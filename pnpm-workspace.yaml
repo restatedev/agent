@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: set this to true or false
+# esbuild ships a native binary and needs its install/build script to run.
+# pnpm blocks dependency build scripts by default; allow it explicitly.
+onlyBuiltDependencies:
+  - esbuild
