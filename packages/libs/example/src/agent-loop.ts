@@ -10,6 +10,7 @@
 // signals.
 
 import {setTimeout} from "node:timers/promises";
+import {TerminalError} from "@restatedev/restate-sdk";
 import {
   InterruptedError,
   type Operation,
@@ -57,6 +58,19 @@ const SYSTEM = [
 
 let client: OpenAI | undefined;
 
+// Restate owns retries for model calls. Retry transport failures, timeouts,
+// rate limits, conflicts, and server failures; fail fast for deterministic
+// request/configuration errors.
+export function isRetryableModelStatus(status: number | undefined): boolean {
+  return (
+    status === undefined ||
+    status === 408 ||
+    status === 409 ||
+    status === 429 ||
+    status >= 500
+  );
+}
+
 // One model round is one durable side effect. There is no streaming adapter or
 // resumable-source machinery: Restate journals the single validated action.
 // Protocol mistakes are returned as values so the loop can ask the model to
@@ -64,23 +78,46 @@ let client: OpenAI | undefined;
 function* model(messages: ModelMessage[]): Operation<ModelResult> {
   return yield* run(
     async ({signal}): Promise<ModelResult> => {
-      client ??= new OpenAI();
-      const completion = await client.chat.completions.create(
-        {
-          model: MODEL,
-          response_format: {type: "json_object"},
-          messages: [
-            {role: "system", content: SYSTEM},
-            ...messages.map(
-              (message): OpenAI.ChatCompletionMessageParam =>
-                message.role === "tool"
-                  ? {role: "user", content: `tool_result: ${message.content}`}
-                  : {role: message.role, content: message.content},
-            ),
-          ],
-        },
-        {signal},
-      );
+      if (!process.env.OPENAI_API_KEY) {
+        throw new TerminalError("OPENAI_API_KEY is not set");
+      }
+
+      // Disable the library's hidden retries so Restate journals and controls
+      // the complete retry policy.
+      client ??= new OpenAI({maxRetries: 0});
+
+      let completion: OpenAI.ChatCompletion;
+      try {
+        completion = await client.chat.completions.create(
+          {
+            model: MODEL,
+            response_format: {type: "json_object"},
+            messages: [
+              {role: "system", content: SYSTEM},
+              ...messages.map(
+                (message): OpenAI.ChatCompletionMessageParam =>
+                  message.role === "tool"
+                    ? {role: "user", content: `tool_result: ${message.content}`}
+                    : {role: message.role, content: message.content},
+              ),
+            ],
+          },
+          {signal},
+        );
+      } catch (error) {
+        if (
+          error instanceof OpenAI.APIError &&
+          !isRetryableModelStatus(error.status)
+        ) {
+          throw new TerminalError(
+            `OpenAI rejected the request: ${error.message}`,
+            {
+              errorCode: error.status,
+            },
+          );
+        }
+        throw error;
+      }
 
       const raw = completion.choices[0]?.message.content ?? "";
       let value: unknown;
@@ -98,7 +135,15 @@ function* model(messages: ModelMessage[]): Operation<ModelResult> {
       }
       return parsed.data;
     },
-    {name: "model"},
+    {
+      name: "model",
+      retry: {
+        maxAttempts: 4,
+        initialInterval: 500,
+        maxInterval: 5_000,
+        exponentiationFactor: 2,
+      },
+    },
   );
 }
 
@@ -125,7 +170,7 @@ function* runTool(call: ToolCall): Operation<string> {
     });
     return `${weather.temp}°C, ${weather.condition} in ${weather.city}`;
   } catch (error) {
-    if (error instanceof InterruptedError) {
+    if (error instanceof InterruptedError || error instanceof TerminalError) {
       throw error;
     }
     return `error: getWeather failed: ${error instanceof Error ? error.message : String(error)}`;

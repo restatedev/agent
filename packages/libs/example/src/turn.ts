@@ -16,8 +16,10 @@
 //   - STEERING  aborts the current run and reruns it on a new instruction
 // `startTurn`/`interruptTurn`/`steerTurn` are the lifecycle API the Agent uses.
 
+import {CancelledError} from "@restatedev/restate-sdk";
 import {
   handlerRequest,
+  InterruptedError,
   invocation,
   type Operation,
   schemas,
@@ -26,25 +28,57 @@ import {
   service,
   signal,
   spawn,
+  type Task,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent";
 import {agentLoop, type ModelMessage} from "./agent-loop";
 import {
   type ConversationEntry,
+  type TurnOutcome,
   type TurnRequest,
   TurnRequestSchema,
-  type TurnStatus,
 } from "./types";
 
 // Signal names used to control a running turn.
 const INTERRUPT = "interrupt";
 const STEERING = "steering";
 
-const toModelMessage = (e: ConversationEntry): ModelMessage => ({
-  role: e.role,
-  content: e.text,
-});
+// The Agent keeps the complete durable transcript; the model receives only a
+// bounded recent window. Failed and interrupted summaries are operational
+// outcomes, not assistant answers, so they must not be presented as if the
+// model said them.
+export const MAX_CONTEXT_MESSAGES = 40;
+
+export function buildModelContext(
+  history: ConversationEntry[],
+): ModelMessage[] {
+  return history
+    .flatMap((entry): ModelMessage[] => {
+      if (entry.role === "user") {
+        return [{role: "user", content: entry.text}];
+      }
+      return entry.status === "completed"
+        ? [{role: "assistant", content: entry.text}]
+        : [];
+    })
+    .slice(-MAX_CONTEXT_MESSAGES);
+}
+
+function* stopAgentLoop(task: Task<unknown>): Operation<void> {
+  task.interrupt();
+  try {
+    yield* task; // join so abort and finally blocks run before we continue
+  } catch (error) {
+    if (!(error instanceof InterruptedError)) {
+      throw error;
+    }
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export const Turn = service({
   name: "Turn",
@@ -69,66 +103,85 @@ export const Turn = service({
         const interrupt = signal<string>(INTERRUPT);
         let steering = signal<string>(STEERING);
 
-        // The model context: the conversation so far (ending with the triggering
-        // message). A steer replaces the trailing instruction for the rerun.
-        let context = req.history.map(toModelMessage);
-        let status: TurnStatus = "completed";
-        let text = "";
+        // The model context ends with the message that triggered this turn.
+        // Steering messages are added as newer instructions when they arrive.
+        let context = buildModelContext(req.history);
+        let activeTask: Task<unknown> | undefined;
 
         try {
+          let outcome: TurnOutcome | undefined;
+
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
             const task = spawn(agentLoop(context));
+            activeTask = task;
             const selected = yield* select({answer: task, interrupt, steering});
 
             switch (selected.tag) {
               case "answer": {
                 const result = yield* selected.future;
-                status = result.status;
-                text =
-                  result.status === "completed" ? result.text : result.error;
+                activeTask = undefined;
+                outcome = {
+                  turnId,
+                  status: result.status,
+                  text:
+                    result.status === "completed" ? result.text : result.error,
+                };
                 break turn;
               }
               case "interrupt": {
-                text = yield* selected.future;
-                status = "interrupted";
-                task.interrupt();
-                try {
-                  yield* task; // join so the loop's teardown (HTTP abort) runs
-                } catch {
-                  // Swallow the interrupt.
-                }
+                const reason = yield* selected.future;
+                yield* stopAgentLoop(task);
+                activeTask = undefined;
+                outcome = {turnId, status: "interrupted", text: reason};
                 break turn;
               }
               case "steering": {
                 const steer = yield* selected.future;
-                task.interrupt();
-                try {
-                  yield* task;
-                } catch {
-                  // Swallow the interrupt.
-                }
+                yield* stopAgentLoop(task);
+                activeTask = undefined;
                 steering = signal<string>(STEERING); // re-arm for the next steer
                 // Add the steer to the current model context. The Agent already
                 // recorded it in the durable conversation history.
-                context = [...context, {role: "user", content: steer}];
+                context = [
+                  ...context,
+                  {role: "user" as const, content: steer},
+                ].slice(-MAX_CONTEXT_MESSAGES);
                 break;
               }
             }
           }
-        } catch (err) {
-          // An unexpected model/tool failure escaped the structured loop
-          // result. Record it instead of letting the turn die silently.
-          status = "failed";
-          text = err instanceof Error ? err.message : String(err);
-        }
 
-        // Always report exactly one outcome to the general conversation.
-        yield* sendClient(Agent, req.agentId).append({
-          turnId,
-          status,
-          text,
-        });
+          yield* sendClient(Agent, req.agentId).append(outcome);
+        } catch (error) {
+          if (error instanceof CancelledError) {
+            // Cancellation aborts in-flight run I/O first. Join the spawned loop
+            // for cleanup, retire the controller's active turn, then rethrow so
+            // Restate still records this invocation as cancelled.
+            if (activeTask) {
+              activeTask.interrupt(error);
+              try {
+                yield* activeTask;
+              } catch {
+                // Preserve the invocation's original cancellation.
+              }
+            }
+            yield* sendClient(Agent, req.agentId).append({
+              turnId,
+              status: "interrupted",
+              text: "Turn cancelled",
+            });
+            throw error;
+          }
+
+          // Unexpected model/tool failures become one explicit turn outcome;
+          // the controller is never left permanently busy.
+          yield* sendClient(Agent, req.agentId).append({
+            turnId,
+            status: "failed",
+            text: errorMessage(error),
+          });
+        }
       },
     ),
   },
