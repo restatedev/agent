@@ -12,6 +12,7 @@ import {durableSource} from "@restate-agents/core";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
   handlerRequest,
+  InterruptedError,
   invocation,
   type Operation,
   run,
@@ -58,9 +59,10 @@ async function getWeather(city: string, signal: AbortSignal) {
   return {city, temp: 22, condition: "sunny"};
 }
 
-// Validate and run a tool call. An unknown tool or a missing arg returns an
-// error string that is fed back to the model, so a bad call is recoverable
-// rather than fatal.
+// Validate and run a tool call, returning a result string for the model. Every
+// failure the model could act on is returned as an `error: ...` string rather
+// than thrown, so the loop feeds it back and the model can adapt: an unknown
+// tool, a missing arg, or the tool itself failing.
 function* runTool(call: {
   name: string;
   args: Record<string, string>;
@@ -72,13 +74,25 @@ function* runTool(call: {
   if (!city) {
     return 'error: getWeather requires a string "city" arg';
   }
-  // Durable + abortable: the run's signal fires if the step is interrupted.
-  // `run` names the journal entry after the action's `Function.name`; this arrow
-  // is anonymous, so pass an explicit (deterministic) name instead.
-  const weather = yield* run((opts) => getWeather(city, opts.signal), {
-    name: "getWeather",
-  });
-  return `${weather.temp}°C, ${weather.condition} in ${weather.city}`;
+  try {
+    // Durable + abortable: the run's signal fires if the step is interrupted.
+    // `run` names the journal entry after the action's `Function.name`; this
+    // arrow is anonymous, so pass an explicit (deterministic) name instead.
+    const weather = yield* run((opts) => getWeather(city, opts.signal), {
+      name: "getWeather",
+    });
+    return `${weather.temp}°C, ${weather.condition} in ${weather.city}`;
+  } catch (err) {
+    // An interrupt is delivered as an InterruptedError (task.interrupt injects
+    // it) and MUST propagate, so the turn actually stops instead of feeding the
+    // "failure" back and looping. Any other failure is the tool's own — return
+    // it as an error result the model can react to (the mock never fails, but a
+    // real tool would).
+    if (err instanceof InterruptedError) {
+      throw err;
+    }
+    return `error: getWeather failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 // The outcome of one model round: either the model's text plus any tool results,
