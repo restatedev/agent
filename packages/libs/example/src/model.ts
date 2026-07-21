@@ -6,13 +6,23 @@
 // Set OPENAI_API_KEY in the environment before running.
 
 import OpenAI from "openai";
+import {z} from "zod";
 
 // A single streamed step from the model. The model speaks a small protocol: it
 // emits a sequence of compact JSON objects, each one an `LLMChunk`, so a caller
 // can act on each the moment it completes instead of waiting for the whole reply.
-export type LLMChunk =
-  | {type: "text"; content: string}
-  | {type: "tool_call"; name: string; args: Record<string, string>};
+// The schema is enforced on every parsed object (see drainObjects) — the model's
+// output is untrusted, so a malformed chunk is a clear protocol error, not a
+// value cast blindly to this type.
+export const LLMChunkSchema = z.discriminatedUnion("type", [
+  z.object({type: z.literal("text"), content: z.string()}),
+  z.object({
+    type: z.literal("tool_call"),
+    name: z.string(),
+    args: z.record(z.string(), z.string()),
+  }),
+]);
+export type LLMChunk = z.infer<typeof LLMChunkSchema>;
 
 // A message in the model's context window. `tool` carries a tool's result back
 // into the next inference so the model can act on it (a closed model->tool->model
@@ -54,6 +64,23 @@ function toChatMessage(m: ModelMessage): OpenAI.ChatCompletionMessageParam {
   return {role: m.role, content: m.content};
 }
 
+// Parse one complete JSON object and validate it against the chunk protocol.
+// The model is untrusted, so bad JSON or an unrecognized shape is a clear
+// protocol error rather than a value quietly cast to LLMChunk.
+function parseChunk(slice: string): LLMChunk {
+  let value: unknown;
+  try {
+    value = JSON.parse(slice);
+  } catch {
+    throw new Error(`model emitted invalid JSON: ${slice}`);
+  }
+  const result = LLMChunkSchema.safeParse(value);
+  if (!result.success) {
+    throw new Error(`model emitted an unrecognized chunk: ${slice}`);
+  }
+  return result.data;
+}
+
 // Pull every complete top-level JSON object out of `buf`, returning the parsed
 // chunks and the not-yet-complete remainder. We track brace depth (respecting
 // strings/escapes) instead of trusting a delimiter, because the model is not
@@ -80,7 +107,7 @@ function drainObjects(buf: string): {chunks: LLMChunk[]; rest: string} {
     } else if (ch === "}" && depth > 0) {
       depth--;
       if (depth === 0) {
-        chunks.push(JSON.parse(buf.slice(start, i + 1)) as LLMChunk);
+        chunks.push(parseChunk(buf.slice(start, i + 1)));
         start = -1;
       }
     }
@@ -115,6 +142,12 @@ export async function* llmFetch(
     buffer = rest;
     for (const chunk of chunks) yield chunk;
   }
-  // Drain any final complete object left in the buffer.
-  for (const chunk of drainObjects(buffer).chunks) yield chunk;
+  // Drain any final complete object, then fail if the stream ended mid-object —
+  // an incomplete tail would otherwise be dropped silently and surface as a
+  // misleading empty answer.
+  const {chunks, rest} = drainObjects(buffer);
+  for (const chunk of chunks) yield chunk;
+  if (rest.trim().length > 0) {
+    throw new Error(`model stream ended with incomplete JSON: ${rest}`);
+  }
 }

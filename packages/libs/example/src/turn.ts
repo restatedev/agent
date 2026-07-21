@@ -26,7 +26,12 @@ import {z} from "zod";
 import {Agent} from "./agent";
 import {llmFetch, type ModelMessage} from "./model";
 import {Turn} from "./turn-conversation";
-import {type Message, type TurnRequest, TurnRequestSchema} from "./types";
+import {
+  type ConversationEntry,
+  type TurnRequest,
+  TurnRequestSchema,
+  type TurnStatus,
+} from "./types";
 
 // Signal names used to control a running turn.
 const INTERRUPT = "interrupt";
@@ -36,9 +41,9 @@ const STEERING = "steering";
 // can't spin forever.
 const MAX_STEPS = 8;
 
-const toModelMessage = (m: Message): ModelMessage => ({
-  role: m.role,
-  content: m.text,
+const toModelMessage = (e: ConversationEntry): ModelMessage => ({
+  role: e.role,
+  content: e.text,
 });
 
 // A (mock) weather tool. It takes the run's AbortSignal, so interrupting the
@@ -77,7 +82,10 @@ function* runTool(call: {
 function* modelStep(
   turnId: string,
   messages: ModelMessage[],
-): Operation<{text: string; tools: {name: string; result: string}[]}> {
+): Operation<{
+  text: string;
+  tools: {name: string; args: Record<string, string>; result: string}[];
+}> {
   // Own the abort so an interrupt tears down the in-flight HTTP stream, not just
   // the Restate task. The finally fires on normal completion and on the throw
   // that task.interrupt() injects mid-stream.
@@ -88,7 +96,11 @@ function* modelStep(
     );
 
     let text = "";
-    const tools: {name: string; result: string}[] = [];
+    const tools: {
+      name: string;
+      args: Record<string, string>;
+      result: string;
+    }[] = [];
     while (true) {
       const res = yield* stream.next();
       if (res.type === "done") {
@@ -108,7 +120,7 @@ function* modelStep(
           role: "tool",
           text: `${chunk.name}(${JSON.stringify(chunk.args)}) → ${result}`,
         });
-        tools.push({name: chunk.name, result});
+        tools.push({name: chunk.name, args: chunk.args, result});
       } else if (chunk.content) {
         text += chunk.content;
         yield* sendClient(Turn, turnId).append({
@@ -138,6 +150,17 @@ function* agentRun(turnId: string, context: ModelMessage[]): Operation<string> {
       return text; // final answer — the model asked for no more tools
     }
     for (const t of tools) {
+      // Preserve the model's own tool request in context, then its result, so
+      // the next inference sees the full request/response pair — not a bare
+      // tool_result with no preceding call.
+      messages.push({
+        role: "assistant",
+        content: JSON.stringify({
+          type: "tool_call",
+          name: t.name,
+          args: t.args,
+        }),
+      });
       messages.push({role: "tool", content: `${t.name}: ${t.result}`});
     }
   }
@@ -153,13 +176,14 @@ export const TurnService = service({
     // Drive one turn: run the agent loop against the interrupt/steering signals,
     // then report a single summary. The input is validated against
     // TurnRequestSchema.
-    //   - run completes -> the turn is done; its answer is the summary
-    //   - interrupt     -> interrupt the run, end it ("interrupted: ...")
+    //   - run completes -> status "completed", text = the answer
+    //   - interrupt     -> status "interrupted", text = the reason
     //   - steer         -> interrupt the run, rerun on the steering message
-    //   - run throws     -> record the failure ("failed: ...")
-    // Detailed step output goes to the per-turn conversation (Turn); only this
-    // one summary reaches the general conversation (Agent), and it always does,
-    // so the turn can never die silently and leave `turnId` set forever.
+    //   - run throws     -> status "failed", text = the error
+    // Detailed step output goes to the per-turn conversation (Turn); only one
+    // TurnOutcome (turnId + status + text) reaches the general conversation
+    // (Agent), and it always does, so the turn can't die silently and leave
+    // `turnId` set forever.
     doTurn: schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): Operation<void> {
@@ -170,9 +194,9 @@ export const TurnService = service({
 
         // The model context: the conversation so far (ending with the triggering
         // message). A steer replaces the trailing instruction for the rerun.
-        const base = req.history.map(toModelMessage);
-        let context = base;
-        let outcome = "";
+        let context = req.history.map(toModelMessage);
+        let status: TurnStatus = "completed";
+        let text = "";
 
         try {
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
@@ -182,18 +206,19 @@ export const TurnService = service({
 
             switch (selected.tag) {
               case "answer": {
-                outcome = (yield* selected.future) || "(no answer)";
+                text = (yield* selected.future) || "(no answer)";
+                status = "completed";
                 break turn;
               }
               case "interrupt": {
-                const reason = yield* selected.future;
+                text = yield* selected.future;
+                status = "interrupted";
                 task.interrupt();
                 try {
                   yield* task; // join so the run's finally (HTTP abort) runs
                 } catch {
                   // Swallow the interrupt.
                 }
-                outcome = `interrupted: ${reason}`;
                 break turn;
               }
               case "steering": {
@@ -205,7 +230,14 @@ export const TurnService = service({
                   // Swallow the interrupt.
                 }
                 steering = signal<string>(STEERING); // re-arm for the next steer
-                context = [...base, {role: "user", content: steer}];
+                // Record the steer in this turn's detailed trace and add it to
+                // the context so the rerun (and the model) sees it. (The Agent
+                // also records it in the general conversation.)
+                yield* sendClient(Turn, turnId).append({
+                  role: "user",
+                  text: steer,
+                });
+                context = [...context, {role: "user", content: steer}];
                 break;
               }
             }
@@ -213,12 +245,15 @@ export const TurnService = service({
         } catch (err) {
           // The run failed terminally (model/tool error, truncated recovery,
           // step budget). Record it instead of letting the turn die silently.
-          outcome = `failed: ${err instanceof Error ? err.message : String(err)}`;
+          status = "failed";
+          text = err instanceof Error ? err.message : String(err);
         }
 
-        // Always report exactly one summary to the general conversation.
+        // Always report exactly one outcome to the general conversation.
         yield* sendClient(Agent, req.conversationId).recordSummary({
-          text: outcome,
+          turnId,
+          status,
+          text,
         });
       },
     ),
