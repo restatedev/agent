@@ -5,32 +5,44 @@
 
 import {z} from "zod";
 
-// A single message in a conversation.
+// A single message. The general conversation uses `user`/`assistant`; the
+// per-turn conversation additionally uses `tool` for tool calls and results.
 export const MessageSchema = z.object({
-  role: z.enum(["user", "assistant"]),
+  role: z.enum(["user", "assistant", "tool"]),
   text: z.string(),
 });
 export type Message = z.infer<typeof MessageSchema>;
 
-// Durable per-conversation state owned by the Agent. `turnId` is the invocation
-// id of the active turn, and is unset when no turn is running.
+// The general conversation owned by the Agent: the user-facing thread. It holds
+// one `user` message per ask and one `assistant` summary per turn. `turnId` is
+// the active turn's invocation id (unset when idle); `pending` holds messages
+// received while a turn was running, to be run as their own turns afterwards.
 export const ConversationStateSchema = z.object({
   history: z.array(MessageSchema),
   turnId: z.string(),
+  pending: z.array(z.string()),
 });
 export type ConversationState = z.infer<typeof ConversationStateSchema>;
 
-// Input to a turn: which conversation it belongs to, and the user's message.
+// The per-turn detailed conversation owned by a Turn object: the trace of one
+// turn's steps (assistant chunks + tool calls/results), kept separate from the
+// general conversation.
+export const TurnStateSchema = z.object({
+  history: z.array(MessageSchema),
+});
+export type TurnState = z.infer<typeof TurnStateSchema>;
+
+// Input to a turn: which conversation it belongs to, and the conversation
+// history so far (ending with the message that triggered it) as the model's
+// context.
 export const TurnRequestSchema = z.object({
   conversationId: z.string(),
-  message: z.string(),
+  history: z.array(MessageSchema),
 });
 export type TurnRequest = z.infer<typeof TurnRequestSchema>;
 
-// A concise message the turn reports back to the Agent. The final entry marks
-// the turn as no longer active.
-export const AppendEntrySchema = z.object({
+// The single summary a turn reports back to the general conversation.
+export const SummarySchema = z.object({
   text: z.string(),
-  final: z.boolean().optional(),
 });
-export type AppendEntry = z.infer<typeof AppendEntrySchema>;
+export type Summary = z.infer<typeof SummarySchema>;

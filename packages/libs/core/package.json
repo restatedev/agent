@@ -12,15 +12,16 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "prebuild": "rm -rf dist",
     "build": "tsc --noEmitOnError"
   },
   "dependencies": {
     "@restatedev/restate-sdk": "^1.16.2",
-    "@restatedev/restate-sdk-gen": "^1.16.2",
-    "openai": "^4.77.0"
+    "@restatedev/restate-sdk-gen": "^1.16.2"
   },
   "devDependencies": {
     "@types/node": "^22",

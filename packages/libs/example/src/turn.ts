@@ -1,15 +1,17 @@
-// TurnService owns the turn loop. It is stateless: everything durable lives in
-// the Agent (see ./agent), and the turn talks to it only through one-way sends.
+// TurnService owns the turn loop. It is stateless: durable conversation state
+// lives in the Agent (general conversation) and in Turn (per-turn detail); the
+// turn talks to both only through one-way sends.
 //
-// A running turn is controlled through two signals raised on its own
-// invocation:
+// A running turn is controlled through two signals raised on its own invocation:
 //   - INTERRUPT ends the turn
-//   - STEERING  aborts the current step and re-runs a fresh one on a new message
-// `interruptTurn`/`steerTurn` are the API the Agent uses to raise them.
+//   - STEERING  aborts the current run and reruns it on a new instruction
+// `startTurn`/`interruptTurn`/`steerTurn` are the lifecycle API the Agent uses.
 
 import {setTimeout} from "node:timers/promises";
-import {durableSource, llmFetch} from "@restate-agents/core";
+import {durableSource} from "@restate-agents/core";
+import {TerminalError} from "@restatedev/restate-sdk";
 import {
+  handlerRequest,
   invocation,
   type Operation,
   run,
@@ -22,11 +24,22 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent";
-import {type TurnRequest, TurnRequestSchema} from "./types";
+import {llmFetch, type ModelMessage} from "./model";
+import {Turn} from "./turn-conversation";
+import {type Message, type TurnRequest, TurnRequestSchema} from "./types";
 
 // Signal names used to control a running turn.
 const INTERRUPT = "interrupt";
 const STEERING = "steering";
+
+// Bound on the model->tool->model loop, so a model that keeps calling tools
+// can't spin forever.
+const MAX_STEPS = 8;
+
+const toModelMessage = (m: Message): ModelMessage => ({
+  role: m.role,
+  content: m.text,
+});
 
 // A (mock) weather tool. It takes the run's AbortSignal, so interrupting the
 // turn cancels the in-flight call instead of waiting for it.
@@ -35,80 +48,148 @@ async function getWeather(city: string, signal: AbortSignal) {
   return {city, temp: 22, condition: "sunny"};
 }
 
-// One step of a turn: stream a completion and accumulate what happened into a
-// single reply, which the turn uses as its summary. For now we just keep the
-// message in a variable; the detailed per-turn conversation (each chunk, each
-// tool call/result kept separately from the general conversation) is deferred.
-function* step(message: string): Operation<string> {
-  const stream = yield* durableSource(() => llmFetch(message));
+// Validate and run a tool call. An unknown tool or a missing arg returns an
+// error string that is fed back to the model, so a bad call is recoverable
+// rather than fatal.
+function* runTool(call: {
+  name: string;
+  args: Record<string, string>;
+}): Operation<string> {
+  if (call.name !== "getWeather") {
+    return `error: unknown tool "${call.name}"`;
+  }
+  const city = call.args.city;
+  if (!city) {
+    return 'error: getWeather requires a string "city" arg';
+  }
+  // Durable + abortable: the run's signal fires if the step is interrupted.
+  // `run` names the journal entry after the action's `Function.name`; this arrow
+  // is anonymous, so pass an explicit (deterministic) name instead.
+  const weather = yield* run((opts) => getWeather(city, opts.signal), {
+    name: "getWeather",
+  });
+  return `${weather.temp}°C, ${weather.condition} in ${weather.city}`;
+}
 
-  let reply = "";
-  while (true) {
-    const res = yield* stream.next();
-    if (res.type !== "next") {
-      break; // "done" (stream ended) or "aborted" (replayed past the stream)
+// One model step: stream a completion, record each chunk to the per-turn
+// conversation, and run any tool calls. Returns the assistant text plus the
+// tool results (empty when the model produced a final answer).
+function* modelStep(
+  turnId: string,
+  messages: ModelMessage[],
+): Operation<{text: string; tools: {name: string; result: string}[]}> {
+  // Own the abort so an interrupt tears down the in-flight HTTP stream, not just
+  // the Restate task. The finally fires on normal completion and on the throw
+  // that task.interrupt() injects mid-stream.
+  const controller = new AbortController();
+  try {
+    const stream = yield* durableSource(() =>
+      llmFetch(messages, controller.signal),
+    );
+
+    let text = "";
+    const tools: {name: string; result: string}[] = [];
+    while (true) {
+      const res = yield* stream.next();
+      if (res.type === "done") {
+        break;
+      }
+      if (res.type === "aborted") {
+        // Replay ran past a stream that no longer exists (a crash mid-response).
+        // A model stream is not replayable, so fail explicitly rather than pass
+        // a truncated answer off as complete.
+        throw new TerminalError("model response was truncated on recovery");
+      }
+      const chunk = res.value;
+
+      if (chunk.type === "tool_call") {
+        const result = yield* runTool(chunk);
+        yield* sendClient(Turn, turnId).append({
+          role: "tool",
+          text: `${chunk.name}(${JSON.stringify(chunk.args)}) → ${result}`,
+        });
+        tools.push({name: chunk.name, result});
+      } else if (chunk.content) {
+        text += chunk.content;
+        yield* sendClient(Turn, turnId).append({
+          role: "assistant",
+          text: chunk.content,
+        });
+      }
     }
-    const chunk = res.value;
 
-    if (chunk.type === "tool_call") {
-      // Durable + abortable: the run's signal fires if the step is interrupted.
-      // `run` names the journal entry after the action's `Function.name`; this
-      // arrow is anonymous, so pass an explicit (deterministic) name instead.
-      const weather = yield* run(
-        (opts) => getWeather(chunk.args.city, opts.signal),
-        {name: "getWeather"},
-      );
-      reply += `[${chunk.name}: ${weather.temp}°C, ${weather.condition} in ${weather.city}] `;
-    } else {
-      reply += chunk.content;
+    return {text, tools};
+  } finally {
+    controller.abort();
+  }
+}
+
+// Run the agent loop for one instruction: model -> tools -> model until the
+// model answers with no tool call (bounded by MAX_STEPS). Returns the final
+// answer text.
+function* agentRun(turnId: string, context: ModelMessage[]): Operation<string> {
+  const messages = [...context];
+  for (let stepNo = 0; stepNo < MAX_STEPS; stepNo++) {
+    const {text, tools} = yield* modelStep(turnId, messages);
+    if (text) {
+      messages.push({role: "assistant", content: text});
+    }
+    if (tools.length === 0) {
+      return text; // final answer — the model asked for no more tools
+    }
+    for (const t of tools) {
+      messages.push({role: "tool", content: `${t.name}: ${t.result}`});
     }
   }
-
-  return reply;
+  throw new TerminalError(
+    `agent exceeded ${MAX_STEPS} steps without a final answer`,
+  );
 }
 
 // TurnService owns the turn loop. The Agent starts this and never awaits it.
 export const TurnService = service({
   name: "TurnService",
   handlers: {
-    // Drive one turn: run the step against the interrupt/steering signals, then
-    // report the outcome. The input is validated against TurnRequestSchema.
-    //   - step completes    -> the turn is done; its reply is the summary
-    //   - interrupt         -> interrupt the step, end it ("interrupted: ...")
-    //   - steer             -> interrupt the step, then run a fresh one on the
-    //                          steering message
-    //   - step throws       -> record the failure         ("failed: ...")
-    // In every case a final entry is reported, so the conversation always ends
-    // with a summary and the Agent clears the active turn. Without this, a
-    // terminal failure in the step would skip the report, leaving the turn dead
-    // but `turnId` set forever — the failure would vanish from the conversation.
+    // Drive one turn: run the agent loop against the interrupt/steering signals,
+    // then report a single summary. The input is validated against
+    // TurnRequestSchema.
+    //   - run completes -> the turn is done; its answer is the summary
+    //   - interrupt     -> interrupt the run, end it ("interrupted: ...")
+    //   - steer         -> interrupt the run, rerun on the steering message
+    //   - run throws     -> record the failure ("failed: ...")
+    // Detailed step output goes to the per-turn conversation (Turn); only this
+    // one summary reaches the general conversation (Agent), and it always does,
+    // so the turn can never die silently and leave `turnId` set forever.
     doTurn: schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): Operation<void> {
+        // This turn's own invocation id is the key of its per-turn conversation.
+        const turnId = handlerRequest().id;
         const interrupt = signal<string>(INTERRUPT);
         let steering = signal<string>(STEERING);
 
-        // The message the current step runs on; a steer replaces it for the next.
-        let message = req.message;
-        let outcome = "completed";
+        // The model context: the conversation so far (ending with the triggering
+        // message). A steer replaces the trailing instruction for the rerun.
+        const base = req.history.map(toModelMessage);
+        let context = base;
+        let outcome = "";
 
         try {
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
-            const task = spawn(step(message));
-            const selected = yield* select({step: task, interrupt, steering});
+            const task = spawn(agentRun(turnId, context));
+            const selected = yield* select({answer: task, interrupt, steering});
 
             switch (selected.tag) {
-              case "step": {
-                // The step finished; its accumulated reply is the turn summary.
-                outcome = (yield* selected.future) || "completed";
+              case "answer": {
+                outcome = (yield* selected.future) || "(no answer)";
                 break turn;
               }
               case "interrupt": {
                 const reason = yield* selected.future;
                 task.interrupt();
                 try {
-                  yield* task; // join so the step's finally/catch runs
+                  yield* task; // join so the run's finally (HTTP abort) runs
                 } catch {
                   // Swallow the interrupt.
                 }
@@ -116,7 +197,7 @@ export const TurnService = service({
                 break turn;
               }
               case "steering": {
-                message = yield* selected.future; // redirect the fresh step
+                const steer = yield* selected.future;
                 task.interrupt();
                 try {
                   yield* task;
@@ -124,21 +205,20 @@ export const TurnService = service({
                   // Swallow the interrupt.
                 }
                 steering = signal<string>(STEERING); // re-arm for the next steer
+                context = [...base, {role: "user", content: steer}];
                 break;
               }
             }
           }
         } catch (err) {
-          // The step failed terminally (LLM/tool error, invalid input, ...).
-          // Record it as the outcome instead of letting the turn die silently.
+          // The run failed terminally (model/tool error, truncated recovery,
+          // step budget). Record it instead of letting the turn die silently.
           outcome = `failed: ${err instanceof Error ? err.message : String(err)}`;
         }
 
-        // Always report a final entry — completed, interrupted, or failed — so
-        // the conversation ends with a summary and the Agent clears the turn.
-        yield* sendClient(Agent, req.conversationId).append({
+        // Always report exactly one summary to the general conversation.
+        yield* sendClient(Agent, req.conversationId).recordSummary({
           text: outcome,
-          final: true,
         });
       },
     ),
@@ -149,8 +229,8 @@ export const TurnService = service({
 // all three here means the Agent never has to know about TurnService or the
 // signal protocol directly.
 
-// Start a fresh turn for a conversation; returns its invocation id so the Agent
-// can remember it and later interrupt/steer that exact turn.
+// Start a fresh turn; returns its invocation id so the Agent can remember it and
+// later interrupt/steer that exact turn.
 export function* startTurn(req: TurnRequest): Operation<string> {
   const started = yield* sendClient(TurnService).doTurn(req);
   return started.id;

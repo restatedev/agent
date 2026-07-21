@@ -1,18 +1,22 @@
-// Entrypoint: a conversational weather agent, wired from two Restate constructs.
+// Entrypoint: a conversational weather agent, wired from three Restate
+// constructs.
 //
-//   - Agent (./agent): a conversation-keyed VirtualObject that owns the durable
-//     history and the active turn's invocation id; the single `ask` entry point
-//     plus shared interrupt/steer controls.
-//   - TurnService (./turn): a stateless Service whose `doTurn` handler owns the
-//     turn loop (LLM streaming, tools, steps, interrupt/steering), reporting
-//     concise messages back to the Agent via one-way sends.
+//   - Agent (./agent): the general conversation VirtualObject — a clean thread
+//     of one user message per ask and one assistant summary per turn, plus the
+//     single `ask` entry point and shared interrupt/steer controls.
+//   - Turn (./turn-conversation): the per-turn detailed conversation
+//     VirtualObject — the "inside the run" trace (chunks + tool calls/results),
+//     kept separate from the general conversation.
+//   - TurnService (./turn): the stateless turn loop that runs the closed
+//     model->tool->model loop, writing detail to Turn and one summary to Agent.
 //
 // Set OPENAI_API_KEY in the environment before running.
 
 import {serve} from "@restatedev/restate-sdk";
 import {Agent} from "./agent";
 import {TurnService} from "./turn";
+import {Turn} from "./turn-conversation";
 
 serve({
-  services: [TurnService, Agent],
+  services: [Agent, Turn, TurnService],
 });

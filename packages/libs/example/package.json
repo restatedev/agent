@@ -17,6 +17,7 @@
     "@restate-agents/core": "workspace:*",
     "@restatedev/restate-sdk": "^1.16.2",
     "@restatedev/restate-sdk-gen": "^1.16.2",
+    "openai": "^4.104.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

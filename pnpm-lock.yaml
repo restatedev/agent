@@ -20,9 +20,6 @@ importers:
       '@restatedev/restate-sdk-gen':
         specifier: ^1.16.2
         version: 1.16.2(@restatedev/restate-sdk@1.16.2)
-      openai:
-        specifier: ^4.77.0
-        version: 4.104.0
     devDependencies:
       '@types/node':
         specifier: ^22
@@ -42,6 +39,9 @@ importers:
       '@restatedev/restate-sdk-gen':
         specifier: ^1.16.2
         version: 1.16.2(@restatedev/restate-sdk@1.16.2)
+      openai:
+        specifier: ^4.104.0
+        version: 4.104.0(zod@4.4.3)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -1023,7 +1023,7 @@ snapshots:
     dependencies:
       whatwg-url: 5.0.0
 
-  openai@4.104.0:
+  openai@4.104.0(zod@4.4.3):
     dependencies:
       '@types/node': 18.19.130
       '@types/node-fetch': 2.6.13
@@ -1032,6 +1032,8 @@ snapshots:
       form-data-encoder: 1.7.2
       formdata-node: 4.4.1
       node-fetch: 2.7.0
+    optionalDependencies:
+      zod: 4.4.3
     transitivePeerDependencies:
       - encoding
 
