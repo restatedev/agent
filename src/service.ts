@@ -1,14 +1,15 @@
+import {type GenericCall, TerminalError} from "@restatedev/restate-sdk";
 import {
   allSettled,
+  type Channel,
   call,
-  Channel,
   channel,
-  Future,
+  type Future,
   gen,
   handlerRequest,
   invocation,
+  type Operation,
   object,
-  Operation,
   run,
   select,
   sharedState,
@@ -16,34 +17,33 @@ import {
   spawn,
   state,
 } from "@restatedev/restate-sdk-gen";
-import {GenericCall, TerminalError} from "@restatedev/restate-sdk";
-import {Agent, LLMChunk, StepContext} from "./agent_framework";
+import type {Agent, LLMChunk, StepContext} from "./agent_framework";
 import {llmFetch} from "./utils";
 
 const INTERRUPT = "interrupt";
 const STEERING = "steering";
 
-type AgentState = { turnId: string };
+type AgentState = {turnId: string};
 
 export function makeAgentObject(agent: Agent) {
   return object({
     name: agent.name,
     handlers: {
-      * doTurn() {
+      *doTurn() {
         state<AgentState>().set("turnId", handlerRequest().id);
         yield* doTurn(agent);
         state<AgentState>().clear("turnId");
       },
 
       // Two handlers that help out to send signals
-      * interrupt() {
+      *interrupt() {
         const id = yield* sharedState<AgentState>().get("turnId");
         if (!id) {
           throw new TerminalError("No running turn");
         }
         invocation(id).signal(INTERRUPT).resolve();
       },
-      * steer() {
+      *steer() {
         const id = yield* sharedState<AgentState>().get("turnId");
         if (!id) {
           throw new TerminalError("No running turn");
@@ -59,8 +59,8 @@ export function makeAgentObject(agent: Agent) {
         interrupt: {shared: true},
         steer: {shared: true},
       },
-    }
-  })
+    },
+  });
 }
 
 // Entrypoint of the turn business logic
@@ -70,7 +70,7 @@ function* doTurn(agent: Agent) {
 
   // -- pre-turn
   // All settled will not throw in case of errors.
-  yield* allSettled(agent.preTurnHooks?.map(hook => spawn(hook())) ?? []);
+  yield* allSettled(agent.preTurnHooks?.map((hook) => spawn(hook())) ?? []);
 
   while (true) {
     // We use this stop channel to stop a step execution.
@@ -121,7 +121,7 @@ function* doTurn(agent: Agent) {
   }
 
   // -- post-turn
-  yield* allSettled(agent.postTurnHooks?.map(hook => spawn(hook())) ?? []);
+  yield* allSettled(agent.postTurnHooks?.map((hook) => spawn(hook())) ?? []);
 }
 
 // True means exit the loop
@@ -132,7 +132,7 @@ function* step(agent: Agent, stopChannel: Channel<void>): Operation<boolean> {
   // - Run post-step hooks
 
   // -- pre-step
-  yield* allSettled(agent.preStepHook?.map(hook => spawn(hook())) ?? []);
+  yield* allSettled(agent.preStepHook?.map((hook) => spawn(hook())) ?? []);
 
   try {
     // -- step
@@ -140,13 +140,13 @@ function* step(agent: Agent, stopChannel: Channel<void>): Operation<boolean> {
     return yield* agent.step(stepContext);
   } catch (e) {
     // Just logging here
-    console.log(`Step failed! ${e}`)
-    throw e
+    console.log(`Step failed! ${e}`);
+    throw e;
   } finally {
     // -- post-step
 
     // Don't care about signals, run these post-step hooks no matter what
-    yield* allSettled(agent.postStepHooks?.map(hook => spawn(hook())) ?? []);
+    yield* allSettled(agent.postStepHooks?.map((hook) => spawn(hook())) ?? []);
   }
 }
 
@@ -155,80 +155,94 @@ function makeStepContext(stopChannel: Channel<void>): StepContext {
   // while handling the stopChannel depending on the semantics we want.
 
   const stepContextRun = <T>(
-      closure: (abortSignal: AbortSignal) => Promise<T>
-  ) => spawn(gen(function* () {
-    const abortController = new AbortController();
-    const runFut = run(() => closure(abortController.signal), {name: "step-context-run"});
-    const selectResult = yield* select({
-      runFut,
-      stop: stopChannel.receive,
-    });
+    closure: (abortSignal: AbortSignal) => Promise<T>,
+  ) =>
+    spawn(
+      gen(function* () {
+        const abortController = new AbortController();
+        const runFut = run(() => closure(abortController.signal), {
+          name: "step-context-run",
+        });
+        const selectResult = yield* select({
+          runFut,
+          stop: stopChannel.receive,
+        });
 
-    if (selectResult.tag == "runFut") {
-      // We're all good
-      return yield* selectResult.future;
-    } else {
-      // While running, we got the stop signal, so let's fire the abort controller here.
-      abortController.abort();
-      // Let's wait the run fut to guarantee that when this future is done, nothing is running anymore.
-      let runResult;
-      try {
-        yield* runFut;
-        runResult = "success"
-      } catch (e) {
-        // Ignore it
-        runResult = `failure ${e}`
-      }
-      throw new TerminalError(`framework cancellation. Run completed with ${runResult}`);
-    }
-  }));
+        if (selectResult.tag === "runFut") {
+          // We're all good
+          return yield* selectResult.future;
+        } else {
+          // While running, we got the stop signal, so let's fire the abort controller here.
+          abortController.abort();
+          // Let's wait the run fut to guarantee that when this future is done, nothing is running anymore.
+          let runResult: string;
+          try {
+            yield* runFut;
+            runResult = "success";
+          } catch (e) {
+            // Ignore it
+            runResult = `failure ${e}`;
+          }
+          throw new TerminalError(
+            `framework cancellation. Run completed with ${runResult}`,
+          );
+        }
+      }),
+    );
 
-  const stepContextCall = <REQ, RES>(
-      c: GenericCall<REQ, RES>
-  ) => spawn(gen(function* () {
-    const callFut = call(c);
-    const selectResult = yield* select({
-      callFut,
-      stop: stopChannel.receive,
-    });
+  const stepContextCall = <REQ, RES>(c: GenericCall<REQ, RES>) =>
+    spawn(
+      gen(function* () {
+        const callFut = call(c);
+        const selectResult = yield* select({
+          callFut,
+          stop: stopChannel.receive,
+        });
 
-    if (selectResult.tag == "callFut") {
-      // We're all good
-      return yield* selectResult.future;
-    } else {
-      // Here we can take the actions we want to take on cancellation
-      // E.g. we can propagate the interrupt downstream to the call future
-      (yield* callFut.invocation).signal(INTERRUPT).resolve();
-      // and we can await for the call to complete anyway, ignoring its result
-      try {
-        yield* callFut;
-      } catch {
-        // Ignore it
-      }
-      throw new TerminalError("framework cancellation");
-    }
-  }));
+        if (selectResult.tag === "callFut") {
+          // We're all good
+          return yield* selectResult.future;
+        } else {
+          // Here we can take the actions we want to take on cancellation
+          // E.g. we can propagate the interrupt downstream to the call future
+          (yield* callFut.invocation).signal(INTERRUPT).resolve();
+          // and we can await for the call to complete anyway, ignoring its result
+          try {
+            yield* callFut;
+          } catch {
+            // Ignore it
+          }
+          throw new TerminalError("framework cancellation");
+        }
+      }),
+    );
 
-  const stepContextPrompt = function* (prompt: string): Operation<{ next(): Future<LLMChunk | { eos: true }> }> {
+  const stepContextPrompt = function* (
+    prompt: string,
+  ): Operation<{next(): Future<LLMChunk | {eos: true}>}> {
     let stream: AsyncGenerator<LLMChunk> | undefined;
-    yield* stepContextRun(async (signal) => {
+    yield* stepContextRun(async (_signal) => {
       stream = llmFetch(prompt);
     });
 
     return {
       next: () =>
-          stepContextRun(async (signal) => {
-            if (!stream) {
-              return {eos: true};
-            }
-            const next = await stream.next();
-            if (next.done) {
-              return {eos: true};
-            }
-            return next.value;
-          })
-    }
+        stepContextRun(async (_signal) => {
+          if (!stream) {
+            return {eos: true};
+          }
+          const next = await stream.next();
+          if (next.done) {
+            return {eos: true};
+          }
+          return next.value;
+        }),
+    };
   };
 
-  return {run: stepContextRun, call: stepContextCall, prompt: stepContextPrompt}
+  return {
+    run: stepContextRun,
+    call: stepContextCall,
+    prompt: stepContextPrompt,
+  };
 }
