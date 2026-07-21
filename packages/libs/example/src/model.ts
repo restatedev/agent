@@ -1,14 +1,17 @@
-// The example's model: the application-specific half of the ModelRound
-// interface (see ./step). It supplies `fetch` (llmFetch: stream a completion)
-// and `parse` (parseProgram: raw text -> protocol chunks); the engine that
-// drives them never imports this file. Swap this module for any other
-// streaming source that speaks ModelChunk and the loop is unchanged.
+// The example's Model implementation (see the Model interface in ./loop):
+// stream a completion from OpenAI, and parse the compact-JSON protocol those
+// completions are prompted to speak. The two are exported as ONE object —
+// `openAiModel` — because they are two halves of one contract: the SYSTEM
+// prompt below promises the exact protocol parseProgram decodes, so they must
+// live, change, and be swapped together. The loop that drives them (./loop)
+// never imports this file. Swap this module for any other Model
+// implementation and the loop is unchanged.
 //
 // Set OPENAI_API_KEY in the environment before running.
 
 import OpenAI from "openai";
 import {z} from "zod";
-import type {ModelChunk, ModelMessage} from "./step";
+import type {Model, ModelChunk, ModelMessage} from "./loop";
 
 // One protocol step from the model. The model speaks a small protocol: its reply
 // is a sequence of compact JSON objects, each one a chunk. The raw text is
@@ -122,12 +125,12 @@ function drainObjects(buf: string): {chunks: LLMChunk[]; rest: string} {
 }
 
 // Parse the model's full response text into protocol chunks. Called OUTSIDE the
-// durable model pull (see modelStep in ./step), so a malformed response is a
+// durable model pull (see modelStep in ./loop), so a malformed response is a
 // recoverable model mistake the agent can feed back — not a terminal stream
 // failure. Throws on non-JSON output (via drainObjects), an incomplete trailing
 // object, or an empty response. The ModelChunk return type is the conformance
-// check against the engine's protocol.
-export function parseProgram(raw: string): ModelChunk[] {
+// check against the loop's protocol.
+function parseProgram(raw: string): ModelChunk[] {
   const {chunks, rest} = drainObjects(raw);
   if (rest.trim().length > 0) {
     throw new Error(`response ended with incomplete JSON: ${rest}`);
@@ -140,9 +143,10 @@ export function parseProgram(raw: string): ModelChunk[] {
 
 // Stream a completion for `messages`, yielding the raw text deltas. Parsing is
 // deliberately left to parseProgram (run outside the durable pull). The `signal`
-// aborts the underlying HTTP request, so interrupting a turn tears down the
-// in-flight stream instead of leaving it draining.
-export async function* llmFetch(
+// aborts the underlying HTTP request — durableSource owns it and fires it when
+// a pull is interrupted, so an interrupted turn tears down the in-flight
+// stream instead of leaving it draining.
+async function* llmFetch(
   messages: ModelMessage[],
   signal?: AbortSignal,
 ): AsyncGenerator<string> {
@@ -165,3 +169,11 @@ export async function* llmFetch(
     }
   }
 }
+
+// The module's single export: stream + parse bound as one Model. This is the
+// object a turn plugs into the loop (see LoopDeps in ./loop and the binding
+// in ./turn).
+export const openAiModel: Model = {
+  stream: llmFetch,
+  parse: parseProgram,
+};

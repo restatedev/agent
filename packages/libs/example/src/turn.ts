@@ -1,19 +1,19 @@
-// Turn is the turn loop: a stateless service that drives one conversation turn
-// (model -> tools -> model until the model answers). It owns no state at all.
-// Everything durable about a turn lives in the Agent — the conversation object
-// — because it is conversation data: the transcript, the active turn id, and
-// the per-turn detailed trace. The turn reports into the Agent with one-way
-// sends: `appendTrace` per detailed step, then exactly one `recordSummary`.
-// Restate delivers sends from one invocation to one object key in submission
-// order, so every trace entry lands while this turn is still the active one —
-// the summary (sent last) is what retires it. That ordering is why appendTrace
-// carries no turn id: the Agent files each entry under its own notion of the
-// active turn, which is exactly this turn.
+// Turn is the turn policy: a stateless service that supervises one
+// conversation turn. The thinking itself — the model -> tools -> model cycle —
+// is the agent loop (see ./loop); this file binds the loop's dependencies (the
+// example's model, its tools, the trace reporter) and decides everything
+// around it: what starts a turn, what interrupts or redirects it, and how its
+// ending is reported.
 //
-// The engine of the loop — one durable model round — lives in ./step behind
-// the ModelRound interface; this file supplies the bindings (the example's
-// model, its tools, the trace reporter) and owns the loop policy (round
-// budget, feedback on model mistakes, interrupt/steer handling).
+// It owns no state at all. Everything durable about a turn lives in the Agent
+// — the conversation object — because it is conversation data: the transcript,
+// the active turn id, and the per-turn detailed trace. The turn reports into
+// the Agent with one-way sends: `appendTrace` per detailed step, then exactly
+// one `recordSummary`. Restate delivers sends from one invocation to one
+// object key in submission order, so every trace entry lands while this turn
+// is still the active one — the summary (sent last) is what retires it. That
+// ordering is why appendTrace carries no turn id: the Agent files each entry
+// under its own notion of the active turn, which is exactly this turn.
 //
 // The turn's identity is its own invocation id: minted by the send that starts
 // the turn (so the Agent knows it without a handshake), it keys the trace
@@ -23,7 +23,6 @@
 // `startTurn`/`interruptTurn`/`steerTurn` are the lifecycle API the Agent uses.
 
 import {setTimeout} from "node:timers/promises";
-import {TerminalError} from "@restatedev/restate-sdk";
 import {
   handlerRequest,
   InterruptedError,
@@ -39,14 +38,14 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent";
-import {llmFetch, parseProgram} from "./model";
 import {
+  agentLoop,
+  type LoopDeps,
   type ModelMessage,
-  type ModelRound,
-  modelStep,
   type Reporter,
   type ToolCall,
-} from "./step";
+} from "./loop";
+import {openAiModel} from "./model";
 import {
   type ConversationEntry,
   type TurnRequest,
@@ -57,10 +56,6 @@ import {
 // Signal names used to control a running turn.
 const INTERRUPT = "interrupt";
 const STEERING = "steering";
-
-// Bound on the agent loop (model rounds, including error-feedback retries), so a
-// model that keeps calling tools — or keeps producing junk — can't spin forever.
-const MAX_ROUNDS = 8;
 
 const toModelMessage = (e: ConversationEntry): ModelMessage => ({
   role: e.role,
@@ -107,80 +102,16 @@ function* runTool(call: ToolCall): Operation<string> {
   }
 }
 
-// Feed a recoverable error/observation back to the model and record it in the
-// turn's trace, so the next round can self-correct.
-function* observe(
-  report: Reporter,
-  messages: ModelMessage[],
-  note: string,
-): Operation<void> {
-  messages.push({role: "user", content: note});
-  yield* report({role: "tool", text: note});
-}
-
-// Run the agent loop for one instruction: model -> tools -> model until the model
-// answers with no tool call. A recoverable model mistake — a malformed response
-// or an empty one — is fed back as an observation so the model self-corrects next
-// round rather than failing the turn. Bounded by MAX_ROUNDS.
-function* agentRun(
-  round: ModelRound,
-  context: ModelMessage[],
-): Operation<string> {
-  const messages = [...context];
-  for (let n = 0; n < MAX_ROUNDS; n++) {
-    const step = yield* modelStep(round, messages);
-
-    if ("error" in step) {
-      yield* observe(
-        round.report,
-        messages,
-        `Your last response could not be used (${step.error}). Reply with valid protocol JSON.`,
-      );
-      continue;
-    }
-
-    const {text, tools} = step;
-    if (text) {
-      messages.push({role: "assistant", content: text});
-    }
-    if (tools.length === 0) {
-      if (text) {
-        return text; // final answer — the model asked for no more tools
-      }
-      yield* observe(
-        round.report,
-        messages,
-        "Your last response was empty. Call a tool or give a final answer.",
-      );
-      continue;
-    }
-    for (const t of tools) {
-      // Preserve the model's own tool request in context, then its result, so the
-      // next inference sees the full request/response pair.
-      messages.push({
-        role: "assistant",
-        content: JSON.stringify({
-          type: "tool_call",
-          name: t.name,
-          args: t.args,
-        }),
-      });
-      messages.push({role: "tool", content: `${t.name}: ${t.result}`});
-    }
-  }
-  throw new TerminalError(`agent did not finish within ${MAX_ROUNDS} rounds`);
-}
-
 export const Turn = service({
   name: "Turn",
   handlers: {
     // Drive one turn: run the agent loop against the interrupt/steering signals,
     // then report a single summary. The input is validated against
     // TurnRequestSchema.
-    //   - run completes -> status "completed", text = the answer
-    //   - interrupt     -> status "interrupted", text = the reason
-    //   - steer         -> interrupt the run, rerun on the steering message
-    //   - run throws     -> status "failed", text = the error
+    //   - loop completes -> status "completed", text = the answer
+    //   - interrupt      -> status "interrupted", text = the reason
+    //   - steer          -> interrupt the loop, rerun it on the steering message
+    //   - loop throws    -> status "failed", text = the error
     // Detailed step output goes to the Agent's per-turn trace (via appendTrace
     // sends); only one TurnOutcome (turnId + status + text) reaches the
     // transcript, and it always does, so the turn can't die silently and leave
@@ -192,18 +123,13 @@ export const Turn = service({
         // when it started us, and it keys this turn's trace over there.
         const turnId = handlerRequest().id;
 
-        // Bind the engine's dependencies once for this turn: the example's
-        // model and tools, and a reporter that files trace entries with the
+        // Bind the loop's dependencies once for this turn: the example's model
+        // and tools, and a reporter that files trace entries with the
         // conversation. The entry carries no turn id — the Agent attributes it
         // to its active turn, which (by send ordering) is exactly this one.
         const report: Reporter = (entry) =>
           sendClient(Agent, req.conversationId).appendTrace(entry);
-        const round: ModelRound = {
-          fetch: llmFetch,
-          parse: parseProgram,
-          runTool,
-          report,
-        };
+        const deps: LoopDeps = {model: openAiModel, runTool, report};
 
         const interrupt = signal<string>(INTERRUPT);
         let steering = signal<string>(STEERING);
@@ -217,7 +143,7 @@ export const Turn = service({
         try {
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
-            const task = spawn(agentRun(round, context));
+            const task = spawn(agentLoop(deps, context));
             const selected = yield* select({answer: task, interrupt, steering});
 
             switch (selected.tag) {
@@ -231,7 +157,7 @@ export const Turn = service({
                 status = "interrupted";
                 task.interrupt();
                 try {
-                  yield* task; // join so the run's finally (HTTP abort) runs
+                  yield* task; // join so the loop's teardown (HTTP abort) runs
                 } catch {
                   // Swallow the interrupt.
                 }
@@ -256,8 +182,8 @@ export const Turn = service({
             }
           }
         } catch (err) {
-          // The run failed terminally (model/tool error, truncated recovery,
-          // step budget). Record it instead of letting the turn die silently.
+          // The loop failed terminally (model/tool error, truncated recovery,
+          // round budget). Record it instead of letting the turn die silently.
           status = "failed";
           text = err instanceof Error ? err.message : String(err);
         }
