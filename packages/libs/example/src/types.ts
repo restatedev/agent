@@ -32,20 +32,6 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
-// What to do with a new message that arrives while a turn is already running:
-//   - queue     -> run it as its own turn after the active one finishes
-//   - steer     -> redirect the running turn with the message
-//   - interrupt -> stop the running turn (the message is the reason)
-export const AskDispositionSchema = z.enum(["queue", "steer", "interrupt"]);
-export type AskDisposition = z.infer<typeof AskDispositionSchema>;
-
-// A user message, plus how to treat it if a turn is in flight (default: queue).
-export const AskSchema = z.object({
-  message: z.string(),
-  ifBusy: AskDispositionSchema.optional(),
-});
-export type Ask = z.infer<typeof AskSchema>;
-
 // Input to a turn: which conversation it belongs to, and the conversation
 // history so far (ending with the message that triggered it) as the model's
 // context.

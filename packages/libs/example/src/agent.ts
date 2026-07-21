@@ -18,8 +18,6 @@ import {
 import {z} from "zod";
 import {interruptTurn, startTurn, steerTurn} from "./turn";
 import {
-  type Ask,
-  AskSchema,
   type ConversationEntry,
   ConversationEntrySchema,
   type TurnOutcome,
@@ -102,14 +100,17 @@ export const Agent = object({
   name: "Agent",
   handlers: {
     // The single entry point for the user. When idle, the message starts a turn.
-    // When a turn is already running, a mid-turn message can be handled three
-    // ways — the caller picks via `ifBusy` (default: queue):
-    //   - queue     -> run it as its own turn after the active one finishes
-    //   - steer     -> redirect the running turn with the message
-    //   - interrupt -> stop the running turn (the message is the reason)
+    // When a turn is already running, decide what to do with the message:
+    //   - contains "interrupt"      -> stop the running turn (message = reason)
+    //   - contains "steer"          -> redirect the running turn with the message
+    //   - otherwise (incl. "queue") -> run it as its own turn afterward
+    //
+    // The keyword match is a DEMO shortcut — it even trips on "how do interrupts
+    // work?". A real agent would classify the message's intent instead, e.g. with
+    // a cheap, fast model deciding "redirect, cancel, or just queue this?".
     ask: schemas(
-      {input: AskSchema, output: z.void()},
-      function* ({message, ifBusy}: Ask): Operation<void> {
+      {input: z.string(), output: z.void()},
+      function* (message: string): Operation<void> {
         const conversationId = conversationKey();
         const turnId = yield* readTurnId();
 
@@ -118,20 +119,17 @@ export const Agent = object({
           return;
         }
 
-        switch (ifBusy ?? "queue") {
-          case "queue":
-            // Stays out of the committed history until its turn starts, but is
-            // visible via history() (which merges pending).
-            yield* enqueuePending(message);
-            break;
-          case "steer":
-            // Record the steer as a conversation event, then redirect the turn.
-            yield* appendEntry({role: "user", text: message});
-            steerTurn(turnId, message);
-            break;
-          case "interrupt":
-            interruptTurn(turnId, message);
-            break;
+        const text = message.toLowerCase();
+        if (text.includes("interrupt")) {
+          interruptTurn(turnId, message);
+        } else if (text.includes("steer")) {
+          // Record the steer as a conversation event, then redirect the turn.
+          yield* appendEntry({role: "user", text: message});
+          steerTurn(turnId, message);
+        } else {
+          // Default (including an explicit "queue"): run it as its own turn once
+          // the active one finishes. Visible via history() (which merges pending).
+          yield* enqueuePending(message);
         }
       },
     ),
