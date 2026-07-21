@@ -71,8 +71,8 @@ export function isRetryableModelStatus(status: number | undefined): boolean {
   );
 }
 
-// One model round is one durable side effect. There is no streaming adapter or
-// resumable-source machinery: Restate journals the single validated action.
+// One model round is one durable side effect: Restate journals the single
+// validated action.
 // Protocol mistakes are returned as values so the loop can ask the model to
 // correct itself; transport failures still throw and follow `run` retry policy.
 function* model(messages: ModelMessage[]): Operation<ModelResult> {

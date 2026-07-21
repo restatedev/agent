@@ -185,6 +185,11 @@ export const Turn = service({
       },
     ),
   },
+  options: {
+    handlers: {
+      run: {ingressPrivate: true},
+    },
+  },
 });
 
 // The turn lifecycle API the Agent uses to start and control a turn. Keeping

@@ -49,6 +49,10 @@ function agentKey(): string {
 // re-interrupting it is a no-op.
 type ActiveTurn = {id: string; interrupting: boolean};
 
+// Keep the Turn invocation payload bounded as the durable transcript grows.
+// Turn applies the tighter model-specific filter/window after receiving it.
+const MAX_TURN_HISTORY_ENTRIES = 80;
+
 function* readTurn(): Operation<ActiveTurn | undefined> {
   return (yield* sharedState().get<ActiveTurn>("turn")) ?? undefined;
 }
@@ -66,7 +70,7 @@ function* readHistory(): Operation<ConversationEntry[]> {
 }
 
 function* appendEntry(entry: ConversationEntry): Operation<void> {
-  const history = yield* readHistory();
+  const history = (yield* readHistory()).slice(-MAX_TURN_HISTORY_ENTRIES);
   history.push(entry);
   state().set("history", history);
 }
@@ -274,6 +278,7 @@ export const Agent = object({
   },
   options: {
     handlers: {
+      append: {ingressPrivate: true},
       history: {shared: true},
     },
   },
