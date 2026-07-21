@@ -35,11 +35,14 @@ async function getWeather(city: string, signal: AbortSignal) {
   return {city, temp: 22, condition: "sunny"};
 }
 
-// One step of a turn: stream a completion and act on each chunk, reporting a
-// concise message to the conversation for each. Returning true ends the turn.
-function* step(req: TurnRequest): Operation<boolean> {
-  const stream = yield* durableSource(() => llmFetch(req.message));
+// One step of a turn: stream a completion and accumulate what happened into a
+// single reply, which the turn uses as its summary. For now we just keep the
+// message in a variable; the detailed per-turn conversation (each chunk, each
+// tool call/result kept separately from the general conversation) is deferred.
+function* step(message: string): Operation<string> {
+  const stream = yield* durableSource(() => llmFetch(message));
 
+  let reply = "";
   while (true) {
     const res = yield* stream.next();
     if (res.type !== "next") {
@@ -55,17 +58,13 @@ function* step(req: TurnRequest): Operation<boolean> {
         (opts) => getWeather(chunk.args.city, opts.signal),
         {name: "getWeather"},
       );
-      yield* sendClient(Agent, req.conversationId).append({
-        text: `${chunk.name}: ${weather.temp}°C, ${weather.condition} in ${weather.city}`,
-      });
+      reply += `[${chunk.name}: ${weather.temp}°C, ${weather.condition} in ${weather.city}] `;
     } else {
-      yield* sendClient(Agent, req.conversationId).append({
-        text: chunk.content,
-      });
+      reply += chunk.content;
     }
   }
 
-  return true;
+  return reply;
 }
 
 // TurnService owns the turn loop. The Agent starts this and never awaits it.
@@ -74,7 +73,7 @@ export const TurnService = service({
   handlers: {
     // Drive one turn: run the step against the interrupt/steering signals, then
     // report the outcome. The input is validated against TurnRequestSchema.
-    //   - step returns true -> the turn is done          ("completed")
+    //   - step completes    -> the turn is done; its reply is the summary
     //   - interrupt         -> interrupt the step, end it ("interrupted: ...")
     //   - steer             -> interrupt the step, then run a fresh one on the
     //                          steering message
@@ -96,17 +95,14 @@ export const TurnService = service({
         try {
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
-            const task = spawn(
-              step({conversationId: req.conversationId, message}),
-            );
+            const task = spawn(step(message));
             const selected = yield* select({step: task, interrupt, steering});
 
             switch (selected.tag) {
               case "step": {
-                if (yield* selected.future) {
-                  break turn;
-                }
-                break;
+                // The step finished; its accumulated reply is the turn summary.
+                outcome = (yield* selected.future) || "completed";
+                break turn;
               }
               case "interrupt": {
                 const reason = yield* selected.future;
