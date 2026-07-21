@@ -2,10 +2,10 @@
 //
 // A plain Restate virtual object with the whole turn loop written out here — no
 // framework factory or turn-runner hides it. The `run` handler drives one turn:
-// it runs hooks, then repeatedly runs a `step` with an abortable context,
-// selecting the step against the interrupt/steering signals raised by the shared
-// `interrupt`/`steer` handlers. The only thing borrowed from @restate-agents/core
-// is `makeStepContext`, which gives each step a durable, abortable run/prompt.
+// it repeatedly runs a `step` with an abortable context, selecting the step
+// against the interrupt/steering signals raised by the shared `interrupt`/`steer`
+// handlers. The only thing borrowed from @restate-agents/core is `makeStepContext`,
+// which gives each step a durable, abortable run/prompt.
 //
 // Set OPENAI_API_KEY in the environment before running.
 
@@ -13,8 +13,6 @@ import {setTimeout} from "node:timers/promises";
 import {makeStepContext, type StepContext} from "@restate-agents/core";
 import {serve, TerminalError} from "@restatedev/restate-sdk";
 import {
-  allSettled,
-  type Channel,
   channel,
   handlerRequest,
   invocation,
@@ -34,36 +32,6 @@ const STEERING = "steering";
 
 // The running turn's invocation id, so the shared handlers can signal it.
 type TurnState = {turnId: string};
-
-// A hook is a durable side effect run at a turn/step boundary.
-type Hook = () => Operation<void>;
-
-// Run hooks concurrently and swallow their failures, so a bad hook can't take
-// down the turn.
-function* runHooks(hooks: Hook[]): Operation<void> {
-  yield* allSettled(hooks.map((hook) => spawn(hook())));
-}
-
-const preTurnHooks: Hook[] = [
-  function* () {
-    console.log("[turn] start");
-  },
-];
-const postTurnHooks: Hook[] = [
-  function* () {
-    console.log("[turn] done");
-  },
-];
-const preStepHooks: Hook[] = [
-  function* () {
-    console.log("[step] start");
-  },
-];
-const postStepHooks: Hook[] = [
-  function* () {
-    console.log("[step] done");
-  },
-];
 
 // A (mock) weather tool. It takes the step's AbortSignal, so an interrupt/steer
 // cancels the in-flight call instead of waiting for it.
@@ -101,24 +69,11 @@ function* step(ctx: StepContext): Operation<boolean> {
   return true;
 }
 
-// Run a single step wrapped in its step hooks, with an abortable context bound
-// to `stopChannel`. True means end the turn.
-function* runStep(stopChannel: Channel<void>): Operation<boolean> {
-  yield* runHooks(preStepHooks);
-  try {
-    const ctx = makeStepContext(stopChannel);
-    return yield* step(ctx);
-  } finally {
-    // Post-step hooks run no matter what, including on stop.
-    yield* runHooks(postStepHooks);
-  }
-}
-
 const weatherAgent = object({
   name: "weatherAgent",
   handlers: {
-    // Drive one turn. Runs pre-turn hooks, then loops: run the step with an
-    // abortable context and select it against the interrupt/steering signals.
+    // Drive one turn. Loops: run the step with an abortable context and select
+    // it against the interrupt/steering signals.
     //   - step returns true -> the turn is done
     //   - interrupt         -> stop the step, then end the turn
     //   - steer             -> stop the step, then run a fresh one
@@ -129,12 +84,10 @@ const weatherAgent = object({
       const interrupt = signal<void>(INTERRUPT);
       let steering = signal<void>(STEERING);
 
-      yield* runHooks(preTurnHooks);
-
       while (true) {
         // A per-step channel that stops the step (and aborts its tools) on a signal.
         const stopChannel = channel<void>();
-        const stepFut = spawn(runStep(stopChannel));
+        const stepFut = spawn(step(makeStepContext(stopChannel)));
 
         const selected = yield* select({stepFut, interrupt, steering});
 
@@ -161,8 +114,6 @@ const weatherAgent = object({
           steering = signal<void>(STEERING); // re-arm for the next steer
         }
       }
-
-      yield* runHooks(postTurnHooks);
 
       state<TurnState>().clear("turnId");
     },
