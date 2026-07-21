@@ -5,7 +5,7 @@
 
 import {z} from "zod";
 
-// A message in the per-turn detailed conversation (and the model's context):
+// A message in the per-turn detailed trace (and the model's context):
 // assistant text, tool calls/results, or a steer recorded into the turn.
 export const MessageSchema = z.object({
   role: z.enum(["user", "assistant", "tool"]),
@@ -19,8 +19,8 @@ export type TurnStatus = z.infer<typeof TurnStatusSchema>;
 
 // An entry in the general conversation. A `user` entry is a plain message; an
 // `assistant` entry is a turn's summary and carries that turn's identity and
-// status, so a client can see how the turn ended and query its detailed
-// conversation (the Turn object keyed by `turnId`).
+// status, so a client can see how the turn ended and query its detailed trace
+// (the Turn object keyed by `turnId`).
 export const ConversationEntrySchema = z.discriminatedUnion("role", [
   z.object({role: z.literal("user"), text: z.string()}),
   z.object({

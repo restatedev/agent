@@ -1,14 +1,28 @@
-// TurnService owns the turn loop. It is stateless: durable conversation state
-// lives in the Agent (general conversation) and in Turn (per-turn detail); the
-// turn talks to both only through one-way sends.
+// Turn is the turn loop: a stateless service that drives one conversation turn
+// (model -> tools -> model until the model answers). It owns no state at all.
+// Everything durable about a turn lives in the Agent — the conversation object
+// — because it is conversation data: the transcript, the active turn id, and
+// the per-turn detailed trace. The turn reports into the Agent with one-way
+// sends: `appendTrace` per detailed step, then exactly one `recordSummary`.
+// Restate delivers sends from one invocation to one object key in submission
+// order, so every trace entry lands while this turn is still the active one —
+// the summary (sent last) is what retires it. That ordering is why appendTrace
+// carries no turn id: the Agent files each entry under its own notion of the
+// active turn, which is exactly this turn.
 //
-// A running turn is controlled through two signals raised on its own invocation:
+// The engine of the loop — one durable model round — lives in ./step behind
+// the ModelRound interface; this file supplies the bindings (the example's
+// model, its tools, the trace reporter) and owns the loop policy (round
+// budget, feedback on model mistakes, interrupt/steer handling).
+//
+// The turn's identity is its own invocation id: minted by the send that starts
+// the turn (so the Agent knows it without a handshake), it keys the trace
+// inside the Agent and is the target for the control signals:
 //   - INTERRUPT ends the turn
 //   - STEERING  aborts the current run and reruns it on a new instruction
 // `startTurn`/`interruptTurn`/`steerTurn` are the lifecycle API the Agent uses.
 
 import {setTimeout} from "node:timers/promises";
-import {durableSource} from "@restate-agents/core";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
   handlerRequest,
@@ -25,13 +39,14 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent";
+import {llmFetch, parseProgram} from "./model";
 import {
-  type LLMChunk,
-  llmFetch,
   type ModelMessage,
-  parseProgram,
-} from "./model";
-import {Turn} from "./turn-conversation";
+  type ModelRound,
+  modelStep,
+  type Reporter,
+  type ToolCall,
+} from "./step";
 import {
   type ConversationEntry,
   type TurnRequest,
@@ -63,10 +78,7 @@ async function getWeather(city: string, signal: AbortSignal) {
 // failure the model could act on is returned as an `error: ...` string rather
 // than thrown, so the loop feeds it back and the model can adapt: an unknown
 // tool, a missing arg, or the tool itself failing.
-function* runTool(call: {
-  name: string;
-  args: Record<string, string>;
-}): Operation<string> {
+function* runTool(call: ToolCall): Operation<string> {
   if (call.name !== "getWeather") {
     return `error: unknown tool "${call.name}"`;
   }
@@ -95,103 +107,32 @@ function* runTool(call: {
   }
 }
 
-// The outcome of one model round: either the model's text plus any tool results,
-// or a recoverable error to feed back to the model so it can self-correct.
-type StepOutcome =
-  | {
-      text: string;
-      tools: {name: string; args: Record<string, string>; result: string}[];
-    }
-  | {error: string};
-
-// One model round: durably pull the raw completion, then parse and run it.
-// Parsing happens OUTSIDE the durable pull, so a malformed response is a
-// recoverable `{error}` (fed back to the model) rather than a terminal failure.
-// Interrupts and genuine stream failures surface from the pull and propagate.
-function* modelStep(
-  turnId: string,
-  messages: ModelMessage[],
-): Operation<StepOutcome> {
-  // Own the abort so an interrupt tears down the in-flight HTTP stream, not just
-  // the Restate task. The finally fires on normal completion and on the throw
-  // that task.interrupt() injects mid-stream.
-  const controller = new AbortController();
-  let raw = "";
-  try {
-    const stream = yield* durableSource(() =>
-      llmFetch(messages, controller.signal),
-    );
-    while (true) {
-      const res = yield* stream.next();
-      if (res.type === "done") {
-        break;
-      }
-      if (res.type === "aborted") {
-        // Replay ran past a stream that no longer exists (a crash mid-response).
-        // A model stream is not replayable, so fail explicitly rather than pass
-        // a truncated answer off as complete.
-        throw new TerminalError("model response was truncated on recovery");
-      }
-      raw += res.value;
-    }
-  } finally {
-    controller.abort();
-  }
-
-  // Parse outside the durable pull: a malformed response is the model's mistake,
-  // recoverable by feeding it back — not a terminal stream error.
-  let chunks: LLMChunk[];
-  try {
-    chunks = parseProgram(raw);
-  } catch (err) {
-    return {error: err instanceof Error ? err.message : String(err)};
-  }
-
-  let text = "";
-  const tools: {name: string; args: Record<string, string>; result: string}[] =
-    [];
-  for (const chunk of chunks) {
-    if (chunk.type === "tool_call") {
-      const result = yield* runTool(chunk);
-      yield* sendClient(Turn, turnId).append({
-        role: "tool",
-        text: `${chunk.name}(${JSON.stringify(chunk.args)}) → ${result}`,
-      });
-      tools.push({name: chunk.name, args: chunk.args, result});
-    } else if (chunk.content) {
-      text += chunk.content;
-      yield* sendClient(Turn, turnId).append({
-        role: "assistant",
-        text: chunk.content,
-      });
-    }
-  }
-  return {text, tools};
-}
-
 // Feed a recoverable error/observation back to the model and record it in the
-// per-turn trace, so the next round can self-correct.
+// turn's trace, so the next round can self-correct.
 function* observe(
-  turnId: string,
+  report: Reporter,
   messages: ModelMessage[],
   note: string,
 ): Operation<void> {
   messages.push({role: "user", content: note});
-  yield* sendClient(Turn, turnId).append({role: "tool", text: note});
+  yield* report({role: "tool", text: note});
 }
 
 // Run the agent loop for one instruction: model -> tools -> model until the model
 // answers with no tool call. A recoverable model mistake — a malformed response
 // or an empty one — is fed back as an observation so the model self-corrects next
 // round rather than failing the turn. Bounded by MAX_ROUNDS.
-function* agentRun(turnId: string, context: ModelMessage[]): Operation<string> {
+function* agentRun(
+  round: ModelRound,
+  context: ModelMessage[],
+): Operation<string> {
   const messages = [...context];
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const step = yield* modelStep(turnId, messages);
+  for (let n = 0; n < MAX_ROUNDS; n++) {
+    const step = yield* modelStep(round, messages);
 
     if ("error" in step) {
       yield* observe(
-        turnId,
+        round.report,
         messages,
         `Your last response could not be used (${step.error}). Reply with valid protocol JSON.`,
       );
@@ -207,7 +148,7 @@ function* agentRun(turnId: string, context: ModelMessage[]): Operation<string> {
         return text; // final answer — the model asked for no more tools
       }
       yield* observe(
-        turnId,
+        round.report,
         messages,
         "Your last response was empty. Call a tool or give a final answer.",
       );
@@ -230,9 +171,8 @@ function* agentRun(turnId: string, context: ModelMessage[]): Operation<string> {
   throw new TerminalError(`agent did not finish within ${MAX_ROUNDS} rounds`);
 }
 
-// TurnService owns the turn loop. The Agent starts this and never awaits it.
-export const TurnService = service({
-  name: "TurnService",
+export const Turn = service({
+  name: "Turn",
   handlers: {
     // Drive one turn: run the agent loop against the interrupt/steering signals,
     // then report a single summary. The input is validated against
@@ -241,15 +181,30 @@ export const TurnService = service({
     //   - interrupt     -> status "interrupted", text = the reason
     //   - steer         -> interrupt the run, rerun on the steering message
     //   - run throws     -> status "failed", text = the error
-    // Detailed step output goes to the per-turn conversation (Turn); only one
-    // TurnOutcome (turnId + status + text) reaches the general conversation
-    // (Agent), and it always does, so the turn can't die silently and leave
-    // `turnId` set forever.
-    doTurn: schemas(
+    // Detailed step output goes to the Agent's per-turn trace (via appendTrace
+    // sends); only one TurnOutcome (turnId + status + text) reaches the
+    // transcript, and it always does, so the turn can't die silently and leave
+    // the Agent's active turn set forever.
+    run: schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): Operation<void> {
-        // This turn's own invocation id is the key of its per-turn conversation.
+        // This turn's own invocation id is its identity: the Agent stored it
+        // when it started us, and it keys this turn's trace over there.
         const turnId = handlerRequest().id;
+
+        // Bind the engine's dependencies once for this turn: the example's
+        // model and tools, and a reporter that files trace entries with the
+        // conversation. The entry carries no turn id — the Agent attributes it
+        // to its active turn, which (by send ordering) is exactly this one.
+        const report: Reporter = (entry) =>
+          sendClient(Agent, req.conversationId).appendTrace(entry);
+        const round: ModelRound = {
+          fetch: llmFetch,
+          parse: parseProgram,
+          runTool,
+          report,
+        };
+
         const interrupt = signal<string>(INTERRUPT);
         let steering = signal<string>(STEERING);
 
@@ -262,7 +217,7 @@ export const TurnService = service({
         try {
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
-            const task = spawn(agentRun(turnId, context));
+            const task = spawn(agentRun(round, context));
             const selected = yield* select({answer: task, interrupt, steering});
 
             switch (selected.tag) {
@@ -291,13 +246,10 @@ export const TurnService = service({
                   // Swallow the interrupt.
                 }
                 steering = signal<string>(STEERING); // re-arm for the next steer
-                // Record the steer in this turn's detailed trace and add it to
-                // the context so the rerun (and the model) sees it. (The Agent
-                // also records it in the general conversation.)
-                yield* sendClient(Turn, turnId).append({
-                  role: "user",
-                  text: steer,
-                });
+                // Record the steer in this turn's trace and add it to the
+                // context so the rerun (and the model) sees it. (The Agent also
+                // records it in the general conversation.)
+                yield* report({role: "user", text: steer});
                 context = [...context, {role: "user", content: steer}];
                 break;
               }
@@ -322,13 +274,13 @@ export const TurnService = service({
 });
 
 // The turn lifecycle API the Agent uses to start and control a turn. Keeping
-// all three here means the Agent never has to know about TurnService or the
-// signal protocol directly.
+// all three here means the Agent never has to know about the Turn service or
+// the signal protocol directly.
 
-// Start a fresh turn; returns its invocation id so the Agent can remember it and
-// later interrupt/steer that exact turn.
+// Start a fresh turn; returns its invocation id — the turn's whole identity:
+// the Agent remembers it, the trace is keyed by it, interrupt/steer target it.
 export function* startTurn(req: TurnRequest): Operation<string> {
-  const started = yield* sendClient(TurnService).doTurn(req);
+  const started = yield* sendClient(Turn).run(req);
   return started.id;
 }
 

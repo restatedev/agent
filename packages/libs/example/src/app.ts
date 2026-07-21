@@ -1,23 +1,24 @@
-// Entrypoint: a conversational weather agent, wired from three Restate
-// constructs.
+// Entrypoint: a conversational weather agent, wired from two Restate
+// VirtualObjects.
 //
-//   - Agent (./agent): the general conversation VirtualObject — a clean thread
-//     of one user message per ask and one assistant summary per turn. `ask`
-//     starts a turn when idle; a message arriving mid-turn is queued, or — by a
-//     naive keyword check in this demo — steers or interrupts the running turn.
-//   - Turn (./turn-conversation): the per-turn detailed conversation
-//     VirtualObject — the "inside the run" trace (chunks + tool calls/results),
-//     kept separate from the general conversation.
-//   - TurnService (./turn): the stateless turn loop that runs the closed
-//     model->tool->model loop, writing detail to Turn and one summary to Agent.
+//   - Agent (./agent): the conversation object, owning ALL conversation data —
+//     the clean transcript (one user message per ask, one assistant summary per
+//     turn) plus a detailed per-turn trace, readable via `trace(turnId)` (live,
+//     mid-turn too). `ask` starts a turn when idle; a message arriving mid-turn
+//     is queued, or — by a naive keyword check in this demo — steers or
+//     interrupts the running turn. Explicit `interrupt`/`steer` handlers exist
+//     alongside for clients with real affordances (a stop button, an edit box)
+//     instead of keyword guessing.
+//   - Turn (./turn): the stateless turn loop. Drives the closed
+//     model->tool->model loop, reporting each detailed step into the Agent's
+//     per-turn trace and exactly one summary into the transcript.
 //
 // Set OPENAI_API_KEY in the environment before running.
 
 import {serve} from "@restatedev/restate-sdk";
 import {Agent} from "./agent";
-import {TurnService} from "./turn";
-import {Turn} from "./turn-conversation";
+import {Turn} from "./turn";
 
 serve({
-  services: [Agent, Turn, TurnService],
+  services: [Agent, Turn],
 });

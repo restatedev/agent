@@ -1,20 +1,23 @@
-// The example's model. This is deliberately example-specific and self-contained
-// — the framework only cares about a stream of chunks (see `durableSource` in
-// @restate-agents/core); it does not care that they come from an LLM. Swap this
-// file for any other streaming source and the turn loop is unchanged.
+// The example's model: the application-specific half of the ModelRound
+// interface (see ./step). It supplies `fetch` (llmFetch: stream a completion)
+// and `parse` (parseProgram: raw text -> protocol chunks); the engine that
+// drives them never imports this file. Swap this module for any other
+// streaming source that speaks ModelChunk and the loop is unchanged.
 //
 // Set OPENAI_API_KEY in the environment before running.
 
 import OpenAI from "openai";
 import {z} from "zod";
+import type {ModelChunk, ModelMessage} from "./step";
 
 // One protocol step from the model. The model speaks a small protocol: its reply
-// is a sequence of compact JSON objects, each one an `LLMChunk`. The raw text is
+// is a sequence of compact JSON objects, each one a chunk. The raw text is
 // streamed durably (llmFetch) and parsed afterwards (parseProgram). The schema is
 // enforced on every parsed object (see drainObjects) — the model's output is
 // untrusted, so a malformed chunk is a clear protocol error, not a value cast
-// blindly to this type.
-export const LLMChunkSchema = z.discriminatedUnion("type", [
+// blindly to a type. The inferred type matches the engine's ModelChunk;
+// parseProgram's return annotation is what holds the two in sync.
+const LLMChunkSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("text"), content: z.string()}),
   z.object({
     type: z.literal("tool_call"),
@@ -22,15 +25,7 @@ export const LLMChunkSchema = z.discriminatedUnion("type", [
     args: z.record(z.string(), z.string()),
   }),
 ]);
-export type LLMChunk = z.infer<typeof LLMChunkSchema>;
-
-// A message in the model's context window. `tool` carries a tool's result back
-// into the next inference so the model can act on it (a closed model->tool->model
-// loop).
-export type ModelMessage = {
-  role: "user" | "assistant" | "tool";
-  content: string;
-};
+type LLMChunk = z.infer<typeof LLMChunkSchema>;
 
 // The chat model to use. Any streaming-capable OpenAI chat model works.
 const MODEL = "gpt-4o";
@@ -127,11 +122,12 @@ function drainObjects(buf: string): {chunks: LLMChunk[]; rest: string} {
 }
 
 // Parse the model's full response text into protocol chunks. Called OUTSIDE the
-// durable model pull (see modelStep), so a malformed response is a recoverable
-// model mistake the agent can feed back — not a terminal stream failure. Throws
-// on non-JSON output (via drainObjects), an incomplete trailing object, or an
-// empty response.
-export function parseProgram(raw: string): LLMChunk[] {
+// durable model pull (see modelStep in ./step), so a malformed response is a
+// recoverable model mistake the agent can feed back — not a terminal stream
+// failure. Throws on non-JSON output (via drainObjects), an incomplete trailing
+// object, or an empty response. The ModelChunk return type is the conformance
+// check against the engine's protocol.
+export function parseProgram(raw: string): ModelChunk[] {
   const {chunks, rest} = drainObjects(raw);
   if (rest.trim().length > 0) {
     throw new Error(`response ended with incomplete JSON: ${rest}`);
