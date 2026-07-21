@@ -6,8 +6,8 @@
 // exactly that protocol.
 //
 // The surrounding Turn service only supervises this work. It supplies the
-// conversation context and a trace reporter, then races the loop against the
-// interrupt and steering signals.
+// conversation context and races the loop against interrupt and steering
+// signals.
 
 import {setTimeout} from "node:timers/promises";
 import {
@@ -17,7 +17,6 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import OpenAI from "openai";
 import {z} from "zod";
-import type {Message} from "./types";
 
 // A message in the model's context window. Tool messages carry results back
 // into the next inference so the model can act on them.
@@ -25,9 +24,6 @@ export type ModelMessage = {
   role: "user" | "assistant" | "tool";
   content: string;
 };
-
-// The Turn binds this to Agent.appendTrace for the current conversation.
-export type Reporter = (entry: Message) => Operation<unknown>;
 
 export type AgentLoopResult =
   | {status: "completed"; text: string}
@@ -136,30 +132,23 @@ function* runTool(call: ToolCall): Operation<string> {
   }
 }
 
-function* observe(
-  messages: ModelMessage[],
-  report: Reporter,
-  note: string,
-): Operation<void> {
+function observe(messages: ModelMessage[], note: string): void {
   messages.push({role: "user", content: note});
-  yield* report({role: "tool", text: note});
 }
 
 // Run model -> tools -> model until there is a final answer. The only injected
-// behavior is the turn-scoped trace destination; the example's model and tools
-// are concrete parts of this loop rather than ceremonial dependencies.
+// input is conversation context; the example's model and tools are concrete
+// parts of this loop rather than ceremonial dependencies.
 export function* agentLoop(
   context: ModelMessage[],
-  report: Reporter,
 ): Operation<AgentLoopResult> {
   const messages = [...context];
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const action = yield* model(messages);
 
     if (action.type === "error") {
-      yield* observe(
+      observe(
         messages,
-        report,
         `Your last response could not be used (${action.message}). Reply with valid protocol JSON.`,
       );
       continue;
@@ -167,22 +156,16 @@ export function* agentLoop(
 
     if (action.type === "text") {
       if (!action.content) {
-        yield* observe(
+        observe(
           messages,
-          report,
           "Your last response was empty. Call a tool or give a final answer.",
         );
         continue;
       }
-      yield* report({role: "assistant", text: action.content});
       return {status: "completed", text: action.content};
     }
 
     const result = yield* runTool(action);
-    yield* report({
-      role: "tool",
-      text: `${action.name}(${JSON.stringify(action.args)}) → ${result}`,
-    });
     messages.push({
       role: "assistant",
       content: JSON.stringify(action),

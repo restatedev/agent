@@ -1,17 +1,13 @@
-// Entrypoint: a conversational weather agent, wired from two Restate
-// VirtualObjects.
+// Entrypoint for the conversational weather agent.
 //
-//   - Agent (./agent): the conversation object, owning ALL conversation data —
-//     the clean transcript (one user message per ask, one assistant summary per
-//     turn) plus a detailed per-turn trace, readable via `trace(turnId)` (live,
-//     mid-turn too). `ask` starts a turn when idle; a message arriving mid-turn
-//     is queued, or — by a naive keyword check in this demo — steers or
-//     interrupts the running turn. Explicit `interrupt`/`steer` handlers exist
-//     alongside for clients with real affordances (a stop button, an edit box)
-//     instead of keyword guessing.
+//   - Agent (./agent): the conversation object, owning the user-facing history
+//     and active turn. `ask` starts a turn when idle; a message arriving
+//     mid-turn is queued, or — by a naive keyword check in this demo — steers
+//     or interrupts the running turn. Explicit `interrupt`/`steer` handlers
+//     exist for clients with real affordances (a stop button, an edit box).
 //   - Turn (./turn): the stateless turn loop. Drives the closed
-//     model->tool->model loop, reporting each detailed step into the Agent's
-//     per-turn trace and exactly one summary into the transcript.
+//     model->tool->model loop and appends exactly one structured outcome to the
+//     conversation. Restate's invocation observability keeps lower-level detail.
 //
 // Set OPENAI_API_KEY in the environment before running.
 

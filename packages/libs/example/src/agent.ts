@@ -1,13 +1,10 @@
-// Agent is the general conversation: a VirtualObject keyed by agent id
-// that owns everything durable about the conversation — the user-facing thread
-// (user messages + one assistant summary per turn), the per-turn detailed
-// traces, and the active turn's id. It never runs the turn itself — it starts
-// one (see ./turn, a stateless service) with a one-way send and returns.
+// Agent is the durable conversation controller. It is a Virtual Object keyed
+// by agent id, so its exclusive handlers serialize every decision about the
+// active turn, queued messages, and user-facing history.
 //
-// Two views, one owner. `history` is the clean transcript; `trace(turnId)` is
-// the "inside the run" detail a summary entry points into. Both live here
-// because both are conversation data: one object to query, one object's state
-// to delete when the conversation goes.
+// It never runs the agent loop itself. `ask` starts a stateless Turn service
+// with a one-way send, `interrupt` and `steer` resolve signals on that
+// invocation, and `append` accepts the Turn's single high-level outcome.
 
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
@@ -23,8 +20,6 @@ import {interruptTurn, startTurn, steerTurn} from "./turn";
 import {
   type ConversationEntry,
   ConversationEntrySchema,
-  type Message,
-  MessageSchema,
   TurnOutcomeSchema,
 } from "./types";
 
@@ -43,13 +38,12 @@ function agentKey(): string {
 // as intent ("read the active turn", "append an entry") rather than key strings.
 // Reads use `sharedState()` (read-only, usable from any handler); writes use
 // `state()` (only valid in an exclusive handler). The keys are `turn`
-// (ActiveTurn), `history` (ConversationEntry[]), `pending` (string[]), and one
-// `trace/<turnId>` (Message[]) per turn.
+// (ActiveTurn), `history` (ConversationEntry[]), and `pending` (string[]).
 
-// The active turn as this object tracks it. `id` is the turn's invocation id —
-// its identity, its trace key, and the signal target. `interrupting` marks the
+// The active turn as this object tracks it. `id` is the turn's invocation id
+// and the signal target. `interrupting` marks the
 // wind-down window: we have asked the turn to stop, but its terminal summary
-// (which is what retires the turn, see recordSummary) has not arrived yet.
+// (which is what retires the turn, see append) has not arrived yet.
 // Control decisions need that window to be visible — a turn that is winding
 // down has stopped selecting signals, so steering it is futile and
 // re-interrupting it is a no-op.
@@ -65,23 +59,6 @@ function* saveTurn(turn: ActiveTurn): Operation<void> {
 
 function* clearTurn(): Operation<void> {
   state().clear("turn");
-}
-
-// Per-turn traces live under their own state keys, one per turn, so reading or
-// growing one turn's trace never touches another's. This pair is the only
-// place that knows the key format.
-function traceKey(turnId: string): string {
-  return `trace/${turnId}`;
-}
-
-function* readTrace(turnId: string): Operation<Message[]> {
-  return (yield* sharedState().get<Message[]>(traceKey(turnId))) ?? [];
-}
-
-function* appendTraceEntry(turnId: string, entry: Message): Operation<void> {
-  const trace = yield* readTrace(turnId);
-  trace.push(entry);
-  state().set(traceKey(turnId), trace);
 }
 
 function* readHistory(): Operation<ConversationEntry[]> {
@@ -121,7 +98,7 @@ function* drainPending(): Operation<string[]> {
 // the transcript, so the turn's context ends with the whole batch). Guards the
 // one-turn-at-a-time invariant in one place: it never starts a turn while one
 // is already running, so an in-flight turn can't be orphaned. Callers begin
-// only when idle (ask when no turn is running; recordSummary after clearing
+// only when idle (ask when no turn is running; append after clearing
 // the finished turn). An empty batch is a no-op.
 function* beginTurn(agentId: string, messages: string[]): Operation<void> {
   if (messages.length === 0 || (yield* readTurn())) {
@@ -137,8 +114,8 @@ function* beginTurn(agentId: string, messages: string[]): Operation<void> {
 
 // Ask the active turn to stop, with `reason`. Fire-and-forget BY DESIGN: this
 // resolves the signal and returns — the turn is NOT finished yet. It winds
-// down on its own (aborts the model stream, joins its task) and then reports
-// its summary like any other ending; only that report (recordSummary) retires
+// down on its own (aborts in-flight model I/O, joins its task) and then reports
+// its summary like any other ending; only that report (append) retires
 // the turn. Starting the next turn therefore never waits on an interrupt
 // explicitly: beginTurn is gated on the active turn, and messages arriving
 // during the wind-down queue as pending. Blocking here until the turn died
@@ -165,8 +142,8 @@ function* interruptActive(reason: string): Operation<boolean> {
 }
 
 // Steer the active turn to `message`, if one is running AND still listening.
-// The steer is recorded as a user entry (the turn also records it in its own
-// trace), so the transcript shows what redirected the turn.
+// The steer is recorded as a user entry, so the transcript shows what
+// redirected the turn.
 //
 // Returns false — with NO side effects — when no turn will act on the steer:
 // the conversation is idle, or the turn is winding down after an interrupt.
@@ -269,45 +246,12 @@ export const Agent = object({
       },
     ),
 
-    // Read one turn's detailed trace — the "inside the run" record a summary
-    // entry's turnId points into. Shared, so it serves concurrently with a
-    // running turn: poll it mid-turn to watch the trace grow.
-    trace: schemas(
-      {input: z.string(), output: z.array(MessageSchema)},
-      function* (turnId): Operation<Message[]> {
-        return yield* readTrace(turnId);
-      },
-    ),
-
-    // The running turn reports each detailed step here (streamed text, tool
-    // calls/results, steers). The entry does not say which turn it belongs to
-    // — it can't: this object already knows its active turn and files the
-    // entry under it, so addressing another turn's trace is not even
-    // expressible. Send ordering makes the attribution exact, not
-    // approximate: Restate delivers sends from one invocation to one object
-    // key in submission order, so a turn's appends are all processed while it
-    // is still the active turn — its own recordSummary (sent last) is what
-    // retires it. An append arriving with no active turn is foreign or
-    // spoofed: drop it, there is nothing it could legitimately belong to.
-    appendTrace: schemas(
-      {input: MessageSchema, output: z.void()},
-      function* (entry: Message): Operation<void> {
-        const turn = yield* readTurn();
-        if (!turn) {
-          return;
-        }
-        // Note: a turn that is winding down (interrupting) still attributes
-        // correctly — its id is unchanged until its summary retires it.
-        yield* appendTraceEntry(turn.id, entry);
-      },
-    ),
-
-    // The active turn reports its single outcome here. Verify it belongs to the
-    // active turn (a stale/foreign report is ignored), record it as the turn's
-    // assistant entry — carrying turnId + status so a client can find and read
-    // the detailed trace — clear the active turn, then drain the queue into the
-    // next turn (if anything is queued).
-    recordSummary: schemas(
+    // The active Turn sends exactly one structured outcome here. Verify it
+    // belongs to the active turn, append the user-facing assistant entry,
+    // retire the turn, and start one batch turn for anything queued meanwhile.
+    // This is intentionally high-level: detailed tool/model activity belongs
+    // in Restate's invocation logs and observability, not conversation state.
+    append: schemas(
       {input: TurnOutcomeSchema, output: z.void()},
       function* ({turnId, status, text}): Operation<void> {
         const agentId = agentKey();
@@ -331,7 +275,6 @@ export const Agent = object({
   options: {
     handlers: {
       history: {shared: true},
-      trace: {shared: true},
     },
   },
 });

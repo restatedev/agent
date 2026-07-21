@@ -4,19 +4,14 @@
 // around it: what starts a turn, what interrupts or redirects it, and how its
 // ending is reported.
 //
-// It owns no state at all. Everything durable about a turn lives in the Agent
-// — the conversation object — because it is conversation data: the transcript,
-// the active turn id, and the per-turn detailed trace. The turn reports into
-// the Agent with one-way sends: `appendTrace` per detailed step, then exactly
-// one `recordSummary`. Restate delivers sends from one invocation to one
-// object key in submission order, so every trace entry lands while this turn
-// is still the active one — the summary (sent last) is what retires it. That
-// ordering is why appendTrace carries no turn id: the Agent files each entry
-// under its own notion of the active turn, which is exactly this turn.
+// It owns no state at all. The Agent owns the durable conversation transcript
+// and active turn id. This service sends exactly one structured outcome back
+// to `Agent.append`; model and tool details remain in Restate's invocation
+// observability instead of becoming user-facing conversation state.
 //
 // The turn's identity is its own invocation id: minted by the send that starts
-// the turn (so the Agent knows it without a handshake), it keys the trace
-// inside the Agent and is the target for the control signals:
+// the turn (so the Agent knows it without a handshake) and used as the target
+// for the control signals:
 //   - INTERRUPT ends the turn
 //   - STEERING  aborts the current run and reruns it on a new instruction
 // `startTurn`/`interruptTurn`/`steerTurn` are the lifecycle API the Agent uses.
@@ -34,7 +29,7 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent";
-import {agentLoop, type ModelMessage, type Reporter} from "./agent-loop";
+import {agentLoop, type ModelMessage} from "./agent-loop";
 import {
   type ConversationEntry,
   type TurnRequest,
@@ -62,22 +57,14 @@ export const Turn = service({
     //   - interrupt      -> status "interrupted", text = the reason
     //   - steer          -> interrupt the loop, rerun it on the steering message
     //   - loop throws    -> status "failed", text = the unexpected error
-    // Detailed step output goes to the Agent's per-turn trace (via appendTrace
-    // sends); only one TurnOutcome (turnId + status + text) reaches the
-    // transcript, and it always does, so the turn can't die silently and leave
-    // the Agent's active turn set forever.
+    // Only one TurnOutcome (turnId + status + text) reaches the transcript, so
+    // the turn cannot finish silently and leave the Agent marked busy.
     run: schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): Operation<void> {
-        // This turn's own invocation id is its identity: the Agent stored it
-        // when it started us, and it keys this turn's trace over there.
+        // This turn's own invocation id is its identity; the Agent stored it
+        // when it started us.
         const turnId = handlerRequest().id;
-
-        // Bind the turn-scoped trace destination. The entry carries no turn id
-        // — the Agent attributes it to its active turn, which (by send ordering)
-        // is exactly this one.
-        const report: Reporter = (entry) =>
-          sendClient(Agent, req.agentId).appendTrace(entry);
 
         const interrupt = signal<string>(INTERRUPT);
         let steering = signal<string>(STEERING);
@@ -91,7 +78,7 @@ export const Turn = service({
         try {
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
-            const task = spawn(agentLoop(context, report));
+            const task = spawn(agentLoop(context));
             const selected = yield* select({answer: task, interrupt, steering});
 
             switch (selected.tag) {
@@ -122,10 +109,8 @@ export const Turn = service({
                   // Swallow the interrupt.
                 }
                 steering = signal<string>(STEERING); // re-arm for the next steer
-                // Record the steer in this turn's trace and add it to the
-                // context so the rerun (and the model) sees it. (The Agent also
-                // records it in the general conversation.)
-                yield* report({role: "user", text: steer});
+                // Add the steer to the current model context. The Agent already
+                // recorded it in the durable conversation history.
                 context = [...context, {role: "user", content: steer}];
                 break;
               }
@@ -139,7 +124,7 @@ export const Turn = service({
         }
 
         // Always report exactly one outcome to the general conversation.
-        yield* sendClient(Agent, req.agentId).recordSummary({
+        yield* sendClient(Agent, req.agentId).append({
           turnId,
           status,
           text,
@@ -153,8 +138,8 @@ export const Turn = service({
 // all three here means the Agent never has to know about the Turn service or
 // the signal protocol directly.
 
-// Start a fresh turn; returns its invocation id — the turn's whole identity:
-// the Agent remembers it, the trace is keyed by it, interrupt/steer target it.
+// Start a fresh turn; returns its invocation id — the Agent remembers it and
+// interrupt/steer use it as their signal target.
 export function* startTurn(req: TurnRequest): Operation<string> {
   const started = yield* sendClient(Turn).run(req);
   return started.id;

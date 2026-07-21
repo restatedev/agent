@@ -5,22 +5,14 @@
 
 import {z} from "zod";
 
-// A message in the per-turn detailed trace (and the model's context):
-// assistant text, tool calls/results, or a steer recorded into the turn.
-export const MessageSchema = z.object({
-  role: z.enum(["user", "assistant", "tool"]),
-  text: z.string(),
-});
-export type Message = z.infer<typeof MessageSchema>;
-
 // How a turn ended.
 export const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
 export type TurnStatus = z.infer<typeof TurnStatusSchema>;
 
 // An entry in the general conversation. A `user` entry is a plain message; an
 // `assistant` entry is a turn's summary and carries that turn's identity and
-// status, so a client can see how the turn ended and query its detailed trace
-// (the Turn object keyed by `turnId`).
+// status, so a client can see how the turn ended and correlate it with the
+// Turn invocation in Restate's observability tooling.
 export const ConversationEntrySchema = z.discriminatedUnion("role", [
   z.object({role: z.literal("user"), text: z.string()}),
   z.object({
@@ -42,8 +34,7 @@ export const TurnRequestSchema = z.object({
 export type TurnRequest = z.infer<typeof TurnRequestSchema>;
 
 // The single outcome a turn reports back to the general conversation: its own
-// id (so the Agent can confirm identity and a client can find the detail), how
-// it ended, and the summary text.
+// id (so the Agent can confirm identity), how it ended, and the summary text.
 export const TurnOutcomeSchema = z.object({
   turnId: z.string(),
   status: TurnStatusSchema,
