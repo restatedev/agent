@@ -58,9 +58,10 @@ export const Turn = service({
     // then report a single summary. The input is validated against
     // TurnRequestSchema.
     //   - loop completes -> status "completed", text = the answer
+    //   - loop fails     -> status "failed", text = the reported error
     //   - interrupt      -> status "interrupted", text = the reason
     //   - steer          -> interrupt the loop, rerun it on the steering message
-    //   - loop throws    -> status "failed", text = the error
+    //   - loop throws    -> status "failed", text = the unexpected error
     // Detailed step output goes to the Agent's per-turn trace (via appendTrace
     // sends); only one TurnOutcome (turnId + status + text) reaches the
     // transcript, and it always does, so the turn can't die silently and leave
@@ -95,8 +96,10 @@ export const Turn = service({
 
             switch (selected.tag) {
               case "answer": {
-                text = (yield* selected.future) || "(no answer)";
-                status = "completed";
+                const result = yield* selected.future;
+                status = result.status;
+                text =
+                  result.status === "completed" ? result.text : result.error;
                 break turn;
               }
               case "interrupt": {
@@ -129,8 +132,8 @@ export const Turn = service({
             }
           }
         } catch (err) {
-          // The loop failed terminally (model/tool error, truncated recovery,
-          // round budget). Record it instead of letting the turn die silently.
+          // An unexpected model/tool failure escaped the structured loop
+          // result. Record it instead of letting the turn die silently.
           status = "failed";
           text = err instanceof Error ? err.message : String(err);
         }

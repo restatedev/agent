@@ -1,6 +1,6 @@
 // The concrete agent loop for the example. It owns the complete
 // model -> tools -> model cycle: the OpenAI prompt and transport, the response
-// protocol, durable streaming, tool execution, error feedback, and the round
+// protocol, durable model calls, tool execution, error feedback, and the round
 // budget. Keeping those pieces together makes their coupling explicit — the
 // prompt promises exactly the protocol parsed below, and the loop consumes
 // exactly that protocol.
@@ -10,8 +10,6 @@
 // interrupt and steering signals.
 
 import {setTimeout} from "node:timers/promises";
-import {durableSource} from "@restate-agents/core";
-import {TerminalError} from "@restatedev/restate-sdk";
 import {
   InterruptedError,
   type Operation,
@@ -31,12 +29,11 @@ export type ModelMessage = {
 // The Turn binds this to Agent.appendTrace for the current conversation.
 export type Reporter = (entry: Message) => Operation<unknown>;
 
-type ToolCall = {name: string; args: Record<string, string>};
-type ModelChunk =
-  | {type: "text"; content: string}
-  | ({type: "tool_call"} & ToolCall);
+export type AgentLoopResult =
+  | {status: "completed"; text: string}
+  | {status: "failed"; error: string};
 
-const ModelChunkSchema = z.discriminatedUnion("type", [
+const ModelActionSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("text"), content: z.string()}),
   z.object({
     type: z.literal("tool_call"),
@@ -44,13 +41,16 @@ const ModelChunkSchema = z.discriminatedUnion("type", [
     args: z.record(z.string(), z.string()),
   }),
 ]);
+type ModelAction = z.infer<typeof ModelActionSchema>;
+type ToolCall = Extract<ModelAction, {type: "tool_call"}>;
+type ModelResult = ModelAction | {type: "error"; message: string};
 
 const MODEL = "gpt-4o";
 const MAX_ROUNDS = 8;
 
 const SYSTEM = [
-  "You are an agent that works in steps, emitting compact JSON objects — one per",
-  "step, no prose, no markdown fences. Each object must be exactly one of:",
+  "You are an agent that works in steps. Reply with exactly one compact JSON",
+  "object, with no prose or markdown fences. It must be one of:",
   '{"type":"text","content":"..."} for anything you say, or',
   '{"type":"tool_call","name":"...","args":{"key":"value"}} to call a tool.',
   "The only tool is getWeather(city). All arg values must be strings.",
@@ -59,112 +59,51 @@ const SYSTEM = [
   "with your final answer and no further tool_call.",
 ].join(" ");
 
-// Construct the client lazily so importing the service does not require the
-// API key until a turn actually reaches the model.
 let client: OpenAI | undefined;
-function openai(): OpenAI {
-  client ??= new OpenAI();
-  return client;
-}
 
-function toChatMessage(
-  message: ModelMessage,
-): OpenAI.ChatCompletionMessageParam {
-  if (message.role === "tool") {
-    return {role: "user", content: `tool_result: ${message.content}`};
-  }
-  return {role: message.role, content: message.content};
-}
+// One model round is one durable side effect. There is no streaming adapter or
+// resumable-source machinery: Restate journals the single validated action.
+// Protocol mistakes are returned as values so the loop can ask the model to
+// correct itself; transport failures still throw and follow `run` retry policy.
+function* model(messages: ModelMessage[]): Operation<ModelResult> {
+  return yield* run(
+    async ({signal}): Promise<ModelResult> => {
+      client ??= new OpenAI();
+      const completion = await client.chat.completions.create(
+        {
+          model: MODEL,
+          response_format: {type: "json_object"},
+          messages: [
+            {role: "system", content: SYSTEM},
+            ...messages.map(
+              (message): OpenAI.ChatCompletionMessageParam =>
+                message.role === "tool"
+                  ? {role: "user", content: `tool_result: ${message.content}`}
+                  : {role: message.role, content: message.content},
+            ),
+          ],
+        },
+        {signal},
+      );
 
-// Stream raw text deltas. durableSource journals every pull and supplies the
-// signal that aborts the underlying HTTP request when the loop is interrupted.
-async function* streamModel(
-  messages: ModelMessage[],
-  signal: AbortSignal,
-): AsyncGenerator<string> {
-  const stream = await openai().chat.completions.create(
-    {
-      model: MODEL,
-      stream: true,
-      messages: [
-        {role: "system", content: SYSTEM},
-        ...messages.map(toChatMessage),
-      ],
+      const raw = completion.choices[0]?.message.content ?? "";
+      let value: unknown;
+      try {
+        value = JSON.parse(raw);
+      } catch {
+        return {type: "error", message: `model emitted invalid JSON: ${raw}`};
+      }
+      const parsed = ModelActionSchema.safeParse(value);
+      if (!parsed.success) {
+        return {
+          type: "error",
+          message: `model emitted an unrecognized action: ${raw}`,
+        };
+      }
+      return parsed.data;
     },
-    {signal},
+    {name: "model"},
   );
-
-  for await (const part of stream) {
-    const delta = part.choices[0]?.delta?.content ?? "";
-    if (delta) {
-      yield delta;
-    }
-  }
-}
-
-function parseChunk(slice: string): ModelChunk {
-  let value: unknown;
-  try {
-    value = JSON.parse(slice);
-  } catch {
-    throw new Error(`model emitted invalid JSON: ${slice}`);
-  }
-  const result = ModelChunkSchema.safeParse(value);
-  if (!result.success) {
-    throw new Error(`model emitted an unrecognized chunk: ${slice}`);
-  }
-  return result.data;
-}
-
-// Extract complete top-level JSON objects while respecting braces inside
-// strings. Any non-whitespace outside an object is a protocol violation.
-function drainObjects(buf: string): {chunks: ModelChunk[]; rest: string} {
-  const chunks: ModelChunk[] = [];
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let start = -1;
-
-  for (let i = 0; i < buf.length; i++) {
-    const ch = buf[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (depth === 0) {
-      if (!/\s/.test(ch)) {
-        throw new Error(
-          `model emitted non-JSON output: ${JSON.stringify(buf.slice(i))}`,
-        );
-      }
-    } else if (ch === '"') {
-      inString = true;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        chunks.push(parseChunk(buf.slice(start, i + 1)));
-        start = -1;
-      }
-    }
-  }
-
-  return {chunks, rest: start === -1 ? "" : buf.slice(start)};
-}
-
-function parseProgram(raw: string): ModelChunk[] {
-  const {chunks, rest} = drainObjects(raw);
-  if (rest.trim().length > 0) {
-    throw new Error(`response ended with incomplete JSON: ${rest}`);
-  }
-  if (chunks.length === 0) {
-    throw new Error("response contained no JSON objects");
-  }
-  return chunks;
 }
 
 // The example tool is deliberately local and small. A real application can
@@ -197,57 +136,6 @@ function* runTool(call: ToolCall): Operation<string> {
   }
 }
 
-type StepOutcome =
-  | {text: string; tools: (ToolCall & {result: string})[]}
-  | {error: string};
-
-// One durable model round. Parsing remains outside the durable source pull so
-// malformed model output is recoverable feedback, while transport failures and
-// truncated recovery remain terminal.
-function* modelStep(
-  messages: ModelMessage[],
-  report: Reporter,
-): Operation<StepOutcome> {
-  const stream = yield* durableSource((signal) =>
-    streamModel(messages, signal),
-  );
-  let raw = "";
-  while (true) {
-    const result = yield* stream.next();
-    if (result.type === "done") {
-      break;
-    }
-    if (result.type === "aborted") {
-      throw new TerminalError("model response was truncated on recovery");
-    }
-    raw += result.value;
-  }
-
-  let chunks: ModelChunk[];
-  try {
-    chunks = parseProgram(raw);
-  } catch (error) {
-    return {error: error instanceof Error ? error.message : String(error)};
-  }
-
-  let text = "";
-  const tools: (ToolCall & {result: string})[] = [];
-  for (const chunk of chunks) {
-    if (chunk.type === "tool_call") {
-      const result = yield* runTool(chunk);
-      yield* report({
-        role: "tool",
-        text: `${chunk.name}(${JSON.stringify(chunk.args)}) → ${result}`,
-      });
-      tools.push({name: chunk.name, args: chunk.args, result});
-    } else if (chunk.content) {
-      text += chunk.content;
-      yield* report({role: "assistant", text: chunk.content});
-    }
-  }
-  return {text, tools};
-}
-
 function* observe(
   messages: ModelMessage[],
   report: Reporter,
@@ -263,51 +151,47 @@ function* observe(
 export function* agentLoop(
   context: ModelMessage[],
   report: Reporter,
-): Operation<string> {
+): Operation<AgentLoopResult> {
   const messages = [...context];
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const step = yield* modelStep(messages, report);
+    const action = yield* model(messages);
 
-    if ("error" in step) {
+    if (action.type === "error") {
       yield* observe(
         messages,
         report,
-        `Your last response could not be used (${step.error}). Reply with valid protocol JSON.`,
+        `Your last response could not be used (${action.message}). Reply with valid protocol JSON.`,
       );
       continue;
     }
 
-    const {text, tools} = step;
-    if (text) {
-      messages.push({role: "assistant", content: text});
-    }
-    if (tools.length === 0) {
-      if (text) {
-        return text;
+    if (action.type === "text") {
+      if (!action.content) {
+        yield* observe(
+          messages,
+          report,
+          "Your last response was empty. Call a tool or give a final answer.",
+        );
+        continue;
       }
-      yield* observe(
-        messages,
-        report,
-        "Your last response was empty. Call a tool or give a final answer.",
-      );
-      continue;
+      yield* report({role: "assistant", text: action.content});
+      return {status: "completed", text: action.content};
     }
 
-    for (const tool of tools) {
-      messages.push({
-        role: "assistant",
-        content: JSON.stringify({
-          type: "tool_call",
-          name: tool.name,
-          args: tool.args,
-        }),
-      });
-      messages.push({
-        role: "tool",
-        content: `${tool.name}: ${tool.result}`,
-      });
-    }
+    const result = yield* runTool(action);
+    yield* report({
+      role: "tool",
+      text: `${action.name}(${JSON.stringify(action.args)}) → ${result}`,
+    });
+    messages.push({
+      role: "assistant",
+      content: JSON.stringify(action),
+    });
+    messages.push({role: "tool", content: `${action.name}: ${result}`});
   }
 
-  throw new TerminalError(`agent did not finish within ${MAX_ROUNDS} rounds`);
+  return {
+    status: "failed",
+    error: `agent did not finish within ${MAX_ROUNDS} rounds`,
+  };
 }
