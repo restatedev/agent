@@ -2,8 +2,9 @@
 // constructs.
 //
 //   - Agent (./agent): the general conversation VirtualObject — a clean thread
-//     of one user message per ask and one assistant summary per turn, plus the
-//     `ask` entry point and the interrupt/steer controls.
+//     of one user message per ask and one assistant summary per turn. `ask`
+//     starts a turn when idle; a message arriving mid-turn is queued, steers,
+//     or interrupts the running turn (the caller's choice).
 //   - Turn (./turn-conversation): the per-turn detailed conversation
 //     VirtualObject — the "inside the run" trace (chunks + tool calls/results),
 //     kept separate from the general conversation.

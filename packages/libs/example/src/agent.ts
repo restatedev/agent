@@ -18,6 +18,8 @@ import {
 import {z} from "zod";
 import {interruptTurn, startTurn, steerTurn} from "./turn";
 import {
+  type Ask,
+  AskSchema,
   type ConversationEntry,
   ConversationEntrySchema,
   type TurnOutcome,
@@ -44,9 +46,11 @@ function conversationKey(): string {
 function* readTurnId(): Operation<string | undefined> {
   return (yield* sharedState().get<string>("turnId")) ?? undefined;
 }
+
 function* saveTurnId(turnId: string): Operation<void> {
   state().set("turnId", turnId);
 }
+
 function* clearTurnId(): Operation<void> {
   state().clear("turnId");
 }
@@ -64,11 +68,13 @@ function* appendEntry(entry: ConversationEntry): Operation<void> {
 function* readPending(): Operation<string[]> {
   return (yield* sharedState().get<string[]>("pending")) ?? [];
 }
+
 function* enqueuePending(message: string): Operation<void> {
   const pending = yield* readPending();
   pending.push(message);
   state().set("pending", pending);
 }
+
 function* dequeuePending(): Operation<string | undefined> {
   const pending = yield* readPending();
   const next = pending.shift();
@@ -78,18 +84,12 @@ function* dequeuePending(): Operation<string | undefined> {
   return next;
 }
 
-// Start a turn for `message` if the conversation is idle; otherwise queue it to
-// run after the active turn finishes. Guarding here (rather than in the callers)
-// keeps the one-turn-at-a-time invariant in one place: this never overwrites an
-// in-flight turn's id.
-function* startOrQueue(
-  conversationId: string,
-  message: string,
-): Operation<void> {
+// Begin a turn for `message`. Guards the one-turn-at-a-time invariant in one
+// place: it never starts a turn while one is already running, so an in-flight
+// turn can't be orphaned. Callers begin only when idle (ask when no turn is
+// running; recordSummary after clearing the finished turn).
+function* beginTurn(conversationId: string, message: string): Operation<void> {
   if (yield* readTurnId()) {
-    // A turn is running: queue the message. It stays out of the committed
-    // history until its own turn starts, but is visible via history() below.
-    yield* enqueuePending(message);
     return;
   }
   yield* appendEntry({role: "user", text: message});
@@ -101,14 +101,38 @@ function* startOrQueue(
 export const Agent = object({
   name: "Agent",
   handlers: {
-    // The single entry point for the user. Delegates to startOrQueue, which
-    // starts a turn when idle or queues the message when one is running.
-    // (Control is a separate, explicit API: the interrupt/steer handlers below.)
+    // The single entry point for the user. When idle, the message starts a turn.
+    // When a turn is already running, a mid-turn message can be handled three
+    // ways — the caller picks via `ifBusy` (default: queue):
+    //   - queue     -> run it as its own turn after the active one finishes
+    //   - steer     -> redirect the running turn with the message
+    //   - interrupt -> stop the running turn (the message is the reason)
     ask: schemas(
-      {input: z.string(), output: z.void()},
-      function* (message: string): Operation<void> {
+      {input: AskSchema, output: z.void()},
+      function* ({message, ifBusy}: Ask): Operation<void> {
         const conversationId = conversationKey();
-        yield* startOrQueue(conversationId, message);
+        const turnId = yield* readTurnId();
+
+        if (!turnId) {
+          yield* beginTurn(conversationId, message);
+          return;
+        }
+
+        switch (ifBusy ?? "queue") {
+          case "queue":
+            // Stays out of the committed history until its turn starts, but is
+            // visible via history() (which merges pending).
+            yield* enqueuePending(message);
+            break;
+          case "steer":
+            // Record the steer as a conversation event, then redirect the turn.
+            yield* appendEntry({role: "user", text: message});
+            steerTurn(turnId, message);
+            break;
+          case "interrupt":
+            interruptTurn(turnId, message);
+            break;
+        }
       },
     ),
 
@@ -151,37 +175,7 @@ export const Agent = object({
 
         const next = yield* dequeuePending();
         if (next !== undefined) {
-          yield* startOrQueue(conversationId, next);
-        }
-      },
-    ),
-
-    // Direct control API: signal the active turn, if one is running. When no
-    // message is passed, the literal word "interrupt"/"steer" is sent.
-    //
-    // Exclusive (not shared): a shared control handler could run between
-    // startOrQueue starting a turn and committing `turnId`, observe no active
-    // turn, and drop the command. Handlers never await the turn, so exclusivity
-    // stays responsive.
-    interrupt: schemas(
-      {input: z.string().optional(), output: z.void()},
-      function* (reason?: string): Operation<void> {
-        const turnId = yield* readTurnId();
-        if (turnId) {
-          interruptTurn(turnId, reason ?? "interrupt");
-        }
-      },
-    ),
-    steer: schemas(
-      {input: z.string().optional(), output: z.void()},
-      function* (message?: string): Operation<void> {
-        const turnId = yield* readTurnId();
-        if (turnId) {
-          const steer = message ?? "steer";
-          // Persist the steer as a conversation event so it's durable and
-          // visible to later turns, then redirect the running turn.
-          yield* appendEntry({role: "user", text: steer});
-          steerTurn(turnId, steer);
+          yield* beginTurn(conversationId, next);
         }
       },
     ),
