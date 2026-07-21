@@ -32,7 +32,8 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent";
-import {agentLoop, type ModelMessage} from "./agent-loop";
+import {agentLoop} from "./agent-loop";
+import type {ModelMessage} from "./model";
 import {
   type ConversationEntry,
   type TurnOutcome,
@@ -113,7 +114,9 @@ export const Turn = service({
 
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
-            const task = spawn(agentLoop(context));
+            const task = spawn(
+              agentLoop({agentId: req.agentId, messages: context}),
+            );
             activeTask = task;
             const selected = yield* select({answer: task, interrupt, steering});
 

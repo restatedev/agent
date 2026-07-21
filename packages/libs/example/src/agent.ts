@@ -6,7 +6,7 @@
 // with a one-way send, `interrupt` and `steer` resolve signals on that
 // invocation, and `append` accepts the Turn's single high-level outcome.
 
-import {TerminalError} from "@restatedev/restate-sdk";
+import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import {
   handlerRequest,
   type Operation,
@@ -16,6 +16,7 @@ import {
   state,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
+import {type MessageRoute, routeMessage} from "./model";
 import {interruptTurn, startTurn, steerTurn} from "./turn";
 import {
   type ConversationEntry,
@@ -70,7 +71,7 @@ function* readHistory(): Operation<ConversationEntry[]> {
 }
 
 function* appendEntry(entry: ConversationEntry): Operation<void> {
-  const history = (yield* readHistory()).slice(-MAX_TURN_HISTORY_ENTRIES);
+  const history = yield* readHistory();
   history.push(entry);
   state().set("history", history);
 }
@@ -111,7 +112,7 @@ function* beginTurn(agentId: string, messages: string[]): Operation<void> {
   for (const message of messages) {
     yield* appendEntry({role: "user", text: message});
   }
-  const history = yield* readHistory();
+  const history = (yield* readHistory()).slice(-MAX_TURN_HISTORY_ENTRIES);
   const turnId = yield* startTurn({agentId, history});
   yield* saveTurn({id: turnId, interrupting: false});
 }
@@ -166,48 +167,56 @@ function* steerActive(message: string): Operation<boolean> {
   return true;
 }
 
+// Routing is advisory. A classifier outage must not lose an accepted user
+// message, so any non-cancellation failure falls back to the pending queue.
+function* classify(message: string): Operation<MessageRoute> {
+  try {
+    return yield* routeMessage(message);
+  } catch (error) {
+    if (error instanceof CancelledError) {
+      throw error;
+    }
+    return "queue";
+  }
+}
+
 export const Agent = object({
   name: "Agent",
   handlers: {
     // The plain-text entry point for the user. When idle, the message starts a
-    // turn. When a turn is already running, decide what to do with the message:
-    //   - contains "interrupt"      -> stop the running turn (message = reason)
-    //   - contains "steer"          -> redirect the running turn with the message
-    //   - otherwise (incl. "queue") -> run it as its own turn afterward
-    //
-    // The keyword match is a DEMO shortcut — it even trips on "how do interrupts
-    // work?". A real agent would classify the message's intent instead, e.g. with
-    // a cheap, fast model deciding "redirect, cancel, or just queue this?". A
-    // client with real affordances (a stop button, an edit-and-resend box)
-    // shouldn't route through this guessing at all — it calls the explicit
-    // `interrupt`/`steer` handlers below.
+    // turn. When a turn is already running, a fast model classifies it as a
+    // steer, interrupt, or queued follow-up. Clients with explicit stop/edit UI
+    // should still call the handlers below and skip classification entirely.
     ask: schemas(
       {input: z.string(), output: z.void()},
       function* (message): Operation<void> {
         const agentId = agentKey();
 
-        if (!(yield* readTurn())) {
+        const turn = yield* readTurn();
+        if (!turn) {
           yield* beginTurn(agentId, [message]);
           return;
         }
 
-        const text = message.toLowerCase();
-        if (text.includes("interrupt")) {
-          // If this returns false the turn is already winding down — the
-          // extra stop request has nothing left to do; drop it.
-          yield* interruptActive(message);
-        } else if (text.includes("steer")) {
-          // A steer that can't be honored (the turn is winding down after an
-          // interrupt) still carries the user's words — queue it for the next
-          // turn instead of dropping it.
-          if (!(yield* steerActive(message))) {
-            yield* enqueuePending(message);
-          }
-        } else {
-          // Default (including an explicit "queue"): hold it for the next turn.
-          // The whole queue drains into one batch turn when the active one
-          // finishes. Visible via history() (which merges pending).
+        // A winding-down turn no longer consumes steering signals, so there is
+        // no useful routing decision to make; preserve the message for next.
+        if (turn.interrupting) {
           yield* enqueuePending(message);
+          return;
+        }
+
+        switch (yield* classify(message)) {
+          case "interrupt":
+            yield* interruptActive(message);
+            break;
+          case "steer":
+            if (!(yield* steerActive(message))) {
+              yield* enqueuePending(message);
+            }
+            break;
+          case "queue":
+            yield* enqueuePending(message);
+            break;
         }
       },
     ),
