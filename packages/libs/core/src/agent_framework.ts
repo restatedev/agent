@@ -1,11 +1,6 @@
 import type {GenericCall} from "@restatedev/restate-sdk";
 import type {Future, Operation} from "@restatedev/restate-sdk-gen";
 
-export type Hook = () => Operation<void>;
-
-// If a step returns true, the turn breaks, otherwise continues
-export type Step = (ctx: StepContext) => Operation<boolean>;
-
 export type LLMChunk =
   | {type: "text"; content: string}
   | {type: "tool_call"; name: string; args: Record<string, string>};
@@ -36,15 +31,4 @@ export interface StepContext {
 
   // Prompt the LLM, returning a durable stream of chunks
   prompt(prompt: string): Operation<DurableSource<LLMChunk>>;
-}
-
-export interface Agent {
-  name: string;
-
-  preTurnHooks?: Hook[];
-  postTurnHooks?: Hook[];
-
-  preStepHook?: Hook[];
-  step: Step;
-  postStepHooks?: Hook[];
 }

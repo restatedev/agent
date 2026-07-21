@@ -1,12 +1,8 @@
-// Public API of the agent framework.
-
+// Public API.
 export type {
-  Agent,
   DurableSource,
-  Hook,
   LLMChunk,
   Next,
-  Step,
   StepContext,
 } from "./agent_framework";
-export {makeAgentObject} from "./service";
+export {makeStepContext} from "./service";

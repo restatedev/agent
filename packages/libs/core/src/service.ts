@@ -1,23 +1,14 @@
 import {type GenericCall, TerminalError} from "@restatedev/restate-sdk";
 import {
-  allSettled,
   type Channel,
   call,
-  channel,
   gen,
-  handlerRequest,
-  invocation,
   type Operation,
-  object,
   run,
   select,
-  sharedState,
-  signal,
   spawn,
-  state,
 } from "@restatedev/restate-sdk-gen";
 import type {
-  Agent,
   DurableSource,
   LLMChunk,
   Next,
@@ -25,137 +16,16 @@ import type {
 } from "./agent_framework";
 import {llmFetch} from "./utils";
 
+// Signal name used to propagate cancellation to a downstream `ctx.call`. It must
+// match the interrupt signal the called object listens for.
 const INTERRUPT = "interrupt";
-const STEERING = "steering";
 
-type AgentState = {turnId: string};
-
-export function makeAgentObject(agent: Agent) {
-  return object({
-    name: agent.name,
-    handlers: {
-      *doTurn() {
-        state<AgentState>().set("turnId", handlerRequest().id);
-        yield* doTurn(agent);
-        state<AgentState>().clear("turnId");
-      },
-
-      // Two handlers that help out to send signals
-      *interrupt() {
-        const id = yield* sharedState<AgentState>().get("turnId");
-        if (!id) {
-          throw new TerminalError("No running turn");
-        }
-        invocation(id).signal(INTERRUPT).resolve();
-      },
-      *steer() {
-        const id = yield* sharedState<AgentState>().get("turnId");
-        if (!id) {
-          throw new TerminalError("No running turn");
-        }
-        invocation(id).signal(STEERING).resolve();
-      },
-    },
-    options: {
-      // We don't use restate cancellation at all,
-      // so disable implicit cancellation for safety to avoid misusage.
-      explicitCancellation: true,
-      handlers: {
-        interrupt: {shared: true},
-        steer: {shared: true},
-      },
-    },
-  });
-}
-
-// Entrypoint of the turn business logic
-function* doTurn(agent: Agent) {
-  const interrupt = signal<void>(INTERRUPT);
-  let steering = signal<void>(STEERING);
-
-  // -- pre-turn
-  // All settled will not throw in case of errors.
-  yield* allSettled(agent.preTurnHooks?.map((hook) => spawn(hook())) ?? []);
-
-  while (true) {
-    // We use this stop channel to stop a step execution.
-    const stopChannel = channel<void>();
-
-    // Spawn the step
-    const stepFut = spawn(step(agent, stopChannel));
-
-    // Wait it alongside with interruption and steering signals.
-    const selectResult = yield* select({
-      stepFut,
-      interrupt,
-      steering,
-    });
-
-    if (selectResult.tag === "stepFut") {
-      const done = yield* selectResult.future;
-      // If step returned is true, we break the loop
-      if (done) {
-        break;
-      }
-    } else if (selectResult.tag === "interrupt") {
-      // We got the interrupt signal, let's propagate it to the step and wait for it to exit.
-      yield* stopChannel.send();
-      try {
-        yield* stepFut;
-      } catch {
-        // Just ignore failure
-      }
-
-      // Interruption breaks the loop
-      break;
-    } else if (selectResult.tag === "steering") {
-      // We got the steering signal, let's propagate it to the step and wait for it to exit.
-      yield* stopChannel.send();
-      try {
-        yield* stepFut;
-      } catch {
-        // Just ignore failure
-      }
-
-      // Steering is a stream, so if we consumed the latest steering signal,
-      // let's go recreate a new fut
-      steering = signal<void>(INTERRUPT);
-
-      // On steering, we run some specific business logic and continue to loop
-    }
-  }
-
-  // -- post-turn
-  yield* allSettled(agent.postTurnHooks?.map((hook) => spawn(hook())) ?? []);
-}
-
-// True means exit the loop
-function* step(agent: Agent, stopChannel: Channel<void>): Operation<boolean> {
-  // For each step, we:
-  // - Run pre-step hooks
-  // - Run the actual step
-  // - Run post-step hooks
-
-  // -- pre-step
-  yield* allSettled(agent.preStepHook?.map((hook) => spawn(hook())) ?? []);
-
-  try {
-    // -- step
-    const stepContext = makeStepContext(stopChannel);
-    return yield* agent.step(stepContext);
-  } catch (e) {
-    // Just logging here
-    console.log(`Step failed! ${e}`);
-    throw e;
-  } finally {
-    // -- post-step
-
-    // Don't care about signals, run these post-step hooks no matter what
-    yield* allSettled(agent.postStepHooks?.map((hook) => spawn(hook())) ?? []);
-  }
-}
-
-function makeStepContext(stopChannel: Channel<void>): StepContext {
+// Build a StepContext bound to `stopChannel`. Each operation races the stop
+// channel, so sending on the channel aborts the in-flight operation: `run`
+// aborts through its AbortSignal and `call` propagates an interrupt downstream.
+// This is the one durable primitive the framework provides — the turn loop that
+// feeds the stop channel lives in the caller (see the example's `run` handler).
+export function makeStepContext(stopChannel: Channel<void>): StepContext {
   // Wrap the restate functions in StepContext
   // while handling the stopChannel depending on the semantics we want.
 
