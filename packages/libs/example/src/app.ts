@@ -8,15 +8,13 @@
 //   - Turn (./turn): the stateless turn loop. Drives the closed
 //     model->tool->model loop and appends exactly one structured outcome to the
 //     conversation. Restate's invocation observability keeps lower-level detail.
-//   - Weather (./weather): a mock tool implemented as its own Restate service.
 //
 // Set OPENAI_API_KEY in the environment before running.
 
 import {serve} from "@restatedev/restate-sdk";
 import {Agent} from "./agent";
 import {Turn} from "./turn";
-import {Weather} from "./weather";
 
 serve({
-  services: [Agent, Turn, Weather],
+  services: [Agent, Turn],
 });

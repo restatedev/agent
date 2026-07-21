@@ -9,16 +9,15 @@
 // conversation context and races the loop against interrupt and steering
 // signals.
 
+import {setTimeout} from "node:timers/promises";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
-  client,
   InterruptedError,
   type Operation,
   run,
 } from "@restatedev/restate-sdk-gen";
 import OpenAI from "openai";
 import {z} from "zod";
-import {Weather} from "./weather";
 
 // A message in the model's context window. Tool messages carry results back
 // into the next inference so the model can act on them.
@@ -57,7 +56,7 @@ const SYSTEM = [
   "with your final answer and no further tool_call.",
 ].join(" ");
 
-let modelClient: OpenAI | undefined;
+let client: OpenAI | undefined;
 
 // Restate owns retries for model calls. Retry transport failures, timeouts,
 // rate limits, conflicts, and server failures; fail fast for deterministic
@@ -85,11 +84,11 @@ function* model(messages: ModelMessage[]): Operation<ModelResult> {
 
       // Disable the library's hidden retries so Restate journals and controls
       // the complete retry policy.
-      modelClient ??= new OpenAI({maxRetries: 0});
+      client ??= new OpenAI({maxRetries: 0});
 
       let completion: OpenAI.ChatCompletion;
       try {
-        completion = await modelClient.chat.completions.create(
+        completion = await client.chat.completions.create(
           {
             model: MODEL,
             response_format: {type: "json_object"},
@@ -148,6 +147,14 @@ function* model(messages: ModelMessage[]): Operation<ModelResult> {
   );
 }
 
+// The example tool is deliberately local and small. A real application can
+// replace this switch with a registry or service invocations without changing
+// the Turn lifecycle.
+async function getWeather(city: string, signal: AbortSignal) {
+  await setTimeout(200, undefined, {signal});
+  return {city, temp: 22, condition: "sunny"};
+}
+
 function* runTool(call: ToolCall): Operation<string> {
   if (call.name !== "getWeather") {
     return `error: unknown tool "${call.name}"`;
@@ -158,10 +165,10 @@ function* runTool(call: ToolCall): Operation<string> {
   }
 
   try {
-    // The tool call is a durable service invocation, not an opaque local
-    // callback hidden inside the Turn's journal.
-    const weather = yield* client(Weather).get({city});
-    return `${weather.temperatureCelsius}°C, ${weather.condition} in ${weather.city}`;
+    const weather = yield* run((opts) => getWeather(city, opts.signal), {
+      name: "getWeather",
+    });
+    return `${weather.temp}°C, ${weather.condition} in ${weather.city}`;
   } catch (error) {
     if (error instanceof InterruptedError || error instanceof TerminalError) {
       throw error;
