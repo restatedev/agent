@@ -100,11 +100,21 @@ function drainObjects(buf: string): {chunks: LLMChunk[]; rest: string} {
       else if (ch === '"') inString = false;
       continue;
     }
-    if (ch === '"') inString = true;
-    else if (ch === "{") {
+    if (ch === "{") {
       if (depth === 0) start = i;
       depth++;
-    } else if (ch === "}" && depth > 0) {
+    } else if (depth === 0) {
+      // Outside any object only whitespace is allowed. Prose, markdown fences, or
+      // any stray token is a protocol violation — surface it rather than drop it
+      // silently (which would otherwise show up later as an empty answer).
+      if (!/\s/.test(ch)) {
+        throw new Error(
+          `model emitted non-JSON output: ${JSON.stringify(buf.slice(i))}`,
+        );
+      }
+    } else if (ch === '"') {
+      inString = true;
+    } else if (ch === "}") {
       depth--;
       if (depth === 0) {
         chunks.push(parseChunk(buf.slice(start, i + 1)));

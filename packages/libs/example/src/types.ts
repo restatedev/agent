@@ -32,23 +32,6 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
-// The general conversation owned by the Agent: the user-facing thread. `turnId`
-// is the active turn's invocation id (unset when idle); `pending` holds messages
-// received while a turn was running, to be run as their own turns afterwards.
-export const ConversationStateSchema = z.object({
-  history: z.array(ConversationEntrySchema),
-  turnId: z.string(),
-  pending: z.array(z.string()),
-});
-export type ConversationState = z.infer<typeof ConversationStateSchema>;
-
-// The per-turn detailed conversation owned by a Turn object: the trace of one
-// turn's steps, kept separate from the general conversation.
-export const TurnStateSchema = z.object({
-  history: z.array(MessageSchema),
-});
-export type TurnState = z.infer<typeof TurnStateSchema>;
-
 // Input to a turn: which conversation it belongs to, and the conversation
 // history so far (ending with the message that triggered it) as the model's
 // context.

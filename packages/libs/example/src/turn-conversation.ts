@@ -12,7 +12,7 @@ import {
   state,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
-import {type Message, MessageSchema, type TurnState} from "./types";
+import {type Message, MessageSchema} from "./types";
 
 export const Turn = object({
   name: "Turn",
@@ -21,9 +21,9 @@ export const Turn = object({
     append: schemas(
       {input: MessageSchema, output: z.void()},
       function* (entry): Operation<void> {
-        const history = (yield* state<TurnState>().get("history")) ?? [];
+        const history = (yield* state().get<Message[]>("history")) ?? [];
         history.push(entry);
-        state<TurnState>().set("history", history);
+        state().set("history", history);
       },
     ),
 
@@ -31,7 +31,7 @@ export const Turn = object({
     history: schemas(
       {input: z.void(), output: z.array(MessageSchema)},
       function* (): Operation<Message[]> {
-        return (yield* sharedState<TurnState>().get("history")) ?? [];
+        return (yield* sharedState().get<Message[]>("history")) ?? [];
       },
     ),
   },

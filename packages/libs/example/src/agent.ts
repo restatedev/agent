@@ -20,7 +20,6 @@ import {interruptTurn, startTurn, steerTurn} from "./turn";
 import {
   type ConversationEntry,
   ConversationEntrySchema,
-  type ConversationState,
   type TurnOutcome,
   TurnOutcomeSchema,
 } from "./types";
@@ -39,40 +38,42 @@ function conversationKey(): string {
 // Encapsulate every read/write behind a named Operation, so the handlers read
 // as intent ("read the active turn", "append an entry") rather than key strings.
 // Reads use `sharedState()` (read-only, usable from any handler); writes use
-// `state()` (only valid in an exclusive handler).
+// `state()` (only valid in an exclusive handler). The keys are `turnId`
+// (string), `history` (ConversationEntry[]), and `pending` (string[]).
 
 function* readTurnId(): Operation<string | undefined> {
-  return (yield* sharedState<ConversationState>().get("turnId")) ?? undefined;
+  return (yield* sharedState().get<string>("turnId")) ?? undefined;
 }
 function* saveTurnId(turnId: string): Operation<void> {
-  state<ConversationState>().set("turnId", turnId);
+  state().set("turnId", turnId);
 }
 function* clearTurnId(): Operation<void> {
-  state<ConversationState>().clear("turnId");
+  state().clear("turnId");
 }
 
 function* readHistory(): Operation<ConversationEntry[]> {
-  return (yield* sharedState<ConversationState>().get("history")) ?? [];
+  return (yield* sharedState().get<ConversationEntry[]>("history")) ?? [];
 }
+
 function* appendEntry(entry: ConversationEntry): Operation<void> {
   const history = yield* readHistory();
   history.push(entry);
-  state<ConversationState>().set("history", history);
+  state().set("history", history);
 }
 
 function* readPending(): Operation<string[]> {
-  return (yield* sharedState<ConversationState>().get("pending")) ?? [];
+  return (yield* sharedState().get<string[]>("pending")) ?? [];
 }
 function* enqueuePending(message: string): Operation<void> {
   const pending = yield* readPending();
   pending.push(message);
-  state<ConversationState>().set("pending", pending);
+  state().set("pending", pending);
 }
 function* dequeuePending(): Operation<string | undefined> {
   const pending = yield* readPending();
   const next = pending.shift();
   if (next !== undefined) {
-    state<ConversationState>().set("pending", pending);
+    state().set("pending", pending);
   }
   return next;
 }
