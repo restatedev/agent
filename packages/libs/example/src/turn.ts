@@ -24,7 +24,12 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent";
-import {llmFetch, type ModelMessage} from "./model";
+import {
+  type LLMChunk,
+  llmFetch,
+  type ModelMessage,
+  parseProgram,
+} from "./model";
 import {Turn} from "./turn-conversation";
 import {
   type ConversationEntry,
@@ -37,9 +42,9 @@ import {
 const INTERRUPT = "interrupt";
 const STEERING = "steering";
 
-// Bound on the model->tool->model loop, so a model that keeps calling tools
-// can't spin forever.
-const MAX_STEPS = 8;
+// Bound on the agent loop (model rounds, including error-feedback retries), so a
+// model that keeps calling tools — or keeps producing junk — can't spin forever.
+const MAX_ROUNDS = 8;
 
 const toModelMessage = (e: ConversationEntry): ModelMessage => ({
   role: e.role,
@@ -76,31 +81,32 @@ function* runTool(call: {
   return `${weather.temp}°C, ${weather.condition} in ${weather.city}`;
 }
 
-// One model step: stream a completion, record each chunk to the per-turn
-// conversation, and run any tool calls. Returns the assistant text plus the
-// tool results (empty when the model produced a final answer).
+// The outcome of one model round: either the model's text plus any tool results,
+// or a recoverable error to feed back to the model so it can self-correct.
+type StepOutcome =
+  | {
+      text: string;
+      tools: {name: string; args: Record<string, string>; result: string}[];
+    }
+  | {error: string};
+
+// One model round: durably pull the raw completion, then parse and run it.
+// Parsing happens OUTSIDE the durable pull, so a malformed response is a
+// recoverable `{error}` (fed back to the model) rather than a terminal failure.
+// Interrupts and genuine stream failures surface from the pull and propagate.
 function* modelStep(
   turnId: string,
   messages: ModelMessage[],
-): Operation<{
-  text: string;
-  tools: {name: string; args: Record<string, string>; result: string}[];
-}> {
+): Operation<StepOutcome> {
   // Own the abort so an interrupt tears down the in-flight HTTP stream, not just
   // the Restate task. The finally fires on normal completion and on the throw
   // that task.interrupt() injects mid-stream.
   const controller = new AbortController();
+  let raw = "";
   try {
     const stream = yield* durableSource(() =>
       llmFetch(messages, controller.signal),
     );
-
-    let text = "";
-    const tools: {
-      name: string;
-      args: Record<string, string>;
-      result: string;
-    }[] = [];
     while (true) {
       const res = yield* stream.next();
       if (res.type === "done") {
@@ -112,47 +118,90 @@ function* modelStep(
         // a truncated answer off as complete.
         throw new TerminalError("model response was truncated on recovery");
       }
-      const chunk = res.value;
-
-      if (chunk.type === "tool_call") {
-        const result = yield* runTool(chunk);
-        yield* sendClient(Turn, turnId).append({
-          role: "tool",
-          text: `${chunk.name}(${JSON.stringify(chunk.args)}) → ${result}`,
-        });
-        tools.push({name: chunk.name, args: chunk.args, result});
-      } else if (chunk.content) {
-        text += chunk.content;
-        yield* sendClient(Turn, turnId).append({
-          role: "assistant",
-          text: chunk.content,
-        });
-      }
+      raw += res.value;
     }
-
-    return {text, tools};
   } finally {
     controller.abort();
   }
+
+  // Parse outside the durable pull: a malformed response is the model's mistake,
+  // recoverable by feeding it back — not a terminal stream error.
+  let chunks: LLMChunk[];
+  try {
+    chunks = parseProgram(raw);
+  } catch (err) {
+    return {error: err instanceof Error ? err.message : String(err)};
+  }
+
+  let text = "";
+  const tools: {name: string; args: Record<string, string>; result: string}[] =
+    [];
+  for (const chunk of chunks) {
+    if (chunk.type === "tool_call") {
+      const result = yield* runTool(chunk);
+      yield* sendClient(Turn, turnId).append({
+        role: "tool",
+        text: `${chunk.name}(${JSON.stringify(chunk.args)}) → ${result}`,
+      });
+      tools.push({name: chunk.name, args: chunk.args, result});
+    } else if (chunk.content) {
+      text += chunk.content;
+      yield* sendClient(Turn, turnId).append({
+        role: "assistant",
+        text: chunk.content,
+      });
+    }
+  }
+  return {text, tools};
 }
 
-// Run the agent loop for one instruction: model -> tools -> model until the
-// model answers with no tool call (bounded by MAX_STEPS). Returns the final
-// answer text.
+// Feed a recoverable error/observation back to the model and record it in the
+// per-turn trace, so the next round can self-correct.
+function* observe(
+  turnId: string,
+  messages: ModelMessage[],
+  note: string,
+): Operation<void> {
+  messages.push({role: "user", content: note});
+  yield* sendClient(Turn, turnId).append({role: "tool", text: note});
+}
+
+// Run the agent loop for one instruction: model -> tools -> model until the model
+// answers with no tool call. A recoverable model mistake — a malformed response
+// or an empty one — is fed back as an observation so the model self-corrects next
+// round rather than failing the turn. Bounded by MAX_ROUNDS.
 function* agentRun(turnId: string, context: ModelMessage[]): Operation<string> {
   const messages = [...context];
-  for (let stepNo = 0; stepNo < MAX_STEPS; stepNo++) {
-    const {text, tools} = yield* modelStep(turnId, messages);
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const step = yield* modelStep(turnId, messages);
+
+    if ("error" in step) {
+      yield* observe(
+        turnId,
+        messages,
+        `Your last response could not be used (${step.error}). Reply with valid protocol JSON.`,
+      );
+      continue;
+    }
+
+    const {text, tools} = step;
     if (text) {
       messages.push({role: "assistant", content: text});
     }
     if (tools.length === 0) {
-      return text; // final answer — the model asked for no more tools
+      if (text) {
+        return text; // final answer — the model asked for no more tools
+      }
+      yield* observe(
+        turnId,
+        messages,
+        "Your last response was empty. Call a tool or give a final answer.",
+      );
+      continue;
     }
     for (const t of tools) {
-      // Preserve the model's own tool request in context, then its result, so
-      // the next inference sees the full request/response pair — not a bare
-      // tool_result with no preceding call.
+      // Preserve the model's own tool request in context, then its result, so the
+      // next inference sees the full request/response pair.
       messages.push({
         role: "assistant",
         content: JSON.stringify({
@@ -164,9 +213,7 @@ function* agentRun(turnId: string, context: ModelMessage[]): Operation<string> {
       messages.push({role: "tool", content: `${t.name}: ${t.result}`});
     }
   }
-  throw new TerminalError(
-    `agent exceeded ${MAX_STEPS} steps without a final answer`,
-  );
+  throw new TerminalError(`agent did not finish within ${MAX_ROUNDS} rounds`);
 }
 
 // TurnService owns the turn loop. The Agent starts this and never awaits it.

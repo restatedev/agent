@@ -8,12 +8,12 @@
 import OpenAI from "openai";
 import {z} from "zod";
 
-// A single streamed step from the model. The model speaks a small protocol: it
-// emits a sequence of compact JSON objects, each one an `LLMChunk`, so a caller
-// can act on each the moment it completes instead of waiting for the whole reply.
-// The schema is enforced on every parsed object (see drainObjects) — the model's
-// output is untrusted, so a malformed chunk is a clear protocol error, not a
-// value cast blindly to this type.
+// One protocol step from the model. The model speaks a small protocol: its reply
+// is a sequence of compact JSON objects, each one an `LLMChunk`. The raw text is
+// streamed durably (llmFetch) and parsed afterwards (parseProgram). The schema is
+// enforced on every parsed object (see drainObjects) — the model's output is
+// untrusted, so a malformed chunk is a clear protocol error, not a value cast
+// blindly to this type.
 export const LLMChunkSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("text"), content: z.string()}),
   z.object({
@@ -126,13 +126,30 @@ function drainObjects(buf: string): {chunks: LLMChunk[]; rest: string} {
   return {chunks, rest: start === -1 ? "" : buf.slice(start)};
 }
 
-// Stream a completion for `messages`. The `signal` aborts the underlying HTTP
-// request, so interrupting a turn actually tears down the in-flight stream
-// instead of leaving it draining.
+// Parse the model's full response text into protocol chunks. Called OUTSIDE the
+// durable model pull (see modelStep), so a malformed response is a recoverable
+// model mistake the agent can feed back — not a terminal stream failure. Throws
+// on non-JSON output (via drainObjects), an incomplete trailing object, or an
+// empty response.
+export function parseProgram(raw: string): LLMChunk[] {
+  const {chunks, rest} = drainObjects(raw);
+  if (rest.trim().length > 0) {
+    throw new Error(`response ended with incomplete JSON: ${rest}`);
+  }
+  if (chunks.length === 0) {
+    throw new Error("response contained no JSON objects");
+  }
+  return chunks;
+}
+
+// Stream a completion for `messages`, yielding the raw text deltas. Parsing is
+// deliberately left to parseProgram (run outside the durable pull). The `signal`
+// aborts the underlying HTTP request, so interrupting a turn tears down the
+// in-flight stream instead of leaving it draining.
 export async function* llmFetch(
   messages: ModelMessage[],
   signal?: AbortSignal,
-): AsyncGenerator<LLMChunk> {
+): AsyncGenerator<string> {
   const stream = await openai().chat.completions.create(
     {
       model: MODEL,
@@ -145,19 +162,10 @@ export async function* llmFetch(
     {signal},
   );
 
-  let buffer = "";
   for await (const part of stream) {
-    buffer += part.choices[0]?.delta?.content ?? "";
-    const {chunks, rest} = drainObjects(buffer);
-    buffer = rest;
-    for (const chunk of chunks) yield chunk;
-  }
-  // Drain any final complete object, then fail if the stream ended mid-object —
-  // an incomplete tail would otherwise be dropped silently and surface as a
-  // misleading empty answer.
-  const {chunks, rest} = drainObjects(buffer);
-  for (const chunk of chunks) yield chunk;
-  if (rest.trim().length > 0) {
-    throw new Error(`model stream ended with incomplete JSON: ${rest}`);
+    const delta = part.choices[0]?.delta?.content ?? "";
+    if (delta) {
+      yield delta;
+    }
   }
 }
