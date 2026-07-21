@@ -51,6 +51,11 @@ turn appends exactly one structured outcome: `completed`, `interrupted`, or
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 successive `signal("steering")` consumes the next instruction in order.
+The controller also tracks the sequence it sent, while each turn reports how
+many elements it consumed. If normal completion wins the race with a steer,
+the unconsumed instruction becomes the newest input to one follow-up turn
+instead of being stranded in history. An explicit interrupt supersedes any
+outstanding steering.
 
 The classifier uses GPT-4o mini directly from the exclusive `Agent` handler and
 falls back to `queue` on failure, so an accepted message is never lost. A real

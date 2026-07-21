@@ -43,13 +43,19 @@ function agentKey(): string {
 // (ActiveTurn), `history` (ConversationEntry[]), and `pending` (string[]).
 
 // The active turn as this object tracks it. `id` is the turn's invocation id
-// and the signal target. `interrupting` marks the
+// and the signal target. `sentSteering` is the FIFO sequence resolved on that
+// invocation; it remains optional so state written by older deployments can be
+// read safely. `interrupting` marks the
 // wind-down window: we have asked the turn to stop, but its terminal summary
 // (which is what retires the turn, see append) has not arrived yet.
 // Control decisions need that window to be visible — a turn that is winding
 // down has stopped selecting signals, so steering it is futile and
 // re-interrupting it is a no-op.
-type ActiveTurn = {id: string; interrupting: boolean};
+type ActiveTurn = {
+  id: string;
+  interrupting: boolean;
+  sentSteering?: string[];
+};
 
 // Keep the Turn invocation payload bounded as the durable transcript grows.
 // Turn applies the tighter model-specific filter/window after receiving it.
@@ -101,26 +107,57 @@ function* drainPending(): Operation<string[]> {
   return pending;
 }
 
-// Begin a turn for `messages` (one or more user messages; all are appended to
-// the transcript, so the turn's context ends with the whole batch). Guards the
-// one-turn-at-a-time invariant in one place: it never starts a turn while one
-// is already running, so an in-flight turn can't be orphaned. Callers begin
-// only when idle (ask when no turn is running; append after clearing
-// the finished turn). An empty batch is a no-op.
+// Remove the latest `count` steering entries from a model-history snapshot.
+// They remain in the durable user-facing history, but `beginTurn` passes them
+// separately so the Turn can place unconsumed steering after the answer that
+// raced with it instead of presenting the instruction twice.
+function omitLatestSteering(
+  history: ConversationEntry[],
+  count: number,
+): ConversationEntry[] {
+  let remaining = count;
+  return history
+    .toReversed()
+    .filter((entry) => {
+      if (
+        remaining > 0 &&
+        entry.role === "user" &&
+        entry.delivery === "steer"
+      ) {
+        remaining -= 1;
+        return false;
+      }
+      return true;
+    })
+    .toReversed();
+}
+
+// Begin a turn for new `messages` and/or steering that the previous turn did
+// not consume. New messages are appended to the transcript; replayed steering
+// already exists there and is moved to the end of the model context only.
+// Guards the one-turn-at-a-time invariant in one place, so an in-flight turn
+// cannot be orphaned.
 function* beginTurn(
   agentId: string,
   messages: string[],
   delivery: Extract<UserMessageDelivery, "turn" | "queued">,
+  replayedSteering: string[] = [],
 ): Operation<void> {
-  if (messages.length === 0 || (yield* readTurn())) {
+  if (
+    (messages.length === 0 && replayedSteering.length === 0) ||
+    (yield* readTurn())
+  ) {
     return;
   }
   for (const message of messages) {
     yield* appendEntry({role: "user", text: message, delivery});
   }
-  const history = (yield* readHistory()).slice(-MAX_TURN_HISTORY_ENTRIES);
-  const turnId = yield* startTurn({agentId, history});
-  yield* saveTurn({id: turnId, interrupting: false});
+  const history = omitLatestSteering(
+    yield* readHistory(),
+    replayedSteering.length,
+  ).slice(-MAX_TURN_HISTORY_ENTRIES);
+  const turnId = yield* startTurn({agentId, history, replayedSteering});
+  yield* saveTurn({id: turnId, interrupting: false, sentSteering: []});
 }
 
 // Ask the active turn to stop, with `reason`. Fire-and-forget BY DESIGN: this
@@ -176,6 +213,10 @@ function* steerActive(message: string): Operation<boolean> {
     return false;
   }
   yield* appendEntry({role: "user", text: message, delivery: "steer"});
+  yield* saveTurn({
+    ...turn,
+    sentSteering: [...(turn.sentSteering ?? []), message],
+  });
   steerTurn(turn.id, message);
   return true;
 }
@@ -292,12 +333,21 @@ export const Agent = object({
     // in Restate's invocation logs and observability, not conversation state.
     append: schemas(
       {input: TurnOutcomeSchema, output: z.void()},
-      function* ({turnId, status, text}): Operation<void> {
+      function* ({turnId, status, text, consumedSteering}): Operation<void> {
         const agentId = agentKey();
+        const turn = yield* readTurn();
 
-        if ((yield* readTurn())?.id !== turnId) {
+        if (turn?.id !== turnId) {
           return; // not the active turn — a superseded or duplicate report
         }
+
+        // Interrupt is authoritative and discards outstanding steering. On any
+        // other ending, carry steering that the Turn never consumed into one
+        // follow-up turn instead of leaving it dead-lettered in history.
+        const replayedSteering =
+          status === "interrupted"
+            ? []
+            : (turn.sentSteering ?? []).slice(consumedSteering);
 
         yield* appendEntry({
           role: "assistant",
@@ -307,7 +357,12 @@ export const Agent = object({
         });
         yield* clearTurn();
 
-        yield* beginTurn(agentId, yield* drainPending(), "queued");
+        yield* beginTurn(
+          agentId,
+          yield* drainPending(),
+          "queued",
+          replayedSteering,
+        );
       },
     ),
   },

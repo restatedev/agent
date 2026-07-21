@@ -38,12 +38,15 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
-// Input to a turn: which Agent object it belongs to, and that agent's
-// conversation history so far (ending with the message that triggered it) as
-// the model's context.
+// Input to a turn: which Agent object it belongs to, that agent's conversation
+// history, and any steering the previous turn retired before consuming.
 export const TurnRequestSchema = z.object({
   agentId: z.string(),
   history: z.array(ConversationEntrySchema),
+  // Steering accepted just as the previous turn completed is replayed as the
+  // newest instruction of the follow-up turn. The default keeps in-flight
+  // requests from older deployments compatible.
+  replayedSteering: z.array(z.string()).default([]),
 });
 export type TurnRequest = z.infer<typeof TurnRequestSchema>;
 
@@ -53,5 +56,9 @@ export const TurnOutcomeSchema = z.object({
   turnId: z.string(),
   status: TurnStatusSchema,
   text: z.string(),
+  // Number of steering signals this turn actually consumed, in FIFO order.
+  // The Agent compares this with what it sent so completion cannot dead-letter
+  // a concurrently accepted steer.
+  consumedSteering: z.number().int().nonnegative().default(0),
 });
 export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;

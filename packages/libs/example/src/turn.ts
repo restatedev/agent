@@ -92,8 +92,8 @@ export const Turn = service({
     //   - interrupt      -> status "interrupted", text = the reason
     //   - steer          -> interrupt the loop, rerun it on the steering message
     //   - loop throws    -> status "failed", text = the unexpected error
-    // Only one TurnOutcome (turnId + status + text) reaches the transcript, so
-    // the turn cannot finish silently and leave the Agent marked busy.
+    // Only one TurnOutcome reaches the transcript. It includes the number of
+    // steering signals consumed so the Agent can recover a completion race.
     run: schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): Operation<void> {
@@ -106,8 +106,15 @@ export const Turn = service({
 
         // The model context ends with the message that triggered this turn.
         // Steering messages are added as newer instructions when they arrive.
-        let context = buildModelContext(req.history);
+        let context = [
+          ...buildModelContext(req.history),
+          ...req.replayedSteering.map((content) => ({
+            role: "user" as const,
+            content,
+          })),
+        ].slice(-MAX_CONTEXT_MESSAGES);
         let activeTask: Task<unknown> | undefined;
+        let consumedSteering = 0;
 
         try {
           let outcome: TurnOutcome | undefined;
@@ -118,7 +125,10 @@ export const Turn = service({
               agentLoop({agentId: req.agentId, messages: context}),
             );
             activeTask = task;
-            const selected = yield* select({answer: task, interrupt, steering});
+            // Prefer controls when several branches are already complete. The
+            // consumed count still closes the race where the answer passed this
+            // select before the controller resolved a signal.
+            const selected = yield* select({interrupt, steering, answer: task});
 
             switch (selected.tag) {
               case "answer": {
@@ -129,6 +139,7 @@ export const Turn = service({
                   status: result.status,
                   text:
                     result.status === "completed" ? result.text : result.error,
+                  consumedSteering,
                 };
                 break turn;
               }
@@ -136,11 +147,17 @@ export const Turn = service({
                 const reason = yield* selected.future;
                 yield* stopAgentLoop(task);
                 activeTask = undefined;
-                outcome = {turnId, status: "interrupted", text: reason};
+                outcome = {
+                  turnId,
+                  status: "interrupted",
+                  text: reason,
+                  consumedSteering,
+                };
                 break turn;
               }
               case "steering": {
                 const steer = yield* selected.future;
+                consumedSteering += 1;
                 yield* stopAgentLoop(task);
                 activeTask = undefined;
                 steering = signal<string>(STEERING); // re-arm for the next steer
@@ -173,6 +190,7 @@ export const Turn = service({
               turnId,
               status: "interrupted",
               text: "Turn cancelled",
+              consumedSteering,
             });
             throw error;
           }
@@ -183,6 +201,7 @@ export const Turn = service({
             turnId,
             status: "failed",
             text: errorMessage(error),
+            consumedSteering,
           });
         }
       },
