@@ -42,21 +42,29 @@ function conversationKey(): string {
 // Encapsulate every read/write behind a named Operation, so the handlers read
 // as intent ("read the active turn", "append an entry") rather than key strings.
 // Reads use `sharedState()` (read-only, usable from any handler); writes use
-// `state()` (only valid in an exclusive handler). The keys are `turnId`
-// (string — the running turn's invocation id), `history`
-// (ConversationEntry[]), `pending` (string[]), and one `trace/<turnId>`
-// (Message[]) per turn.
+// `state()` (only valid in an exclusive handler). The keys are `turn`
+// (ActiveTurn), `history` (ConversationEntry[]), `pending` (string[]), and one
+// `trace/<turnId>` (Message[]) per turn.
 
-function* readTurnId(): Operation<string | undefined> {
-  return (yield* sharedState().get<string>("turnId")) ?? undefined;
+// The active turn as this object tracks it. `id` is the turn's invocation id —
+// its identity, its trace key, and the signal target. `interrupting` marks the
+// wind-down window: we have asked the turn to stop, but its terminal summary
+// (which is what retires the turn, see recordSummary) has not arrived yet.
+// Control decisions need that window to be visible — a turn that is winding
+// down has stopped selecting signals, so steering it is futile and
+// re-interrupting it is a no-op.
+type ActiveTurn = {id: string; interrupting: boolean};
+
+function* readTurn(): Operation<ActiveTurn | undefined> {
+  return (yield* sharedState().get<ActiveTurn>("turn")) ?? undefined;
 }
 
-function* saveTurnId(turnId: string): Operation<void> {
-  state().set("turnId", turnId);
+function* saveTurn(turn: ActiveTurn): Operation<void> {
+  state().set("turn", turn);
 }
 
-function* clearTurnId(): Operation<void> {
-  state().clear("turnId");
+function* clearTurn(): Operation<void> {
+  state().clear("turn");
 }
 
 // Per-turn traces live under their own state keys, one per turn, so reading or
@@ -119,7 +127,7 @@ function* beginTurn(
   conversationId: string,
   messages: string[],
 ): Operation<void> {
-  if (messages.length === 0 || (yield* readTurnId())) {
+  if (messages.length === 0 || (yield* readTurn())) {
     return;
   }
   for (const message of messages) {
@@ -127,36 +135,56 @@ function* beginTurn(
   }
   const history = yield* readHistory();
   const turnId = yield* startTurn({conversationId, history});
-  yield* saveTurnId(turnId);
+  yield* saveTurn({id: turnId, interrupting: false});
 }
 
-// Interrupt the active turn with `reason`, if one is running. The reason is
-// not appended to the transcript here — it comes back as the interrupted
-// turn's summary (status "interrupted"), so recording it now would double it.
-// Returns false when the conversation is idle. Note the inherent race: true
-// means the signal was sent to the active turn's invocation; a turn finishing
-// at that same instant may still complete normally.
+// Ask the active turn to stop, with `reason`. Fire-and-forget BY DESIGN: this
+// resolves the signal and returns — the turn is NOT finished yet. It winds
+// down on its own (aborts the model stream, joins its task) and then reports
+// its summary like any other ending; only that report (recordSummary) retires
+// the turn. Starting the next turn therefore never waits on an interrupt
+// explicitly: beginTurn is gated on the active turn, and messages arriving
+// during the wind-down queue as pending. Blocking here until the turn died
+// would be worse, not safer — this runs in an exclusive handler, so it would
+// freeze the whole conversation for the duration of the wind-down.
+//
+// The reason is not appended to the transcript — it comes back as the turn's
+// summary text (status "interrupted"), so recording it now would double it.
+//
+// Returns false when there is nothing to stop: the conversation is idle, or
+// the turn is already winding down (the signal is single-shot; a second
+// resolve would be a silent no-op, so report it as one honestly). The inherent
+// completion race stands: true means the signal was sent — a turn finishing at
+// that same instant may still report "completed", and the transcript records
+// what actually happened.
 function* interruptActive(reason: string): Operation<boolean> {
-  const turnId = yield* readTurnId();
-  if (!turnId) {
+  const turn = yield* readTurn();
+  if (!turn || turn.interrupting) {
     return false;
   }
-  interruptTurn(turnId, reason);
+  interruptTurn(turn.id, reason);
+  yield* saveTurn({...turn, interrupting: true});
   return true;
 }
 
-// Steer the active turn to `message`, if one is running. The steer is recorded
-// as a user entry (the turn also records it in its own trace), so the
-// transcript shows what redirected the turn. Returns false when the
-// conversation is idle — nothing is recorded, the caller owns the fallback
-// (typically re-sending via ask). Same completion race as interruptActive.
+// Steer the active turn to `message`, if one is running AND still listening.
+// The steer is recorded as a user entry (the turn also records it in its own
+// trace), so the transcript shows what redirected the turn.
+//
+// Returns false — with NO side effects — when no turn will act on the steer:
+// the conversation is idle, or the turn is winding down after an interrupt.
+// The wind-down case matters: the turn's loop has already stopped selecting
+// steering signals, so resolving one would strand the message in a signal
+// nobody reads, while its transcript entry pretended it was heard. The caller
+// owns the fallback (ask() queues the message for the next turn; an external
+// caller re-sends via ask).
 function* steerActive(message: string): Operation<boolean> {
-  const turnId = yield* readTurnId();
-  if (!turnId) {
+  const turn = yield* readTurn();
+  if (!turn || turn.interrupting) {
     return false;
   }
   yield* appendEntry({role: "user", text: message});
-  steerTurn(turnId, message);
+  steerTurn(turn.id, message);
   return true;
 }
 
@@ -179,18 +207,24 @@ export const Agent = object({
       {input: z.string(), output: z.void()},
       function* (message): Operation<void> {
         const conversationId = conversationKey();
-        const turnId = yield* readTurnId();
 
-        if (!turnId) {
+        if (!(yield* readTurn())) {
           yield* beginTurn(conversationId, [message]);
           return;
         }
 
         const text = message.toLowerCase();
         if (text.includes("interrupt")) {
+          // If this returns false the turn is already winding down — the
+          // extra stop request has nothing left to do; drop it.
           yield* interruptActive(message);
         } else if (text.includes("steer")) {
-          yield* steerActive(message);
+          // A steer that can't be honored (the turn is winding down after an
+          // interrupt) still carries the user's words — queue it for the next
+          // turn instead of dropping it.
+          if (!(yield* steerActive(message))) {
+            yield* enqueuePending(message);
+          }
         } else {
           // Default (including an explicit "queue"): hold it for the next turn.
           // The whole queue drains into one batch turn when the active one
@@ -201,9 +235,9 @@ export const Agent = object({
     ),
 
     // Explicitly stop the active turn; the input is the reason. No intent
-    // guessing — this is the API a stop button calls. Returns whether there was
-    // an active turn to interrupt; false means the conversation was idle and
-    // nothing happened.
+    // guessing — this is the API a stop button calls. Returns whether the stop
+    // was requested; false means there was nothing to stop (idle, or already
+    // winding down from an earlier interrupt) and nothing happened.
     interrupt: schemas(
       {input: z.string(), output: z.boolean()},
       function* (reason): Operation<boolean> {
@@ -212,9 +246,10 @@ export const Agent = object({
     ),
 
     // Explicitly redirect the active turn with a new instruction. Returns
-    // whether there was an active turn to steer; false means the conversation
-    // was idle and nothing was recorded — the caller decides the fallback
-    // (typically sending the message via `ask` instead).
+    // whether a turn will act on it; false means no turn is listening (idle,
+    // or winding down after an interrupt) and nothing was recorded — the
+    // caller decides the fallback (typically sending the message via `ask`,
+    // which queues it for the next turn).
     steer: schemas(
       {input: z.string(), output: z.boolean()},
       function* (message): Operation<boolean> {
@@ -260,11 +295,13 @@ export const Agent = object({
     appendTrace: schemas(
       {input: MessageSchema, output: z.void()},
       function* (entry: Message): Operation<void> {
-        const turnId = yield* readTurnId();
-        if (!turnId) {
+        const turn = yield* readTurn();
+        if (!turn) {
           return;
         }
-        yield* appendTraceEntry(turnId, entry);
+        // Note: a turn that is winding down (interrupting) still attributes
+        // correctly — its id is unchanged until its summary retires it.
+        yield* appendTraceEntry(turn.id, entry);
       },
     ),
 
@@ -278,7 +315,7 @@ export const Agent = object({
       function* ({turnId, status, text}): Operation<void> {
         const conversationId = conversationKey();
 
-        if ((yield* readTurnId()) !== turnId) {
+        if ((yield* readTurn())?.id !== turnId) {
           return; // not the active turn — a superseded or duplicate report
         }
 
@@ -288,7 +325,7 @@ export const Agent = object({
           turnId,
           status,
         });
-        yield* clearTurnId();
+        yield* clearTurn();
 
         yield* beginTurn(conversationId, yield* drainPending());
       },
