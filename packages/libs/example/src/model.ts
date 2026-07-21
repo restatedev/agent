@@ -1,62 +1,48 @@
-// Everything specific to model access lives here: model selection, tool
-// definitions, the cheap message router, and the scoped model gateway.
+// Everything specific to model access lives here: model selection, the cheap
+// message router, and the scoped model gateway.
 
 import {createHash} from "node:crypto";
 import {createOpenAI, type OpenAIProvider} from "@ai-sdk/openai";
 import {Opts, TerminalError} from "@restatedev/restate-sdk";
-import {
-  type Operation,
-  run,
-  schemas,
-  scope,
-  service,
-} from "@restatedev/restate-sdk-gen";
+import {type Operation, run, scope, service} from "@restatedev/restate-sdk-gen";
 import {
   APICallError,
-  assistantModelMessageSchema,
+  type AssistantModelMessage,
   generateText,
   jsonSchema,
   type ModelMessage,
-  modelMessageSchema,
   Output,
   type ToolSet,
 } from "ai";
-import {z} from "zod";
 
-const ToolManifestSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-  inputSchema: z.record(z.string(), z.unknown()),
-});
-export type ToolManifest = z.infer<typeof ToolManifestSchema>;
+export type ToolManifest = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+};
 
-const ToolCallSchema = z.object({
-  type: z.literal("tool-call"),
-  toolCallId: z.string(),
-  toolName: z.string(),
-  input: z.unknown(),
-});
-export type ToolCall = z.infer<typeof ToolCallSchema>;
-const ToolCallsSchema = z.array(ToolCallSchema).min(1);
+export type ToolCall = {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+};
 
-const ModelResultSchema = z.discriminatedUnion("type", [
-  z.object({type: z.literal("text"), content: z.string()}),
-  z.object({
-    type: z.literal("tool_calls"),
-    message: assistantModelMessageSchema,
-    calls: ToolCallsSchema,
-  }),
-  z.object({type: z.literal("error"), message: z.string()}),
-]);
-export type ModelResult = z.infer<typeof ModelResultSchema>;
+export type ModelResult =
+  | {type: "text"; content: string}
+  | {
+      type: "tool_calls";
+      message: AssistantModelMessage;
+      calls: ToolCall[];
+    }
+  | {type: "error"; message: string};
 
 const MESSAGE_ROUTES = ["steer", "interrupt", "queue"] as const;
 export type MessageRoute = (typeof MESSAGE_ROUTES)[number];
 
-const ModelRequestSchema = z.object({
-  messages: z.array(modelMessageSchema),
-  tools: z.array(ToolManifestSchema).min(1),
-});
+type ModelRequest = {
+  messages: ModelMessage[];
+  tools: ToolManifest[];
+};
 
 const AGENT_MODEL = "gpt-5.6-terra";
 const ROUTER_MODEL = "gpt-4o-mini";
@@ -108,16 +94,6 @@ async function withOpenAI<T>(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function validationMessage(error: z.ZodError): string {
-  return error.issues
-    .slice(0, 4)
-    .map((issue) => {
-      const path = issue.path.length > 0 ? issue.path.join(".") : "value";
-      return `${path}: ${issue.message}`;
-    })
-    .join("; ");
 }
 
 async function completeAgent(
@@ -176,7 +152,8 @@ async function completeAgent(
       }
 
       const message = result.responseMessages.findLast(
-        (candidate) => candidate.role === "assistant",
+        (candidate): candidate is AssistantModelMessage =>
+          candidate.role === "assistant",
       );
       if (!message) {
         return {
@@ -185,26 +162,14 @@ async function completeAgent(
         };
       }
 
-      const parsedMessage = assistantModelMessageSchema.safeParse(message);
-      if (!parsedMessage.success) {
-        return {
-          type: "error",
-          message: `assistant message failed validation: ${validationMessage(parsedMessage.error)}`,
-        };
-      }
-
-      const parsedCalls = ToolCallsSchema.safeParse(result.toolCalls);
-      if (!parsedCalls.success) {
-        return {
-          type: "error",
-          message: `tool calls failed validation: ${validationMessage(parsedCalls.error)}`,
-        };
-      }
-
       return {
         type: "tool_calls",
-        message: parsedMessage.data,
-        calls: parsedCalls.data,
+        message,
+        calls: result.toolCalls.map(({toolCallId, toolName, input}) => ({
+          toolCallId,
+          toolName,
+          input,
+        })),
       };
     }
 
@@ -257,23 +222,17 @@ export function* routeMessage(
 export const ModelGateway = service({
   name: "ModelGateway",
   handlers: {
-    complete: schemas(
-      {input: ModelRequestSchema, output: ModelResultSchema},
-      function* ({messages, tools}): Operation<ModelResult> {
-        return yield* run(
-          ({signal}) => completeAgent(messages, tools, signal),
-          {
-            name: "agent-model",
-            retry: {
-              maxAttempts: 4,
-              initialInterval: 500,
-              maxInterval: 5_000,
-              exponentiationFactor: 2,
-            },
-          },
-        );
-      },
-    ),
+    *complete({messages, tools}: ModelRequest): Operation<ModelResult> {
+      return yield* run(({signal}) => completeAgent(messages, tools, signal), {
+        name: "agent-model",
+        retry: {
+          maxAttempts: 4,
+          initialInterval: 500,
+          maxInterval: 5_000,
+          exponentiationFactor: 2,
+        },
+      });
+    },
   },
   options: {handlers: {complete: {ingressPrivate: true}}},
 });

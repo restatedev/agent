@@ -28,7 +28,7 @@ export type AgentLoopResult =
   | {status: "completed"; text: string}
   | {status: "failed"; error: string};
 
-export type ToolOutcome =
+type ToolOutcome =
   | {call: ToolCall; status: "succeeded"; result: string}
   | {call: ToolCall; status: "failed"; error: string};
 
@@ -146,12 +146,6 @@ const sleepTool = defineAgentTool({
 
 const STATIC_TOOLS = [getWeatherTool, sleepTool] as const;
 
-// Static today; this is the single place that can later derive a tool set from
-// agent identity, conversation state, authorization, or installed capabilities.
-function deriveTools(): readonly AgentTool[] {
-  return STATIC_TOOLS;
-}
-
 function toManifest(tool: AgentTool): ToolManifest {
   return {
     name: tool.name,
@@ -186,7 +180,7 @@ export function* agentLoop({
   messages: context,
 }: AgentLoopInput): Operation<AgentLoopResult> {
   const messages = [...context];
-  const tools = deriveTools();
+  const tools = STATIC_TOOLS;
   const manifests = tools.map(toManifest);
   let toolCallCount = 0;
   for (let round = 0; round < MAX_ROUNDS; round++) {
