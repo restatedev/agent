@@ -11,8 +11,10 @@
     "prebundle": "rm -rf dist",
     "bundle": "esbuild src/app.ts --bundle --minify --sourcemap --platform=node --target=es2020 --outfile=dist/app.js",
     "postbundle": "cd dist && zip -r index.zip app.js*",
-    "app": "npm run start",
-    "app-dev": "npm run dev"
+    "app": "pnpm run start",
+    "app-dev": "pnpm run dev",
+    "lint": "biome check src",
+    "format": "biome check --write src"
   },
   "dependencies": {
     "@restatedev/restate-sdk": "^1.16.2",
@@ -20,6 +22,7 @@
     "zod": "^4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
     "@types/node": "^22",
     "esbuild": "^0.25.4",
     "tsx": "^4.19.2",
