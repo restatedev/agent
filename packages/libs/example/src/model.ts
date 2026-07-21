@@ -15,41 +15,27 @@ import {
   APICallError,
   assistantModelMessageSchema,
   generateText,
+  jsonSchema,
   type ModelMessage,
   modelMessageSchema,
   Output,
+  type ToolSet,
 } from "ai";
 import {z} from "zod";
 
-const WeatherArgsSchema = z.object({
-  city: z
-    .string()
-    .describe("City name, optionally including state or country."),
+const ToolManifestSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  inputSchema: z.record(z.string(), z.unknown()),
 });
+export type ToolManifest = z.infer<typeof ToolManifestSchema>;
 
-const SleepArgsSchema = z.object({
-  durationSeconds: z
-    .number()
-    .int()
-    .min(1)
-    .max(300)
-    .describe("How long to sleep, from 1 to 300 seconds."),
+const ToolCallSchema = z.object({
+  type: z.literal("tool-call"),
+  toolCallId: z.string(),
+  toolName: z.string(),
+  input: z.unknown(),
 });
-
-const ToolCallSchema = z.discriminatedUnion("toolName", [
-  z.object({
-    type: z.literal("tool-call"),
-    toolCallId: z.string(),
-    toolName: z.literal("getWeather"),
-    input: WeatherArgsSchema,
-  }),
-  z.object({
-    type: z.literal("tool-call"),
-    toolCallId: z.string(),
-    toolName: z.literal("sleep"),
-    input: SleepArgsSchema,
-  }),
-]);
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 const ToolCallsSchema = z.array(ToolCallSchema).min(1);
 
@@ -67,17 +53,19 @@ export type ModelResult = z.infer<typeof ModelResultSchema>;
 const MESSAGE_ROUTES = ["steer", "interrupt", "queue"] as const;
 export type MessageRoute = (typeof MESSAGE_ROUTES)[number];
 
-const ModelRequestSchema = z.object({messages: z.array(modelMessageSchema)});
+const ModelRequestSchema = z.object({
+  messages: z.array(modelMessageSchema),
+  tools: z.array(ToolManifestSchema).min(1),
+});
 
 const AGENT_MODEL = "gpt-5.6-terra";
 const ROUTER_MODEL = "gpt-4o-mini";
 const MODEL_SCOPE = "openai";
 
 const AGENT_SYSTEM = [
-  "You are a concise weather assistant.",
-  "Use getWeather whenever current weather data is required.",
-  "Call it once per city and group independent city lookups in one response.",
-  "When the user asks you to wait or sleep, call the sleep tool for the requested duration.",
+  "You are a concise assistant.",
+  "Use the available tools whenever they are needed to fulfill the request.",
+  "Group independent tool calls in one response so they can run in parallel.",
   "After receiving tool results, answer the user's request directly.",
 ].join(" ");
 
@@ -87,22 +75,6 @@ const ROUTER_SYSTEM = [
   "Use steer for corrections or refinements intended to change current work.",
   "Use queue for a separate request, a follow-up that can wait, or uncertainty.",
 ].join(" ");
-
-// There is deliberately no execute function here. The model only chooses and
-// validates tools; Restate executes them as durable local steps in agent-loop.
-const AGENT_TOOLS = {
-  getWeather: {
-    description: "Get the current weather for one city.",
-    inputSchema: WeatherArgsSchema,
-    strict: true,
-  },
-  sleep: {
-    description:
-      "Wait durably for a requested duration before continuing the turn.",
-    inputSchema: SleepArgsSchema,
-    strict: true,
-  },
-};
 
 let provider: OpenAIProvider | undefined;
 
@@ -150,14 +122,29 @@ function validationMessage(error: z.ZodError): string {
 
 async function completeAgent(
   messages: ModelMessage[],
+  tools: ToolManifest[],
   signal: AbortSignal,
 ): Promise<ModelResult> {
   return withOpenAI(async (openai) => {
+    const modelTools: ToolSet = Object.fromEntries(
+      tools.map((tool) => [
+        tool.name,
+        {
+          description: tool.description,
+          // Tool manifests are produced from Zod's draft-07 JSON Schema output
+          // in agent-loop. The gateway deliberately receives no executors.
+          inputSchema: jsonSchema(
+            tool.inputSchema as Parameters<typeof jsonSchema>[0],
+          ),
+          strict: true,
+        },
+      ]),
+    );
     const result = await generateText({
       model: openai.responses(AGENT_MODEL),
       system: AGENT_SYSTEM,
       messages,
-      tools: AGENT_TOOLS,
+      tools: modelTools,
       toolChoice: "auto",
       maxOutputTokens: 2_000,
       maxRetries: 0,
@@ -272,16 +259,19 @@ export const ModelGateway = service({
   handlers: {
     complete: schemas(
       {input: ModelRequestSchema, output: ModelResultSchema},
-      function* ({messages}): Operation<ModelResult> {
-        return yield* run(({signal}) => completeAgent(messages, signal), {
-          name: "agent-model",
-          retry: {
-            maxAttempts: 4,
-            initialInterval: 500,
-            maxInterval: 5_000,
-            exponentiationFactor: 2,
+      function* ({messages, tools}): Operation<ModelResult> {
+        return yield* run(
+          ({signal}) => completeAgent(messages, tools, signal),
+          {
+            name: "agent-model",
+            retry: {
+              maxAttempts: 4,
+              initialInterval: 500,
+              maxInterval: 5_000,
+              exponentiationFactor: 2,
+            },
           },
-        });
+        );
       },
     ),
   },
@@ -298,11 +288,12 @@ function agentLimitKey(agentId: string): string {
 export function* model(
   agentId: string,
   messages: ModelMessage[],
+  tools: ToolManifest[],
 ): Operation<ModelResult> {
   return yield* scope(MODEL_SCOPE)
     .client(ModelGateway)
     .complete(
-      {messages},
+      {messages, tools},
       Opts.from({limitKey: agentLimitKey(agentId), name: "agent-model"}),
     );
 }

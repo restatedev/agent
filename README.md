@@ -25,14 +25,14 @@ flowchart LR
 - `Turn` is stateless. One invocation supervises one agent turn and races the
   agent loop against interrupt and steering signals.
 - `agentLoop` has one small boundary: `{ agentId, messages }` in and a
-  `completed | failed` result out. It owns the bounded model/tool policy and
-  keeps tools as local durable `run` and `sleep` operations.
-- `model.ts` owns model definitions and access. AI SDK provides typed tools,
-  structured output, and provider-neutral messages, while deliberately not
-  executing tools. A cheap model routes messages that arrive mid-turn. Full
-  agent inference uses OpenAI's Responses API and goes through `ModelGateway`,
-  where Restate can admit work according to scope and limit-key concurrency
-  rules.
+  `completed | failed` result out. It owns self-contained tools—their model
+  descriptions, input schemas, and local durable implementations—and projects
+  serializable manifests for the model gateway.
+- `model.ts` owns model access and is tool-agnostic. It reconstructs AI SDK tool
+  definitions from the loop's manifests, while deliberately receiving no
+  executors. A cheap model routes messages that arrive mid-turn. Full agent
+  inference uses OpenAI's Responses API and goes through `ModelGateway`, where
+  Restate can admit work according to scope and limit-key concurrency rules.
 
 The controller stores only user-facing history. Tool calls and intermediate
 model steps stay in Restate's invocation journal and observability tools. A

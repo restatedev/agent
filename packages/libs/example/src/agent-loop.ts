@@ -16,7 +16,8 @@ import {
   spawn,
 } from "@restatedev/restate-sdk-gen";
 import type {ModelMessage, ToolModelMessage} from "ai";
-import {model as callModel, type ToolCall} from "./model.js";
+import {z} from "zod";
+import {model as callModel, type ToolCall, type ToolManifest} from "./model.js";
 
 export type AgentLoopInput = {
   agentId: string;
@@ -31,51 +32,148 @@ export type ToolOutcome =
   | {call: ToolCall; status: "succeeded"; result: string}
   | {call: ToolCall; status: "failed"; error: string};
 
+type ToolExecution =
+  | {status: "succeeded"; result: string}
+  | {status: "failed"; error: string};
+
+type AgentTool = {
+  name: string;
+  description: string;
+  inputSchema: z.ZodType;
+  execute(input: unknown): Operation<ToolExecution>;
+};
+
 const MAX_ROUNDS = 8;
 const MAX_TOOL_CALLS = 24;
 
-async function getWeather(city: string, signal: AbortSignal) {
-  await setTimeout(200, undefined, {signal});
-  return {city, temp: 22, condition: "sunny"};
+function validationMessage(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 4)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "input";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
 }
 
-function* runTool(call: ToolCall): Operation<ToolOutcome> {
-  if (call.toolName === "sleep") {
-    const {durationSeconds} = call.input;
+function defineAgentTool<
+  const Name extends string,
+  Schema extends z.ZodType,
+>(definition: {
+  name: Name;
+  description: string;
+  inputSchema: Schema;
+  run(input: z.output<Schema>): Operation<ToolExecution>;
+}): AgentTool & Pick<typeof definition, "name" | "inputSchema"> {
+  return {
+    name: definition.name,
+    description: definition.description,
+    inputSchema: definition.inputSchema,
+    *execute(input: unknown): Operation<ToolExecution> {
+      const parsed = definition.inputSchema.safeParse(input);
+      if (!parsed.success) {
+        return {
+          status: "failed",
+          error: `invalid input: ${validationMessage(parsed.error)}`,
+        };
+      }
+      return yield* definition.run(parsed.data);
+    },
+  };
+}
+
+const getWeatherTool = defineAgentTool({
+  name: "getWeather",
+  description:
+    "Get the current weather for one city. Call once per city; independent city lookups can run in parallel.",
+  inputSchema: z.object({
+    city: z
+      .string()
+      .describe("City name, optionally including state or country."),
+  }),
+  *run({city}): Operation<ToolExecution> {
+    try {
+      const weather = yield* run(
+        async ({signal}) => {
+          await setTimeout(200, undefined, {signal});
+          return {city, temp: 22, condition: "sunny"};
+        },
+        {
+          name: "getWeather",
+          retry: {
+            maxAttempts: 3,
+            initialInterval: 200,
+            maxInterval: 2_000,
+            exponentiationFactor: 2,
+          },
+        },
+      );
+      return {
+        status: "succeeded",
+        result: `${weather.temp}°C, ${weather.condition} in ${weather.city}`,
+      };
+    } catch (error) {
+      if (error instanceof InterruptedError || error instanceof TerminalError) {
+        throw error;
+      }
+      return {
+        status: "failed",
+        error: `getWeather failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  },
+});
+
+const sleepTool = defineAgentTool({
+  name: "sleep",
+  description: "Wait durably for a requested duration before continuing.",
+  inputSchema: z.object({
+    durationSeconds: z
+      .number()
+      .int()
+      .min(1)
+      .max(300)
+      .describe("How long to sleep, from 1 to 300 seconds."),
+  }),
+  *run({durationSeconds}): Operation<ToolExecution> {
     yield* sleep(durationSeconds * 1_000, "sleep");
     return {
-      call,
       status: "succeeded",
       result: `Slept for ${durationSeconds} seconds`,
     };
-  }
+  },
+});
 
-  const city = call.input.city;
-  try {
-    const weather = yield* run((opts) => getWeather(city, opts.signal), {
-      name: "getWeather",
-      retry: {
-        maxAttempts: 3,
-        initialInterval: 200,
-        maxInterval: 2_000,
-        exponentiationFactor: 2,
-      },
-    });
-    return {
-      call,
-      status: "succeeded",
-      result: `${weather.temp}°C, ${weather.condition} in ${weather.city}`,
-    };
-  } catch (error) {
-    if (error instanceof InterruptedError || error instanceof TerminalError) {
-      throw error;
-    }
+const STATIC_TOOLS = [getWeatherTool, sleepTool] as const;
+
+// Static today; this is the single place that can later derive a tool set from
+// agent identity, conversation state, authorization, or installed capabilities.
+function deriveTools(): readonly AgentTool[] {
+  return STATIC_TOOLS;
+}
+
+function toManifest(tool: AgentTool): ToolManifest {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
+  };
+}
+
+function* executeTool(
+  tools: readonly AgentTool[],
+  call: ToolCall,
+): Operation<ToolOutcome> {
+  const tool = tools.find((candidate) => candidate.name === call.toolName);
+  if (!tool) {
     return {
       call,
       status: "failed",
-      error: `getWeather failed: ${error instanceof Error ? error.message : String(error)}`,
+      error: `unknown tool: ${call.toolName}`,
     };
   }
+
+  return {call, ...(yield* tool.execute(call.input))};
 }
 
 function observe(messages: ModelMessage[], note: string): void {
@@ -88,9 +186,11 @@ export function* agentLoop({
   messages: context,
 }: AgentLoopInput): Operation<AgentLoopResult> {
   const messages = [...context];
+  const tools = deriveTools();
+  const manifests = tools.map(toManifest);
   let toolCallCount = 0;
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const action = yield* callModel(agentId, messages);
+    const action = yield* callModel(agentId, messages, manifests);
 
     if (action.type === "error") {
       observe(
@@ -123,7 +223,7 @@ export function* agentLoop({
     // Spawn every call before joining any of them. Interrupting the surrounding
     // agent loop cascades through the complete tool batch.
     const outcomes = yield* all(
-      action.calls.map((call) => spawn(runTool(call))),
+      action.calls.map((call) => spawn(executeTool(tools, call))),
     );
     const toolMessage: ToolModelMessage = {
       role: "tool",
