@@ -74,10 +74,15 @@ export const TurnService = service({
   handlers: {
     // Drive one turn: run the step against the interrupt/steering signals, then
     // report the outcome. The input is validated against TurnRequestSchema.
-    //   - step returns true -> the turn is done
-    //   - interrupt         -> interrupt the step, then end the turn
+    //   - step returns true -> the turn is done          ("completed")
+    //   - interrupt         -> interrupt the step, end it ("interrupted: ...")
     //   - steer             -> interrupt the step, then run a fresh one on the
     //                          steering message
+    //   - step throws       -> record the failure         ("failed: ...")
+    // In every case a final entry is reported, so the conversation always ends
+    // with a summary and the Agent clears the active turn. Without this, a
+    // terminal failure in the step would skip the report, leaving the turn dead
+    // but `turnId` set forever — the failure would vanish from the conversation.
     doTurn: schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): Operation<void> {
@@ -88,45 +93,53 @@ export const TurnService = service({
         let message = req.message;
         let outcome = "completed";
 
-        // Labelled so a case can break the loop; a bare `break` only leaves the switch.
-        turn: while (true) {
-          const task = spawn(
-            step({conversationId: req.conversationId, message}),
-          );
-          const selected = yield* select({step: task, interrupt, steering});
+        try {
+          // Labelled so a case can break the loop; a bare `break` only leaves the switch.
+          turn: while (true) {
+            const task = spawn(
+              step({conversationId: req.conversationId, message}),
+            );
+            const selected = yield* select({step: task, interrupt, steering});
 
-          switch (selected.tag) {
-            case "step": {
-              if (yield* selected.future) {
+            switch (selected.tag) {
+              case "step": {
+                if (yield* selected.future) {
+                  break turn;
+                }
+                break;
+              }
+              case "interrupt": {
+                const reason = yield* selected.future;
+                task.interrupt();
+                try {
+                  yield* task; // join so the step's finally/catch runs
+                } catch {
+                  // Swallow the interrupt.
+                }
+                outcome = `interrupted: ${reason}`;
                 break turn;
               }
-              break;
-            }
-            case "interrupt": {
-              const reason = yield* selected.future;
-              task.interrupt();
-              try {
-                yield* task; // join so the step's finally/catch runs
-              } catch {
-                // Swallow the interrupt.
+              case "steering": {
+                message = yield* selected.future; // redirect the fresh step
+                task.interrupt();
+                try {
+                  yield* task;
+                } catch {
+                  // Swallow the interrupt.
+                }
+                steering = signal<string>(STEERING); // re-arm for the next steer
+                break;
               }
-              outcome = `interrupted: ${reason}`;
-              break turn;
-            }
-            case "steering": {
-              message = yield* selected.future; // redirect the fresh step
-              task.interrupt();
-              try {
-                yield* task;
-              } catch {
-                // Swallow the interrupt.
-              }
-              steering = signal<string>(STEERING); // re-arm for the next steer
-              break;
             }
           }
+        } catch (err) {
+          // The step failed terminally (LLM/tool error, invalid input, ...).
+          // Record it as the outcome instead of letting the turn die silently.
+          outcome = `failed: ${err instanceof Error ? err.message : String(err)}`;
         }
 
+        // Always report a final entry — completed, interrupted, or failed — so
+        // the conversation ends with a summary and the Agent clears the turn.
         yield* sendClient(Agent, req.conversationId).append({
           text: outcome,
           final: true,
@@ -135,6 +148,17 @@ export const TurnService = service({
     ),
   },
 });
+
+// The turn lifecycle API the Agent uses to start and control a turn. Keeping
+// all three here means the Agent never has to know about TurnService or the
+// signal protocol directly.
+
+// Start a fresh turn for a conversation; returns its invocation id so the Agent
+// can remember it and later interrupt/steer that exact turn.
+export function* startTurn(req: TurnRequest): Operation<string> {
+  const started = yield* sendClient(TurnService).doTurn(req);
+  return started.id;
+}
 
 // Resolve a control signal on a running turn's invocation.
 export function interruptTurn(turnId: string, reason: string): void {

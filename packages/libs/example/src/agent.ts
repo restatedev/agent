@@ -13,12 +13,11 @@ import {
   type Operation,
   object,
   schemas,
-  sendClient,
   sharedState,
   state,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
-import {interruptTurn, steerTurn, TurnService} from "./turn";
+import {interruptTurn, startTurn, steerTurn} from "./turn";
 import {
   AppendEntrySchema,
   type ConversationState,
@@ -62,11 +61,8 @@ export const Agent = object({
           }
         } else if (!turnId) {
           // No turn running: start one and remember its invocation id.
-          const started = yield* sendClient(TurnService).doTurn({
-            conversationId,
-            message,
-          });
-          state<ConversationState>().set("turnId", started.id);
+          const startedId = yield* startTurn({conversationId, message});
+          state<ConversationState>().set("turnId", startedId);
         }
         // A normal message while a turn is running is just recorded above; we
         // do not start a second concurrent turn.
