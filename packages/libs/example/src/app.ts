@@ -1,23 +1,24 @@
 // Example service: a weather agent.
 //
-// A plain Restate virtual object with the whole turn loop written out here — no
-// framework factory or turn-runner hides it. The `run` handler drives one turn:
-// it repeatedly runs a `step` with an abortable context, selecting the step
-// against the interrupt/steering signals raised by the shared `interrupt`/`steer`
-// handlers. The only thing borrowed from @restate-agents/core is `makeStepContext`,
-// which gives each step a durable, abortable run/prompt.
+// A plain Restate virtual object. The `run` handler drives one turn: it spawns a
+// `step` and selects it against the interrupt/steering signals raised by the
+// shared `interrupt`/`steer` handlers. There is no separate step-context — the
+// step just uses Restate's `run` directly, and interrupting it is Restate's
+// native `task.interrupt()`: it throws into the step and aborts the AbortSignal
+// of its in-flight `run`, so a tool is cancelled with no extra plumbing.
 //
-// Set OPENAI_API_KEY in the environment before running.
+// The only things borrowed from @restate-agents/core are the durable LLM stream
+// helpers. Set OPENAI_API_KEY in the environment before running.
 
 import {setTimeout} from "node:timers/promises";
-import {makeStepContext, type StepContext} from "@restate-agents/core";
+import {durableSource, llmFetch} from "@restate-agents/core";
 import {serve, TerminalError} from "@restatedev/restate-sdk";
 import {
-  channel,
   handlerRequest,
   invocation,
   type Operation,
   object,
+  run,
   select,
   sharedState,
   signal,
@@ -25,16 +26,14 @@ import {
   state,
 } from "@restatedev/restate-sdk-gen";
 
-// Signal names used to control a running turn. INTERRUPT must match the name
-// the framework's ctx.call propagation uses.
 const INTERRUPT = "interrupt";
 const STEERING = "steering";
 
 // The running turn's invocation id, so the shared handlers can signal it.
 type TurnState = {turnId: string};
 
-// A (mock) weather tool. It takes the step's AbortSignal, so an interrupt/steer
-// cancels the in-flight call instead of waiting for it.
+// A (mock) weather tool. It takes the run's AbortSignal, so interrupting the
+// step cancels the in-flight call instead of waiting for it.
 async function getWeather(city: string, signal: AbortSignal) {
   await setTimeout(200, undefined, {signal}); // stand-in for a network call
   return {city, temp: 22, condition: "sunny"};
@@ -43,9 +42,9 @@ async function getWeather(city: string, signal: AbortSignal) {
 // One step: stream a completion and act on each chunk. Returning true ends the
 // turn. Every chunk pulled and every tool run is journaled, so a replay after a
 // crash re-emits the same sequence instead of re-prompting the model.
-function* step(ctx: StepContext): Operation<boolean> {
-  const stream = yield* ctx.prompt(
-    "What's the weather in Paris? Reason briefly, then answer.",
+function* step(): Operation<boolean> {
+  const stream = yield* durableSource(() =>
+    llmFetch("What's the weather in Paris? Reason briefly, then answer."),
   );
 
   while (true) {
@@ -56,9 +55,9 @@ function* step(ctx: StepContext): Operation<boolean> {
     const chunk = res.value;
 
     if (chunk.type === "tool_call") {
-      // Durable + abortable: the signal fires if the turn is interrupted/steered.
-      const weather = yield* ctx.run((signal) =>
-        getWeather(chunk.args.city, signal),
+      // Durable + abortable: the run's signal fires if the step is interrupted.
+      const weather = yield* run((opts) =>
+        getWeather(chunk.args.city, opts.signal),
       );
       console.log(`🔧 ${chunk.name}:`, weather);
     } else {
@@ -72,11 +71,10 @@ function* step(ctx: StepContext): Operation<boolean> {
 const weatherAgent = object({
   name: "weatherAgent",
   handlers: {
-    // Drive one turn. Loops: run the step with an abortable context and select
-    // it against the interrupt/steering signals.
+    // Drive one turn: spawn the step and select it against the control signals.
     //   - step returns true -> the turn is done
-    //   - interrupt         -> stop the step, then end the turn
-    //   - steer             -> stop the step, then run a fresh one
+    //   - interrupt         -> interrupt the step, then end the turn
+    //   - steer             -> interrupt the step, then run a fresh one
     *run(): Operation<void> {
       // Record which invocation runs the turn so the shared handlers can signal it.
       state<TurnState>().set("turnId", handlerRequest().id);
@@ -85,31 +83,29 @@ const weatherAgent = object({
       let steering = signal<void>(STEERING);
 
       while (true) {
-        // A per-step channel that stops the step (and aborts its tools) on a signal.
-        const stopChannel = channel<void>();
-        const stepFut = spawn(step(makeStepContext(stopChannel)));
+        const task = spawn(step());
+        const selected = yield* select({step: task, interrupt, steering});
 
-        const selected = yield* select({stepFut, interrupt, steering});
-
-        if (selected.tag === "stepFut") {
+        if (selected.tag === "step") {
           if (yield* selected.future) {
             break;
           }
         } else if (selected.tag === "interrupt") {
-          yield* stopChannel.send();
+          // Native interrupt: aborts the step's in-flight run and throws into it.
+          task.interrupt();
           try {
-            yield* stepFut;
+            yield* task; // join so the step's finally/catch runs
           } catch {
-            // The step throws framework-cancellation on stop; ignore it.
+            // Swallow the interrupt.
           }
           break;
         } else {
-          // steering: stop the current step, then loop to run a fresh one.
-          yield* stopChannel.send();
+          // steering: interrupt the current step, then loop to run a fresh one.
+          task.interrupt();
           try {
-            yield* stepFut;
+            yield* task;
           } catch {
-            // Ignore the cancellation.
+            // Swallow the interrupt.
           }
           steering = signal<void>(STEERING); // re-arm for the next steer
         }
@@ -135,8 +131,8 @@ const weatherAgent = object({
     },
   },
   options: {
-    // We drive cancellation ourselves via the stop channel, so disable Restate's
-    // implicit cancellation.
+    // Interruption is driven explicitly via task.interrupt(), so disable
+    // Restate's implicit invocation cancellation.
     explicitCancellation: true,
     handlers: {
       interrupt: {shared: true},

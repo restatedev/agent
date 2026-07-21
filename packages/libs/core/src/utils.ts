@@ -1,16 +1,17 @@
 import OpenAI from "openai";
-import type {LLMChunk} from "./agent_framework";
 
-// The framework talks to the model in a small streaming protocol: the model
-// emits a sequence of compact JSON objects, each one an `LLMChunk`, so the agent
+// A single streamed step from the model. The model speaks a small protocol: it
+// emits a sequence of compact JSON objects, each one an `LLMChunk`, so a caller
 // can act on each the moment it completes instead of waiting for the whole reply.
-//
+export type LLMChunk =
+  | {type: "text"; content: string}
+  | {type: "tool_call"; name: string; args: Record<string, string>};
+
 // The streaming implementation is adapted from the `signal-stream-example`
 // reference: accumulate token deltas and drain every *complete* top-level JSON
 // object out of the buffer as it arrives. This raw stream is non-replayable (a
-// re-run would call the model again and get different tokens); the framework
-// consumes it through `StepContext.prompt` (see service.ts), which journals each
-// chunk it pulls and replays them verbatim after a crash.
+// re-run would call the model again and get different tokens), so callers should
+// consume it through `durableSource`, which journals each chunk it pulls.
 
 // The chat model to use. Any streaming-capable OpenAI chat model works.
 const MODEL = "gpt-4o";
