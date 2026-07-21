@@ -7,6 +7,12 @@ settings:
 importers:
 
   .:
+    devDependencies:
+      '@biomejs/biome':
+        specifier: ^2.4.16
+        version: 2.5.4
+
+  packages/libs/core:
     dependencies:
       '@restatedev/restate-sdk':
         specifier: ^1.16.2
@@ -14,13 +20,26 @@ importers:
       '@restatedev/restate-sdk-gen':
         specifier: ^1.16.2
         version: 1.16.2(@restatedev/restate-sdk@1.16.2)
-      zod:
-        specifier: ^4.3
-        version: 4.4.3
     devDependencies:
-      '@biomejs/biome':
-        specifier: ^2.4.16
-        version: 2.5.4
+      '@types/node':
+        specifier: ^22
+        version: 22.20.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/libs/example:
+    dependencies:
+      '@restate-agents/core':
+        specifier: workspace:*
+        version: link:../core
+      '@restatedev/restate-sdk':
+        specifier: ^1.16.2
+        version: 1.16.2
+      '@restatedev/restate-sdk-gen':
+        specifier: ^1.16.2
+        version: 1.16.2(@restatedev/restate-sdk@1.16.2)
+    devDependencies:
       '@types/node':
         specifier: ^22
         version: 22.20.1
@@ -450,9 +469,6 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
-
 snapshots:
 
   '@biomejs/biome@2.5.4':
@@ -736,5 +752,3 @@ snapshots:
   typescript@6.0.3: {}
 
   undici-types@6.21.0: {}
-
-  zod@4.4.3: {}

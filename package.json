@@ -1,31 +1,17 @@
 {
   "name": "restate-ts-template",
   "version": "0.0.1",
-  "description": "Template for JavaScript/TypeScript services running with Restate (https://github.com/restatedev/) ",
-  "main": "app.js",
-  "type": "commonjs",
+  "description": "Template for JavaScript/TypeScript services running with Restate (https://github.com/restatedev/)",
+  "private": true,
   "scripts": {
-    "build": "tsc --noEmitOnError",
-    "start": "node ./dist/app.js",
-    "dev": "tsx watch ./src/app.ts",
-    "prebundle": "rm -rf dist",
-    "bundle": "esbuild src/app.ts --bundle --minify --sourcemap --platform=node --target=es2020 --outfile=dist/app.js",
-    "postbundle": "cd dist && zip -r index.zip app.js*",
-    "app": "pnpm run start",
-    "app-dev": "pnpm run dev",
-    "lint": "biome check src",
-    "format": "biome check --write src"
-  },
-  "dependencies": {
-    "@restatedev/restate-sdk": "^1.16.2",
-    "@restatedev/restate-sdk-gen": "^1.16.2",
-    "zod": "^4.3"
+    "build": "pnpm -r build",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "bundle": "pnpm --filter @restate-agents/core build && pnpm --filter @restate-agents/example bundle",
+    "app": "pnpm -r build && pnpm --filter @restate-agents/example start",
+    "app-dev": "pnpm --filter @restate-agents/core build && pnpm --filter @restate-agents/example dev"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.16",
-    "@types/node": "^22",
-    "esbuild": "^0.25.4",
-    "tsx": "^4.19.2",
-    "typescript": "^6.0.3"
+    "@biomejs/biome": "^2.4.16"
   }
 }

@@ -1,0 +1,27 @@
+{
+  "name": "@restate-agents/example",
+  "version": "0.0.1",
+  "description": "Example agents demonstrating the @restate-agents/core framework.",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/app.js",
+  "scripts": {
+    "build": "tsc --noEmitOnError",
+    "start": "node ./dist/app.js",
+    "dev": "tsx watch ./src/app.ts",
+    "prebundle": "rm -rf dist",
+    "bundle": "esbuild src/app.ts --bundle --minify --sourcemap --platform=node --target=es2020 --outfile=dist/app.js",
+    "postbundle": "cd dist && zip -r index.zip app.js*"
+  },
+  "dependencies": {
+    "@restate-agents/core": "workspace:*",
+    "@restatedev/restate-sdk": "^1.16.2",
+    "@restatedev/restate-sdk-gen": "^1.16.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "esbuild": "^0.25.4",
+    "tsx": "^4.19.2",
+    "typescript": "^6.0.3"
+  }
+}
