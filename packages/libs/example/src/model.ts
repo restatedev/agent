@@ -43,7 +43,6 @@ export type MessageRoute = z.infer<typeof MessageRouteSchema>;
 const RouteResponseSchema = z.object({route: MessageRouteSchema});
 
 const ModelRequestSchema = z.object({messages: z.array(ModelMessageSchema)});
-type ModelRequest = z.infer<typeof ModelRequestSchema>;
 
 const AGENT_MODEL = "gpt-5.6-terra";
 const ROUTER_MODEL = "gpt-4o-mini";
@@ -169,7 +168,7 @@ export const ModelGateway = service({
   handlers: {
     complete: schemas(
       {input: ModelRequestSchema, output: ModelResultSchema},
-      function* ({messages}: ModelRequest): Operation<ModelResult> {
+      function* ({messages}): Operation<ModelResult> {
         return yield* run(
           async ({signal}) =>
             parseAction(
