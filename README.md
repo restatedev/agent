@@ -26,10 +26,13 @@ flowchart LR
   agent loop against interrupt and steering signals.
 - `agentLoop` has one small boundary: `{ agentId, messages }` in and a
   `completed | failed` result out. It owns the bounded model/tool policy and
-  keeps tools as local durable `run` steps.
-- `model.ts` owns model protocol and access. A cheap model routes messages that
-  arrive mid-turn. Full agent inference goes through `ModelGateway`, where
-  Restate can admit work according to scope and limit-key concurrency rules.
+  keeps tools as local durable `run` and `sleep` operations.
+- `model.ts` owns model definitions and access. AI SDK provides typed tools,
+  structured output, and provider-neutral messages, while deliberately not
+  executing tools. A cheap model routes messages that arrive mid-turn. Full
+  agent inference uses OpenAI's Responses API and goes through `ModelGateway`,
+  where Restate can admit work according to scope and limit-key concurrency
+  rules.
 
 The controller stores only user-facing history. Tool calls and intermediate
 model steps stay in Restate's invocation journal and observability tools. A
@@ -41,7 +44,7 @@ turn appends exactly one structured outcome: `completed`, `interrupted`, or
 | Handler | Input | Behavior |
 | --- | --- | --- |
 | `ask` | string | Appends and starts a turn when idle. While busy, a fast classifier chooses interrupt, steer, or queue. |
-| `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. |
+| `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. User entries identify whether they started, steered, queued, or interrupted work. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
 | `interrupt` | reason string | Resolves the active turn's interrupt signal and returns immediately. |
 | `steer` | instruction string | Appends the instruction and resolves the active turn's steering signal. |
@@ -59,7 +62,10 @@ directly and skip intent classification.
 - Starting a turn and reporting its outcome are one-way Restate sends.
 - Each full model round is a scoped `ModelGateway` invocation containing one
   durable `run` step. Restate owns a bounded four-attempt retry policy; the
-  OpenAI client's internal retries are disabled.
+  AI SDK's internal retries are disabled.
+- The loop carries AI SDK response messages into the next model call. This
+  preserves reasoning and tool-call state while OpenAI response storage is
+  disabled.
 - If a model round emits several independent tool calls, `agentLoop` uses
   Restate's [concurrent task primitives](https://docs.restate.dev/develop/ts/concurrent-tasks)
   to spawn all local tool `run` steps before joining them. Restate journals
@@ -101,7 +107,7 @@ such as tenant or account to avoid concentrating scheduling on one partition.
 
 ## Run locally
 
-Requirements: Node.js 20 or newer, pnpm, a local Restate Server and CLI, and an
+Requirements: Node.js 22 or newer, pnpm, a local Restate Server and CLI, and an
 OpenAI API key. Restate's [quickstart](https://docs.restate.dev/quickstart)
 covers installing the server and CLI.
 
@@ -141,6 +147,20 @@ curl localhost:8080/Agent/demo/steer \
 curl localhost:8080/Agent/demo/interrupt \
   --json '"Stop; the user changed their mind"'
 ```
+
+To keep a turn alive while trying steering, ask the agent to use its durable
+sleep tool and redirect it from another shell:
+
+```sh
+curl localhost:8080/Agent/demo/ask \
+  --json '"Sleep for 30 seconds, then tell me that you finished"'
+
+curl localhost:8080/Agent/demo/steer \
+  --json '"Do not wait any longer; answer immediately"'
+```
+
+The steering signal interrupts the pending Restate timer and restarts the agent
+loop with the new instruction in its context.
 
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
 model/tool steps, retries, and signals. See Restate's

@@ -3,20 +3,24 @@
   "version": "0.0.1",
   "description": "Reference implementation of a durable agent on Restate.",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "main": "dist/app.js",
   "scripts": {
     "build": "tsc --noEmitOnError",
     "start": "node ./dist/app.js",
     "dev": "tsx watch ./src/app.ts",
     "prebundle": "rm -rf dist",
-    "bundle": "esbuild src/app.ts --bundle --minify --sourcemap --platform=node --target=es2020 --outfile=dist/app.js",
+    "bundle": "esbuild src/app.ts --bundle --format=esm --minify --sourcemap --platform=node --target=node22 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/app.js",
     "postbundle": "cd dist && zip -r index.zip app.js*"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^4.0.10",
     "@restatedev/restate-sdk": "^1.16.2",
     "@restatedev/restate-sdk-gen": "^1.16.2",
-    "openai": "^4.104.0",
+    "ai": "^7.0.26",
     "zod": "^4.4.3"
   },
   "devDependencies": {

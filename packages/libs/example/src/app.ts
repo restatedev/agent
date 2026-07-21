@@ -14,9 +14,9 @@
 // Set OPENAI_API_KEY in the environment before running.
 
 import {serve} from "@restatedev/restate-sdk";
-import {Agent} from "./agent";
-import {ModelGateway} from "./model";
-import {Turn} from "./turn";
+import {Agent} from "./agent.js";
+import {ModelGateway} from "./model.js";
+import {Turn} from "./turn.js";
 
 serve({
   services: [Agent, Turn, ModelGateway],

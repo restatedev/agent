@@ -30,16 +30,16 @@ import {
   spawn,
   type Task,
 } from "@restatedev/restate-sdk-gen";
+import type {ModelMessage} from "ai";
 import {z} from "zod";
-import {Agent} from "./agent";
-import {agentLoop} from "./agent-loop";
-import type {ModelMessage} from "./model";
+import {Agent} from "./agent.js";
+import {agentLoop} from "./agent-loop.js";
 import {
   type ConversationEntry,
   type TurnOutcome,
   type TurnRequest,
   TurnRequestSchema,
-} from "./types";
+} from "./types.js";
 
 // Signal names used to control a running turn.
 const INTERRUPT = "interrupt";

@@ -1,7 +1,8 @@
-// Everything specific to model access lives here: the wire protocol used by
-// the agent loop, the cheap message router, and the scoped model gateway.
+// Everything specific to model access lives here: model selection, tool
+// definitions, the cheap message router, and the scoped model gateway.
 
 import {createHash} from "node:crypto";
+import {createOpenAI, type OpenAIProvider} from "@ai-sdk/openai";
 import {Opts, TerminalError} from "@restatedev/restate-sdk";
 import {
   type Operation,
@@ -10,150 +11,253 @@ import {
   scope,
   service,
 } from "@restatedev/restate-sdk-gen";
-import OpenAI from "openai";
+import {
+  APICallError,
+  assistantModelMessageSchema,
+  generateText,
+  type ModelMessage,
+  modelMessageSchema,
+  Output,
+} from "ai";
 import {z} from "zod";
 
-const ModelMessageSchema = z.object({
-  role: z.enum(["user", "assistant", "tool"]),
-  content: z.string(),
+const WeatherArgsSchema = z.object({
+  city: z
+    .string()
+    .describe("City name, optionally including state or country."),
 });
-export type ModelMessage = z.infer<typeof ModelMessageSchema>;
 
-const ToolCallSchema = z.object({
-  name: z.string(),
-  args: z.record(z.string(), z.string()),
+const SleepArgsSchema = z.object({
+  durationSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(300)
+    .describe("How long to sleep, from 1 to 300 seconds."),
 });
+
+const ToolCallSchema = z.discriminatedUnion("toolName", [
+  z.object({
+    type: z.literal("tool-call"),
+    toolCallId: z.string(),
+    toolName: z.literal("getWeather"),
+    input: WeatherArgsSchema,
+  }),
+  z.object({
+    type: z.literal("tool-call"),
+    toolCallId: z.string(),
+    toolName: z.literal("sleep"),
+    input: SleepArgsSchema,
+  }),
+]);
 export type ToolCall = z.infer<typeof ToolCallSchema>;
+const ToolCallsSchema = z.array(ToolCallSchema).min(1);
 
-const ModelActionSchema = z.discriminatedUnion("type", [
+const ModelResultSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("text"), content: z.string()}),
   z.object({
     type: z.literal("tool_calls"),
-    calls: z.array(ToolCallSchema).min(1).max(10),
+    message: assistantModelMessageSchema,
+    calls: ToolCallsSchema,
   }),
-]);
-const ModelResultSchema = z.union([
-  ModelActionSchema,
   z.object({type: z.literal("error"), message: z.string()}),
 ]);
-type ModelResult = z.infer<typeof ModelResultSchema>;
+export type ModelResult = z.infer<typeof ModelResultSchema>;
 
-const MessageRouteSchema = z.enum(["steer", "interrupt", "queue"]);
-export type MessageRoute = z.infer<typeof MessageRouteSchema>;
-const RouteResponseSchema = z.object({route: MessageRouteSchema});
+const MESSAGE_ROUTES = ["steer", "interrupt", "queue"] as const;
+export type MessageRoute = (typeof MESSAGE_ROUTES)[number];
 
-const ModelRequestSchema = z.object({messages: z.array(ModelMessageSchema)});
+const ModelRequestSchema = z.object({messages: z.array(modelMessageSchema)});
 
 const AGENT_MODEL = "gpt-5.6-terra";
 const ROUTER_MODEL = "gpt-4o-mini";
 const MODEL_SCOPE = "openai";
 
 const AGENT_SYSTEM = [
-  "You are an agent that works in steps. Reply with exactly one compact JSON",
-  "object, with no prose or markdown fences. It must be one of:",
-  '{"type":"text","content":"..."} for a final answer, or',
-  '{"type":"tool_calls","calls":[{"name":"...","args":{"key":"value"}}]}',
-  "to call between 1 and 10 independent tools in parallel.",
-  "The only tool is getWeather(city). All arg values must be strings.",
-  "Group independent calls into one tool_calls action. After calling tools, stop;",
-  "their results arrive next as user messages prefixed with 'tool_result:'.",
-  "Once you have what you need, emit one text action.",
+  "You are a concise weather assistant.",
+  "Use getWeather whenever current weather data is required.",
+  "Call it once per city and group independent city lookups in one response.",
+  "When the user asks you to wait or sleep, call the sleep tool for the requested duration.",
+  "After receiving tool results, answer the user's request directly.",
 ].join(" ");
 
 const ROUTER_SYSTEM = [
   "Another agent turn is currently running. Classify the new user message.",
-  'Reply with exactly one JSON object: {"route":"steer|interrupt|queue"}.',
   "Use interrupt only for an explicit request to stop or cancel current work.",
   "Use steer for corrections or refinements intended to change current work.",
   "Use queue for a separate request, a follow-up that can wait, or uncertainty.",
 ].join(" ");
 
-let client: OpenAI | undefined;
+// There is deliberately no execute function here. The model only chooses and
+// validates tools; Restate executes them as durable local steps in agent-loop.
+const AGENT_TOOLS = {
+  getWeather: {
+    description: "Get the current weather for one city.",
+    inputSchema: WeatherArgsSchema,
+    strict: true,
+  },
+  sleep: {
+    description:
+      "Wait durably for a requested duration before continuing the turn.",
+    inputSchema: SleepArgsSchema,
+    strict: true,
+  },
+};
 
-function isRetryableStatus(status: number | undefined): boolean {
-  return (
-    status === undefined ||
-    status === 408 ||
-    status === 409 ||
-    status === 429 ||
-    status >= 500
-  );
-}
+let provider: OpenAIProvider | undefined;
 
-async function completeJson(
-  model: string,
-  system: string,
-  messages: ModelMessage[],
-  signal: AbortSignal,
-): Promise<string> {
-  if (!process.env.OPENAI_API_KEY) {
+function openAI(): OpenAIProvider {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
     throw new TerminalError("OPENAI_API_KEY is not set");
   }
+  if (!provider) {
+    provider = createOpenAI({apiKey});
+  }
+  return provider;
+}
 
-  // Restate owns retries, so the OpenAI client must not retry invisibly.
-  client ??= new OpenAI({maxRetries: 0});
-
+async function withOpenAI<T>(
+  call: (provider: OpenAIProvider) => Promise<T>,
+): Promise<T> {
   try {
-    const completion = await client.chat.completions.create(
-      {
-        model,
-        reasoning_effort: model === ROUTER_MODEL ? undefined : "low",
-        response_format: {type: "json_object"},
-        messages: [
-          {role: "system", content: system},
-          ...messages.map(
-            (message): OpenAI.ChatCompletionMessageParam =>
-              message.role === "tool"
-                ? {role: "user", content: `tool_result: ${message.content}`}
-                : {role: message.role, content: message.content},
-          ),
-        ],
-      },
-      {signal},
-    );
-    return completion.choices[0]?.message.content ?? "";
+    return await call(openAI());
   } catch (error) {
-    if (error instanceof OpenAI.APIError && !isRetryableStatus(error.status)) {
+    // Restate owns retries. Invalid requests and authentication failures are
+    // terminal; throttling and transient provider failures remain retryable.
+    if (APICallError.isInstance(error) && !error.isRetryable) {
       throw new TerminalError(`OpenAI rejected the request: ${error.message}`, {
-        errorCode: error.status,
+        errorCode: error.statusCode,
       });
     }
     throw error;
   }
 }
 
-function parseAction(raw: string): ModelResult {
-  try {
-    const parsed = ModelActionSchema.safeParse(JSON.parse(raw));
-    return parsed.success
-      ? parsed.data
-      : {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function validationMessage(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 4)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "value";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
+}
+
+async function completeAgent(
+  messages: ModelMessage[],
+  signal: AbortSignal,
+): Promise<ModelResult> {
+  return withOpenAI(async (openai) => {
+    const result = await generateText({
+      model: openai.responses(AGENT_MODEL),
+      system: AGENT_SYSTEM,
+      messages,
+      tools: AGENT_TOOLS,
+      toolChoice: "auto",
+      maxOutputTokens: 2_000,
+      maxRetries: 0,
+      abortSignal: signal,
+      timeout: 120_000,
+      providerOptions: {
+        openai: {
+          reasoningEffort: "low",
+          parallelToolCalls: true,
+          store: false,
+        },
+      },
+    });
+
+    if (result.toolCalls.length > 0) {
+      const invalidCalls = result.toolCalls.filter(
+        (call) => call.dynamic || call.invalid,
+      );
+      if (invalidCalls.length > 0) {
+        return {
           type: "error",
-          message: `model emitted an unrecognized action: ${raw}`,
+          message: invalidCalls
+            .map(
+              (call) =>
+                `${call.toolName}: ${call.error ? errorMessage(call.error) : "invalid tool call"}`,
+            )
+            .join("; "),
         };
-  } catch {
-    return {type: "error", message: `model emitted invalid JSON: ${raw}`};
-  }
+      }
+
+      const message = result.responseMessages.findLast(
+        (candidate) => candidate.role === "assistant",
+      );
+      if (!message) {
+        return {
+          type: "error",
+          message: "model emitted tool calls without an assistant message",
+        };
+      }
+
+      const parsedMessage = assistantModelMessageSchema.safeParse(message);
+      if (!parsedMessage.success) {
+        return {
+          type: "error",
+          message: `assistant message failed validation: ${validationMessage(parsedMessage.error)}`,
+        };
+      }
+
+      const parsedCalls = ToolCallsSchema.safeParse(result.toolCalls);
+      if (!parsedCalls.success) {
+        return {
+          type: "error",
+          message: `tool calls failed validation: ${validationMessage(parsedCalls.error)}`,
+        };
+      }
+
+      return {
+        type: "tool_calls",
+        message: parsedMessage.data,
+        calls: parsedCalls.data,
+      };
+    }
+
+    if (result.finishReason === "length") {
+      return {
+        type: "error",
+        message: "model response exceeded its token limit",
+      };
+    }
+    if (result.finishReason === "content-filter") {
+      return {type: "error", message: "model response was filtered"};
+    }
+    return result.text
+      ? {type: "text", content: result.text}
+      : {type: "error", message: "model returned neither text nor tool calls"};
+  });
 }
 
 // This fast classification runs directly in the Agent handler. If it fails,
 // the Agent conservatively queues the message rather than losing it.
-export function* routeMessage(message: string): Operation<MessageRoute> {
+export function* routeMessage(
+  message: string,
+  recentConversation: string[],
+): Operation<MessageRoute> {
   return yield* run(
-    async ({signal}): Promise<MessageRoute> => {
-      const raw = await completeJson(
-        ROUTER_MODEL,
-        ROUTER_SYSTEM,
-        [{role: "user", content: message}],
-        signal,
-      );
-      try {
-        const parsed = RouteResponseSchema.safeParse(JSON.parse(raw));
-        return parsed.success ? parsed.data.route : "queue";
-      } catch {
-        return "queue";
-      }
-    },
+    ({signal}) =>
+      withOpenAI(async (openai): Promise<MessageRoute> => {
+        const result = await generateText({
+          model: openai.chat(ROUTER_MODEL),
+          system: ROUTER_SYSTEM,
+          prompt: JSON.stringify({recentConversation, newMessage: message}),
+          output: Output.choice({options: [...MESSAGE_ROUTES]}),
+          maxOutputTokens: 32,
+          maxRetries: 0,
+          abortSignal: signal,
+          timeout: 5_000,
+          providerOptions: {openai: {store: false}},
+        });
+        return result.output;
+      }),
     {
       name: "route-message",
       retry: {maxAttempts: 2, initialInterval: 100, maxInterval: 500},
@@ -169,21 +273,15 @@ export const ModelGateway = service({
     complete: schemas(
       {input: ModelRequestSchema, output: ModelResultSchema},
       function* ({messages}): Operation<ModelResult> {
-        return yield* run(
-          async ({signal}) =>
-            parseAction(
-              await completeJson(AGENT_MODEL, AGENT_SYSTEM, messages, signal),
-            ),
-          {
-            name: "agent-model",
-            retry: {
-              maxAttempts: 4,
-              initialInterval: 500,
-              maxInterval: 5_000,
-              exponentiationFactor: 2,
-            },
+        return yield* run(({signal}) => completeAgent(messages, signal), {
+          name: "agent-model",
+          retry: {
+            maxAttempts: 4,
+            initialInterval: 500,
+            maxInterval: 5_000,
+            exponentiationFactor: 2,
           },
-        );
+        });
       },
     ),
   },

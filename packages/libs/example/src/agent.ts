@@ -16,13 +16,14 @@ import {
   state,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
-import {type MessageRoute, routeMessage} from "./model";
-import {interruptTurn, startTurn, steerTurn} from "./turn";
+import {type MessageRoute, routeMessage} from "./model.js";
+import {interruptTurn, startTurn, steerTurn} from "./turn.js";
 import {
   type ConversationEntry,
   ConversationEntrySchema,
   TurnOutcomeSchema,
-} from "./types";
+  type UserMessageDelivery,
+} from "./types.js";
 
 // The agent id is this object's key. Object handlers always have one, but read
 // it through here so a missing key is a clear error, not a stray `!`.
@@ -53,6 +54,7 @@ type ActiveTurn = {id: string; interrupting: boolean};
 // Keep the Turn invocation payload bounded as the durable transcript grows.
 // Turn applies the tighter model-specific filter/window after receiving it.
 const MAX_TURN_HISTORY_ENTRIES = 80;
+const ROUTER_CONTEXT_ENTRIES = 8;
 
 function* readTurn(): Operation<ActiveTurn | undefined> {
   return (yield* sharedState().get<ActiveTurn>("turn")) ?? undefined;
@@ -105,12 +107,16 @@ function* drainPending(): Operation<string[]> {
 // is already running, so an in-flight turn can't be orphaned. Callers begin
 // only when idle (ask when no turn is running; append after clearing
 // the finished turn). An empty batch is a no-op.
-function* beginTurn(agentId: string, messages: string[]): Operation<void> {
+function* beginTurn(
+  agentId: string,
+  messages: string[],
+  delivery: Extract<UserMessageDelivery, "turn" | "queued">,
+): Operation<void> {
   if (messages.length === 0 || (yield* readTurn())) {
     return;
   }
   for (const message of messages) {
-    yield* appendEntry({role: "user", text: message});
+    yield* appendEntry({role: "user", text: message, delivery});
   }
   const history = (yield* readHistory()).slice(-MAX_TURN_HISTORY_ENTRIES);
   const turnId = yield* startTurn({agentId, history});
@@ -127,8 +133,9 @@ function* beginTurn(agentId: string, messages: string[]): Operation<void> {
 // would be worse, not safer — this runs in an exclusive handler, so it would
 // freeze the whole conversation for the duration of the wind-down.
 //
-// The reason is not appended to the transcript — it comes back as the turn's
-// summary text (status "interrupted"), so recording it now would double it.
+// Explicit `interrupt` calls keep the reason only in the turn summary. An
+// `ask` classified as interrupt opts into recording the original user message
+// with delivery "interrupt", because every accepted `ask` belongs in history.
 //
 // Returns false when there is nothing to stop: the conversation is idle, or
 // the turn is already winding down (the signal is single-shot; a second
@@ -136,10 +143,16 @@ function* beginTurn(agentId: string, messages: string[]): Operation<void> {
 // completion race stands: true means the signal was sent — a turn finishing at
 // that same instant may still report "completed", and the transcript records
 // what actually happened.
-function* interruptActive(reason: string): Operation<boolean> {
+function* interruptActive(
+  reason: string,
+  recordUserMessage = false,
+): Operation<boolean> {
   const turn = yield* readTurn();
   if (!turn || turn.interrupting) {
     return false;
+  }
+  if (recordUserMessage) {
+    yield* appendEntry({role: "user", text: reason, delivery: "interrupt"});
   }
   interruptTurn(turn.id, reason);
   yield* saveTurn({...turn, interrupting: true});
@@ -162,7 +175,7 @@ function* steerActive(message: string): Operation<boolean> {
   if (!turn || turn.interrupting) {
     return false;
   }
-  yield* appendEntry({role: "user", text: message});
+  yield* appendEntry({role: "user", text: message, delivery: "steer"});
   steerTurn(turn.id, message);
   return true;
 }
@@ -171,7 +184,14 @@ function* steerActive(message: string): Operation<boolean> {
 // message, so any non-cancellation failure falls back to the pending queue.
 function* classify(message: string): Operation<MessageRoute> {
   try {
-    return yield* routeMessage(message);
+    const recent = (yield* readHistory())
+      .slice(-ROUTER_CONTEXT_ENTRIES)
+      .map((entry) =>
+        entry.role === "user"
+          ? `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`
+          : `assistant (${entry.status}): ${entry.text}`,
+      );
+    return yield* routeMessage(message, recent);
   } catch (error) {
     if (error instanceof CancelledError) {
       throw error;
@@ -194,7 +214,7 @@ export const Agent = object({
 
         const turn = yield* readTurn();
         if (!turn) {
-          yield* beginTurn(agentId, [message]);
+          yield* beginTurn(agentId, [message], "turn");
           return;
         }
 
@@ -207,7 +227,7 @@ export const Agent = object({
 
         switch (yield* classify(message)) {
           case "interrupt":
-            yield* interruptActive(message);
+            yield* interruptActive(message, true);
             break;
           case "steer":
             if (!(yield* steerActive(message))) {
@@ -254,7 +274,13 @@ export const Agent = object({
         const pending = yield* readPending();
         return [
           ...history,
-          ...pending.map((text): ConversationEntry => ({role: "user", text})),
+          ...pending.map(
+            (text): ConversationEntry => ({
+              role: "user",
+              text,
+              delivery: "queued",
+            }),
+          ),
         ];
       },
     ),
@@ -281,14 +307,18 @@ export const Agent = object({
         });
         yield* clearTurn();
 
-        yield* beginTurn(agentId, yield* drainPending());
+        yield* beginTurn(agentId, yield* drainPending(), "queued");
       },
     ),
   },
   options: {
     handlers: {
-      append: {ingressPrivate: true},
-      history: {shared: true},
+      append: {
+        ingressPrivate: true,
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      history: {shared: true, idempotencyRetention: 0, journalRetention: 0},
     },
   },
 });
