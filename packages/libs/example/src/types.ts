@@ -32,11 +32,11 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
-// Input to a turn: which conversation it belongs to, and the conversation
-// history so far (ending with the message that triggered it) as the model's
-// context.
+// Input to a turn: which Agent object it belongs to, and that agent's
+// conversation history so far (ending with the message that triggered it) as
+// the model's context.
 export const TurnRequestSchema = z.object({
-  conversationId: z.string(),
+  agentId: z.string(),
   history: z.array(ConversationEntrySchema),
 });
 export type TurnRequest = z.infer<typeof TurnRequestSchema>;

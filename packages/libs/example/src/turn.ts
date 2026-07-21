@@ -1,7 +1,6 @@
 // Turn is the turn policy: a stateless service that supervises one
 // conversation turn. The thinking itself — the model -> tools -> model cycle —
-// is the agent loop (see ./loop); this file binds the loop's dependencies (the
-// example's model, its tools, the trace reporter) and decides everything
+// is the concrete agent loop (see ./agent-loop). This file decides everything
 // around it: what starts a turn, what interrupts or redirects it, and how its
 // ending is reported.
 //
@@ -22,13 +21,10 @@
 //   - STEERING  aborts the current run and reruns it on a new instruction
 // `startTurn`/`interruptTurn`/`steerTurn` are the lifecycle API the Agent uses.
 
-import {setTimeout} from "node:timers/promises";
 import {
   handlerRequest,
-  InterruptedError,
   invocation,
   type Operation,
-  run,
   schemas,
   select,
   sendClient,
@@ -38,14 +34,7 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent";
-import {
-  agentLoop,
-  type LoopDeps,
-  type ModelMessage,
-  type Reporter,
-  type ToolCall,
-} from "./loop";
-import {openAiModel} from "./model";
+import {agentLoop, type ModelMessage, type Reporter} from "./agent-loop";
 import {
   type ConversationEntry,
   type TurnRequest,
@@ -61,46 +50,6 @@ const toModelMessage = (e: ConversationEntry): ModelMessage => ({
   role: e.role,
   content: e.text,
 });
-
-// A (mock) weather tool. It takes the run's AbortSignal, so interrupting the
-// turn cancels the in-flight call instead of waiting for it.
-async function getWeather(city: string, signal: AbortSignal) {
-  await setTimeout(200, undefined, {signal}); // stand-in for a network call
-  return {city, temp: 22, condition: "sunny"};
-}
-
-// Validate and run a tool call, returning a result string for the model. Every
-// failure the model could act on is returned as an `error: ...` string rather
-// than thrown, so the loop feeds it back and the model can adapt: an unknown
-// tool, a missing arg, or the tool itself failing.
-function* runTool(call: ToolCall): Operation<string> {
-  if (call.name !== "getWeather") {
-    return `error: unknown tool "${call.name}"`;
-  }
-  const city = call.args.city;
-  if (!city) {
-    return 'error: getWeather requires a string "city" arg';
-  }
-  try {
-    // Durable + abortable: the run's signal fires if the step is interrupted.
-    // `run` names the journal entry after the action's `Function.name`; this
-    // arrow is anonymous, so pass an explicit (deterministic) name instead.
-    const weather = yield* run((opts) => getWeather(city, opts.signal), {
-      name: "getWeather",
-    });
-    return `${weather.temp}°C, ${weather.condition} in ${weather.city}`;
-  } catch (err) {
-    // An interrupt is delivered as an InterruptedError (task.interrupt injects
-    // it) and MUST propagate, so the turn actually stops instead of feeding the
-    // "failure" back and looping. Any other failure is the tool's own — return
-    // it as an error result the model can react to (the mock never fails, but a
-    // real tool would).
-    if (err instanceof InterruptedError) {
-      throw err;
-    }
-    return `error: getWeather failed: ${err instanceof Error ? err.message : String(err)}`;
-  }
-}
 
 export const Turn = service({
   name: "Turn",
@@ -123,13 +72,11 @@ export const Turn = service({
         // when it started us, and it keys this turn's trace over there.
         const turnId = handlerRequest().id;
 
-        // Bind the loop's dependencies once for this turn: the example's model
-        // and tools, and a reporter that files trace entries with the
-        // conversation. The entry carries no turn id — the Agent attributes it
-        // to its active turn, which (by send ordering) is exactly this one.
+        // Bind the turn-scoped trace destination. The entry carries no turn id
+        // — the Agent attributes it to its active turn, which (by send ordering)
+        // is exactly this one.
         const report: Reporter = (entry) =>
-          sendClient(Agent, req.conversationId).appendTrace(entry);
-        const deps: LoopDeps = {model: openAiModel, runTool, report};
+          sendClient(Agent, req.agentId).appendTrace(entry);
 
         const interrupt = signal<string>(INTERRUPT);
         let steering = signal<string>(STEERING);
@@ -143,7 +90,7 @@ export const Turn = service({
         try {
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
-            const task = spawn(agentLoop(deps, context));
+            const task = spawn(agentLoop(context, report));
             const selected = yield* select({answer: task, interrupt, steering});
 
             switch (selected.tag) {
@@ -189,7 +136,7 @@ export const Turn = service({
         }
 
         // Always report exactly one outcome to the general conversation.
-        yield* sendClient(Agent, req.conversationId).recordSummary({
+        yield* sendClient(Agent, req.agentId).recordSummary({
           turnId,
           status,
           text,

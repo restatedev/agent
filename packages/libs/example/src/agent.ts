@@ -1,4 +1,4 @@
-// Agent is the general conversation: a VirtualObject keyed by conversation id
+// Agent is the general conversation: a VirtualObject keyed by agent id
 // that owns everything durable about the conversation — the user-facing thread
 // (user messages + one assistant summary per turn), the per-turn detailed
 // traces, and the active turn's id. It never runs the turn itself — it starts
@@ -28,12 +28,12 @@ import {
   TurnOutcomeSchema,
 } from "./types";
 
-// The conversation id is this object's key. Object handlers always have one, but
-// read it through here so a missing key is a clear error, not a stray `!`.
-function conversationKey(): string {
+// The agent id is this object's key. Object handlers always have one, but read
+// it through here so a missing key is a clear error, not a stray `!`.
+function agentKey(): string {
   const key = handlerRequest().key;
   if (!key) {
-    throw new TerminalError("Agent handlers require a conversation key");
+    throw new TerminalError("Agent handlers require an agent key");
   }
   return key;
 }
@@ -123,10 +123,7 @@ function* drainPending(): Operation<string[]> {
 // is already running, so an in-flight turn can't be orphaned. Callers begin
 // only when idle (ask when no turn is running; recordSummary after clearing
 // the finished turn). An empty batch is a no-op.
-function* beginTurn(
-  conversationId: string,
-  messages: string[],
-): Operation<void> {
+function* beginTurn(agentId: string, messages: string[]): Operation<void> {
   if (messages.length === 0 || (yield* readTurn())) {
     return;
   }
@@ -134,7 +131,7 @@ function* beginTurn(
     yield* appendEntry({role: "user", text: message});
   }
   const history = yield* readHistory();
-  const turnId = yield* startTurn({conversationId, history});
+  const turnId = yield* startTurn({agentId, history});
   yield* saveTurn({id: turnId, interrupting: false});
 }
 
@@ -206,10 +203,10 @@ export const Agent = object({
     ask: schemas(
       {input: z.string(), output: z.void()},
       function* (message): Operation<void> {
-        const conversationId = conversationKey();
+        const agentId = agentKey();
 
         if (!(yield* readTurn())) {
-          yield* beginTurn(conversationId, [message]);
+          yield* beginTurn(agentId, [message]);
           return;
         }
 
@@ -313,7 +310,7 @@ export const Agent = object({
     recordSummary: schemas(
       {input: TurnOutcomeSchema, output: z.void()},
       function* ({turnId, status, text}): Operation<void> {
-        const conversationId = conversationKey();
+        const agentId = agentKey();
 
         if ((yield* readTurn())?.id !== turnId) {
           return; // not the active turn — a superseded or duplicate report
@@ -327,7 +324,7 @@ export const Agent = object({
         });
         yield* clearTurn();
 
-        yield* beginTurn(conversationId, yield* drainPending());
+        yield* beginTurn(agentId, yield* drainPending());
       },
     ),
   },
