@@ -4,7 +4,6 @@ import {
   type Channel,
   call,
   channel,
-  type Future,
   gen,
   handlerRequest,
   invocation,
@@ -17,7 +16,13 @@ import {
   spawn,
   state,
 } from "@restatedev/restate-sdk-gen";
-import type {Agent, LLMChunk, StepContext} from "./agent_framework";
+import type {
+  Agent,
+  DurableSource,
+  LLMChunk,
+  Next,
+  StepContext,
+} from "./agent_framework";
 import {llmFetch} from "./utils";
 
 const INTERRUPT = "interrupt";
@@ -219,23 +224,30 @@ function makeStepContext(stopChannel: Channel<void>): StepContext {
 
   const stepContextPrompt = function* (
     prompt: string,
-  ): Operation<{next(): Future<LLMChunk | {eos: true}>}> {
+  ): Operation<DurableSource<LLMChunk>> {
+    // Lives only in this process's memory — it is NOT restored on replay. After
+    // a crash/replay we re-enter with `stream` undefined, which is how we detect
+    // that the live source is gone and report `aborted`.
     let stream: AsyncGenerator<LLMChunk> | undefined;
     yield* stepContextRun(async (_signal) => {
       stream = llmFetch(prompt);
     });
 
+    // Each pull is wrapped in a durable run, so every chunk we yield is recorded
+    // in the journal and replayed verbatim without touching the live generator.
     return {
       next: () =>
-        stepContextRun(async (_signal) => {
+        stepContextRun<Next<LLMChunk>>(async (_signal) => {
+          // No live stream (replaying after a restart): we can't safely re-run
+          // the non-deterministic source, so report it as aborted.
           if (!stream) {
-            return {eos: true};
+            return {type: "aborted"};
           }
           const next = await stream.next();
           if (next.done) {
-            return {eos: true};
+            return {type: "done"};
           }
-          return next.value;
+          return {type: "next", value: next.value};
         }),
     };
   };

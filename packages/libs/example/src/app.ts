@@ -45,10 +45,11 @@ const weatherAgent: Agent = {
     );
 
     while (true) {
-      const chunk = yield* stream.next();
-      if ("eos" in chunk) {
+      const res = yield* stream.next();
+      if (res.type === "done" || res.type === "aborted") {
         break;
       }
+      const chunk = res.value;
 
       if (chunk.type === "tool_call") {
         // Run the requested tool as a durable side effect.
