@@ -12,27 +12,8 @@ importers:
         specifier: ^2.4.16
         version: 2.5.4
 
-  packages/libs/core:
-    dependencies:
-      '@restatedev/restate-sdk':
-        specifier: ^1.16.2
-        version: 1.16.2
-      '@restatedev/restate-sdk-gen':
-        specifier: ^1.16.2
-        version: 1.16.2(@restatedev/restate-sdk@1.16.2)
-    devDependencies:
-      '@types/node':
-        specifier: ^22
-        version: 22.20.1
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
   packages/libs/example:
     dependencies:
-      '@restate-agents/core':
-        specifier: workspace:*
-        version: link:../core
       '@restatedev/restate-sdk':
         specifier: ^1.16.2
         version: 1.16.2

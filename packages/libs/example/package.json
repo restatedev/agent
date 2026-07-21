@@ -1,7 +1,7 @@
 {
   "name": "@restate-agents/example",
   "version": "0.0.1",
-  "description": "Example agents demonstrating the @restate-agents/core framework.",
+  "description": "Reference implementation of a durable agent on Restate.",
   "private": true,
   "type": "commonjs",
   "main": "dist/app.js",
@@ -14,7 +14,6 @@
     "postbundle": "cd dist && zip -r index.zip app.js*"
   },
   "dependencies": {
-    "@restate-agents/core": "workspace:*",
     "@restatedev/restate-sdk": "^1.16.2",
     "@restatedev/restate-sdk-gen": "^1.16.2",
     "openai": "^4.104.0",
