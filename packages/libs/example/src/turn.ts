@@ -49,8 +49,11 @@ function* step(req: TurnRequest): Operation<boolean> {
 
     if (chunk.type === "tool_call") {
       // Durable + abortable: the run's signal fires if the step is interrupted.
-      const weather = yield* run((opts) =>
-        getWeather(chunk.args.city, opts.signal),
+      // `run` names the journal entry after the action's `Function.name`; this
+      // arrow is anonymous, so pass an explicit (deterministic) name instead.
+      const weather = yield* run(
+        (opts) => getWeather(chunk.args.city, opts.signal),
+        {name: "getWeather"},
       );
       yield* sendClient(Agent, req.conversationId).append({
         text: `${chunk.name}: ${weather.temp}°C, ${weather.condition} in ${weather.city}`,
