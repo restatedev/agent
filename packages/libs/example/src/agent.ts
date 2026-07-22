@@ -6,7 +6,7 @@
 // with a one-way send, `interrupt` and `steer` resolve signals on that
 // invocation, and `append` accepts the Turn's single high-level outcome.
 
-import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
+import {TerminalError} from "@restatedev/restate-sdk";
 import {
   handlerRequest,
   type Operation,
@@ -99,27 +99,21 @@ export const Agent = object({
           return;
         }
 
-        // Routing is advisory. During interrupt wind-down, or when the cheap
-        // classifier fails, preserve the accepted message for the next turn.
+        // A turn winding down no longer consumes steering, so skip routing and
+        // preserve the accepted message for the next turn.
         let route: MessageRoute = "queue";
         if (!current.interrupting) {
-          try {
-            const recent = (yield* history.recent(ROUTER_CONTEXT_ENTRIES)).map(
-              (entry) => {
-                if (entry.role === "user") {
-                  return `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`;
-                }
-                return entry.role === "assistant"
-                  ? `assistant (${entry.status}): ${entry.text}`
-                  : `event (${entry.type}): ${entry.reason}`;
-              },
-            );
-            route = yield* routeMessage(message, recent);
-          } catch (error) {
-            if (error instanceof CancelledError) {
-              throw error;
-            }
-          }
+          const recent = (yield* history.recent(ROUTER_CONTEXT_ENTRIES)).map(
+            (entry) => {
+              if (entry.role === "user") {
+                return `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`;
+              }
+              return entry.role === "assistant"
+                ? `assistant (${entry.status}): ${entry.text}`
+                : `event (${entry.type}): ${entry.reason}`;
+            },
+          );
+          route = yield* routeMessage(message, recent);
         }
 
         if (route === "interrupt") {
