@@ -17,7 +17,8 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import type {ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
-import {model as callModel, type ToolCall, type ToolManifest} from "./model.js";
+import type {ToolCall, ToolManifest} from "./model.js";
+import {callModel} from "./model-gateway.js";
 
 export type AgentLoopInput = {
   agentId: string;

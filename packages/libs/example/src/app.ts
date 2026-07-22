@@ -3,7 +3,7 @@
 
 import {serve} from "@restatedev/restate-sdk";
 import {Agent} from "./agent.js";
-import {ModelGateway} from "./model.js";
+import {ModelGateway} from "./model-gateway.js";
 import {Turn} from "./turn.js";
 
 serve({

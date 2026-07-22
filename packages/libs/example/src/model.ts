@@ -1,16 +1,9 @@
-// Everything specific to model access lives here: model selection, the cheap
-// message router, and the scoped model gateway.
+// Everything specific to the model provider lives here: shared model
+// contracts, model selection, inference, and the cheap message router.
 
-import {createHash} from "node:crypto";
 import {createOpenAI, type OpenAIProvider} from "@ai-sdk/openai";
-import {Opts, TerminalError} from "@restatedev/restate-sdk";
-import {
-  InterruptedError,
-  type Operation,
-  run,
-  scope,
-  service,
-} from "@restatedev/restate-sdk-gen";
+import {TerminalError} from "@restatedev/restate-sdk";
+import {type Operation, run} from "@restatedev/restate-sdk-gen";
 import {
   APICallError,
   type AssistantModelMessage,
@@ -45,14 +38,8 @@ export type ModelResult =
 const MESSAGE_ROUTES = ["steer", "interrupt", "queue"] as const;
 export type MessageRoute = (typeof MESSAGE_ROUTES)[number];
 
-type ModelRequest = {
-  messages: ModelMessage[];
-  tools: ToolManifest[];
-};
-
-const AGENT_MODEL = "gpt-5.6-terra";
+export const AGENT_MODEL = "gpt-5.6-terra";
 const ROUTER_MODEL = "gpt-4o-mini";
-const MODEL_SCOPE = "openai";
 
 const AGENT_SYSTEM = [
   "You are a concise assistant.",
@@ -102,7 +89,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function completeAgent(
+export async function completeAgent(
   messages: ModelMessage[],
   tools: ToolManifest[],
   signal: AbortSignal,
@@ -114,7 +101,7 @@ async function completeAgent(
         {
           description: tool.description,
           // Tool manifests are produced from Zod's draft-07 JSON Schema output
-          // in agent-loop. The gateway deliberately receives no executors.
+          // in agent-loop. The model deliberately receives no executors.
           inputSchema: jsonSchema(
             tool.inputSchema as Parameters<typeof jsonSchema>[0],
           ),
@@ -217,53 +204,4 @@ export function* routeMessage(message: string): Operation<MessageRoute> {
       retry: {maxAttempts: 2, initialInterval: 100, maxInterval: 500},
     },
   );
-}
-
-// The main model call is a service so Restate can apply scope-based concurrency
-// control before the expensive OpenAI request starts.
-export const ModelGateway = service({
-  name: "ModelGateway",
-  handlers: {
-    *complete({messages, tools}: ModelRequest): Operation<ModelResult> {
-      return yield* run(({signal}) => completeAgent(messages, tools, signal), {
-        name: "agent-model",
-        retry: {
-          maxAttempts: 4,
-          initialInterval: 500,
-          maxInterval: 5_000,
-          exponentiationFactor: 2,
-        },
-      });
-    },
-  },
-  options: {handlers: {complete: {ingressPrivate: true}}},
-});
-
-function agentLimitKey(agentId: string): string {
-  const agent = createHash("sha256").update(agentId).digest("hex").slice(0, 24);
-  return `${AGENT_MODEL}/${agent}`;
-}
-
-// Only the agent loop goes through the scoped gateway. The `openai` scope is
-// the provider-wide budget; the two limit-key levels are model and agent.
-export function* model(
-  agentId: string,
-  messages: ModelMessage[],
-  tools: ToolManifest[],
-): Operation<ModelResult> {
-  const call = scope(MODEL_SCOPE)
-    .client(ModelGateway)
-    .complete(
-      {messages, tools},
-      Opts.from({limitKey: agentLimitKey(agentId), name: "agent-model"}),
-    );
-  const invocation = yield* call.invocation;
-  try {
-    return yield* call;
-  } catch (error) {
-    if (error instanceof InterruptedError) {
-      invocation.cancel();
-    }
-    throw error;
-  }
 }

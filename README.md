@@ -30,11 +30,13 @@ flowchart LR
   `completed | failed` result out. It owns self-contained tools—their model
   descriptions, input schemas, and local durable implementations—and projects
   serializable manifests for the model gateway.
-- `model.ts` owns model access and is tool-agnostic. It reconstructs AI SDK tool
-  definitions from the loop's manifests, while deliberately receiving no
-  executors. A cheap model routes messages that arrive mid-turn. Full agent
-  inference uses OpenAI's Responses API and goes through `ModelGateway`, where
-  Restate can admit work according to scope and limit-key concurrency rules.
+- `model.ts` owns provider-specific inference and the shared model contracts. It
+  reconstructs AI SDK tool definitions from the loop's manifests, while
+  deliberately receiving no executors. A cheap model routes messages that
+  arrive mid-turn.
+- `model-gateway.ts` is the Restate boundary for full agent inference. It owns
+  scoped admission, limit keys, retries, and cancellation propagation before
+  delegating the provider call to `model.ts`.
 
 The controller stores only user-facing history. Tool calls and intermediate
 model steps stay in Restate's invocation journal and observability tools. A
@@ -184,5 +186,6 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/agent.ts` — durable conversation controller
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signal supervision
 - `packages/libs/example/src/agent-loop.ts` — bounded model/tool loop and local tools
-- `packages/libs/example/src/model.ts` — model protocol, router, and scoped gateway
+- `packages/libs/example/src/model.ts` — model protocol, provider calls, and router
+- `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries
 - `packages/libs/example/src/types.ts` — wire schemas and domain types
