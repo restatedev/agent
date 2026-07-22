@@ -59,28 +59,6 @@ function* dispatchTurn(
   });
 }
 
-function* requestInterrupt(reason: string): Operation<boolean> {
-  const turnId = yield* activeTurn.interrupt(reason);
-  if (!turnId) {
-    return false;
-  }
-  yield* history.append({
-    role: "event",
-    type: "interrupt",
-    turnId,
-    reason,
-  });
-  return true;
-}
-
-function* requestSteer(message: string): Operation<boolean> {
-  if (!(yield* activeTurn.steer(message))) {
-    return false;
-  }
-  yield* history.append({role: "user", text: message, delivery: "steer"});
-  return true;
-}
-
 export const Agent = object({
   name: "Agent",
   handlers: {
@@ -103,15 +81,29 @@ export const Agent = object({
           : yield* routeMessage(message);
 
         if (route === "interrupt") {
-          if (!(yield* requestInterrupt(message))) {
+          const turnId = yield* activeTurn.interrupt(message);
+          if (!turnId) {
             yield* activeTurn.enqueue(message);
+            return;
           }
+          yield* history.append({
+            role: "event",
+            type: "interrupt",
+            turnId,
+            reason: message,
+          });
           return;
         }
         if (route === "steer") {
-          if (!(yield* requestSteer(message))) {
+          if (!(yield* activeTurn.steer(message))) {
             yield* activeTurn.enqueue(message);
+            return;
           }
+          yield* history.append({
+            role: "user",
+            text: message,
+            delivery: "steer",
+          });
           return;
         }
         yield* activeTurn.enqueue(message);
@@ -125,7 +117,17 @@ export const Agent = object({
     interrupt: schemas(
       {input: z.string(), output: z.boolean()},
       function* (reason): Operation<boolean> {
-        return yield* requestInterrupt(reason);
+        const turnId = yield* activeTurn.interrupt(reason);
+        if (!turnId) {
+          return false;
+        }
+        yield* history.append({
+          role: "event",
+          type: "interrupt",
+          turnId,
+          reason,
+        });
+        return true;
       },
     ),
 
@@ -137,7 +139,11 @@ export const Agent = object({
     steer: schemas(
       {input: z.string(), output: z.boolean()},
       function* (message): Operation<boolean> {
-        return yield* requestSteer(message);
+        if (!(yield* activeTurn.steer(message))) {
+          return false;
+        }
+        yield* history.append({role: "user", text: message, delivery: "steer"});
+        return true;
       },
     ),
 
