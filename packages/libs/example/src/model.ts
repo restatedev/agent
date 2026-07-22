@@ -57,6 +57,7 @@ const AGENT_SYSTEM = [
 
 const ROUTER_SYSTEM = [
   "Another agent turn is currently running. Classify the new user message.",
+  "Use the recent conversation to decide whether the new message changes the active request or starts separate work.",
   "Use interrupt only for an explicit request to stop or cancel current work.",
   "Use steer for corrections or refinements intended to change current work.",
   "Use queue for a separate request, a follow-up that can wait, or uncertainty.",
@@ -277,14 +278,17 @@ export async function* streamAgent(
 }
 
 // This fast classification runs directly in the Agent handler.
-export function* routeMessage(message: string): Operation<MessageRoute> {
+export function* routeMessage(
+  message: string,
+  recentConversation: string[],
+): Operation<MessageRoute> {
   return yield* run(
     ({signal}) =>
       withOpenAI(async (openai): Promise<MessageRoute> => {
         const result = await generateText({
           model: openai.chat(ROUTER_MODEL),
           system: ROUTER_SYSTEM,
-          prompt: message,
+          prompt: JSON.stringify({recentConversation, newMessage: message}),
           output: Output.choice({options: [...MESSAGE_ROUTES]}),
           maxOutputTokens: 32,
           maxRetries: 0,

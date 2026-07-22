@@ -26,7 +26,8 @@ flowchart LR
   turn state and signal lifecycle, `agent-history.ts` owns the durable
   transcript, and `agent-approval.ts` owns pending human approvals.
 - `Turn` is stateless. One invocation supervises one agent turn and races the
-  agent loop against interrupt and steering signals.
+  agent loop against hard interruption. The loop consumes steering itself at
+  safe model/tool boundaries so it can retain its working context.
 - `agentLoop` has one small boundary: `{ agentId, turnId, messages }` in and a
   `completed | failed` result out. It owns self-contained tools—their model
   descriptions, input schemas, and local durable implementations—and projects
@@ -63,8 +64,8 @@ race.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 successive `signal("steering")` consumes the next instruction in order.
-The controller tracks how many signals it sent, while each turn reports how
-many it consumed. If normal completion wins the race with a steer, the
+The controller tracks how many signals it sent, while the loop reports how many
+it consumed. If normal completion wins the race with a steer, the
 unconsumed instruction moves behind that outcome and runs through the normal
 queued-turn path instead of being stranded in history. An explicit interrupt
 supersedes outstanding steering.
@@ -87,6 +88,11 @@ directly and skip intent classification.
   Restate's [concurrent task primitives](https://docs.restate.dev/develop/ts/concurrent-tasks)
   to spawn all local tool `run` steps before joining them. Restate journals
   their concurrent execution and preserves deterministic replay.
+- Steering can abandon an in-flight model call immediately. If tools have
+  already started, the loop retains completed results, cancels unfinished
+  tools, records a result for every tool-call ID, and only then applies the new
+  instruction. Already completed tools are therefore not logically reissued
+  because steering discarded their context.
 - The `humanApproval` tool registers its request as Agent state, then suspends
   on a Turn-scoped signal named from the stable model tool-call ID. Approval,
   rejection, steering, and interruption all leave an explicit durable trail;
@@ -193,8 +199,9 @@ curl localhost:8080/Agent/demo/steer \
   --json '"Do not wait any longer; answer immediately"'
 ```
 
-The steering signal interrupts the pending Restate timer and restarts the agent
-loop with the new instruction in its context.
+The steering signal cancels the pending Restate timer, records that tool call
+as cancelled, and continues the same loop with the new instruction. Results
+from other tools that already completed in the round remain in model context.
 
 To try human approval, explicitly ask the model to use the approval tool:
 

@@ -14,9 +14,9 @@ The application is split into four concrete parts:
   pending human approvals. Alongside the conversation handlers, `approvals`
   and `resolveApproval` expose the human-in-the-loop boundary.
 - **`Turn`** is a stateless service invocation that supervises one turn. It
-  runs the agent loop and listens for durable steering and interruption
-  signals. A steering message stops the current loop and restarts it with the
-  new instruction.
+  runs the agent loop and listens for durable interruption. The loop consumes
+  steering cooperatively, preserving completed tool results and closing
+  unfinished calls with cancellation outcomes before applying the instruction.
 - **`agentLoop`** performs a bounded model → tools → model cycle. Tool
   definitions are self-contained here: each tool includes its description,
   input schema, and local durable implementation. Independent tool calls are

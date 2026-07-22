@@ -1,8 +1,8 @@
 // Turn is the turn policy: a stateless service that supervises one
 // conversation turn. The thinking itself — the model -> tools -> model cycle —
-// is the concrete agent loop (see ./agent-loop). This file decides how a
-// running turn reacts to interruption and steering, and how its ending is
-// reported.
+// is the concrete agent loop (see ./agent-loop). This file owns hard
+// interruption and reports how the turn ended; the loop handles steering at
+// safe model/tool boundaries without discarding its working context.
 //
 // It owns no state at all. The Agent owns the durable conversation transcript
 // and active turn id. This service sends exactly one structured outcome back
@@ -12,8 +12,8 @@
 // The turn's identity is its own invocation id: minted by the send that starts
 // the turn (so the Agent knows it without a handshake) and used as the target
 // for the control signals:
-//   - INTERRUPT ends the turn
-//   - STEERING  aborts the current run and reruns it on a new instruction
+//   - interrupt is consumed here and ends the turn
+//   - steering is consumed cooperatively inside agentLoop
 // The Agent-side lifecycle and signal senders live in agent-turn.ts.
 
 import {CancelledError} from "@restatedev/restate-sdk";
@@ -40,9 +40,8 @@ import {
   TurnRequestSchema,
 } from "./types.js";
 
-// Signal names used to control a running turn.
+// Signal used to stop a running turn immediately.
 const INTERRUPT = "interrupt";
-const STEERING = "steering";
 
 // The Agent keeps the complete durable transcript; the model receives only a
 // bounded recent window. Failed and interrupted summaries are operational
@@ -83,13 +82,12 @@ function errorMessage(error: unknown): string {
 export const Turn = service({
   name: "Turn",
   handlers: {
-    // Drive one turn: run the agent loop against the interrupt/steering signals,
-    // then report a single summary. The input is validated against
-    // TurnRequestSchema.
+    // Drive one turn: race the agent loop against hard interruption, then
+    // report a single summary. Steering is handled cooperatively by the loop.
+    // The input is validated against TurnRequestSchema.
     //   - loop completes -> status "completed", text = the answer
     //   - loop fails     -> status "failed", text = the reported error
     //   - interrupt      -> status "interrupted", text = the reason
-    //   - steer          -> interrupt the loop, rerun it on the steering message
     //   - loop throws    -> status "failed", text = the unexpected error
     // Only one TurnOutcome reaches the transcript. It includes the number of
     // steering signals consumed so the Agent can recover a completion race.
@@ -101,69 +99,39 @@ export const Turn = service({
         const turnId = handlerRequest().id;
 
         const interrupt = signal<string>(INTERRUPT);
-        let steering = signal<string>(STEERING);
-
-        // The model context ends with the message that triggered this turn.
-        // Steering messages are added as newer instructions when they arrive.
-        let context = buildModelContext(req.history);
         let activeTask: Task<unknown> | undefined;
-        let consumedSteering = 0;
 
         try {
-          let outcome: TurnOutcome | undefined;
-
-          // Labelled so a case can break the loop; a bare `break` only leaves the switch.
-          turn: while (true) {
-            const task = spawn(
-              agentLoop({agentId: req.agentId, turnId, messages: context}),
-            );
-            activeTask = task;
-            // Prefer controls when several branches are already complete. The
-            // consumed count still closes the race where the answer passed this
-            // select before the controller resolved a signal.
-            const selected = yield* select({interrupt, steering, answer: task});
-
-            switch (selected.tag) {
-              case "answer": {
-                const result = yield* selected.future;
-                activeTask = undefined;
-                outcome = {
-                  turnId,
-                  status: result.status,
-                  text:
-                    result.status === "completed" ? result.text : result.error,
-                  consumedSteering,
-                };
-                break turn;
-              }
-              case "interrupt": {
-                const reason = yield* selected.future;
-                yield* stopAgentLoop(task);
-                activeTask = undefined;
-                outcome = {
-                  turnId,
-                  status: "interrupted",
-                  text: reason,
-                  consumedSteering,
-                };
-                break turn;
-              }
-              case "steering": {
-                const steer = yield* selected.future;
-                consumedSteering += 1;
-                yield* stopAgentLoop(task);
-                activeTask = undefined;
-                steering = signal<string>(STEERING); // re-arm for the next steer
-                // Add the steer to the current model context. The Agent already
-                // recorded it in the durable conversation history.
-                context = [
-                  ...context,
-                  {role: "user" as const, content: steer},
-                ].slice(-MAX_CONTEXT_MESSAGES);
-                break;
-              }
-            }
+          const task = spawn(
+            agentLoop({
+              agentId: req.agentId,
+              turnId,
+              messages: buildModelContext(req.history),
+            }),
+          );
+          activeTask = task;
+          // Prefer a hard interrupt if it races with normal completion.
+          const selected = yield* select({interrupt, answer: task});
+          let outcome: TurnOutcome;
+          if (selected.tag === "interrupt") {
+            const reason = yield* selected.future;
+            yield* stopAgentLoop(task);
+            outcome = {
+              turnId,
+              status: "interrupted",
+              text: reason,
+              consumedSteering: 0,
+            };
+          } else {
+            const result = yield* selected.future;
+            outcome = {
+              turnId,
+              status: result.status,
+              text: result.status === "completed" ? result.text : result.error,
+              consumedSteering: result.consumedSteering,
+            };
           }
+          activeTask = undefined;
 
           yield* sendClient(Agent, req.agentId).append(outcome);
         } catch (error) {
@@ -183,7 +151,7 @@ export const Turn = service({
               turnId,
               status: "interrupted",
               text: "Turn cancelled",
-              consumedSteering,
+              consumedSteering: 0,
             });
             throw error;
           }
@@ -194,7 +162,7 @@ export const Turn = service({
             turnId,
             status: "failed",
             text: errorMessage(error),
-            consumedSteering,
+            consumedSteering: 0,
           });
         }
       },

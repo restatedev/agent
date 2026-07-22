@@ -41,6 +41,7 @@ function agentKey(): string {
 
 const DEFAULT_ASK =
   "What is the weather in the top 10 European capitals? Also sleep for 4 minutes.";
+const ROUTER_CONTEXT_ENTRIES = 8;
 
 const AskRequestSchema = z.object({
   message: z.string().default(DEFAULT_ASK),
@@ -85,7 +86,17 @@ export const Agent = object({
 
         const route = current.interrupting
           ? "queue"
-          : yield* routeMessage(message);
+          : yield* routeMessage(
+              message,
+              (yield* history.recent(ROUTER_CONTEXT_ENTRIES)).map((entry) => {
+                if (entry.role === "user") {
+                  return `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`;
+                }
+                return entry.role === "assistant"
+                  ? `assistant (${entry.status}): ${entry.text}`
+                  : `event (${entry.type}): ${entry.reason}`;
+              }),
+            );
 
         if (route === "interrupt") {
           yield* activeTurn.interrupt(message);
