@@ -106,13 +106,7 @@ export const Turn = service({
 
         // The model context ends with the message that triggered this turn.
         // Steering messages are added as newer instructions when they arrive.
-        let context = [
-          ...buildModelContext(req.history),
-          ...req.replayedSteering.map((content) => ({
-            role: "user" as const,
-            content,
-          })),
-        ].slice(-MAX_CONTEXT_MESSAGES);
+        let context = buildModelContext(req.history);
         let activeTask: Task<unknown> | undefined;
         let consumedSteering = 0;
 

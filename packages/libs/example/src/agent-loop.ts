@@ -28,13 +28,11 @@ export type AgentLoopResult =
   | {status: "completed"; text: string}
   | {status: "failed"; error: string};
 
-type ToolOutcome =
-  | {call: ToolCall; status: "succeeded"; result: string}
-  | {call: ToolCall; status: "failed"; error: string};
-
 type ToolExecution =
   | {status: "succeeded"; result: string}
   | {status: "failed"; error: string};
+
+type ToolOutcome = ToolExecution & {call: ToolCall};
 
 type AgentTool = {
   name: string;
@@ -170,10 +168,6 @@ function* executeTool(
   return {call, ...(yield* tool.execute(call.input))};
 }
 
-function observe(messages: ModelMessage[], note: string): void {
-  messages.push({role: "user", content: note});
-}
-
 // Run model -> tools -> model until there is a final answer.
 export function* agentLoop({
   agentId,
@@ -187,19 +181,20 @@ export function* agentLoop({
     const action = yield* callModel(agentId, messages, manifests);
 
     if (action.type === "error") {
-      observe(
-        messages,
-        `Your last response could not be used (${action.message}). Try again with the available tools or give a final answer.`,
-      );
+      messages.push({
+        role: "user",
+        content: `Your last response could not be used (${action.message}). Try again with the available tools or give a final answer.`,
+      });
       continue;
     }
 
     if (action.type === "text") {
       if (!action.content.trim()) {
-        observe(
-          messages,
-          "Your last response was empty. Call a tool or give a final answer.",
-        );
+        messages.push({
+          role: "user",
+          content:
+            "Your last response was empty. Call a tool or give a final answer.",
+        });
         continue;
       }
       return {status: "completed", text: action.content};

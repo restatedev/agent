@@ -42,19 +42,22 @@ function agentKey(): string {
 // `state()` (only valid in an exclusive handler). The keys are `turn`
 // (ActiveTurn), `history` (ConversationEntry[]), and `pending` (string[]).
 
-// The active turn as this object tracks it. `id` is the turn's invocation id
-// and the signal target. `sentSteering` is the FIFO sequence resolved on that
-// invocation; it remains optional so state written by older deployments can be
-// read safely. `interrupting` marks the
-// wind-down window: we have asked the turn to stop, but its terminal summary
-// (which is what retires the turn, see append) has not arrived yet.
+// `interrupting` covers the wind-down between sending the interrupt signal and
+// receiving the Turn's terminal outcome.
 // Control decisions need that window to be visible — a turn that is winding
 // down has stopped selecting signals, so steering it is futile and
 // re-interrupting it is a no-op.
 type ActiveTurn = {
   id: string;
   interrupting: boolean;
-  sentSteering?: string[];
+  sentSteering: number;
+};
+
+// The previous revision stored the steering messages themselves. Normalize
+// that short-lived state shape at the read boundary and keep the controller's
+// working type simple.
+type StoredActiveTurn = Omit<ActiveTurn, "sentSteering"> & {
+  sentSteering?: number | string[];
 };
 
 // Keep the Turn invocation payload bounded as the durable transcript grows.
@@ -63,7 +66,16 @@ const MAX_TURN_HISTORY_ENTRIES = 80;
 const ROUTER_CONTEXT_ENTRIES = 8;
 
 function* readTurn(): Operation<ActiveTurn | undefined> {
-  return (yield* sharedState().get<ActiveTurn>("turn")) ?? undefined;
+  const turn = yield* sharedState().get<StoredActiveTurn>("turn");
+  if (!turn) {
+    return undefined;
+  }
+  return {
+    ...turn,
+    sentSteering: Array.isArray(turn.sentSteering)
+      ? turn.sentSteering.length
+      : (turn.sentSteering ?? 0),
+  };
 }
 
 function* saveTurn(turn: ActiveTurn): Operation<void> {
@@ -78,9 +90,12 @@ function* readHistory(): Operation<ConversationEntry[]> {
   return (yield* sharedState().get<ConversationEntry[]>("history")) ?? [];
 }
 
-function* appendEntry(entry: ConversationEntry): Operation<void> {
+function* appendHistory(...entries: ConversationEntry[]): Operation<void> {
+  if (entries.length === 0) {
+    return;
+  }
   const history = yield* readHistory();
-  history.push(entry);
+  history.push(...entries);
   state().set("history", history);
 }
 
@@ -107,57 +122,48 @@ function* drainPending(): Operation<string[]> {
   return pending;
 }
 
-// Remove the latest `count` steering entries from a model-history snapshot.
-// They remain in the durable user-facing history, but `beginTurn` passes them
-// separately so the Turn can place unconsumed steering after the answer that
-// raced with it instead of presenting the instruction twice.
-function omitLatestSteering(
-  history: ConversationEntry[],
-  count: number,
-): ConversationEntry[] {
-  let remaining = count;
-  return history
-    .toReversed()
-    .filter((entry) => {
-      if (
-        remaining > 0 &&
-        entry.role === "user" &&
-        entry.delivery === "steer"
-      ) {
-        remaining -= 1;
-        return false;
-      }
-      return true;
-    })
-    .toReversed();
+// Move the latest steering entries out of history so `append` can place them
+// after the outcome they raced with and run them through the normal queue path.
+function* takeLatestSteering(count: number): Operation<string[]> {
+  if (count === 0) {
+    return [];
+  }
+
+  const history = yield* readHistory();
+  const messages: string[] = [];
+  for (
+    let index = history.length - 1;
+    index >= 0 && messages.length < count;
+    index--
+  ) {
+    const entry = history[index];
+    if (entry.role === "user" && entry.delivery === "steer") {
+      messages.push(entry.text);
+      history.splice(index, 1);
+    }
+  }
+  state().set("history", history);
+  return messages.reverse();
 }
 
-// Begin a turn for new `messages` and/or steering that the previous turn did
-// not consume. New messages are appended to the transcript; replayed steering
-// already exists there and is moved to the end of the model context only.
-// Guards the one-turn-at-a-time invariant in one place, so an in-flight turn
-// cannot be orphaned.
+// Append a batch of user messages and start one turn for the resulting history.
+// The active-turn guard keeps the controller's one-turn-at-a-time invariant.
 function* beginTurn(
   agentId: string,
   messages: string[],
   delivery: Extract<UserMessageDelivery, "turn" | "queued">,
-  replayedSteering: string[] = [],
 ): Operation<void> {
-  if (
-    (messages.length === 0 && replayedSteering.length === 0) ||
-    (yield* readTurn())
-  ) {
+  if (messages.length === 0 || (yield* readTurn())) {
     return;
   }
-  for (const message of messages) {
-    yield* appendEntry({role: "user", text: message, delivery});
-  }
-  const history = omitLatestSteering(
-    yield* readHistory(),
-    replayedSteering.length,
-  ).slice(-MAX_TURN_HISTORY_ENTRIES);
-  const turnId = yield* startTurn({agentId, history, replayedSteering});
-  yield* saveTurn({id: turnId, interrupting: false, sentSteering: []});
+  yield* appendHistory(
+    ...messages.map(
+      (text): ConversationEntry => ({role: "user", text, delivery}),
+    ),
+  );
+  const history = (yield* readHistory()).slice(-MAX_TURN_HISTORY_ENTRIES);
+  const turnId = yield* startTurn({agentId, history});
+  yield* saveTurn({id: turnId, interrupting: false, sentSteering: 0});
 }
 
 // Ask the active turn to stop, with `reason`. Fire-and-forget BY DESIGN: this
@@ -189,7 +195,11 @@ function* interruptActive(
     return false;
   }
   if (recordUserMessage) {
-    yield* appendEntry({role: "user", text: reason, delivery: "interrupt"});
+    yield* appendHistory({
+      role: "user",
+      text: reason,
+      delivery: "interrupt",
+    });
   }
   interruptTurn(turn.id, reason);
   yield* saveTurn({...turn, interrupting: true});
@@ -212,10 +222,10 @@ function* steerActive(message: string): Operation<boolean> {
   if (!turn || turn.interrupting) {
     return false;
   }
-  yield* appendEntry({role: "user", text: message, delivery: "steer"});
+  yield* appendHistory({role: "user", text: message, delivery: "steer"});
   yield* saveTurn({
     ...turn,
-    sentSteering: [...(turn.sentSteering ?? []), message],
+    sentSteering: turn.sentSteering + 1,
   });
   steerTurn(turn.id, message);
   return true;
@@ -344,12 +354,14 @@ export const Agent = object({
         // Interrupt is authoritative and discards outstanding steering. On any
         // other ending, carry steering that the Turn never consumed into one
         // follow-up turn instead of leaving it dead-lettered in history.
-        const replayedSteering =
+        const unconsumedSteering =
           status === "interrupted"
             ? []
-            : (turn.sentSteering ?? []).slice(consumedSteering);
+            : yield* takeLatestSteering(
+                Math.max(0, turn.sentSteering - consumedSteering),
+              );
 
-        yield* appendEntry({
+        yield* appendHistory({
           role: "assistant",
           text,
           turnId,
@@ -359,9 +371,8 @@ export const Agent = object({
 
         yield* beginTurn(
           agentId,
-          yield* drainPending(),
+          [...unconsumedSteering, ...(yield* drainPending())],
           "queued",
-          replayedSteering,
         );
       },
     ),

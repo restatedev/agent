@@ -255,19 +255,19 @@ export function* model(
   messages: ModelMessage[],
   tools: ToolManifest[],
 ): Operation<ModelResult> {
-  const future = scope(MODEL_SCOPE)
+  const call = scope(MODEL_SCOPE)
     .client(ModelGateway)
     .complete(
       {messages, tools},
       Opts.from({limitKey: agentLimitKey(agentId), name: "agent-model"}),
     );
+  const invocation = yield* call.invocation;
   try {
-    return yield* future;
-  } catch (e) {
-    if (e instanceof InterruptedError) {
-      const ref = yield* future.invocation;
-      ref.cancel();
+    return yield* call;
+  } catch (error) {
+    if (error instanceof InterruptedError) {
+      invocation.cancel();
     }
-    throw e;
+    throw error;
   }
 }
