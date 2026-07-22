@@ -1,5 +1,5 @@
 // Durable conversation history for one Agent virtual object. Turn lifecycle
-// state and pending work belong to activeTurn in agent.ts.
+// state and pending work belong to agent-turn.ts.
 
 import {type Operation, sharedState, state} from "@restatedev/restate-sdk-gen";
 import type {ConversationEntry} from "./types.js";
@@ -7,6 +7,12 @@ import type {ConversationEntry} from "./types.js";
 export const history = {
   *read(): Operation<ConversationEntry[]> {
     return (yield* sharedState().get<ConversationEntry[]>("history")) ?? [];
+  },
+
+  *recent(limit: number): Operation<ConversationEntry[]> {
+    const current =
+      (yield* sharedState().get<ConversationEntry[]>("history")) ?? [];
+    return current.slice(-limit);
   },
 
   *append(...entries: ConversationEntry[]): Operation<void> {
@@ -19,8 +25,8 @@ export const history = {
     state().set("history", current);
   },
 
-  // Remove steering that lost a completion race so activeTurn can append it
-  // again after that outcome as normal queued input.
+  // Remove steering that lost a completion race so the Agent coordinator can
+  // append it again after that outcome as normal queued input.
   *takeLatestSteering(count: number): Operation<string[]> {
     if (count === 0) {
       return [];

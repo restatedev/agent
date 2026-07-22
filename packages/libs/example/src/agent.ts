@@ -12,17 +12,14 @@ import {
   type Operation,
   object,
   schemas,
-  sharedState,
-  state,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {history} from "./agent-history.js";
+import {activeTurn} from "./agent-turn.js";
 import {type MessageRoute, routeMessage} from "./model.js";
-import {interruptTurn, startTurn, steerTurn} from "./turn.js";
 import {
   type ConversationEntry,
   ConversationEntrySchema,
-  type TurnOutcome,
   TurnOutcomeSchema,
   type UserMessageDelivery,
 } from "./types.js";
@@ -42,174 +39,48 @@ function agentKey(): string {
 const MAX_TURN_HISTORY_ENTRIES = 80;
 const ROUTER_CONTEXT_ENTRIES = 8;
 
-type ActiveTurnState = {
-  id: string;
-  interrupting: boolean;
-  sentSteering: number;
-};
+// Cross-component coordination belongs here: record the input, prepare the
+// Turn request, then ask activeTurn to own its lifecycle.
+function* dispatchTurn(
+  agentId: string,
+  messages: string[],
+  delivery: Extract<UserMessageDelivery, "turn" | "queued">,
+): Operation<void> {
+  if (messages.length === 0 || (yield* activeTurn.current())) {
+    return;
+  }
+  yield* history.append(
+    ...messages.map(
+      (text): ConversationEntry => ({role: "user", text, delivery}),
+    ),
+  );
+  yield* activeTurn.start({
+    agentId,
+    history: yield* history.recent(MAX_TURN_HISTORY_ENTRIES),
+  });
+}
 
-// The previous revision stored the steering messages themselves. Normalize
-// that short-lived state shape when an active turn is read.
-type StoredActiveTurn = Omit<ActiveTurnState, "sentSteering"> & {
-  sentSteering?: number | string[];
-};
+function* requestInterrupt(reason: string): Operation<boolean> {
+  const turnId = yield* activeTurn.interrupt(reason);
+  if (!turnId) {
+    return false;
+  }
+  yield* history.append({
+    role: "event",
+    type: "interrupt",
+    turnId,
+    reason,
+  });
+  return true;
+}
 
-const activeTurn = {
-  *get(): Operation<ActiveTurnState | undefined> {
-    const current = yield* sharedState().get<StoredActiveTurn>("turn");
-    if (!current) {
-      return undefined;
-    }
-    return {
-      ...current,
-      sentSteering: Array.isArray(current.sentSteering)
-        ? current.sentSteering.length
-        : (current.sentSteering ?? 0),
-    };
-  },
-
-  // Append a batch of user messages and start one turn for the resulting
-  // history. The guard preserves the one-turn-at-a-time invariant.
-  *start(
-    agentId: string,
-    messages: string[],
-    delivery: Extract<UserMessageDelivery, "turn" | "queued">,
-  ): Operation<void> {
-    if (messages.length === 0 || (yield* this.get())) {
-      return;
-    }
-    yield* history.append(
-      ...messages.map(
-        (text): ConversationEntry => ({role: "user", text, delivery}),
-      ),
-    );
-    const recentHistory = (yield* history.read()).slice(
-      -MAX_TURN_HISTORY_ENTRIES,
-    );
-    const turnId = yield* startTurn({agentId, history: recentHistory});
-    state().set("turn", {
-      id: turnId,
-      interrupting: false,
-      sentSteering: 0,
-    });
-  },
-
-  // Accept one conversational message. Routing is inlined here because it is
-  // used only for messages that arrive while this turn is active.
-  *ask(agentId: string, message: string): Operation<void> {
-    const current = yield* this.get();
-    if (!current) {
-      yield* this.start(agentId, [message], "turn");
-      return;
-    }
-
-    let route: MessageRoute = "queue";
-    if (!current.interrupting) {
-      try {
-        const recent = (yield* history.read())
-          .slice(-ROUTER_CONTEXT_ENTRIES)
-          .map((entry) => {
-            if (entry.role === "user") {
-              return `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`;
-            }
-            return entry.role === "assistant"
-              ? `assistant (${entry.status}): ${entry.text}`
-              : `event (${entry.type}): ${entry.reason}`;
-          });
-        route = yield* routeMessage(message, recent);
-      } catch (error) {
-        if (error instanceof CancelledError) {
-          throw error;
-        }
-      }
-    }
-
-    if (route === "interrupt") {
-      yield* this.interrupt(message);
-      return;
-    }
-    if (route === "steer") {
-      yield* this.steer(message);
-      return;
-    }
-
-    const pending = (yield* sharedState().get<string[]>("pending")) ?? [];
-    pending.push(message);
-    state().set("pending", pending);
-  },
-
-  // Resolving the signal only starts wind-down. Agent.append retires the turn
-  // after its terminal outcome arrives, keeping the next turn from racing it.
-  *interrupt(reason: string): Operation<boolean> {
-    const current = yield* this.get();
-    if (!current || current.interrupting) {
-      return false;
-    }
-    yield* history.append({
-      role: "event",
-      type: "interrupt",
-      turnId: current.id,
-      reason,
-    });
-    interruptTurn(current.id, reason);
-    state().set("turn", {...current, interrupting: true});
-    return true;
-  },
-
-  // Returns false without recording anything when no turn is still listening;
-  // the caller then decides whether to queue the message instead.
-  *steer(message: string): Operation<boolean> {
-    const current = yield* this.get();
-    if (!current || current.interrupting) {
-      return false;
-    }
-    yield* history.append({
-      role: "user",
-      text: message,
-      delivery: "steer",
-    });
-    state().set("turn", {
-      ...current,
-      sentSteering: current.sentSteering + 1,
-    });
-    steerTurn(current.id, message);
-    return true;
-  },
-
-  *pending(): Operation<string[]> {
-    return (yield* sharedState().get<string[]>("pending")) ?? [];
-  },
-
-  // Reconcile one terminal outcome, retire its state, and start a follow-up
-  // turn for steering or messages that were not consumed.
-  *finish(agentId: string, outcome: TurnOutcome): Operation<void> {
-    const current = yield* this.get();
-    if (current?.id !== outcome.turnId) {
-      return;
-    }
-
-    const unconsumedSteering =
-      outcome.status === "interrupted"
-        ? []
-        : yield* history.takeLatestSteering(
-            Math.max(0, current.sentSteering - outcome.consumedSteering),
-          );
-
-    yield* history.append({
-      role: "assistant",
-      text: outcome.text,
-      turnId: outcome.turnId,
-      status: outcome.status,
-    });
-    state().clear("turn");
-
-    const pending = (yield* sharedState().get<string[]>("pending")) ?? [];
-    if (pending.length > 0) {
-      state().clear("pending");
-    }
-    yield* this.start(agentId, [...unconsumedSteering, ...pending], "queued");
-  },
-};
+function* requestSteer(message: string): Operation<boolean> {
+  if (!(yield* activeTurn.steer(message))) {
+    return false;
+  }
+  yield* history.append({role: "user", text: message, delivery: "steer"});
+  return true;
+}
 
 export const Agent = object({
   name: "Agent",
@@ -221,7 +92,49 @@ export const Agent = object({
     ask: schemas(
       {input: z.string(), output: z.void()},
       function* (message): Operation<void> {
-        yield* activeTurn.ask(agentKey(), message);
+        const agentId = agentKey();
+        const current = yield* activeTurn.current();
+        if (!current) {
+          yield* dispatchTurn(agentId, [message], "turn");
+          return;
+        }
+
+        // Routing is advisory. During interrupt wind-down, or when the cheap
+        // classifier fails, preserve the accepted message for the next turn.
+        let route: MessageRoute = "queue";
+        if (!current.interrupting) {
+          try {
+            const recent = (yield* history.recent(ROUTER_CONTEXT_ENTRIES)).map(
+              (entry) => {
+                if (entry.role === "user") {
+                  return `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`;
+                }
+                return entry.role === "assistant"
+                  ? `assistant (${entry.status}): ${entry.text}`
+                  : `event (${entry.type}): ${entry.reason}`;
+              },
+            );
+            route = yield* routeMessage(message, recent);
+          } catch (error) {
+            if (error instanceof CancelledError) {
+              throw error;
+            }
+          }
+        }
+
+        if (route === "interrupt") {
+          if (!(yield* requestInterrupt(message))) {
+            yield* activeTurn.enqueue(message);
+          }
+          return;
+        }
+        if (route === "steer") {
+          if (!(yield* requestSteer(message))) {
+            yield* activeTurn.enqueue(message);
+          }
+          return;
+        }
+        yield* activeTurn.enqueue(message);
       },
     ),
 
@@ -232,7 +145,7 @@ export const Agent = object({
     interrupt: schemas(
       {input: z.string(), output: z.boolean()},
       function* (reason): Operation<boolean> {
-        return yield* activeTurn.interrupt(reason);
+        return yield* requestInterrupt(reason);
       },
     ),
 
@@ -244,7 +157,7 @@ export const Agent = object({
     steer: schemas(
       {input: z.string(), output: z.boolean()},
       function* (message): Operation<boolean> {
-        return yield* activeTurn.steer(message);
+        return yield* requestSteer(message);
       },
     ),
 
@@ -277,7 +190,25 @@ export const Agent = object({
     append: schemas(
       {input: TurnOutcomeSchema, output: z.void()},
       function* (outcome): Operation<void> {
-        yield* activeTurn.finish(agentKey(), outcome);
+        const finished = yield* activeTurn.finish(outcome);
+        if (!finished) {
+          return;
+        }
+
+        const unconsumedSteering = yield* history.takeLatestSteering(
+          finished.missedSteering,
+        );
+        yield* history.append({
+          role: "assistant",
+          text: outcome.text,
+          turnId: outcome.turnId,
+          status: outcome.status,
+        });
+        yield* dispatchTurn(
+          agentKey(),
+          [...unconsumedSteering, ...finished.pending],
+          "queued",
+        );
       },
     ),
   },
