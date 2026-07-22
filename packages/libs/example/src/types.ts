@@ -9,8 +9,9 @@ import {z} from "zod";
 export const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
 export type TurnStatus = z.infer<typeof TurnStatusSchema>;
 
-// How a user message entered the agent's execution. Optional for compatibility
-// with conversations persisted before this field was introduced.
+// How a user message entered the agent's execution. Both the optional field and
+// the legacy "interrupt" value keep previously persisted histories readable;
+// new interruptions use a dedicated event entry below.
 export const UserMessageDeliverySchema = z.enum([
   "turn",
   "steer",
@@ -19,10 +20,9 @@ export const UserMessageDeliverySchema = z.enum([
 ]);
 export type UserMessageDelivery = z.infer<typeof UserMessageDeliverySchema>;
 
-// An entry in the general conversation. A `user` entry records whether it
-// started work, redirected it, queued behind it, or interrupted it. An
-// `assistant` entry is a turn's summary and carries that turn's identity and
-// status, so a client can correlate it with Restate's observability tooling.
+// An entry in the general conversation. Messages record how they entered the
+// execution, interrupt requests are explicit events, and assistant entries are
+// terminal turn summaries that can be correlated with Restate observability.
 export const ConversationEntrySchema = z.discriminatedUnion("role", [
   z.object({
     role: z.literal("user"),
@@ -34,6 +34,12 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
     text: z.string(),
     turnId: z.string(),
     status: TurnStatusSchema,
+  }),
+  z.object({
+    role: z.literal("event"),
+    type: z.literal("interrupt"),
+    turnId: z.string(),
+    reason: z.string(),
   }),
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;

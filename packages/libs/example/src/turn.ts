@@ -59,7 +59,7 @@ export function buildModelContext(
       if (entry.role === "user") {
         return [{role: "user", content: entry.text}];
       }
-      return entry.status === "completed"
+      return entry.role === "assistant" && entry.status === "completed"
         ? [{role: "assistant", content: entry.text}]
         : [];
     })

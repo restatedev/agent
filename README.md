@@ -45,10 +45,15 @@ turn appends exactly one structured outcome: `completed`, `interrupted`, or
 | Handler | Input | Behavior |
 | --- | --- | --- |
 | `ask` | string | Appends and starts a turn when idle. While busy, a fast classifier chooses interrupt, steer, or queue. |
-| `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. User entries identify whether they started, steered, queued, or interrupted work. |
+| `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. Entries distinguish user messages, interruption events, and terminal turn summaries. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
-| `interrupt` | reason string | Resolves the active turn's interrupt signal and returns immediately. |
+| `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
 | `steer` | instruction string | Appends the instruction and resolves the active turn's steering signal. |
+
+A successful interruption is visible immediately as
+`{ role: "event", type: "interrupt", turnId, reason }`. The later turn outcome
+records whether the turn actually ended as interrupted or won a completion
+race.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 successive `signal("steering")` consumes the next instruction in order.

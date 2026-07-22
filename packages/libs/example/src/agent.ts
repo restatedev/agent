@@ -68,18 +68,17 @@ const activeTurn = {
 
   // Resolving the signal only starts wind-down. Agent.append retires the turn
   // after its terminal outcome arrives, keeping the next turn from racing it.
-  *interrupt(reason: string, recordUserMessage = false): Operation<boolean> {
+  *interrupt(reason: string): Operation<boolean> {
     const turn = yield* agentState.getTurn();
     if (!turn || turn.interrupting) {
       return false;
     }
-    if (recordUserMessage) {
-      yield* agentState.appendHistory({
-        role: "user",
-        text: reason,
-        delivery: "interrupt",
-      });
-    }
+    yield* agentState.appendHistory({
+      role: "event",
+      type: "interrupt",
+      turnId: turn.id,
+      reason,
+    });
     interruptTurn(turn.id, reason);
     yield* agentState.setTurn({...turn, interrupting: true});
     return true;
@@ -111,11 +110,14 @@ const activeTurn = {
     try {
       const recent = (yield* agentState.getHistory())
         .slice(-ROUTER_CONTEXT_ENTRIES)
-        .map((entry) =>
-          entry.role === "user"
-            ? `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`
-            : `assistant (${entry.status}): ${entry.text}`,
-        );
+        .map((entry) => {
+          if (entry.role === "user") {
+            return `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`;
+          }
+          return entry.role === "assistant"
+            ? `assistant (${entry.status}): ${entry.text}`
+            : `event (${entry.type}): ${entry.reason}`;
+        });
       return yield* routeMessage(message, recent);
     } catch (error) {
       if (error instanceof CancelledError) {
@@ -153,7 +155,7 @@ export const Agent = object({
 
         switch (yield* activeTurn.route(message)) {
           case "interrupt":
-            yield* activeTurn.interrupt(message, true);
+            yield* activeTurn.interrupt(message);
             break;
           case "steer":
             if (!(yield* activeTurn.steer(message))) {
