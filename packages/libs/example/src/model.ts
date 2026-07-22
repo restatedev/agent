@@ -4,7 +4,13 @@
 import {createHash} from "node:crypto";
 import {createOpenAI, type OpenAIProvider} from "@ai-sdk/openai";
 import {Opts, TerminalError} from "@restatedev/restate-sdk";
-import {type Operation, run, scope, service} from "@restatedev/restate-sdk-gen";
+import {
+  InterruptedError,
+  type Operation,
+  run,
+  scope,
+  service,
+} from "@restatedev/restate-sdk-gen";
 import {
   APICallError,
   type AssistantModelMessage,
@@ -249,10 +255,19 @@ export function* model(
   messages: ModelMessage[],
   tools: ToolManifest[],
 ): Operation<ModelResult> {
-  return yield* scope(MODEL_SCOPE)
+  const future = scope(MODEL_SCOPE)
     .client(ModelGateway)
     .complete(
       {messages, tools},
       Opts.from({limitKey: agentLimitKey(agentId), name: "agent-model"}),
     );
+  try {
+    return yield* future;
+  } catch (e) {
+    if (e instanceof InterruptedError) {
+      const ref = yield* future.invocation;
+      ref.cancel();
+    }
+    throw e;
+  }
 }
