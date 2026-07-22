@@ -11,6 +11,7 @@ import {
   jsonSchema,
   type ModelMessage,
   Output,
+  streamText,
   type ToolSet,
 } from "ai";
 
@@ -33,6 +34,11 @@ export type ModelResult =
       message: AssistantModelMessage;
       calls: ToolCall[];
     }
+  | {type: "error"; message: string};
+
+export type ModelStreamChunk =
+  | {type: "text"; content: string}
+  | ({type: "tool_call"} & ToolCall)
   | {type: "error"; message: string};
 
 const MESSAGE_ROUTES = ["steer", "interrupt", "queue"] as const;
@@ -74,19 +80,40 @@ async function withOpenAI<T>(
   try {
     return await call(openAI());
   } catch (error) {
-    // Restate owns retries. Invalid requests and authentication failures are
-    // terminal; throttling and transient provider failures remain retryable.
-    if (APICallError.isInstance(error) && !error.isRetryable) {
-      throw new TerminalError(`OpenAI rejected the request: ${error.message}`, {
-        errorCode: error.statusCode,
-      });
-    }
-    throw error;
+    rethrowProviderError(error);
   }
+}
+
+function rethrowProviderError(error: unknown): never {
+  // Restate owns retries. Invalid requests and authentication failures are
+  // terminal; throttling and transient provider failures remain retryable.
+  if (APICallError.isInstance(error) && !error.isRetryable) {
+    throw new TerminalError(`OpenAI rejected the request: ${error.message}`, {
+      errorCode: error.statusCode,
+    });
+  }
+  throw error;
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function modelTools(tools: ToolManifest[]): ToolSet {
+  return Object.fromEntries(
+    tools.map((tool) => [
+      tool.name,
+      {
+        description: tool.description,
+        // Tool manifests are produced from Zod's draft-07 JSON Schema output
+        // in agent-loop. The model deliberately receives no executors.
+        inputSchema: jsonSchema(
+          tool.inputSchema as Parameters<typeof jsonSchema>[0],
+        ),
+        strict: true,
+      },
+    ]),
+  );
 }
 
 export async function completeAgent(
@@ -95,25 +122,11 @@ export async function completeAgent(
   signal: AbortSignal,
 ): Promise<ModelResult> {
   return withOpenAI(async (openai) => {
-    const modelTools: ToolSet = Object.fromEntries(
-      tools.map((tool) => [
-        tool.name,
-        {
-          description: tool.description,
-          // Tool manifests are produced from Zod's draft-07 JSON Schema output
-          // in agent-loop. The model deliberately receives no executors.
-          inputSchema: jsonSchema(
-            tool.inputSchema as Parameters<typeof jsonSchema>[0],
-          ),
-          strict: true,
-        },
-      ]),
-    );
     const result = await generateText({
       model: openai.responses(AGENT_MODEL),
       system: AGENT_SYSTEM,
       messages,
-      tools: modelTools,
+      tools: modelTools(tools),
       toolChoice: "auto",
       maxOutputTokens: 2_000,
       maxRetries: 0,
@@ -179,6 +192,87 @@ export async function completeAgent(
       ? {type: "text", content: result.text}
       : {type: "error", message: "model returned neither text nor tool calls"};
   });
+}
+
+// Stream only chunks useful to an agent consumer. Tool input deltas and
+// provider bookkeeping stay inside the model boundary; tool calls are emitted
+// only after the AI SDK has assembled their complete input.
+export async function* streamAgent(
+  messages: ModelMessage[],
+  tools: ToolManifest[],
+  signal: AbortSignal,
+): AsyncGenerator<ModelStreamChunk> {
+  let emitted = false;
+  try {
+    const result = streamText({
+      model: openAI().responses(AGENT_MODEL),
+      system: AGENT_SYSTEM,
+      messages,
+      tools: modelTools(tools),
+      toolChoice: "auto",
+      maxOutputTokens: 2_000,
+      maxRetries: 0,
+      abortSignal: signal,
+      timeout: 120_000,
+      providerOptions: {
+        openai: {
+          reasoningEffort: "low",
+          parallelToolCalls: true,
+          store: false,
+        },
+      },
+    });
+
+    for await (const part of result.stream) {
+      switch (part.type) {
+        case "text-delta":
+          if (part.text) {
+            emitted = true;
+            yield {type: "text", content: part.text};
+          }
+          break;
+        case "tool-call":
+          emitted = true;
+          if (part.dynamic || part.invalid) {
+            yield {
+              type: "error",
+              message: `${part.toolName}: ${part.error ? errorMessage(part.error) : "invalid tool call"}`,
+            };
+            return;
+          }
+          yield {
+            type: "tool_call",
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+          };
+          break;
+        case "finish":
+          if (part.finishReason === "length") {
+            yield {
+              type: "error",
+              message: "model response exceeded its token limit",
+            };
+            return;
+          }
+          if (part.finishReason === "content-filter") {
+            yield {type: "error", message: "model response was filtered"};
+            return;
+          }
+          break;
+        case "error":
+          throw part.error;
+        case "abort":
+          throw new TerminalError(part.reason ?? "model stream was aborted");
+      }
+    }
+
+    if (!emitted) {
+      yield {type: "error", message: "model returned no text or tool calls"};
+    }
+  } catch (error) {
+    rethrowProviderError(error);
+  }
 }
 
 // This fast classification runs directly in the Agent handler.
