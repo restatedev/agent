@@ -9,11 +9,12 @@ flowchart LR
   User -->|"ask / steer / interrupt"| Agent["Agent Virtual Object\nkeyed by agentId"]
   Agent -->|"cheap route-message run"| Router["GPT-4o mini"]
   Agent -->|"one-way run"| Turn["Turn service"]
-  Agent -.->|"durable signals"| Turn
+  Agent -.->|"control / approval signals"| Turn
   Turn --> Loop["agentLoop"]
   Loop -->|"scoped invocation"| Gateway["ModelGateway service"]
   Gateway -->|"durable model run"| Model["agent model"]
   Loop -->|"spawn + durable run"| Tools["local tools in parallel"]
+  Tools -->|"private approval request"| Agent
   Turn -->|"one-way append outcome"| Agent
 ```
 
@@ -21,12 +22,12 @@ flowchart LR
 
 - `Agent` is the durable controller. Its exclusive handlers serialize changes
   to the active turn, pending messages, and conversation history for one
-  `agentId`. It coordinates two independent components: `agent-turn.ts` owns
-  turn state and signal lifecycle, while `agent-history.ts` owns the durable
-  transcript.
+  `agentId`. It coordinates three independent components: `agent-turn.ts` owns
+  turn state and signal lifecycle, `agent-history.ts` owns the durable
+  transcript, and `agent-approval.ts` owns pending human approvals.
 - `Turn` is stateless. One invocation supervises one agent turn and races the
   agent loop against interrupt and steering signals.
-- `agentLoop` has one small boundary: `{ agentId, messages }` in and a
+- `agentLoop` has one small boundary: `{ agentId, turnId, messages }` in and a
   `completed | failed` result out. It owns self-contained tools—their model
   descriptions, input schemas, and local durable implementations—and projects
   serializable manifests for the model gateway.
@@ -52,6 +53,8 @@ turn appends exactly one structured outcome: `completed`, `interrupted`, or
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
 | `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
 | `steer` | instruction string | Appends the instruction and resolves the active turn's steering signal. |
+| `approvals` | void | Returns the human approvals currently waiting on this agent. |
+| `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool with `approved` or `rejected`. |
 
 A successful interruption is visible immediately as
 `{ role: "event", type: "interrupt", turnId, reason }`. The later turn outcome
@@ -84,6 +87,10 @@ directly and skip intent classification.
   Restate's [concurrent task primitives](https://docs.restate.dev/develop/ts/concurrent-tasks)
   to spawn all local tool `run` steps before joining them. Restate journals
   their concurrent execution and preserves deterministic replay.
+- The `humanApproval` tool registers its request as Agent state, then suspends
+  on a Turn-scoped signal named from the stable model tool-call ID. Approval,
+  rejection, steering, and interruption all leave an explicit durable trail;
+  abandoned requests are cleaned up idempotently.
 - Deterministic configuration and OpenAI 4xx request errors fail immediately.
   Transient transport, timeout, rate-limit, conflict, and 5xx errors retry.
 - Invocation cancellation aborts model I/O, joins the spawned loop, retires the
@@ -189,6 +196,22 @@ curl localhost:8080/Agent/demo/steer \
 The steering signal interrupts the pending Restate timer and restarts the agent
 loop with the new instruction in its context.
 
+To try human approval, explicitly ask the model to use the approval tool:
+
+```sh
+curl localhost:8080/Agent/demo/ask \
+  --json '{"message":"Before answering, use humanApproval to ask whether you may continue."}'
+
+curl -X POST localhost:8080/Agent/demo/approvals
+
+curl localhost:8080/Agent/demo/resolveApproval \
+  --json '{"approvalId":"<approvalId>","decision":"approved","reason":"Looks good"}'
+```
+
+`approvals` returns the `approvalId`, originating Turn invocation ID, and the
+model's question. A rejection is delivered to the model as a normal completed
+tool result, allowing it to explain or choose a different action.
+
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
 model/tool steps, retries, and signals. See Restate's
 [HTTP invocation guide](https://docs.restate.dev/services/invocation/http) for
@@ -197,6 +220,7 @@ request-response, one-way send, attach, and cancellation variants.
 ## Project map
 
 - `packages/libs/example/src/agent.ts` — durable conversation controller
+- `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signal supervision
 - `packages/libs/example/src/agent-loop.ts` — bounded model/tool loop and local tools
 - `packages/libs/example/src/model.ts` — model protocol, provider calls, and router

@@ -9,19 +9,26 @@ import {setTimeout} from "node:timers/promises";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
   all,
+  client,
   InterruptedError,
   type Operation,
   run,
+  sendClient,
+  signal,
   sleep,
   spawn,
 } from "@restatedev/restate-sdk-gen";
 import type {ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
+import {Agent} from "./agent.js";
+import {approvalSignalName} from "./agent-approval.js";
 import type {ToolCall, ToolManifest} from "./model.js";
 import {callModel} from "./model-gateway.js";
+import type {ApprovalDecision} from "./types.js";
 
 export type AgentLoopInput = {
   agentId: string;
+  turnId: string;
   messages: ModelMessage[];
 };
 
@@ -35,11 +42,17 @@ type ToolExecution =
 
 type ToolOutcome = ToolExecution & {call: ToolCall};
 
+type AgentToolContext = {
+  agentId: string;
+  turnId: string;
+  toolCallId: string;
+};
+
 type AgentTool = {
   name: string;
   description: string;
   inputSchema: z.ZodType;
-  execute(input: unknown): Operation<ToolExecution>;
+  execute(input: unknown, context: AgentToolContext): Operation<ToolExecution>;
 };
 
 const MAX_ROUNDS = 8;
@@ -62,13 +75,19 @@ function defineAgentTool<
   name: Name;
   description: string;
   inputSchema: Schema;
-  run(input: z.output<Schema>): Operation<ToolExecution>;
+  run(
+    input: z.output<Schema>,
+    context: AgentToolContext,
+  ): Operation<ToolExecution>;
 }): AgentTool & Pick<typeof definition, "name" | "inputSchema"> {
   return {
     name: definition.name,
     description: definition.description,
     inputSchema: definition.inputSchema,
-    *execute(input: unknown): Operation<ToolExecution> {
+    *execute(
+      input: unknown,
+      context: AgentToolContext,
+    ): Operation<ToolExecution> {
       const parsed = definition.inputSchema.safeParse(input);
       if (!parsed.success) {
         return {
@@ -76,7 +95,7 @@ function defineAgentTool<
           error: `invalid input: ${validationMessage(parsed.error)}`,
         };
       }
-      return yield* definition.run(parsed.data);
+      return yield* definition.run(parsed.data, context);
     },
   };
 }
@@ -143,7 +162,55 @@ const sleepTool = defineAgentTool({
   },
 });
 
-const STATIC_TOOLS = [getWeatherTool, sleepTool] as const;
+const humanApprovalTool = defineAgentTool({
+  name: "humanApproval",
+  description:
+    "Pause durably and ask a human to approve a proposed action. Use this when explicit human authorization is required. Call it by itself before any tools that depend on the decision.",
+  inputSchema: z.object({
+    question: z
+      .string()
+      .min(1)
+      .describe("The specific action or decision the human should approve."),
+  }),
+  *run({question}, context): Operation<ToolExecution> {
+    const request = {
+      approvalId: context.toolCallId,
+      turnId: context.turnId,
+      question,
+    };
+    try {
+      const registered = yield* client(Agent, context.agentId).requestApproval(
+        request,
+      );
+      if (!registered) {
+        return {
+          status: "failed",
+          error:
+            "human approval could not be registered because the turn is no longer active",
+        };
+      }
+
+      const decision = yield* signal<ApprovalDecision>(
+        approvalSignalName(context.toolCallId),
+      );
+      const reason = decision.reason ? ` Reason: ${decision.reason}` : "";
+      return {
+        status: "succeeded",
+        result:
+          decision.decision === "approved"
+            ? `Human approved the request.${reason}`
+            : `Human rejected the request.${reason}`,
+      };
+    } finally {
+      yield* sendClient(Agent, context.agentId).cancelApproval({
+        approvalId: context.toolCallId,
+        turnId: context.turnId,
+      });
+    }
+  },
+});
+
+const STATIC_TOOLS = [getWeatherTool, sleepTool, humanApprovalTool] as const;
 
 function toManifest(tool: AgentTool): ToolManifest {
   return {
@@ -156,6 +223,7 @@ function toManifest(tool: AgentTool): ToolManifest {
 function* executeTool(
   tools: readonly AgentTool[],
   call: ToolCall,
+  context: Omit<AgentToolContext, "toolCallId">,
 ): Operation<ToolOutcome> {
   const tool = tools.find((candidate) => candidate.name === call.toolName);
   if (!tool) {
@@ -166,17 +234,25 @@ function* executeTool(
     };
   }
 
-  return {call, ...(yield* tool.execute(call.input))};
+  return {
+    call,
+    ...(yield* tool.execute(call.input, {
+      ...context,
+      toolCallId: call.toolCallId,
+    })),
+  };
 }
 
 // Run model -> tools -> model until there is a final answer.
 export function* agentLoop({
   agentId,
+  turnId,
   messages: context,
 }: AgentLoopInput): Operation<AgentLoopResult> {
   const messages = [...context];
   const tools = STATIC_TOOLS;
   const manifests = tools.map(toManifest);
+  const toolContext = {agentId, turnId};
   let toolCallCount = 0;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const action = yield* callModel(agentId, messages, manifests);
@@ -213,7 +289,7 @@ export function* agentLoop({
     // Spawn every call before joining any of them. Interrupting the surrounding
     // agent loop cascades through the complete tool batch.
     const outcomes = yield* all(
-      action.calls.map((call) => spawn(executeTool(tools, call))),
+      action.calls.map((call) => spawn(executeTool(tools, call, toolContext))),
     );
     const toolMessage: ToolModelMessage = {
       role: "tool",

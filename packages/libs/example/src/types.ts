@@ -64,3 +64,31 @@ export const TurnOutcomeSchema = z.object({
   consumedSteering: z.number().int().nonnegative().default(0),
 });
 export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
+
+// A human approval requested by a tool running inside a Turn invocation.
+export const ApprovalRequestSchema = z.object({
+  approvalId: z.string().min(1),
+  turnId: z.string().min(1),
+  question: z.string().min(1),
+});
+export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
+
+// The decision delivered back to the waiting tool over a durable signal.
+export const ApprovalDecisionSchema = z.object({
+  decision: z.enum(["approved", "rejected"]),
+  reason: z.string().optional(),
+});
+export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
+
+// Public input used to resolve one pending approval on the Agent object.
+export const ApprovalResolutionSchema = ApprovalDecisionSchema.extend({
+  approvalId: z.string().min(1),
+});
+export type ApprovalResolution = z.infer<typeof ApprovalResolutionSchema>;
+
+// Internal cleanup request used when a waiting tool is interrupted.
+export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
+  approvalId: true,
+  turnId: true,
+});
+export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;

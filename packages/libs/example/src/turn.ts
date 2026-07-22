@@ -115,7 +115,7 @@ export const Turn = service({
           // Labelled so a case can break the loop; a bare `break` only leaves the switch.
           turn: while (true) {
             const task = spawn(
-              agentLoop({agentId: req.agentId, messages: context}),
+              agentLoop({agentId: req.agentId, turnId, messages: context}),
             );
             activeTask = task;
             // Prefer controls when several branches are already complete. The

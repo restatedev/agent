@@ -14,10 +14,15 @@ import {
   schemas,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
+import {approvals as approvalState} from "./agent-approval.js";
 import {history} from "./agent-history.js";
 import {activeTurn} from "./agent-turn.js";
 import {routeMessage} from "./model.js";
 import {
+  ApprovalCancellationSchema,
+  type ApprovalRequest,
+  ApprovalRequestSchema,
+  ApprovalResolutionSchema,
   type ConversationEntry,
   ConversationEntrySchema,
   TurnOutcomeSchema,
@@ -185,6 +190,56 @@ export const Agent = object({
       },
     ),
 
+    // Internal registration path used by the humanApproval tool. The request
+    // is accepted only while its originating Turn is still active.
+    requestApproval: schemas(
+      {input: ApprovalRequestSchema, output: z.boolean()},
+      function* (request: ApprovalRequest): Operation<boolean> {
+        const current = yield* activeTurn.current();
+        if (current?.id !== request.turnId || current.interrupting) {
+          return false;
+        }
+        return yield* approvalState.register(request);
+      },
+    ),
+
+    // Internal, idempotent cleanup when steering or interruption abandons a
+    // tool that was waiting for approval.
+    cancelApproval: schemas(
+      {input: ApprovalCancellationSchema, output: z.void()},
+      function* (request): Operation<void> {
+        yield* approvalState.cancel(request);
+      },
+    ),
+
+    // Read-only pending approvals for a UI or human operator.
+    approvals: schemas(
+      {input: z.void(), output: z.array(ApprovalRequestSchema)},
+      function* (): Operation<ApprovalRequest[]> {
+        return yield* approvalState.list();
+      },
+    ),
+
+    // Resolve one pending request and deliver the decision to the waiting tool
+    // as a signal on its Turn invocation.
+    resolveApproval: schemas(
+      {input: ApprovalResolutionSchema, output: z.boolean()},
+      function* (resolution): Operation<boolean> {
+        const request = (yield* approvalState.list()).find(
+          (candidate) => candidate.approvalId === resolution.approvalId,
+        );
+        if (!request) {
+          return false;
+        }
+        const current = yield* activeTurn.current();
+        if (current?.id !== request.turnId || current.interrupting) {
+          yield* approvalState.cancel(request);
+          return false;
+        }
+        return yield* approvalState.resolve(resolution);
+      },
+    ),
+
     // The active Turn sends exactly one structured outcome here. Verify it
     // belongs to the active turn, append the user-facing assistant entry,
     // retire the turn, and start one batch turn for anything queued meanwhile.
@@ -197,6 +252,7 @@ export const Agent = object({
         if (!finished) {
           return;
         }
+        yield* approvalState.clearTurn(outcome.turnId);
 
         const unconsumedSteering = yield* history.takeLatestSteering(
           finished.missedSteering,
@@ -222,6 +278,9 @@ export const Agent = object({
         idempotencyRetention: 0,
         journalRetention: 0,
       },
+      requestApproval: {ingressPrivate: true},
+      cancelApproval: {ingressPrivate: true},
+      approvals: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       history: {shared: true, idempotencyRetention: 0, journalRetention: 0},
     },
   },
