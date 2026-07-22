@@ -9,7 +9,6 @@ import {
   InterruptedError,
   invocation,
   type Operation,
-  rand,
   run,
   scope,
   service,
@@ -45,6 +44,7 @@ export type ModelSource = {
 };
 
 const MODEL_SCOPE = "openai";
+const MODEL_STREAM = "model-stream";
 
 // The main model call is a service so Restate can apply scope-based concurrency
 // control before the expensive provider request starts.
@@ -62,6 +62,7 @@ export const ModelGateway = service({
         },
       });
     },
+
     *completeStreaming({
       messages,
       tools,
@@ -140,7 +141,6 @@ export function* callModelStreaming(
   messages: ModelMessage[],
   tools: ToolManifest[],
 ): Operation<ModelSource> {
-  const signalName = `model-stream-${rand().uuidv4()}`;
   yield* scope(MODEL_SCOPE)
     .sendClient(ModelGateway)
     .completeStreaming(
@@ -148,7 +148,7 @@ export function* callModelStreaming(
         messages,
         tools,
         sourceInvocationId: handlerRequest().id,
-        signalName,
+        signalName: MODEL_STREAM,
       },
       SendOpts.from({
         limitKey: agentLimitKey(agentId),
@@ -157,7 +157,7 @@ export function* callModelStreaming(
     );
 
   return {
-    next: () => signal<SourceNext<ModelStreamChunk>>(signalName),
+    next: () => signal<SourceNext<ModelStreamChunk>>(MODEL_STREAM),
   };
 }
 
