@@ -81,24 +81,17 @@ export const Agent = object({
           : yield* routeMessage(message);
 
         if (route === "interrupt") {
-          const turnId = yield* activeTurn.interrupt(message);
-          if (!turnId) {
-            yield* activeTurn.enqueue(message);
-            return;
-          }
+          yield* activeTurn.interrupt(message);
           yield* history.append({
             role: "event",
             type: "interrupt",
-            turnId,
+            turnId: current.id,
             reason: message,
           });
           return;
         }
         if (route === "steer") {
-          if (!(yield* activeTurn.steer(message))) {
-            yield* activeTurn.enqueue(message);
-            return;
-          }
+          yield* activeTurn.steer(message);
           yield* history.append({
             role: "user",
             text: message,
