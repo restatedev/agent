@@ -2,8 +2,14 @@
 // `turn` and `pending` state keys plus the Turn invocation and signal lifecycle.
 // It deliberately knows nothing about conversation history.
 
-import {type Operation, sharedState, state} from "@restatedev/restate-sdk-gen";
-import {interruptTurn, startTurn, steerTurn} from "./turn.js";
+import {
+  invocation,
+  type Operation,
+  sendClient,
+  sharedState,
+  state,
+} from "@restatedev/restate-sdk-gen";
+import {Turn} from "./turn.js";
 import type {TurnOutcome, TurnRequest} from "./types.js";
 
 /** Durable state for the invocation currently owned by the Agent. */
@@ -59,8 +65,12 @@ export const activeTurn = {
     if (yield* this.current()) {
       return;
     }
-    const id = yield* startTurn(request);
-    state().set("turn", {id, interrupting: false, sentSteering: 0});
+    const started = yield* sendClient(Turn).run(request);
+    state().set("turn", {
+      id: started.id,
+      interrupting: false,
+      sentSteering: 0,
+    });
   },
 
   /** Adds a message to the FIFO batch for the next turn. */
@@ -86,7 +96,7 @@ export const activeTurn = {
     if (!current || current.interrupting) {
       return undefined;
     }
-    interruptTurn(current.id, reason);
+    invocation(current.id).signal<string>("interrupt").resolve(reason);
     state().set("turn", {...current, interrupting: true});
     return current.id;
   },
@@ -105,7 +115,7 @@ export const activeTurn = {
       ...current,
       sentSteering: current.sentSteering + 1,
     });
-    steerTurn(current.id, message);
+    invocation(current.id).signal<string>("steering").resolve(message);
     return true;
   },
 

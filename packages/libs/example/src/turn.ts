@@ -1,8 +1,8 @@
 // Turn is the turn policy: a stateless service that supervises one
 // conversation turn. The thinking itself — the model -> tools -> model cycle —
-// is the concrete agent loop (see ./agent-loop). This file decides everything
-// around it: what starts a turn, what interrupts or redirects it, and how its
-// ending is reported.
+// is the concrete agent loop (see ./agent-loop). This file decides how a
+// running turn reacts to interruption and steering, and how its ending is
+// reported.
 //
 // It owns no state at all. The Agent owns the durable conversation transcript
 // and active turn id. This service sends exactly one structured outcome back
@@ -14,13 +14,12 @@
 // for the control signals:
 //   - INTERRUPT ends the turn
 //   - STEERING  aborts the current run and reruns it on a new instruction
-// `startTurn`/`interruptTurn`/`steerTurn` are the lifecycle API the Agent uses.
+// The Agent-side lifecycle and signal senders live in agent-turn.ts.
 
 import {CancelledError} from "@restatedev/restate-sdk";
 import {
   handlerRequest,
   InterruptedError,
-  invocation,
   type Operation,
   schemas,
   select,
@@ -207,22 +206,3 @@ export const Turn = service({
     },
   },
 });
-
-// The turn lifecycle API the Agent uses to start and control a turn. Keeping
-// all three here means the Agent never has to know about the Turn service or
-// the signal protocol directly.
-
-// Start a fresh turn; returns its invocation id — the Agent remembers it and
-// interrupt/steer use it as their signal target.
-export function* startTurn(req: TurnRequest): Operation<string> {
-  const started = yield* sendClient(Turn).run(req);
-  return started.id;
-}
-
-// Resolve a control signal on a running turn's invocation.
-export function interruptTurn(turnId: string, reason: string): void {
-  invocation(turnId).signal<string>(INTERRUPT).resolve(reason);
-}
-export function steerTurn(turnId: string, message: string): void {
-  invocation(turnId).signal<string>(STEERING).resolve(message);
-}
