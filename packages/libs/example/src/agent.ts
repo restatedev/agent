@@ -39,120 +39,92 @@ function agentKey(): string {
 const MAX_TURN_HISTORY_ENTRIES = 80;
 const ROUTER_CONTEXT_ENTRIES = 8;
 
-// Append a batch of user messages and start one turn for the resulting history.
-// The active-turn guard keeps the controller's one-turn-at-a-time invariant.
-function* beginTurn(
-  agentId: string,
-  messages: string[],
-  delivery: Extract<UserMessageDelivery, "turn" | "queued">,
-): Operation<void> {
-  if (messages.length === 0 || (yield* agentState.getTurn())) {
-    return;
-  }
-  yield* agentState.appendHistory(
-    ...messages.map(
-      (text): ConversationEntry => ({role: "user", text, delivery}),
-    ),
-  );
-  const history = (yield* agentState.getHistory()).slice(
-    -MAX_TURN_HISTORY_ENTRIES,
-  );
-  const turnId = yield* startTurn({agentId, history});
-  yield* agentState.setTurn({
-    id: turnId,
-    interrupting: false,
-    sentSteering: 0,
-  });
-}
+const activeTurn = {
+  // Append a batch of user messages and start one turn for the resulting
+  // history. The guard preserves the one-turn-at-a-time invariant.
+  *start(
+    agentId: string,
+    messages: string[],
+    delivery: Extract<UserMessageDelivery, "turn" | "queued">,
+  ): Operation<void> {
+    if (messages.length === 0 || (yield* agentState.getTurn())) {
+      return;
+    }
+    yield* agentState.appendHistory(
+      ...messages.map(
+        (text): ConversationEntry => ({role: "user", text, delivery}),
+      ),
+    );
+    const history = (yield* agentState.getHistory()).slice(
+      -MAX_TURN_HISTORY_ENTRIES,
+    );
+    const turnId = yield* startTurn({agentId, history});
+    yield* agentState.setTurn({
+      id: turnId,
+      interrupting: false,
+      sentSteering: 0,
+    });
+  },
 
-// Ask the active turn to stop, with `reason`. Fire-and-forget BY DESIGN: this
-// resolves the signal and returns — the turn is NOT finished yet. It winds
-// down on its own (aborts in-flight model I/O, joins its task) and then reports
-// its summary like any other ending; only that report (append) retires
-// the turn. Starting the next turn therefore never waits on an interrupt
-// explicitly: beginTurn is gated on the active turn, and messages arriving
-// during the wind-down queue as pending. Blocking here until the turn died
-// would be worse, not safer — this runs in an exclusive handler, so it would
-// freeze the whole conversation for the duration of the wind-down.
-//
-// Explicit `interrupt` calls keep the reason only in the turn summary. An
-// `ask` classified as interrupt opts into recording the original user message
-// with delivery "interrupt", because every accepted `ask` belongs in history.
-//
-// Returns false when there is nothing to stop: the conversation is idle, or
-// the turn is already winding down (the signal is single-shot; a second
-// resolve would be a silent no-op, so report it as one honestly). The inherent
-// completion race stands: true means the signal was sent — a turn finishing at
-// that same instant may still report "completed", and the transcript records
-// what actually happened.
-function* interruptActive(
-  reason: string,
-  recordUserMessage = false,
-): Operation<boolean> {
-  const turn = yield* agentState.getTurn();
-  if (!turn || turn.interrupting) {
-    return false;
-  }
-  if (recordUserMessage) {
+  // Resolving the signal only starts wind-down. Agent.append retires the turn
+  // after its terminal outcome arrives, keeping the next turn from racing it.
+  *interrupt(reason: string, recordUserMessage = false): Operation<boolean> {
+    const turn = yield* agentState.getTurn();
+    if (!turn || turn.interrupting) {
+      return false;
+    }
+    if (recordUserMessage) {
+      yield* agentState.appendHistory({
+        role: "user",
+        text: reason,
+        delivery: "interrupt",
+      });
+    }
+    interruptTurn(turn.id, reason);
+    yield* agentState.setTurn({...turn, interrupting: true});
+    return true;
+  },
+
+  // Returns false without recording anything when no turn is still listening;
+  // the caller then decides whether to queue the message instead.
+  *steer(message: string): Operation<boolean> {
+    const turn = yield* agentState.getTurn();
+    if (!turn || turn.interrupting) {
+      return false;
+    }
     yield* agentState.appendHistory({
       role: "user",
-      text: reason,
-      delivery: "interrupt",
+      text: message,
+      delivery: "steer",
     });
-  }
-  interruptTurn(turn.id, reason);
-  yield* agentState.setTurn({...turn, interrupting: true});
-  return true;
-}
+    yield* agentState.setTurn({
+      ...turn,
+      sentSteering: turn.sentSteering + 1,
+    });
+    steerTurn(turn.id, message);
+    return true;
+  },
 
-// Steer the active turn to `message`, if one is running AND still listening.
-// The steer is recorded as a user entry, so the transcript shows what
-// redirected the turn.
-//
-// Returns false — with NO side effects — when no turn will act on the steer:
-// the conversation is idle, or the turn is winding down after an interrupt.
-// The wind-down case matters: the turn's loop has already stopped selecting
-// steering signals, so resolving one would strand the message in a signal
-// nobody reads, while its transcript entry pretended it was heard. The caller
-// owns the fallback (ask() queues the message for the next turn; an external
-// caller re-sends via ask).
-function* steerActive(message: string): Operation<boolean> {
-  const turn = yield* agentState.getTurn();
-  if (!turn || turn.interrupting) {
-    return false;
-  }
-  yield* agentState.appendHistory({
-    role: "user",
-    text: message,
-    delivery: "steer",
-  });
-  yield* agentState.setTurn({
-    ...turn,
-    sentSteering: turn.sentSteering + 1,
-  });
-  steerTurn(turn.id, message);
-  return true;
-}
-
-// Routing is advisory. A classifier outage must not lose an accepted user
-// message, so any non-cancellation failure falls back to the pending queue.
-function* classify(message: string): Operation<MessageRoute> {
-  try {
-    const recent = (yield* agentState.getHistory())
-      .slice(-ROUTER_CONTEXT_ENTRIES)
-      .map((entry) =>
-        entry.role === "user"
-          ? `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`
-          : `assistant (${entry.status}): ${entry.text}`,
-      );
-    return yield* routeMessage(message, recent);
-  } catch (error) {
-    if (error instanceof CancelledError) {
-      throw error;
+  // Routing is advisory. A classifier outage must not lose an accepted user
+  // message, so any non-cancellation failure falls back to the pending queue.
+  *route(message: string): Operation<MessageRoute> {
+    try {
+      const recent = (yield* agentState.getHistory())
+        .slice(-ROUTER_CONTEXT_ENTRIES)
+        .map((entry) =>
+          entry.role === "user"
+            ? `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`
+            : `assistant (${entry.status}): ${entry.text}`,
+        );
+      return yield* routeMessage(message, recent);
+    } catch (error) {
+      if (error instanceof CancelledError) {
+        throw error;
+      }
+      return "queue";
     }
-    return "queue";
-  }
-}
+  },
+};
 
 export const Agent = object({
   name: "Agent",
@@ -168,7 +140,7 @@ export const Agent = object({
 
         const turn = yield* agentState.getTurn();
         if (!turn) {
-          yield* beginTurn(agentId, [message], "turn");
+          yield* activeTurn.start(agentId, [message], "turn");
           return;
         }
 
@@ -179,12 +151,12 @@ export const Agent = object({
           return;
         }
 
-        switch (yield* classify(message)) {
+        switch (yield* activeTurn.route(message)) {
           case "interrupt":
-            yield* interruptActive(message, true);
+            yield* activeTurn.interrupt(message, true);
             break;
           case "steer":
-            if (!(yield* steerActive(message))) {
+            if (!(yield* activeTurn.steer(message))) {
               yield* agentState.enqueue(message);
             }
             break;
@@ -202,7 +174,7 @@ export const Agent = object({
     interrupt: schemas(
       {input: z.string(), output: z.boolean()},
       function* (reason): Operation<boolean> {
-        return yield* interruptActive(reason);
+        return yield* activeTurn.interrupt(reason);
       },
     ),
 
@@ -214,7 +186,7 @@ export const Agent = object({
     steer: schemas(
       {input: z.string(), output: z.boolean()},
       function* (message): Operation<boolean> {
-        return yield* steerActive(message);
+        return yield* activeTurn.steer(message);
       },
     ),
 
@@ -272,7 +244,7 @@ export const Agent = object({
         });
         yield* agentState.clearTurn();
 
-        yield* beginTurn(
+        yield* activeTurn.start(
           agentId,
           [...unconsumedSteering, ...(yield* agentState.drainPending())],
           "queued",
