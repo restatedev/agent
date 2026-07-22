@@ -34,41 +34,23 @@ function agentKey(): string {
   return key;
 }
 
-// Keep the Turn invocation payload bounded as the durable transcript grows.
-// Turn applies the tighter model-specific filter/window after receiving it.
-const MAX_TURN_HISTORY_ENTRIES = 80;
+const DEFAULT_ASK =
+  "What is the weather in the top 10 European capitals? Also sleep for 4 minutes.";
 
-// Cross-component coordination belongs here: record the input, prepare the
-// Turn request, then ask activeTurn to own its lifecycle.
-function* dispatchTurn(
-  agentId: string,
-  messages: string[],
-  delivery: Extract<UserMessageDelivery, "turn" | "queued">,
-): Operation<void> {
-  if (messages.length === 0 || (yield* activeTurn.current())) {
-    return;
-  }
-  yield* history.append(
-    ...messages.map(
-      (text): ConversationEntry => ({role: "user", text, delivery}),
-    ),
-  );
-  yield* activeTurn.start({
-    agentId,
-    history: yield* history.recent(MAX_TURN_HISTORY_ENTRIES),
-  });
-}
+const AskRequestSchema = z.object({
+  message: z.string().default(DEFAULT_ASK),
+});
 
 export const Agent = object({
   name: "Agent",
   handlers: {
-    // The plain-text entry point for the user. When idle, the message starts a
-    // turn. When a turn is already running, a fast model classifies it as a
-    // steer, interrupt, or queued follow-up. Clients with explicit stop/edit UI
-    // should still call the handlers below and skip classification entirely.
+    // The user entry point. When idle, the message starts a turn. When a turn
+    // is already running, a fast model classifies it as a steer, interrupt, or
+    // queued follow-up. Clients with explicit stop/edit UI should still call
+    // the handlers below and skip classification entirely.
     ask: schemas(
-      {input: z.string(), output: z.void()},
-      function* (message): Operation<void> {
+      {input: AskRequestSchema, output: z.void()},
+      function* ({message}): Operation<void> {
         const agentId = agentKey();
         const current = yield* activeTurn.current();
         if (!current) {
@@ -202,3 +184,24 @@ export const Agent = object({
     },
   },
 });
+
+// Cross-component coordination belongs here: record the input, prepare the
+// Turn request, then ask activeTurn to own its lifecycle.
+function* dispatchTurn(
+  agentId: string,
+  messages: string[],
+  delivery: Extract<UserMessageDelivery, "turn" | "queued">,
+): Operation<void> {
+  if (messages.length === 0 || (yield* activeTurn.current())) {
+    return;
+  }
+  yield* history.append(
+    ...messages.map(
+      (text): ConversationEntry => ({role: "user", text, delivery}),
+    ),
+  );
+  yield* activeTurn.start({
+    agentId,
+    history: yield* history.recent(80),
+  });
+}

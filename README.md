@@ -47,7 +47,7 @@ turn appends exactly one structured outcome: `completed`, `interrupted`, or
 
 | Handler | Input | Behavior |
 | --- | --- | --- |
-| `ask` | string | Appends and starts a turn when idle. While busy, a fast classifier chooses interrupt, steer, or queue. |
+| `ask` | `{ message: string }` | Appends and starts a turn when idle. While busy, a fast classifier chooses interrupt, steer, or queue. |
 | `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. Entries distinguish user messages, interruption events, and terminal turn summaries. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
 | `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
@@ -149,9 +149,12 @@ restate deployments register http://localhost:9080
 
 Then invoke the `Agent` Virtual Object under any `agentId`, such as `demo`:
 
+The `ask` schema defaults a missing `message` to: “What is the weather in the
+top 10 European capitals? Also sleep for 4 minutes.”
+
 ```sh
 curl localhost:8080/Agent/demo/ask \
-  --json '"What is the weather in Berlin?"'
+  --json '{"message":"What is the weather in Berlin?"}'
 
 curl -X POST localhost:8080/Agent/demo/history
 
@@ -167,7 +170,7 @@ sleep tool and redirect it from another shell:
 
 ```sh
 curl localhost:8080/Agent/demo/ask \
-  --json '"Sleep for 30 seconds, then tell me that you finished"'
+  --json '{"message":"Sleep for 30 seconds, then tell me that you finished"}'
 
 curl localhost:8080/Agent/demo/steer \
   --json '"Do not wait any longer; answer immediately"'
