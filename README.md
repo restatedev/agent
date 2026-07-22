@@ -21,8 +21,8 @@ flowchart LR
 
 - `Agent` is the durable controller. Its exclusive handlers serialize changes
   to the active turn, pending messages, and conversation history for one
-  `agentId`. `agent-state.ts` keeps the three durable state shapes and their
-  mutations together, without moving controller policy out of `agent.ts`.
+  `agentId`. The local `activeTurn` object owns turn state and lifecycle policy;
+  `agent-history.ts` owns the durable transcript.
 - `Turn` is stateless. One invocation supervises one agent turn and races the
   agent loop against interrupt and steering signals.
 - `agentLoop` has one small boundary: `{ agentId, messages }` in and a
