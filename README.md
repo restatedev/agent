@@ -47,7 +47,7 @@ turn appends exactly one structured outcome: `completed`, `interrupted`, or
 
 | Handler | Input | Behavior |
 | --- | --- | --- |
-| `ask` | `{ message: string }` | Appends and starts a turn when idle. While busy, a fast classifier chooses interrupt, steer, or queue. |
+| `ask` | `{ message: string }` | Returns the `start`, `steer`, `interrupt`, or `queue` decision, affected turn invocation ID, and queue/steering stats. |
 | `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. Entries distinguish user messages, interruption events, and terminal turn summaries. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
 | `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
@@ -163,6 +163,16 @@ curl localhost:8080/Agent/demo/steer \
 
 curl localhost:8080/Agent/demo/interrupt \
   --json '"Stop; the user changed their mind"'
+```
+
+An idle agent returns a response shaped like:
+
+```json
+{
+  "decision": "start",
+  "turnId": "inv_...",
+  "stats": {"pendingMessages": 0, "steeringSignals": 0}
+}
 ```
 
 To keep a turn alive while trying steering, ask the agent to use its durable

@@ -59,11 +59,12 @@ export const activeTurn = {
   /**
    * Starts a Turn invocation and records it as active.
    *
-   * Does nothing when a turn is already active.
+   * @returns The new invocation ID, or `undefined` when a turn is already
+   * active.
    */
-  *start(request: TurnRequest): Operation<void> {
+  *start(request: TurnRequest): Operation<string | undefined> {
     if (yield* this.current()) {
-      return;
+      return undefined;
     }
     const started = yield* sendClient(Turn).run(request);
     state().set("turn", {
@@ -71,6 +72,7 @@ export const activeTurn = {
       interrupting: false,
       sentSteering: 0,
     });
+    return started.id;
   },
 
   /** Adds a message to the FIFO batch for the next turn. */

@@ -41,6 +41,16 @@ const AskRequestSchema = z.object({
   message: z.string().default(DEFAULT_ASK),
 });
 
+const AskResultSchema = z.object({
+  decision: z.enum(["start", "steer", "interrupt", "queue"]),
+  turnId: z.string(),
+  stats: z.object({
+    pendingMessages: z.number().int().nonnegative(),
+    steeringSignals: z.number().int().nonnegative(),
+  }),
+});
+type AskResult = z.infer<typeof AskResultSchema>;
+
 export const Agent = object({
   name: "Agent",
   handlers: {
@@ -49,13 +59,23 @@ export const Agent = object({
     // queued follow-up. Clients with explicit stop/edit UI should still call
     // the handlers below and skip classification entirely.
     ask: schemas(
-      {input: AskRequestSchema, output: z.void()},
-      function* ({message}): Operation<void> {
+      {input: AskRequestSchema, output: AskResultSchema},
+      function* ({message}): Operation<AskResult> {
         const agentId = agentKey();
         const current = yield* activeTurn.current();
         if (!current) {
-          yield* dispatchTurn(agentId, [message], "turn");
-          return;
+          const turnId = yield* dispatchTurn(agentId, [message], "turn");
+          if (!turnId) {
+            throw new TerminalError("Failed to start turn");
+          }
+          return {
+            decision: "start",
+            turnId,
+            stats: {
+              pendingMessages: (yield* activeTurn.pending()).length,
+              steeringSignals: 0,
+            },
+          };
         }
 
         const route = current.interrupting
@@ -70,7 +90,14 @@ export const Agent = object({
             turnId: current.id,
             reason: message,
           });
-          return;
+          return {
+            decision: "interrupt",
+            turnId: current.id,
+            stats: {
+              pendingMessages: (yield* activeTurn.pending()).length,
+              steeringSignals: current.sentSteering,
+            },
+          };
         }
         if (route === "steer") {
           yield* activeTurn.steer(message);
@@ -79,9 +106,24 @@ export const Agent = object({
             text: message,
             delivery: "steer",
           });
-          return;
+          return {
+            decision: "steer",
+            turnId: current.id,
+            stats: {
+              pendingMessages: (yield* activeTurn.pending()).length,
+              steeringSignals: current.sentSteering + 1,
+            },
+          };
         }
         yield* activeTurn.enqueue(message);
+        return {
+          decision: "queue",
+          turnId: current.id,
+          stats: {
+            pendingMessages: (yield* activeTurn.pending()).length,
+            steeringSignals: current.sentSteering,
+          },
+        };
       },
     ),
 
@@ -191,16 +233,16 @@ function* dispatchTurn(
   agentId: string,
   messages: string[],
   delivery: Extract<UserMessageDelivery, "turn" | "queued">,
-): Operation<void> {
+): Operation<string | undefined> {
   if (messages.length === 0 || (yield* activeTurn.current())) {
-    return;
+    return undefined;
   }
   yield* history.append(
     ...messages.map(
       (text): ConversationEntry => ({role: "user", text, delivery}),
     ),
   );
-  yield* activeTurn.start({
+  return yield* activeTurn.start({
     agentId,
     history: yield* history.recent(80),
   });
