@@ -194,19 +194,15 @@ async function completeAgent(
   });
 }
 
-// This fast classification runs directly in the Agent handler. If it fails,
-// the Agent conservatively queues the message rather than losing it.
-export function* routeMessage(
-  message: string,
-  recentConversation: string[],
-): Operation<MessageRoute> {
+// This fast classification runs directly in the Agent handler.
+export function* routeMessage(message: string): Operation<MessageRoute> {
   return yield* run(
     ({signal}) =>
       withOpenAI(async (openai): Promise<MessageRoute> => {
         const result = await generateText({
           model: openai.chat(ROUTER_MODEL),
           system: ROUTER_SYSTEM,
-          prompt: JSON.stringify({recentConversation, newMessage: message}),
+          prompt: message,
           output: Output.choice({options: [...MESSAGE_ROUTES]}),
           maxOutputTokens: 32,
           maxRetries: 0,

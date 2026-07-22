@@ -16,7 +16,7 @@ import {
 import {z} from "zod";
 import {history} from "./agent-history.js";
 import {activeTurn} from "./agent-turn.js";
-import {type MessageRoute, routeMessage} from "./model.js";
+import {routeMessage} from "./model.js";
 import {
   type ConversationEntry,
   ConversationEntrySchema,
@@ -37,7 +37,6 @@ function agentKey(): string {
 // Keep the Turn invocation payload bounded as the durable transcript grows.
 // Turn applies the tighter model-specific filter/window after receiving it.
 const MAX_TURN_HISTORY_ENTRIES = 80;
-const ROUTER_CONTEXT_ENTRIES = 8;
 
 // Cross-component coordination belongs here: record the input, prepare the
 // Turn request, then ask activeTurn to own its lifecycle.
@@ -99,22 +98,9 @@ export const Agent = object({
           return;
         }
 
-        // A turn winding down no longer consumes steering, so skip routing and
-        // preserve the accepted message for the next turn.
-        let route: MessageRoute = "queue";
-        if (!current.interrupting) {
-          const recent = (yield* history.recent(ROUTER_CONTEXT_ENTRIES)).map(
-            (entry) => {
-              if (entry.role === "user") {
-                return `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`;
-              }
-              return entry.role === "assistant"
-                ? `assistant (${entry.status}): ${entry.text}`
-                : `event (${entry.type}): ${entry.reason}`;
-            },
-          );
-          route = yield* routeMessage(message, recent);
-        }
+        const route = current.interrupting
+          ? "queue"
+          : yield* routeMessage(message);
 
         if (route === "interrupt") {
           if (!(yield* requestInterrupt(message))) {
