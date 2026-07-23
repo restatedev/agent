@@ -82,7 +82,7 @@ messages, tool calls, tool results, pending operations, and steering inside
 
 | Handler | Input | Behavior |
 | --- | --- | --- |
-| `ask` | `{ message: string }` | Returns the `start`, `steer`, `interrupt`, or `queue` decision, affected turn invocation ID, and queue/steering stats. |
+| `ask` | `{ message: string }` | Returns the `start`, `steer`, `interrupt`, or `queue` decision, affected turn invocation ID, and queue/steering stats. A routed interrupt stops the current turn and queues the message for the next one. |
 | `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. Entries distinguish user messages, interruption events, and terminal turn summaries. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
 | `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
@@ -95,13 +95,19 @@ A successful interruption is visible immediately as
 records whether the turn actually ended as interrupted or won a completion
 race.
 
+An interruption selected by `ask` also preserves that conversational message
+in the pending queue, so a new turn processes it after the interrupted
+invocation retires. The explicit `interrupt` handler is control-only: it stops
+the active turn without creating another user request.
+
 Repeated resolutions of the `steering` signal form a durable queue. Each
 successive `signal("steering")` consumes the next instruction in order.
 The controller tracks how many signals it sent, while the loop reports how many
 it consumed. If normal completion wins the race with a steer, the
 unconsumed instruction moves behind that outcome and runs through the normal
 queued-turn path instead of being stranded in history. An explicit interrupt
-supersedes outstanding steering.
+supersedes outstanding steering. External cancellation does not: steering
+accepted before cancellation is recovered into the next turn.
 
 The classifier uses GPT-4o mini directly from the exclusive `Agent` handler and
 falls back to `queue` on failure, so an accepted message is never lost. A real
@@ -110,6 +116,9 @@ directly and skip intent classification.
 
 While a turn is active, context-dependent additions, corrections, and follow-up
 questions route to `steer`; only clearly independent work routes to `queue`.
+The classifier also sees messages already waiting in the pending queue, so a
+follow-up to queued work stays with that next turn instead of steering the
+unrelated active turn.
 
 ## Durability and failure behavior
 

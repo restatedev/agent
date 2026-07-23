@@ -68,8 +68,9 @@ export const Agent = object({
   handlers: {
     // The user entry point. When idle, the message starts a turn. When a turn
     // is already running, a fast model classifies it as a steer, interrupt, or
-    // independent queued request. Clients with explicit stop/edit UI still call
-    // the handlers below and skip classification entirely.
+    // independent queued request. A routed interrupt also queues the message
+    // for a follow-up turn. Clients with explicit stop/edit UI still call the
+    // handlers below and skip classification entirely.
     ask: schemas(
       {input: AskRequestSchema, output: AskResultSchema},
       function* ({message}): Operation<AskResult> {
@@ -102,9 +103,11 @@ export const Agent = object({
                   ? `assistant (${entry.status}): ${entry.text}`
                   : `event (${entry.type}): ${entry.reason}`;
               }),
+              yield* activeTurn.pending(),
             );
 
         if (route === "interrupt") {
+          yield* activeTurn.enqueue(message);
           yield* activeTurn.interrupt(message);
           yield* history.append({
             role: "event",

@@ -30,11 +30,6 @@ type FinishedTurn = {
   pending: string[];
 };
 
-/** Previously persisted shape accepted while normalizing active-turn state. */
-type StoredActiveTurn = Omit<ActiveTurnState, "sentSteering"> & {
-  sentSteering?: number | string[];
-};
-
 /**
  * Owns active-turn and pending-message state for the current Agent object.
  *
@@ -42,18 +37,9 @@ type StoredActiveTurn = Omit<ActiveTurnState, "sentSteering"> & {
  * handler serialization; this component deliberately does not access history.
  */
 export const activeTurn = {
-  /** Returns the current turn, normalizing state written by earlier versions. */
+  /** Returns the current turn. */
   *current(): Operation<ActiveTurnState | undefined> {
-    const current = yield* sharedState().get<StoredActiveTurn>("turn");
-    if (!current) {
-      return undefined;
-    }
-    return {
-      ...current,
-      sentSteering: Array.isArray(current.sentSteering)
-        ? current.sentSteering.length
-        : (current.sentSteering ?? 0),
-    };
+    return (yield* sharedState().get<ActiveTurnState>("turn")) ?? undefined;
   },
 
   /**
@@ -143,10 +129,9 @@ export const activeTurn = {
     }
 
     return {
-      missedSteering:
-        outcome.status === "interrupted"
-          ? 0
-          : Math.max(0, current.sentSteering - outcome.consumedSteering),
+      missedSteering: current.interrupting
+        ? 0
+        : Math.max(0, current.sentSteering - outcome.consumedSteering),
       pending,
     };
   },

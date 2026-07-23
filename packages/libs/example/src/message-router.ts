@@ -1,7 +1,9 @@
 // Cheap, latency-sensitive classification for messages received while an
 // Agent turn is already active. This intentionally bypasses ModelGateway:
-// scope-based admission is reserved for full agent inference.
+// scope-based admission is reserved for full agent inference. Provider failure
+// falls back to queue so routing cannot reject an otherwise valid ask.
 
+import {CancelledError} from "@restatedev/restate-sdk";
 import {type Operation, run} from "@restatedev/restate-sdk-gen";
 import {generateText, Output} from "ai";
 import {withOpenAI} from "./model.js";
@@ -18,6 +20,7 @@ const ROUTER_SYSTEM = [
   "Use steer for any context-dependent continuation of the active request, including additions, corrections, refinements, constraints, or questions about its work.",
   "Messages beginning with words such as 'also', 'and', 'actually', 'instead', or 'include' normally steer because they extend or revise the active request.",
   "For example, after a request for European weather, 'also add a few US cities' is steer.",
+  "Messages already queued belong to the next turn. If the new message refers to or modifies queued work, use queue so they stay together.",
   "Use queue only when the new request is clearly independent and could be understood without the active request or its result.",
   "When uncertain whether a message is a continuation or independent work, prefer steer.",
 ].join(" ");
@@ -25,26 +28,38 @@ const ROUTER_SYSTEM = [
 export function* routeMessage(
   message: string,
   recentConversation: string[],
+  pendingMessages: string[],
 ): Operation<MessageRoute> {
-  return yield* run(
-    ({signal}) =>
-      withOpenAI(async (openai): Promise<MessageRoute> => {
-        const result = await generateText({
-          model: openai.chat(ROUTER_MODEL),
-          system: ROUTER_SYSTEM,
-          prompt: JSON.stringify({recentConversation, newMessage: message}),
-          output: Output.choice({options: [...MESSAGE_ROUTES]}),
-          maxOutputTokens: 32,
-          maxRetries: 0,
-          abortSignal: signal,
-          timeout: 5_000,
-          providerOptions: {openai: {store: false}},
-        });
-        return result.output;
-      }),
-    {
-      name: "route-message",
-      retry: {maxAttempts: 2, initialInterval: 100, maxInterval: 500},
-    },
-  );
+  try {
+    return yield* run(
+      ({signal}) =>
+        withOpenAI(async (openai): Promise<MessageRoute> => {
+          const result = await generateText({
+            model: openai.chat(ROUTER_MODEL),
+            system: ROUTER_SYSTEM,
+            prompt: JSON.stringify({
+              recentConversation,
+              pendingMessages,
+              newMessage: message,
+            }),
+            output: Output.choice({options: [...MESSAGE_ROUTES]}),
+            maxOutputTokens: 32,
+            maxRetries: 0,
+            abortSignal: signal,
+            timeout: 5_000,
+            providerOptions: {openai: {store: false}},
+          });
+          return result.output;
+        }),
+      {
+        name: "route-message",
+        retry: {maxAttempts: 2, initialInterval: 100, maxInterval: 500},
+      },
+    );
+  } catch (error) {
+    if (error instanceof CancelledError) {
+      throw error;
+    }
+    return "queue";
+  }
 }
