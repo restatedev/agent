@@ -27,7 +27,8 @@ flowchart LR
   transcript, and `agent-approval.ts` owns pending human approvals.
 - `Turn` is stateless. One invocation supervises one agent turn and races the
   agent loop against hard interruption. The loop consumes steering itself at
-  safe model/tool boundaries so it can retain its working context.
+  model/tool boundaries so it can retain its working context without
+  cancelling current work.
 - `agentLoop` has one small boundary: `{ agentId, turnId, messages }` in and a
   `completed | failed` result out. It owns self-contained tools—their model
   descriptions, input schemas, and local durable implementations—and projects
@@ -75,6 +76,9 @@ falls back to `queue` on failure, so an accepted message is never lost. A real
 client with explicit stop and edit controls should call `interrupt` and `steer`
 directly and skip intent classification.
 
+While a turn is active, context-dependent additions, corrections, and follow-up
+questions route to `steer`; only clearly independent work routes to `queue`.
+
 ## Durability and failure behavior
 
 - Starting a turn and reporting its outcome are one-way Restate sends.
@@ -88,15 +92,19 @@ directly and skip intent classification.
   Restate's [concurrent task primitives](https://docs.restate.dev/develop/ts/concurrent-tasks)
   to spawn all local tool `run` steps before joining them. Restate journals
   their concurrent execution and preserves deterministic replay.
-- Steering can abandon an in-flight model call immediately. If tools have
-  already started, the loop retains completed results, cancels unfinished
-  tools, records a result for every tool-call ID, and only then applies the new
-  instruction. Already completed tools are therefore not logically reissued
-  because steering discarded their context.
-- The `humanApproval` tool registers its request as Agent state, then suspends
-  on a Turn-scoped signal named from the stable model tool-call ID. Approval,
-  rejection, steering, and interruption all leave an explicit durable trail;
-  abandoned requests are cleaned up idempotently.
+- Steering is buffered while the current model call and foreground tool batch
+  finish. Their results remain in context, and the next model round receives
+  every buffered instruction in FIFO order.
+- `sleep` and `humanApproval` return protocol-complete pending acknowledgements
+  to the model, while their turn-scoped Restate tasks continue across later
+  model rounds. A pending sleep therefore keeps its timer while steering starts
+  unrelated tools. A pending approval gates dependent actions without blocking
+  unrelated work; its eventual signal result is injected as a runtime update.
+- `cancelOperation` lets the model selectively interrupt and join one pending
+  operation by its stable ID. Completion races are reported honestly, and
+  unrelated operations continue running.
+- Hard interruption still cascades through the loop and all pending tasks.
+  Abandoned approval requests are cleaned up idempotently.
 - Deterministic configuration and OpenAI 4xx request errors fail immediately.
   Transient transport, timeout, rate-limit, conflict, and 5xx errors retry.
 - Invocation cancellation aborts model I/O, joins the spawned loop, retires the
@@ -151,7 +159,7 @@ In another shell, start the service endpoint:
 
 ```sh
 pnpm install
-OPENAI_API_KEY=... pnpm app-dev
+OPENAI_API_KEY=... pnpm dev
 ```
 
 With the service endpoint running, register it with Restate:
@@ -199,9 +207,12 @@ curl localhost:8080/Agent/demo/steer \
   --json '"Do not wait any longer; answer immediately"'
 ```
 
-The steering signal cancels the pending Restate timer, records that tool call
-as cancelled, and continues the same loop with the new instruction. Results
-from other tools that already completed in the round remain in model context.
+The sleep call returns a pending acknowledgement and its Restate timer remains
+active. A steering message starts another model round after foreground tools
+finish. For the instruction above, the model can call `cancelOperation` with
+the timer's stable operation ID; that timer is interrupted while unrelated work
+continues. The turn publishes its final answer only after its remaining pending
+operations finish.
 
 To try human approval, explicitly ask the model to use the approval tool:
 
@@ -216,8 +227,9 @@ curl localhost:8080/Agent/demo/resolveApproval \
 ```
 
 `approvals` returns the `approvalId`, originating Turn invocation ID, and the
-model's question. A rejection is delivered to the model as a normal completed
-tool result, allowing it to explain or choose a different action.
+model's question. The initial tool result reports the pending request; approval
+or rejection later wakes the loop as a runtime update, allowing the model to
+perform approved work, explain a rejection, or choose a different action.
 
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
 model/tool steps, retries, and signals. See Restate's

@@ -8,8 +8,8 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "bundle": "pnpm --filter @restate-agents/example bundle",
-    "app": "pnpm --filter @restate-agents/example build && pnpm --filter @restate-agents/example start",
-    "app-dev": "pnpm --filter @restate-agents/example dev"
+    "start": "pnpm --filter @restate-agents/example build && pnpm --filter @restate-agents/example start",
+    "dev": "pnpm --filter @restate-agents/example dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16"

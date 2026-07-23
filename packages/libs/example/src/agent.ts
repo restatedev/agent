@@ -62,7 +62,7 @@ export const Agent = object({
   handlers: {
     // The user entry point. When idle, the message starts a turn. When a turn
     // is already running, a fast model classifies it as a steer, interrupt, or
-    // queued follow-up. Clients with explicit stop/edit UI should still call
+    // independent queued request. Clients with explicit stop/edit UI still call
     // the handlers below and skip classification entirely.
     ask: schemas(
       {input: AskRequestSchema, output: AskResultSchema},
@@ -214,8 +214,8 @@ export const Agent = object({
       },
     ),
 
-    // Internal, idempotent cleanup when steering or interruption abandons a
-    // tool that was waiting for approval.
+    // Internal, idempotent cleanup when interruption or turn failure abandons
+    // a tool that was waiting for approval.
     cancelApproval: schemas(
       {input: ApprovalCancellationSchema, output: z.void()},
       function* (request): Operation<void> {

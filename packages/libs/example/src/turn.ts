@@ -170,7 +170,11 @@ export const Turn = service({
   },
   options: {
     handlers: {
-      run: {ingressPrivate: true},
+      run: {
+        ingressPrivate: true,
+        inactivityTimeout: {hours: 1},
+        abortTimeout: {minutes: 15},
+      },
     },
   },
 });

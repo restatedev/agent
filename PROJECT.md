@@ -15,12 +15,14 @@ The application is split into four concrete parts:
   and `resolveApproval` expose the human-in-the-loop boundary.
 - **`Turn`** is a stateless service invocation that supervises one turn. It
   runs the agent loop and listens for durable interruption. The loop consumes
-  steering cooperatively, preserving completed tool results and closing
-  unfinished calls with cancellation outcomes before applying the instruction.
+  steering cooperatively without cancelling work from the current round.
 - **`agentLoop`** performs a bounded model → tools → model cycle. Tool
   definitions are self-contained here: each tool includes its description,
   input schema, and local durable implementation. Independent tool calls are
-  spawned in parallel.
+  spawned in parallel. Long-lived sleeps and approvals remain pending across
+  model rounds, allowing steering and unrelated tools to progress around them.
+  The model can selectively stop those tasks through `cancelOperation` without
+  interrupting the rest of the turn.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
   concurrency controls. A separate cheap model classifies messages that arrive
   during an active turn as `steer`, `interrupt`, or `queue`.
@@ -43,7 +45,7 @@ Restate provides the application-level guarantees that an agent needs:
 - one-way invocation of long-running turns;
 - queued signals for steering and interruption;
 - durable sleeps, retries, and local tool operations;
-- durable signal-backed human approval;
+- durable background timers and signal-backed pending human approval;
 - deterministic concurrent execution of independent tools;
 - concurrency limits around model traffic;
 - an observable invocation tree for the complete turn.

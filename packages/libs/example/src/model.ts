@@ -51,16 +51,22 @@ const AGENT_SYSTEM = [
   "You are a concise assistant.",
   "Use the available tools whenever they are needed to fulfill the request.",
   "Group independent tool calls in one response so they can run in parallel.",
-  "Call humanApproval by itself and wait for its result before calling any tool that depends on that decision.",
+  "A pending tool result means the operation is still running across model rounds; do not call it again.",
+  "Runtime updates report when pending tools complete, fail, or are cancelled.",
+  "When the user asks to stop pending work, call cancelOperation with its operationId and wait for the cancellation result before claiming it stopped.",
+  "Call humanApproval by itself, and do not perform any dependent action while its result is pending.",
   "After receiving tool results, answer the user's request directly.",
 ].join(" ");
 
 const ROUTER_SYSTEM = [
   "Another agent turn is currently running. Classify the new user message.",
-  "Use the recent conversation to decide whether the new message changes the active request or starts separate work.",
+  "Use the recent conversation to decide whether the new message belongs to the active request or starts independent work.",
   "Use interrupt only for an explicit request to stop or cancel current work.",
-  "Use steer for corrections or refinements intended to change current work.",
-  "Use queue for a separate request, a follow-up that can wait, or uncertainty.",
+  "Use steer for any context-dependent continuation of the active request, including additions, corrections, refinements, constraints, or questions about its work.",
+  "Messages beginning with words such as 'also', 'and', 'actually', 'instead', or 'include' normally steer because they extend or revise the active request.",
+  "For example, after a request for European weather, 'also add a few US cities' is steer.",
+  "Use queue only when the new request is clearly independent and could be understood without the active request or its result.",
+  "When uncertain whether a message is a continuation or independent work, prefer steer.",
 ].join(" ");
 
 let provider: OpenAIProvider | undefined;
