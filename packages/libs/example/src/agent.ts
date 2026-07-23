@@ -1,6 +1,6 @@
 // Agent is the durable conversation controller. It is a Virtual Object keyed
 // by agent id, so its exclusive handlers serialize every decision about the
-// active turn, queued messages, and user-facing history.
+// active turn, queued messages, user-facing history, and summary checkpoints.
 //
 // It never runs the agent loop itself. `ask` starts a stateless Turn service
 // with a one-way send, `interrupt` and `steer` resolve signals on that
@@ -12,12 +12,18 @@ import {
   type Operation,
   object,
   schemas,
+  sendClient,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {approvals as approvalState} from "./agent-approval.js";
-import {history} from "./agent-history.js";
+import {
+  type ConversationCompactionPlan,
+  type ConversationCompactionResult,
+  history,
+} from "./agent-history.js";
 import {activeTurn} from "./agent-turn.js";
-import {routeMessage} from "./model.js";
+import {compactConversation} from "./conversation-compactor.js";
+import {routeMessage} from "./message-router.js";
 import {
   ApprovalCancellationSchema,
   type ApprovalRequest,
@@ -274,6 +280,7 @@ export const Agent = object({
           turnId: outcome.turnId,
           status: outcome.status,
         });
+        yield* scheduleCompaction(agentKey());
         yield* dispatchTurn(
           agentKey(),
           [...unconsumedSteering, ...finished.pending],
@@ -281,8 +288,29 @@ export const Agent = object({
         );
       },
     ),
+
+    // Read and summarize one reserved history prefix without blocking the
+    // Agent's exclusive conversation handlers, then self-send the result to
+    // the exclusive checkpoint application path.
+    compact: function* (plan: ConversationCompactionPlan): Operation<void> {
+      const input = yield* history.readCompaction(plan);
+      if (!input) {
+        return;
+      }
+      const result = yield* compactConversation(input);
+      yield* sendClient(Agent, agentKey()).applyCompaction(result);
+    },
+
+    // The shared compaction handler returns a derived checkpoint here. History
+    // validates the reserved prefix before replacing the previous summary.
+    applyCompaction: function* (
+      result: ConversationCompactionResult,
+    ): Operation<void> {
+      yield* history.finishCompaction(result);
+    },
   },
   options: {
+    enableLazyState: true,
     handlers: {
       append: {
         ingressPrivate: true,
@@ -293,9 +321,27 @@ export const Agent = object({
       cancelApproval: {ingressPrivate: true},
       approvals: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       history: {shared: true, idempotencyRetention: 0, journalRetention: 0},
+      compact: {
+        shared: true,
+        ingressPrivate: true,
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      applyCompaction: {
+        ingressPrivate: true,
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
     },
   },
 });
+
+function* scheduleCompaction(agentId: string): Operation<void> {
+  const plan = yield* history.beginCompaction();
+  if (plan) {
+    yield* sendClient(Agent, agentId).compact(plan);
+  }
+}
 
 // Cross-component coordination belongs here: record the input, prepare the
 // Turn request, then ask activeTurn to own its lifecycle.
@@ -312,8 +358,10 @@ function* dispatchTurn(
       (text): ConversationEntry => ({role: "user", text, delivery}),
     ),
   );
+  const context = yield* history.context();
   return yield* activeTurn.start({
     agentId,
-    history: yield* history.recent(80),
+    summary: context.summary,
+    history: context.entries,
   });
 }

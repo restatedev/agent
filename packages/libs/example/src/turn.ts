@@ -43,25 +43,33 @@ import {
 // Signal used to stop a running turn immediately.
 const INTERRUPT = "interrupt";
 
-// The Agent keeps the complete durable transcript; the model receives only a
-// bounded recent window. Failed and interrupted summaries are operational
-// outcomes, not assistant answers, so they must not be presented as if the
-// model said them.
-export const MAX_CONTEXT_MESSAGES = 40;
-
+// Build summary + uncompacted model-visible history. Failed and interrupted
+// outcomes are operational events, not assistant answers.
 export function buildModelContext(
   history: ConversationEntry[],
+  summary?: string,
 ): ModelMessage[] {
-  return history
-    .flatMap((entry): ModelMessage[] => {
-      if (entry.role === "user") {
-        return [{role: "user", content: entry.text}];
-      }
-      return entry.role === "assistant" && entry.status === "completed"
-        ? [{role: "assistant", content: entry.text}]
-        : [];
-    })
-    .slice(-MAX_CONTEXT_MESSAGES);
+  const uncompacted = history.flatMap((entry): ModelMessage[] => {
+    if (entry.role === "user") {
+      return [{role: "user", content: entry.text}];
+    }
+    return entry.role === "assistant" && entry.status === "completed"
+      ? [{role: "assistant", content: entry.text}]
+      : [];
+  });
+  return summary
+    ? [
+        {
+          role: "user",
+          content: [
+            "[Earlier conversation summary]",
+            "This is context derived from older turns. Newer messages take precedence.",
+            summary,
+          ].join("\n"),
+        },
+        ...uncompacted,
+      ]
+    : uncompacted;
 }
 
 function* stopAgentLoop(task: Task<unknown>): Operation<void> {
@@ -106,7 +114,7 @@ export const Turn = service({
             agentLoop({
               agentId: req.agentId,
               turnId,
-              messages: buildModelContext(req.history),
+              messages: buildModelContext(req.history, req.summary),
             }),
           );
           activeTask = task;

@@ -16,6 +16,8 @@ flowchart LR
   Loop -->|"spawn + durable run"| Tools["local tools in parallel"]
   Tools -->|"private approval request"| Agent
   Turn -->|"one-way append outcome"| Agent
+  Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
+  Compactor -->|"one-way applyCompaction"| Agent
 ```
 
 ## Why this structure
@@ -30,13 +32,22 @@ flowchart LR
   model/tool boundaries so it can retain its working context without
   cancelling current work.
 - `agentLoop` has one small boundary: `{ agentId, turnId, messages }` in and a
-  `completed | failed` result out. It owns self-contained tools—their model
-  descriptions, input schemas, and local durable implementations—and projects
-  serializable manifests for the model gateway.
+  `completed | failed` result out. It owns only orchestration policy and the
+  live state for model rounds, steering, parallel tool batches, and pending
+  tasks.
+- `agent-tools.ts` owns the concrete tools. Each definition keeps its model
+  description, input schema, validation, local durable behavior, and result
+  projection together. It exposes the loop a single concrete tool collection.
 - `model.ts` owns provider-specific inference and the shared model contracts. It
-  reconstructs AI SDK tool definitions from the loop's manifests, while
-  deliberately receiving no executors. A cheap model routes messages that
-  arrive mid-turn.
+  reconstructs AI SDK tool definitions from serializable manifests while
+  deliberately receiving no executors.
+- `message-router.ts` owns the cheap model decision for messages that arrive
+  during an active turn.
+- The shared `Agent.compact` handler asynchronously maintains a rolling summary
+  of older finished turns without blocking exclusive conversation handlers.
+  The model operation stays in `conversation-compactor.ts`; the exact
+  transcript remains on the Agent and messages after the checkpoint remain
+  verbatim.
 - `model-gateway.ts` is the Restate boundary for full agent inference. It owns
   scoped admission, limit keys, retries, and cancellation propagation before
   delegating the provider call to `model.ts`.
@@ -45,6 +56,27 @@ The controller stores only user-facing history. Tool calls and intermediate
 model steps stay in Restate's invocation journal and observability tools. A
 turn appends exactly one structured outcome: `completed`, `interrupted`, or
 `failed`.
+
+## Conversation history and compaction
+
+The complete user-facing transcript is canonical and is never replaced by a
+model summary. `agent-history.ts` stores it in fixed-size state chunks with
+stable internal sequence numbers. Lazy state lets normal handlers load only
+the metadata and recent chunks they need; the public `history` handler still
+assembles the complete transcript.
+
+After a turn finishes, the Agent counts model-visible messages since the last
+checkpoint. At 32 messages it reserves that entire finished prefix and
+self-sends its cursor range to the shared `compact` handler. That handler reads
+the relevant summary and history chunks directly from Agent state, merges them
+with a cheap model, and one-way self-sends the derived checkpoint to the
+exclusive `applyCompaction` handler. Newer appended entries do not invalidate
+the checkpoint, and a failed compaction leaves the prior summary untouched.
+
+Each turn receives the rolling summary followed by every exact model-visible
+entry since that checkpoint. Compaction happens only between turns: live model
+messages, tool calls, tool results, pending operations, and steering inside
+`agentLoop` are never summarized mid-turn.
 
 ## Controller handlers
 
@@ -109,16 +141,17 @@ questions route to `steer`; only clearly independent work routes to `queue`.
   Transient transport, timeout, rate-limit, conflict, and 5xx errors retry.
 - Invocation cancellation aborts model I/O, joins the spawned loop, retires the
   controller's active turn, and is rethrown so Restate records cancellation.
-- The complete transcript remains durable, while the model sees only the 40
-  most recent usable messages. Interrupted and failed outcome text is not
-  misrepresented as an assistant answer.
+- The complete transcript remains durable. The model sees the rolling summary
+  plus every exact usable message since its checkpoint. Interrupted and failed
+  outcome text is not misrepresented as an assistant answer.
 - The loop stops after eight model rounds instead of running indefinitely.
 
 ## Model flow control
 
 Only full agent inference uses the scoped gateway. Routing stays directly in
 the controller because it is a small, latency-sensitive decision rather than
-part of the agent loop.
+part of the agent loop. Background compaction similarly owns its cheap model
+call in a shared Agent handler and cannot consume an agent-loop inference slot.
 
 `ModelGateway` calls use scope `openai` and a two-level limit key:
 `gpt-5.6-terra/<agent-hash>`. Each invocation therefore draws from three
@@ -239,9 +272,14 @@ request-response, one-way send, attach, and cancellation variants.
 ## Project map
 
 - `packages/libs/example/src/agent.ts` — durable conversation controller
+- `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
+- `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signal supervision
-- `packages/libs/example/src/agent-loop.ts` — bounded model/tool loop and local tools
-- `packages/libs/example/src/model.ts` — model protocol, provider calls, and router
+- `packages/libs/example/src/agent-loop.ts` — bounded model/tool orchestration
+- `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
+- `packages/libs/example/src/message-router.ts` — active-turn message classification
+- `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
+- `packages/libs/example/src/model.ts` — model protocol and provider calls
 - `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries
 - `packages/libs/example/src/types.ts` — wire schemas and domain types

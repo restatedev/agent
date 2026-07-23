@@ -1,16 +1,13 @@
-// Everything specific to the model provider lives here: shared model
-// contracts, model selection, inference, and the cheap message router.
+// Provider-specific model inference and its shared wire contracts.
 
 import {createOpenAI, type OpenAIProvider} from "@ai-sdk/openai";
 import {TerminalError} from "@restatedev/restate-sdk";
-import {type Operation, run} from "@restatedev/restate-sdk-gen";
 import {
   APICallError,
   type AssistantModelMessage,
   generateText,
   jsonSchema,
   type ModelMessage,
-  Output,
   streamText,
   type ToolSet,
 } from "ai";
@@ -41,11 +38,7 @@ export type ModelStreamChunk =
   | ({type: "tool_call"} & ToolCall)
   | {type: "error"; message: string};
 
-const MESSAGE_ROUTES = ["steer", "interrupt", "queue"] as const;
-export type MessageRoute = (typeof MESSAGE_ROUTES)[number];
-
 export const AGENT_MODEL = "gpt-5.6-terra";
-const ROUTER_MODEL = "gpt-4o-mini";
 
 const AGENT_SYSTEM = [
   "You are a concise assistant.",
@@ -56,17 +49,6 @@ const AGENT_SYSTEM = [
   "When the user asks to stop pending work, call cancelOperation with its operationId and wait for the cancellation result before claiming it stopped.",
   "Call humanApproval by itself, and do not perform any dependent action while its result is pending.",
   "After receiving tool results, answer the user's request directly.",
-].join(" ");
-
-const ROUTER_SYSTEM = [
-  "Another agent turn is currently running. Classify the new user message.",
-  "Use the recent conversation to decide whether the new message belongs to the active request or starts independent work.",
-  "Use interrupt only for an explicit request to stop or cancel current work.",
-  "Use steer for any context-dependent continuation of the active request, including additions, corrections, refinements, constraints, or questions about its work.",
-  "Messages beginning with words such as 'also', 'and', 'actually', 'instead', or 'include' normally steer because they extend or revise the active request.",
-  "For example, after a request for European weather, 'also add a few US cities' is steer.",
-  "Use queue only when the new request is clearly independent and could be understood without the active request or its result.",
-  "When uncertain whether a message is a continuation or independent work, prefer steer.",
 ].join(" ");
 
 let provider: OpenAIProvider | undefined;
@@ -82,7 +64,7 @@ function openAI(): OpenAIProvider {
   return provider;
 }
 
-async function withOpenAI<T>(
+export async function withOpenAI<T>(
   call: (provider: OpenAIProvider) => Promise<T>,
 ): Promise<T> {
   try {
@@ -114,7 +96,7 @@ function modelTools(tools: ToolManifest[]): ToolSet {
       {
         description: tool.description,
         // Tool manifests are produced from Zod's draft-07 JSON Schema output
-        // in agent-loop. The model deliberately receives no executors.
+        // in agent-tools. The model deliberately receives no executors.
         inputSchema: jsonSchema(
           tool.inputSchema as Parameters<typeof jsonSchema>[0],
         ),
@@ -281,32 +263,4 @@ export async function* streamAgent(
   } catch (error) {
     rethrowProviderError(error);
   }
-}
-
-// This fast classification runs directly in the Agent handler.
-export function* routeMessage(
-  message: string,
-  recentConversation: string[],
-): Operation<MessageRoute> {
-  return yield* run(
-    ({signal}) =>
-      withOpenAI(async (openai): Promise<MessageRoute> => {
-        const result = await generateText({
-          model: openai.chat(ROUTER_MODEL),
-          system: ROUTER_SYSTEM,
-          prompt: JSON.stringify({recentConversation, newMessage: message}),
-          output: Output.choice({options: [...MESSAGE_ROUTES]}),
-          maxOutputTokens: 32,
-          maxRetries: 0,
-          abortSignal: signal,
-          timeout: 5_000,
-          providerOptions: {openai: {store: false}},
-        });
-        return result.output;
-      }),
-    {
-      name: "route-message",
-      retry: {maxAttempts: 2, initialInterval: 100, maxInterval: 500},
-    },
-  );
 }

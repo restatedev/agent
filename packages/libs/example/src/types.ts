@@ -9,15 +9,9 @@ import {z} from "zod";
 export const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
 export type TurnStatus = z.infer<typeof TurnStatusSchema>;
 
-// How a user message entered the agent's execution. Both the optional field and
-// the legacy "interrupt" value keep previously persisted histories readable;
-// new interruptions use a dedicated event entry below.
-export const UserMessageDeliverySchema = z.enum([
-  "turn",
-  "steer",
-  "queued",
-  "interrupt",
-]);
+// How a user message entered the agent's execution. Interruptions use the
+// dedicated event entry below instead of masquerading as a user message.
+export const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 export type UserMessageDelivery = z.infer<typeof UserMessageDeliverySchema>;
 
 // An entry in the general conversation. Messages record how they entered the
@@ -44,10 +38,11 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
-// Input to a turn: which Agent object it belongs to and the conversation
-// history the model should see.
+// Input to a turn: which Agent object it belongs to, an optional checkpoint
+// over older turns, and the exact uncompacted history the model should see.
 export const TurnRequestSchema = z.object({
   agentId: z.string(),
+  summary: z.string().min(1).optional(),
   history: z.array(ConversationEntrySchema),
 });
 export type TurnRequest = z.infer<typeof TurnRequestSchema>;

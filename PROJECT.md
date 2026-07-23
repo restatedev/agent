@@ -7,7 +7,7 @@ interruption, model calls, and tools—without introducing an agent framework.
 
 ## How it works
 
-The application is split into four concrete parts:
+The application is split into a few concrete parts:
 
 - **`Agent`** is a Virtual Object keyed by `agentId`. It owns the durable
   conversation history, tracks the active turn, queues new messages, and holds
@@ -16,16 +16,22 @@ The application is split into four concrete parts:
 - **`Turn`** is a stateless service invocation that supervises one turn. It
   runs the agent loop and listens for durable interruption. The loop consumes
   steering cooperatively without cancelling work from the current round.
-- **`agentLoop`** performs a bounded model → tools → model cycle. Tool
-  definitions are self-contained here: each tool includes its description,
-  input schema, and local durable implementation. Independent tool calls are
-  spawned in parallel. Long-lived sleeps and approvals remain pending across
-  model rounds, allowing steering and unrelated tools to progress around them.
-  The model can selectively stop those tasks through `cancelOperation` without
+- **`agentLoop`** performs a bounded model → tools → model cycle. It owns the
+  orchestration policy and live task registry, while `agent-tools.ts` keeps
+  every concrete tool's description, schema, validation, local durable
+  behavior, and result projection together. Independent tool calls are spawned
+  in parallel. Long-lived sleeps and approvals remain pending across model
+  rounds, allowing steering and unrelated tools to progress around them. The
+  model can selectively stop those tasks through `cancelOperation` without
   interrupting the rest of the turn.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
-  concurrency controls. A separate cheap model classifies messages that arrive
-  during an active turn as `steer`, `interrupt`, or `queue`.
+  concurrency controls. `message-router.ts` uses a separate cheap model to
+  classify messages that arrive during an active turn as `steer`, `interrupt`,
+  or `queue`.
+- **`Agent.compact`** is a shared handler that asynchronously summarizes older
+  finished turns without blocking conversation updates. The model operation
+  lives in `conversation-compactor.ts`; the summary is derived context and the
+  chunked Agent transcript remains complete and authoritative.
 
 ```text
 user → Agent → Turn → agentLoop → ModelGateway
@@ -36,12 +42,15 @@ user → Agent → Turn → agentLoop → ModelGateway
 The controller stores only user-facing messages and the final outcome of each
 turn. Intermediate model responses and tool calls remain visible through
 Restate's invocation journal instead of becoming conversation history.
+Older completed turns are summarized for model context without removing them
+from that user-facing transcript.
 
 ## Why Restate is useful here
 
 Restate provides the application-level guarantees that an agent needs:
 
 - durable conversation state and serialized controller decisions;
+- lazy, chunked transcript storage and asynchronous summary checkpoints;
 - one-way invocation of long-running turns;
 - queued signals for steering and interruption;
 - durable sleeps, retries, and local tool operations;
@@ -53,9 +62,14 @@ Restate provides the application-level guarantees that an agent needs:
 ## Source map
 
 - `packages/libs/example/src/agent.ts` — conversation controller
+- `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
+- `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signals
-- `packages/libs/example/src/agent-loop.ts` — agent loop and tools
+- `packages/libs/example/src/agent-loop.ts` — agent loop orchestration
+- `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
+- `packages/libs/example/src/message-router.ts` — active-turn message classification
+- `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — AI SDK integration
 - `packages/libs/example/src/model-gateway.ts` — scoped model gateway
 - `packages/libs/example/src/types.ts` — public wire types and schemas
