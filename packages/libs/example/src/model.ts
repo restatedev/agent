@@ -8,7 +8,6 @@ import {
   generateText,
   jsonSchema,
   type ModelMessage,
-  streamText,
   type ToolSet,
 } from "ai";
 
@@ -31,11 +30,6 @@ export type ModelResult =
       message: AssistantModelMessage;
       calls: ToolCall[];
     }
-  | {type: "error"; message: string};
-
-export type ModelStreamChunk =
-  | {type: "text"; content: string}
-  | ({type: "tool_call"} & ToolCall)
   | {type: "error"; message: string};
 
 export const AGENT_MODEL = "gpt-5.6-terra";
@@ -182,85 +176,4 @@ export async function completeAgent(
       ? {type: "text", content: result.text}
       : {type: "error", message: "model returned neither text nor tool calls"};
   });
-}
-
-// Stream only chunks useful to an agent consumer. Tool input deltas and
-// provider bookkeeping stay inside the model boundary; tool calls are emitted
-// only after the AI SDK has assembled their complete input.
-export async function* streamAgent(
-  messages: ModelMessage[],
-  tools: ToolManifest[],
-  signal: AbortSignal,
-): AsyncGenerator<ModelStreamChunk> {
-  let emitted = false;
-  try {
-    const result = streamText({
-      model: openAI().responses(AGENT_MODEL),
-      system: AGENT_SYSTEM,
-      messages,
-      tools: modelTools(tools),
-      toolChoice: "auto",
-      maxOutputTokens: 2_000,
-      maxRetries: 0,
-      abortSignal: signal,
-      timeout: 120_000,
-      providerOptions: {
-        openai: {
-          reasoningEffort: "low",
-          parallelToolCalls: true,
-          store: false,
-        },
-      },
-    });
-
-    for await (const part of result.stream) {
-      switch (part.type) {
-        case "text-delta":
-          if (part.text) {
-            emitted = true;
-            yield {type: "text", content: part.text};
-          }
-          break;
-        case "tool-call":
-          emitted = true;
-          if (part.dynamic || part.invalid) {
-            yield {
-              type: "error",
-              message: `${part.toolName}: ${part.error ? errorMessage(part.error) : "invalid tool call"}`,
-            };
-            return;
-          }
-          yield {
-            type: "tool_call",
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            input: part.input,
-          };
-          break;
-        case "finish":
-          if (part.finishReason === "length") {
-            yield {
-              type: "error",
-              message: "model response exceeded its token limit",
-            };
-            return;
-          }
-          if (part.finishReason === "content-filter") {
-            yield {type: "error", message: "model response was filtered"};
-            return;
-          }
-          break;
-        case "error":
-          throw part.error;
-        case "abort":
-          throw new TerminalError(part.reason ?? "model stream was aborted");
-      }
-    }
-
-    if (!emitted) {
-      yield {type: "error", message: "model returned no text or tool calls"};
-    }
-  } catch (error) {
-    rethrowProviderError(error);
-  }
 }
