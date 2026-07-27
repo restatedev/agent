@@ -42,7 +42,7 @@ import {
 } from "./types.js";
 
 function interruptionBoundary(
-  entry: Extract<ConversationEntry, {role: "event"}>,
+  entry: Extract<ConversationEntry, {role: "event"; type: "interrupt"}>,
 ): ModelMessage {
   return {
     role: "user",
@@ -71,9 +71,29 @@ function failureBoundary(
   };
 }
 
+function dispatchBoundary(
+  entry: Extract<ConversationEntry, {role: "event"; type: "dispatch"}>,
+): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Queued messages activated]",
+      `The ${entry.queuedMessages} most recent user message(s) marked as queued are the input for this turn.`,
+      "Process them now. Assistant messages or lifecycle events appearing after their original transcript positions did not answer them.",
+    ].join("\n"),
+  };
+}
+
 function userMessage(
   entry: Extract<ConversationEntry, {role: "user"}>,
 ): string {
+  if (entry.delivery === "queued") {
+    return [
+      "[Queued user message]",
+      "This arrived while another turn was active and was not part of that turn's input.",
+      entry.text,
+    ].join("\n");
+  }
   if (entry.delivery !== "steer") {
     return entry.text;
   }
@@ -96,7 +116,11 @@ function buildModelContext(
       return [{role: "user", content: userMessage(entry)}];
     }
     if (entry.role === "event") {
-      return [interruptionBoundary(entry)];
+      return [
+        entry.type === "interrupt"
+          ? interruptionBoundary(entry)
+          : dispatchBoundary(entry),
+      ];
     }
     return entry.status === "completed"
       ? [{role: "assistant", content: entry.text}]

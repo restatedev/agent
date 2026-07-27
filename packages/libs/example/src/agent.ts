@@ -72,6 +72,11 @@ export const Agent = object({
         const current = yield* activeTurn.current();
         if (current) {
           const pendingMessages = yield* activeTurn.enqueue(message);
+          yield* history.append({
+            role: "user",
+            text: message,
+            delivery: "queued",
+          });
           return {
             decision: "queue",
             turnId: current.id,
@@ -79,7 +84,8 @@ export const Agent = object({
           };
         }
 
-        const turnId = yield* dispatchTurn(agentId, [message], "turn");
+        yield* history.append({role: "user", text: message, delivery: "turn"});
+        const turnId = yield* startTurn(agentId);
         return {
           decision: "start",
           turnId,
@@ -119,38 +125,22 @@ export const Agent = object({
         if (!steering) {
           return false;
         }
-        const messages = [...steering.queued, steering.message];
-        yield* history.append(
-          ...messages.map(
-            (text): ConversationEntry => ({
-              role: "user",
-              text,
-              delivery: "steer",
-            }),
-          ),
-        );
+        yield* history.promoteLatestQueued(steering.queued.length);
+        yield* history.append({
+          role: "user",
+          text: steering.message,
+          delivery: "steer",
+        });
         return true;
       },
     ),
 
-    // Read-only view of the general conversation. Includes queued-but-not-yet-
-    // started messages (as user entries) so an accepted message is visible
-    // immediately, even before its turn begins.
+    // Read-only view of the canonical transcript. Queued messages are recorded
+    // by ask at acceptance time, so no second pending-state view is merged in.
     history: schemas(
       {input: z.void(), output: z.array(ConversationEntrySchema)},
       function* (): Operation<ConversationEntry[]> {
-        const entries = yield* history.read();
-        const pending = yield* activeTurn.pending();
-        return [
-          ...entries,
-          ...pending.map(
-            (text): ConversationEntry => ({
-              role: "user",
-              text,
-              delivery: "queued",
-            }),
-          ),
-        ];
+        return yield* history.read();
       },
     ),
 
@@ -221,9 +211,7 @@ export const Agent = object({
         }
         yield* approvals.clearTurn(outcome.turnId);
 
-        const unconsumedSteering = yield* history.takeLatestSteering(
-          finished.missedSteeringMessages,
-        );
+        yield* history.requeueLatestSteering(finished.missedSteeringMessages);
         if (
           outcome.status === "interrupted" &&
           !finished.interruptionRequested
@@ -248,9 +236,10 @@ export const Agent = object({
           yield* sendClient(Agent, agentId).compact(plan);
         }
 
-        const pending = [...unconsumedSteering, ...finished.pending];
-        if (pending.length > 0) {
-          yield* dispatchTurn(agentId, pending, "queued");
+        const queuedMessages =
+          finished.missedSteeringMessages + finished.pendingMessages;
+        if (queuedMessages > 0) {
+          yield* startTurn(agentId, queuedMessages);
         }
       },
     ),
@@ -302,18 +291,16 @@ export const Agent = object({
   },
 });
 
-// Cross-component coordination belongs here: record the input, prepare the
-// Turn request, then ask activeTurn to own its lifecycle.
-function* dispatchTurn(
-  agentId: string,
-  messages: string[],
-  delivery: "turn" | "queued",
-): Operation<string> {
-  yield* history.append(
-    ...messages.map(
-      (text): ConversationEntry => ({role: "user", text, delivery}),
-    ),
-  );
+// Cross-component coordination belongs here: mark queued messages as active,
+// prepare the complete transcript, then let activeTurn own the invocation.
+function* startTurn(agentId: string, queuedMessages = 0): Operation<string> {
+  if (queuedMessages > 0) {
+    yield* history.append({
+      role: "event",
+      type: "dispatch",
+      queuedMessages,
+    });
+  }
   const context = yield* history.context();
   return yield* activeTurn.start({
     agentId,

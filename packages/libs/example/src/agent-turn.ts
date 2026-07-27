@@ -31,8 +31,8 @@ type ActiveTurnState = {
 type FinishedTurn = {
   /** Number of user messages carried by unconsumed steering signals. */
   missedSteeringMessages: number;
-  /** Messages accepted for the next turn while this one was active. */
-  pending: string[];
+  /** Number of messages accepted for the next turn while this one was active. */
+  pendingMessages: number;
   /** Whether the Agent explicitly requested this turn's interruption. */
   interruptionRequested: boolean;
 };
@@ -79,11 +79,6 @@ export const activeTurn = {
     pending.push(message);
     state().set("pending", pending);
     return pending.length;
-  },
-
-  /** Returns messages currently waiting for the next turn. */
-  *pending(): Operation<string[]> {
-    return (yield* sharedState().get<string[]>("pending")) ?? [];
   },
 
   /**
@@ -161,7 +156,7 @@ export const activeTurn = {
           .reduce((total, size) => total + size, 0);
     return {
       missedSteeringMessages,
-      pending,
+      pendingMessages: pending.length,
       interruptionRequested: current.interrupting,
     };
   },

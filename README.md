@@ -75,18 +75,18 @@ handler. Newer appended entries do not invalidate the checkpoint, and a failed
 compaction leaves the prior summary untouched.
 
 Each `TurnRequest` carries the rolling summary and exact uncompacted transcript
-after the new messages have been appended. The Turn projects steering metadata
-and interruption or failure entries as explicit model-visible boundaries.
-Compaction happens only between turns: live model messages, tool calls, tool
-results, pending operations, and steering inside `agentLoop` are never
-summarized mid-turn.
+through the lifecycle event that dispatched it. The Turn projects steering
+metadata and interruption, queued-message dispatch, or failure entries as
+explicit model-visible boundaries. Compaction happens only between turns: live
+model messages, tool calls, tool results, pending operations, and steering
+inside `agentLoop` are never summarized mid-turn.
 
 ## Controller handlers
 
 | Handler | Input | Behavior |
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
-| `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. Entries distinguish user messages, interruption events, and terminal turn summaries. |
+| `history` | void | Returns the complete durable transcript in Agent observation order. Entries distinguish user messages, lifecycle events, and terminal turn summaries. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
 | `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
 | `steer` | instruction string | Promotes queued messages into the active turn, then sends the new instruction after them. |
@@ -110,12 +110,14 @@ The controller flow is therefore:
 
 - An idle `ask` records its message and starts a Turn with the resulting
   transcript.
-- An `ask` received while a Turn is active remains in the pending FIFO queue
-  and is immediately visible through `history`.
-- `steer` promotes that queue into one structured steering signal.
-- `interrupt` leaves the queue intact. After the old Turn retires, the Agent
-  appends the queued messages after the interruption boundary and starts one
-  new Turn with the resulting transcript.
+- An `ask` received while a Turn is active is recorded immediately at its
+  natural transcript position; the pending FIFO controls only when it runs.
+- `steer` promotes that queue without moving its transcript entries, appends
+  the new steering message, and sends one structured steering signal.
+- `interrupt` leaves the queue intact and appends its event after every message
+  the Agent had already observed. After the old Turn retires, a dispatch event
+  activates those queued entries and starts one new Turn with the complete
+  transcript.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 `steer` call resolves one structured `{ queued, message }` signal: messages
@@ -125,11 +127,11 @@ batch into one structured model update, while conversation history retains the
 individual user messages.
 
 The controller tracks each signal's message count, while the loop reports how
-many signals it consumed. If normal completion wins the race with a steer,
-every history entry carried by an unconsumed batch moves behind that outcome
-and runs through the normal queued-turn path. An explicit interrupt supersedes
-outstanding steering. External cancellation does not: steering accepted before
-cancellation is recovered into the next turn.
+many signals it consumed. If normal completion wins the race with a steer, the
+unconsumed entries are reclassified as queued without changing their transcript
+positions, and a later dispatch event activates them. An explicit interrupt
+supersedes outstanding steering. External cancellation does not: steering
+accepted before cancellation is recovered into the next turn.
 
 ## Durability and failure behavior
 

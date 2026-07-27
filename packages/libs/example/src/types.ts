@@ -19,14 +19,29 @@ export type SteeringSignal = {
 // How a turn ended.
 const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
 
-// How a user message entered the agent's execution. Interruptions use the
-// dedicated event entry below instead of masquerading as a user message.
+// How a user message entered the agent's execution. A queued message can later
+// be promoted to steering or activated by a dispatch event without moving it
+// from its original transcript position.
 const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 
 // An entry in the general conversation. Messages record how they entered the
-// execution, interruption boundaries are explicit events, and assistant
-// entries are terminal turn summaries correlated with Restate observability.
-export const ConversationEntrySchema = z.discriminatedUnion("role", [
+// execution, lifecycle boundaries are explicit events, and assistant entries
+// are terminal turn summaries correlated with Restate observability.
+const ConversationEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    role: z.literal("event"),
+    type: z.literal("interrupt"),
+    turnId: z.string(),
+    reason: z.string(),
+  }),
+  z.object({
+    role: z.literal("event"),
+    type: z.literal("dispatch"),
+    queuedMessages: z.number().int().positive(),
+  }),
+]);
+
+export const ConversationEntrySchema = z.union([
   z.object({
     role: z.literal("user"),
     text: z.string(),
@@ -38,12 +53,7 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
     turnId: z.string(),
     status: z.enum(["completed", "failed"]),
   }),
-  z.object({
-    role: z.literal("event"),
-    type: z.literal("interrupt"),
-    turnId: z.string(),
-    reason: z.string(),
-  }),
+  ConversationEventSchema,
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 

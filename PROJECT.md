@@ -10,17 +10,19 @@ interruption, model calls, and tools—without introducing an agent framework.
 The application is split into a few concrete parts:
 
 - **`Agent`** is a Virtual Object keyed by `agentId`. It owns the durable
-  conversation history, tracks the active turn, queues new messages, and holds
-  pending human approvals. Alongside the conversation handlers, `approvals`
-  and `resolveApproval` expose the human-in-the-loop boundary. `ask` starts
-  work when idle and queues when busy; clients explicitly select `steer` or
+  conversation history, tracks the active turn, routes queued messages, and
+  holds pending human approvals. Every message is recorded when its exclusive
+  handler observes it; pending state controls execution without reordering the
+  transcript. Alongside the conversation handlers, `approvals` and
+  `resolveApproval` expose the human-in-the-loop boundary. `ask` starts work
+  when idle and queues when busy; clients explicitly select `steer` or
   `interrupt` when they want to affect the active turn.
 - **`Turn`** is a stateless service invocation that supervises one turn. It
   runs the agent loop and listens for durable interruption. The loop consumes
   structured steering batches cooperatively without cancelling work from the
   current round. Each invocation receives the canonical transcript, where
-  steering metadata and interruption reasons become explicit model-context
-  boundaries.
+  steering metadata, queue dispatch, and interruption reasons become explicit
+  model-context boundaries.
 - **`agentLoop`** performs a bounded model → tools → model cycle. It owns the
   orchestration policy and live task registry, while `agent-tools.ts` keeps
   every concrete tool's description, schema, validation, local durable

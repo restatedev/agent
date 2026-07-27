@@ -1,8 +1,10 @@
 // Durable conversation history for one Agent virtual object. Turn lifecycle
 // state and pending work belong to agent-turn.ts.
 //
-// The complete transcript remains the source of truth. A rolling summary is a
-// replaceable model-context checkpoint over an immutable prefix of that log.
+// The complete transcript remains the source of truth. Its sequence is stable;
+// routing metadata can change when queued messages are promoted or requeued. A
+// rolling summary is a replaceable model-context checkpoint over an older
+// prefix of that log.
 
 import {
   all,
@@ -130,6 +132,42 @@ function* readLocated(
   );
 }
 
+function* rewriteLatestDelivery(
+  messageCount: number,
+  from: "queued" | "steer",
+  to: "queued" | "steer",
+): Operation<void> {
+  if (messageCount === 0) {
+    return;
+  }
+
+  const meta = yield* ensureMeta();
+  let remaining = messageCount;
+  for (let index = meta.lastChunk; index >= 0 && remaining > 0; index--) {
+    const chunk =
+      (yield* sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
+    let changed = false;
+    for (
+      let entryIndex = chunk.length - 1;
+      entryIndex >= 0 && remaining > 0;
+      entryIndex--
+    ) {
+      const stored = chunk[entryIndex];
+      if (stored.entry.role === "user" && stored.entry.delivery === from) {
+        chunk[entryIndex] = {
+          ...stored,
+          entry: {...stored.entry, delivery: to},
+        };
+        remaining -= 1;
+        changed = true;
+      }
+    }
+    if (changed) {
+      state().set(chunkKey(index), chunk);
+    }
+  }
+}
+
 function isConversationMessage(entry: ConversationEntry): boolean {
   return entry.role !== "event";
 }
@@ -190,40 +228,16 @@ export const history = {
     state().set(HISTORY_META, meta);
   },
 
-  // Remove steering that lost a completion race so the Agent coordinator can
-  // append it again after that outcome as normal queued input.
-  *takeLatestSteering(messageCount: number): Operation<string[]> {
-    if (messageCount === 0) {
-      return [];
-    }
+  // Keep accepted messages at their original transcript positions while their
+  // execution route changes.
+  *promoteLatestQueued(messageCount: number): Operation<void> {
+    yield* rewriteLatestDelivery(messageCount, "queued", "steer");
+  },
 
-    const meta = yield* ensureMeta();
-    const messages: string[] = [];
-    for (
-      let index = meta.lastChunk;
-      index >= 0 && messages.length < messageCount;
-      index--
-    ) {
-      const chunk =
-        (yield* sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
-      let changed = false;
-      for (
-        let entryIndex = chunk.length - 1;
-        entryIndex >= 0 && messages.length < messageCount;
-        entryIndex--
-      ) {
-        const entry = chunk[entryIndex].entry;
-        if (entry.role === "user" && entry.delivery === "steer") {
-          messages.push(entry.text);
-          chunk.splice(entryIndex, 1);
-          changed = true;
-        }
-      }
-      if (changed) {
-        state().set(chunkKey(index), chunk);
-      }
-    }
-    return messages.reverse();
+  // Steering that lost a completion race becomes input for the next Turn, but
+  // remains ordered where the Agent originally observed it.
+  *requeueLatestSteering(messageCount: number): Operation<void> {
+    yield* rewriteLatestDelivery(messageCount, "steer", "queued");
   },
 
   // Called after a turn outcome is appended. Once enough conversation messages
