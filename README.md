@@ -23,10 +23,9 @@ flowchart LR
 
 - `Agent` is the durable controller. Its exclusive handlers serialize changes
   to the active turn, pending messages, and conversation history for one
-  `agentId`. It coordinates four independent components: `agent-turn.ts` owns
+  `agentId`. It coordinates three independent components: `agent-turn.ts` owns
   turn state and signal lifecycle, `agent-history.ts` owns the durable
-  transcript, `agent-approval.ts` owns pending human approvals, and
-  `agent-progress.ts` owns a bounded semantic progress feed.
+  transcript, and `agent-approval.ts` owns pending human approvals.
   Each component exports a handler-scoped capability namespace: its operations
   use Restate's current handler context and hold no process-local state.
 - `Turn` is stateless. One invocation supervises one agent turn and passes its
@@ -51,19 +50,22 @@ flowchart LR
   scoped admission, limit keys, retries, and cancellation propagation before
   delegating the provider call to `model.ts`.
 
-The controller stores only user-facing history. Tool calls and intermediate
-model steps stay in Restate's invocation journal and observability tools. A
-turn reports exactly one structured outcome: `completed`, `interrupted`, or
-`failed`. A graceful interruption can include a final assistant response based
-on completed tool results; raw tool activity still stays out of the transcript.
+The controller stores the canonical transcript: user and assistant messages,
+explicit lifecycle boundaries, and semantic progress events. Tool calls and
+intermediate model steps stay in Restate's invocation journal and observability
+tools. A turn reports exactly one structured outcome: `completed`,
+`interrupted`, or `failed`. A graceful interruption can include a final
+assistant response based on completed tool results; raw tool activity still
+stays out of the transcript.
 
 ## Conversation history and compaction
 
 The complete user-facing transcript is canonical and is never replaced by a
 model summary. `agent-history.ts` stores it in fixed-size state chunks with
 stable internal sequence numbers. Lazy state lets normal handlers load only
-the metadata and recent chunks they need; the public `history` handler still
-assembles the complete transcript.
+the metadata and chunks they need. The public `history` handler exposes an
+inclusive cursor over those sequence numbers and reads only enough chunks to
+return the requested page.
 
 After a turn finishes, the Agent counts conversation messages since the last
 checkpoint. At 32 messages it reserves that entire finished prefix and
@@ -86,10 +88,9 @@ inside `agentLoop` are never summarized mid-turn.
 | Handler | Input | Behavior |
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
-| `history` | void | Returns the complete durable transcript in Agent observation order. Entries distinguish user messages, lifecycle events, and terminal turn summaries. |
-| `progress` | `{ afterSequence?: number }` | Returns the retained semantic progress events after a client cursor. |
+| `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
-| `reportProgress` | progress report | Ingress-private one-way path used by the active loop; ignores stale Turn IDs. |
+| `reportProgress` | progress report | Ingress-private one-way path used by the active loop; appends an ordered transcript event and ignores stale Turn IDs. |
 | `interrupt` | reason string | Records an interruption event and signals the active loop to cancel unfinished work and produce a final response. Returns immediately. |
 | `steer` | instruction string | Promotes queued messages into the active turn, then sends the new instruction after them. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
@@ -138,23 +139,28 @@ accepted before cancellation is recovered into the next turn.
 ## Progress
 
 The loop one-way sends semantic milestones to `Agent.reportProgress`. The Agent
-checks the originating `turnId`, assigns a monotonic sequence, and retains the
-latest 32 events separately from conversation history. It reports phases such
-as `thinking`, `tools`, `waiting`, and `finalizing`, followed by a terminal
-`completed`, `interrupted`, or `failed` event. Raw provider reasoning blocks
-are never exposed as progress.
+checks the originating `turnId` and appends each accepted milestone to the
+canonical transcript as `{ role: "event", type: "progress", ... }`. It reports
+phases such as `thinking`, `tools`, `waiting`, and `finalizing`. Terminal state
+is already represented by the turn's assistant outcome, so it is not duplicated
+as progress. Raw provider reasoning blocks are never exposed.
 
-Clients can poll incrementally:
+Progress events retain their natural order relative to every other event the
+Agent observes. They are deliberately omitted from model context and
+conversation compaction because they are derived execution status, not user
+instructions. Clients consume all transcript activity through one cursor:
 
 ```sh
-curl localhost:8080/Agent/demo/progress \
+curl localhost:8080/Agent/demo/history \
   -H 'content-type: application/json' \
-  -d '{"afterSequence": 0}'
+  -d '{"fromSequence":1,"limit":50}'
 ```
 
-The last returned event's sequence is suitable as the next cursor. This durable
-feed can later be mirrored to pub/sub for live fan-out without making pub/sub
-the source of truth.
+The cursor is inclusive. The response contains
+`{ entries: [{ sequence, entry }], nextSequence }`; pass `nextSequence` as the
+next request's `fromSequence`. An empty page leaves the cursor unchanged. This
+durable transcript can later be mirrored to pub/sub for live fan-out without
+making pub/sub the source of truth.
 
 ## Durability and failure behavior
 
@@ -260,7 +266,8 @@ top 10 European capitals? Also sleep for 4 minutes.”
 curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
 
-curl -X POST localhost:8080/Agent/demo/history
+curl localhost:8080/Agent/demo/history \
+  --json '{"fromSequence":1,"limit":50}'
 
 curl localhost:8080/Agent/demo/steer \
   --json '"Steer toward a one-sentence answer"'
@@ -325,7 +332,6 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
-- `packages/libs/example/src/agent-progress.ts` — bounded sequenced progress
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signal supervision
 - `packages/libs/example/src/agent-loop.ts` — bounded model/tool orchestration
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection

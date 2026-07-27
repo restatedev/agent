@@ -12,7 +12,7 @@ import {
   sharedState,
   state,
 } from "@restatedev/restate-sdk-gen";
-import type {ConversationEntry} from "./types.js";
+import type {ConversationEntry, HistoryPage} from "./types.js";
 
 type StoredEntry = {
   sequence: number;
@@ -179,12 +179,25 @@ function isConversationMessage(entry: ConversationEntry): boolean {
  * over Restate's current context and holds no process-local state.
  */
 export const history = {
-  *read(): Operation<ConversationEntry[]> {
+  *page(fromSequence: number, limit: number): Operation<HistoryPage> {
     const meta = yield* readMeta();
-    if (!meta) {
-      return [];
+    if (!meta || fromSequence >= meta.nextSequence) {
+      return {entries: [], nextSequence: fromSequence};
     }
-    return (yield* readLocated(meta)).map(({entry}) => entry);
+
+    const fromChunk = Math.floor((fromSequence - 1) / CHUNK_SIZE);
+    const offset = (fromSequence - 1) % CHUNK_SIZE;
+    const chunksNeeded = Math.ceil((offset + limit) / CHUNK_SIZE);
+    const throughChunk = Math.min(meta.lastChunk, fromChunk + chunksNeeded - 1);
+    const entries = (yield* readLocated(meta, fromChunk, throughChunk))
+      .filter(({sequence}) => sequence >= fromSequence)
+      .slice(0, limit)
+      .map(({sequence, entry}) => ({sequence, entry}));
+    const last = entries.at(-1);
+    return {
+      entries,
+      nextSequence: last ? last.sequence + 1 : fromSequence,
+    };
   },
 
   *context(): Operation<ConversationContext> {

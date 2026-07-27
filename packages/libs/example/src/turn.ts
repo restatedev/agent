@@ -114,6 +114,11 @@ function buildModelContext(
       return [{role: "user", content: userMessage(entry)}];
     }
     if (entry.role === "event") {
+      // Progress is part of the canonical transcript for consumers, but it is
+      // derived execution status rather than conversation input.
+      if (entry.type === "progress") {
+        return [];
+      }
       return [
         entry.type === "interrupt"
           ? interruptionBoundary(entry)

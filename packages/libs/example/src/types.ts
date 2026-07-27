@@ -21,6 +21,21 @@ export type SteeringSignal = {
 // from its original transcript position.
 const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 
+const ProgressPhaseSchema = z.enum([
+  "thinking",
+  "tools",
+  "waiting",
+  "finalizing",
+]);
+
+// A semantic progress update sent from one active Turn to its Agent.
+export const ProgressReportSchema = z.object({
+  turnId: z.string(),
+  phase: ProgressPhaseSchema,
+  message: z.string(),
+});
+export type ProgressReport = z.infer<typeof ProgressReportSchema>;
+
 // An entry in the general conversation. Messages record how they entered the
 // execution, lifecycle boundaries are explicit events, and assistant entries
 // are terminal turn summaries correlated with Restate observability.
@@ -35,6 +50,10 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
     role: z.literal("event"),
     type: z.literal("dispatch"),
     queuedMessages: z.number().int().positive(),
+  }),
+  ProgressReportSchema.extend({
+    role: z.literal("event"),
+    type: z.literal("progress"),
   }),
 ]);
 
@@ -54,29 +73,16 @@ export const ConversationEntrySchema = z.union([
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
-const ProgressPhaseSchema = z.enum([
-  "thinking",
-  "tools",
-  "waiting",
-  "finalizing",
-  "completed",
-  "interrupted",
-  "failed",
-]);
-
-// A semantic progress update sent from one active Turn to its Agent.
-export const ProgressReportSchema = z.object({
-  turnId: z.string(),
-  phase: ProgressPhaseSchema,
-  message: z.string(),
-});
-export type ProgressReport = z.infer<typeof ProgressReportSchema>;
-
-// The Agent assigns a stable sequence so clients can poll incrementally.
-export const ProgressEventSchema = ProgressReportSchema.extend({
+const SequencedConversationEntrySchema = z.object({
   sequence: z.number().int().positive(),
+  entry: ConversationEntrySchema,
 });
-export type ProgressEvent = z.infer<typeof ProgressEventSchema>;
+
+export const HistoryPageSchema = z.object({
+  entries: z.array(SequencedConversationEntrySchema),
+  nextSequence: z.number().int().positive(),
+});
+export type HistoryPage = z.infer<typeof HistoryPageSchema>;
 
 // Input to a turn: which Agent object it belongs to, an optional checkpoint
 // over older entries, and the exact uncompacted transcript the model should

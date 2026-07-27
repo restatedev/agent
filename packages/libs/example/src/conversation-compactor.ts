@@ -28,35 +28,46 @@ function errorMessage(error: unknown): string {
 function compactorInput(request: ConversationCompactionInput): string {
   return JSON.stringify({
     previousSummary: request.previousSummary ?? null,
-    conversation: request.entries.map((entry) => {
-      if (entry.role === "user") {
-        return {
-          role: entry.role,
-          text: entry.text,
-          delivery: entry.delivery ?? null,
-        };
-      }
-      if (entry.role === "assistant") {
-        return {
-          role: entry.role,
-          text: entry.text,
-          turnId: entry.turnId,
-          status: entry.status,
-        };
-      }
-      return entry.type === "interrupt"
-        ? {
-            role: entry.role,
-            type: entry.type,
-            turnId: entry.turnId,
-            reason: entry.reason,
-          }
-        : {
-            role: entry.role,
-            type: entry.type,
-            queuedMessages: entry.queuedMessages,
-          };
-    }),
+    conversation: request.entries.flatMap(
+      (entry): Record<string, unknown>[] => {
+        if (entry.role === "user") {
+          return [
+            {
+              role: entry.role,
+              text: entry.text,
+              delivery: entry.delivery ?? null,
+            },
+          ];
+        }
+        if (entry.role === "assistant") {
+          return [
+            {
+              role: entry.role,
+              text: entry.text,
+              turnId: entry.turnId,
+              status: entry.status,
+            },
+          ];
+        }
+        if (entry.type === "progress") {
+          return [];
+        }
+        return [
+          entry.type === "interrupt"
+            ? {
+                role: entry.role,
+                type: entry.type,
+                turnId: entry.turnId,
+                reason: entry.reason,
+              }
+            : {
+                role: entry.role,
+                type: entry.type,
+                queuedMessages: entry.queuedMessages,
+              },
+        ];
+      },
+    ),
   });
 }
 

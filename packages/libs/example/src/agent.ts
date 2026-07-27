@@ -21,7 +21,6 @@ import {
   type ConversationCompactionResult,
   history,
 } from "./agent-history.js";
-import {progress as progressLog} from "./agent-progress.js";
 import {activeTurn} from "./agent-turn.js";
 import {compactConversation} from "./conversation-compactor.js";
 import {
@@ -29,10 +28,8 @@ import {
   type ApprovalRequest,
   ApprovalRequestSchema,
   ApprovalResolutionSchema,
-  type ConversationEntry,
-  ConversationEntrySchema,
-  type ProgressEvent,
-  ProgressEventSchema,
+  type HistoryPage,
+  HistoryPageSchema,
   type ProgressReport,
   ProgressReportSchema,
   TurnOutcomeSchema,
@@ -64,8 +61,9 @@ const AskResultSchema = z.object({
 });
 type AskResult = z.infer<typeof AskResultSchema>;
 
-const ProgressQuerySchema = z.object({
-  afterSequence: z.number().int().nonnegative().default(0),
+const HistoryQuerySchema = z.object({
+  fromSequence: z.number().int().positive().default(1),
+  limit: z.number().int().min(1).max(100).default(50),
 });
 
 export const Agent = object({
@@ -144,33 +142,28 @@ export const Agent = object({
       },
     ),
 
-    // Read-only view of the canonical transcript. Queued messages are recorded
-    // by ask at acceptance time, so no second pending-state view is merged in.
+    // Incremental read of the canonical transcript. The cursor is inclusive:
+    // a request from sequence K returns up to `limit` entries starting at K.
     history: schemas(
-      {input: z.void(), output: z.array(ConversationEntrySchema)},
-      function* (): Operation<ConversationEntry[]> {
-        return yield* history.read();
+      {input: HistoryQuerySchema, output: HistoryPageSchema},
+      function* ({fromSequence, limit}): Operation<HistoryPage> {
+        return yield* history.page(fromSequence, limit);
       },
     ),
 
-    // Internal one-way status path used by the active loop. Ignore late events
-    // from a Turn that the Agent has already retired.
+    // Internal one-way status path used by the active loop. Progress is an
+    // ordered lifecycle event in the transcript; late reports are ignored.
     reportProgress: schemas(
       {input: ProgressReportSchema, output: z.void()},
       function* (report: ProgressReport): Operation<void> {
         const current = yield* activeTurn.current();
         if (current?.id === report.turnId) {
-          yield* progressLog.append(report);
+          yield* history.append({
+            role: "event",
+            type: "progress",
+            ...report,
+          });
         }
-      },
-    ),
-
-    // Incremental progress feed for UIs. Progress is deliberately separate
-    // from durable conversation history and retains only a bounded tail.
-    progress: schemas(
-      {input: ProgressQuerySchema, output: z.array(ProgressEventSchema)},
-      function* ({afterSequence}): Operation<ProgressEvent[]> {
-        return yield* progressLog.read(afterSequence);
       },
     ),
 
@@ -267,16 +260,6 @@ export const Agent = object({
             status: outcome.status,
           });
         }
-        yield* progressLog.append({
-          turnId: outcome.turnId,
-          phase: outcome.status,
-          message:
-            outcome.status === "completed"
-              ? "Turn completed"
-              : outcome.status === "interrupted"
-                ? "Turn interrupted after graceful finalization"
-                : `Turn failed: ${outcome.error}`,
-        });
         const agentId = agentKey();
         const plan = yield* history.beginCompaction();
         if (plan) {
@@ -323,7 +306,6 @@ export const Agent = object({
       cancelApproval: {ingressPrivate: true},
       reportProgress: {ingressPrivate: true},
       approvals: {shared: true, idempotencyRetention: 0, journalRetention: 0},
-      progress: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       history: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       compact: {
         shared: true,

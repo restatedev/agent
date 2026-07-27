@@ -11,13 +11,14 @@ The application is split into a few concrete parts:
 
 - **`Agent`** is a Virtual Object keyed by `agentId`. It owns the durable
   conversation history, tracks the active turn, routes queued messages, and
-  holds pending human approvals and a bounded progress feed. Every message is
+  holds pending human approvals. Every message and lifecycle event is
   recorded when its exclusive handler observes it; pending state controls
   execution without reordering the transcript. Alongside the conversation
   handlers, `approvals` and `resolveApproval` expose the human-in-the-loop
-  boundary, while `progress` exposes sequenced semantic milestones. `ask`
-  starts work when idle and queues when busy; clients explicitly select
-  `steer` or `interrupt` when they want to affect the active turn.
+  boundary. Semantic progress is appended to the same sequenced transcript,
+  which clients consume through the cursor-based `history` handler. `ask`
+  starts work when idle and queues when busy; clients explicitly select `steer`
+  or `interrupt` when they want to affect the active turn.
 - **`Turn`** is a stateless service invocation that supervises one turn. It
   runs the agent loop and supplies its durable interrupt signal. The loop
   consumes structured steering cooperatively; interruption cancels unfinished
@@ -34,6 +35,8 @@ The application is split into a few concrete parts:
   model can selectively stop those tasks through `cancelOperation`; a graceful
   interrupt stops everything outstanding and summarizes achieved work. The
   loop one-way reports semantic progress without exposing raw reasoning blocks.
+  Progress remains visible in the canonical transcript but is omitted from
+  future model context and compaction input.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
   concurrency controls.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
@@ -47,20 +50,19 @@ user → Agent → Turn → agentLoop → ModelGateway
          └── outcome / signals
 ```
 
-The controller stores only user-facing messages, answers, failures, explicit
-interruption events, and graceful interruption responses. Intermediate model
-responses, cancelled tool work, and other execution details remain visible
-through Restate's invocation journal instead of becoming conversation history.
-Compaction preserves failure and interruption boundaries while older turns are
-summarized for model context without being removed from that user-facing
-transcript.
+The controller stores user-facing messages, answers, failures, lifecycle
+boundaries, and semantic progress in one ordered transcript. Intermediate model
+responses, cancelled tool work, and other low-level execution details remain
+visible through Restate's invocation journal. Compaction preserves failure and
+interruption boundaries while older turns are summarized for model context
+without being removed from the canonical transcript.
 
 ## Why Restate is useful here
 
 Restate provides the application-level guarantees that an agent needs:
 
 - durable conversation state and serialized controller decisions;
-- bounded, sequenced progress state driven by one-way loop reports;
+- one cursor-consumable sequence for messages, lifecycle events, and progress;
 - lazy, chunked transcript storage and asynchronous summary checkpoints;
 - one-way invocation of long-running turns;
 - queued signals for steering and interruption;
@@ -76,7 +78,6 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
-- `packages/libs/example/src/agent-progress.ts` — bounded sequenced progress
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signals
 - `packages/libs/example/src/agent-loop.ts` — agent loop orchestration
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
