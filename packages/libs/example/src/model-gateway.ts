@@ -42,11 +42,6 @@ export const ModelGateway = service({
       });
     },
   },
-  options: {
-    handlers: {
-      complete: {ingressPrivate: true},
-    },
-  },
 });
 
 function agentLimitKey(agentId: string): string {

@@ -298,23 +298,17 @@ export const Agent = object({
     enableLazyState: true,
     handlers: {
       append: {
-        ingressPrivate: true,
         idempotencyRetention: 0,
         journalRetention: 0,
       },
-      requestApproval: {ingressPrivate: true},
-      cancelApproval: {ingressPrivate: true},
-      reportProgress: {ingressPrivate: true},
       approvals: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       history: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       compact: {
         shared: true,
-        ingressPrivate: true,
         idempotencyRetention: 0,
         journalRetention: 0,
       },
       applyCompaction: {
-        ingressPrivate: true,
         idempotencyRetention: 0,
         journalRetention: 0,
       },
