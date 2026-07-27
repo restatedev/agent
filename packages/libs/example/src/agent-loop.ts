@@ -1,9 +1,5 @@
-// The concrete model -> tools -> model policy for one agent turn.
-//
-// Turn owns the interrupt signal and agent-tools owns concrete tool behavior.
-// This module keeps the live orchestration state needed to stop gracefully:
-// model rounds, parallel tool batches, steering, pending tasks, and the model
-// context used for a final interruption response.
+// The concrete model -> tools -> model policy for one agent turn. Turn owns
+// control signals; agent-tools owns concrete tool behavior.
 
 import {CancelledError} from "@restatedev/restate-sdk";
 import {
@@ -53,44 +49,26 @@ type PendingOperation = {
   task: Task<PendingEvent>;
 };
 
-type ModelStep =
-  | {
-      type: "completed";
-      action: ModelResult;
-      steering: SteeringSignal[];
-      nextSteering: Future<SteeringSignal>;
-    }
-  | {type: "interrupted"; reason: string};
-
-type ToolStep =
-  | {
-      type: "completed";
-      outcomes: ToolOutcome[];
-      pending: PendingOperation[];
-      steering: SteeringSignal[];
-      nextSteering: Future<SteeringSignal>;
-    }
-  | {
-      type: "interrupted";
-      reason: string;
-      outcomes: ToolOutcome[];
-      events: PendingEvent[];
-    };
-
-type CancellationStep = {
-  outcomes: ToolOutcome[];
-  pending: PendingOperation[];
-  events: PendingEvent[];
+type CompletedStep<T> = {
+  type: "completed";
+  result: T;
+  steering: SteeringSignal[];
+  nextSteering: Future<SteeringSignal>;
 };
 
+type InterruptedStep = {type: "interrupted"; reason: string};
+
+type ToolStep =
+  | (CompletedStep<ToolOutcome[]> & {pending: PendingOperation[]})
+  | (InterruptedStep & {
+      outcomes: ToolOutcome[];
+      events: PendingEvent[];
+    });
+
 type PendingStep =
-  | {
-      type: "steering";
-      steering: SteeringSignal;
-      nextSteering: Future<SteeringSignal>;
-    }
+  | {type: "steering"; steering: SteeringSignal}
   | {type: "completion"; event: PendingEvent}
-  | {type: "interrupted"; reason: string};
+  | InterruptedStep;
 
 const MAX_ROUNDS = 8;
 const MAX_TOOL_CALLS = 24;
@@ -145,7 +123,7 @@ function* runModelStep(
   messages: ModelMessage[],
   steering: Future<SteeringSignal>,
   interrupt: Future<string>,
-): Operation<ModelStep> {
+): Operation<CompletedStep<ModelResult> | InterruptedStep> {
   const modelTask = spawn(callModel(agentId, messages, agentTools.manifests));
   const buffered: SteeringSignal[] = [];
   let nextSteering = steering;
@@ -165,7 +143,7 @@ function* runModelStep(
     if (selected.tag === "model") {
       return {
         type: "completed",
-        action: yield* selected.future,
+        result: yield* selected.future,
         steering: buffered,
         nextSteering,
       };
@@ -235,7 +213,7 @@ function* runToolStep(
     const outcomes = yield* selected.future;
     return {
       type: "completed",
-      outcomes,
+      result: outcomes,
       pending: outcomes.flatMap((outcome): PendingOperation[] =>
         outcome.status === "pending"
           ? [
@@ -252,112 +230,123 @@ function* runToolStep(
   }
 }
 
-// The loop owns the live task registry, so pending-task coordination belongs
-// together here even though each task's concrete behavior lives in agent-tools.
-const pendingOperations = {
-  // Resolve declarative cancellation requests after preserving the model's
-  // complete tool-call/result protocol. A completion that wins the race is
-  // reported as completed rather than being rewritten as cancelled.
-  *applyCancellations(
-    outcomes: ToolOutcome[],
-    pending: PendingOperation[],
-  ): Operation<CancellationStep> {
-    const resolved: ToolOutcome[] = [];
-    const events: PendingEvent[] = [];
-    let remaining = pending;
+// Pending tools outlive the model round that started them. Keep their live
+// tasks in one turn-local registry instead of passing an array around the loop.
+function createPendingOperations() {
+  const active = new Map<string, PendingOperation>();
 
-    for (const outcome of outcomes) {
-      if (outcome.status !== "cancel_requested") {
-        resolved.push(outcome);
-        continue;
+  return {
+    get size(): number {
+      return active.size;
+    },
+
+    describe(): string {
+      return [...active.values()].map(({call}) => call.toolName).join(", ");
+    },
+
+    add(operations: PendingOperation[]): void {
+      for (const operation of operations) {
+        active.set(operation.call.toolCallId, operation);
       }
+    },
 
-      const operation = remaining.find(
-        ({call}) => call.toolCallId === outcome.operationId,
-      );
-      if (!operation) {
+    // A completion that wins the cancellation race remains completed.
+    *applyCancellations(
+      outcomes: ToolOutcome[],
+    ): Operation<{outcomes: ToolOutcome[]; events: PendingEvent[]}> {
+      const resolved: ToolOutcome[] = [];
+      const events: PendingEvent[] = [];
+
+      for (const outcome of outcomes) {
+        if (outcome.status !== "cancel_requested") {
+          resolved.push(outcome);
+          continue;
+        }
+
+        const operation = active.get(outcome.operationId);
+        if (!operation) {
+          resolved.push({
+            call: outcome.call,
+            status: "failed",
+            error: `no pending operation found for ${outcome.operationId}`,
+          });
+          continue;
+        }
+
+        operation.task.interrupt(new InterruptedError(outcome.reason));
+        const [settled] = yield* allSettled([operation.task]);
+        active.delete(operation.call.toolCallId);
+
+        if (settled.status === "fulfilled") {
+          events.push(settled.value);
+          resolved.push({
+            call: outcome.call,
+            status: "failed",
+            error: `${outcome.operationId} completed before it could be cancelled`,
+          });
+          continue;
+        }
+
+        events.push({
+          call: operation.call,
+          outcome: {status: "cancelled", reason: outcome.reason},
+        });
         resolved.push({
           call: outcome.call,
-          status: "failed",
-          error: `no pending operation found for ${outcome.operationId}`,
+          status: "succeeded",
+          result: `Cancelled pending ${operation.call.toolName} operation ${outcome.operationId}`,
         });
-        continue;
       }
 
-      operation.task.interrupt(new InterruptedError(outcome.reason));
-      const [settled] = yield* allSettled([operation.task]);
-      remaining = remaining.filter(
-        ({call}) => call.toolCallId !== operation.call.toolCallId,
-      );
+      return {outcomes: resolved, events};
+    },
 
-      if (settled.status === "fulfilled") {
-        events.push(settled.value);
-        resolved.push({
-          call: outcome.call,
-          status: "failed",
-          error: `${outcome.operationId} completed before it could be cancelled`,
-        });
-        continue;
+    *next(
+      steering: Future<SteeringSignal>,
+      interrupt: Future<string>,
+    ): Operation<PendingStep> {
+      const selected = yield* select({
+        interrupt,
+        steering,
+        completion: race([...active.values()].map(({task}) => task)),
+      });
+      if (selected.tag === "interrupt") {
+        return {type: "interrupted", reason: yield* selected.future};
       }
+      if (selected.tag === "steering") {
+        return {
+          type: "steering",
+          steering: yield* selected.future,
+        };
+      }
+      const event = yield* selected.future;
+      active.delete(event.call.toolCallId);
+      return {type: "completion", event};
+    },
 
-      events.push({
-        call: operation.call,
-        outcome: {status: "cancelled", reason: outcome.reason},
-      });
-      resolved.push({
-        call: outcome.call,
-        status: "succeeded",
-        result: `Cancelled pending ${operation.call.toolName} operation ${outcome.operationId}`,
-      });
-    }
-
-    return {outcomes: resolved, pending: remaining, events};
-  },
-
-  *next(
-    pending: PendingOperation[],
-    steering: Future<SteeringSignal>,
-    interrupt: Future<string>,
-  ): Operation<PendingStep> {
-    const selected = yield* select({
-      interrupt,
-      steering,
-      completion: race(pending.map(({task}) => task)),
-    });
-    if (selected.tag === "interrupt") {
-      return {type: "interrupted", reason: yield* selected.future};
-    }
-    if (selected.tag === "steering") {
-      return {
-        type: "steering",
-        steering: yield* selected.future,
-        nextSteering: signal<SteeringSignal>(TURN_SIGNALS.steering),
-      };
-    }
-    return {type: "completion", event: yield* selected.future};
-  },
-
-  *stop(
-    pending: PendingOperation[],
-    reason: unknown,
-  ): Operation<PendingEvent[]> {
-    for (const operation of pending) {
-      operation.task.interrupt(reason);
-    }
-    const settled = yield* allSettled(pending.map(({task}) => task));
-    return settled.map((result, index) =>
-      result.status === "fulfilled"
-        ? result.value
-        : {
-            call: pending[index].call,
-            outcome: {
-              status: "cancelled",
-              reason: errorMessage(reason),
+    *stop(reason: unknown): Operation<PendingEvent[]> {
+      const stopped = [...active.values()];
+      active.clear();
+      for (const operation of stopped) {
+        operation.task.interrupt(reason);
+      }
+      const settled = yield* allSettled(stopped.map(({task}) => task));
+      return settled.map((result, index) =>
+        result.status === "fulfilled"
+          ? result.value
+          : {
+              call: stopped[index].call,
+              outcome: {
+                status: "cancelled",
+                reason: errorMessage(reason),
+              },
             },
-          },
-    );
-  },
-};
+      );
+    },
+  };
+}
+
+type PendingOperations = ReturnType<typeof createPendingOperations>;
 
 function interruptionInstruction(reason: string): ModelMessage {
   return {
@@ -375,7 +364,7 @@ function interruptionInstruction(reason: string): ModelMessage {
 function* finalizeInterruption(
   context: AgentToolContext,
   messages: ModelMessage[],
-  pending: PendingOperation[],
+  pending: PendingOperations,
   reason: string,
   consumedSteering: number,
 ): Operation<AgentLoopResult> {
@@ -384,10 +373,7 @@ function* finalizeInterruption(
     "finalizing",
     "Stopping unfinished work for graceful interruption",
   );
-  const stopped = yield* pendingOperations.stop(
-    pending,
-    new InterruptedError(reason),
-  );
+  const stopped = yield* pending.stop(new InterruptedError(reason));
   messages.push(...stopped.map(agentTools.toRuntimeMessage));
   messages.push(interruptionInstruction(reason));
   yield* reportProgress(
@@ -396,37 +382,30 @@ function* finalizeInterruption(
     "Preparing a final response from completed results",
   );
 
+  let text: string;
   try {
     const final = yield* callModel(context.agentId, messages, []);
     if (final.type === "text" && final.content.trim()) {
-      return {
-        status: "interrupted",
-        reason,
-        text: final.content,
-        consumedSteering,
-      };
+      text = final.content;
+    } else {
+      const detail =
+        final.type === "error"
+          ? final.message
+          : "the finalizer unexpectedly requested a tool";
+      text = `The turn was interrupted (${reason}), but its final response could not be generated: ${detail}.`;
     }
-    const detail =
-      final.type === "error"
-        ? final.message
-        : "the finalizer unexpectedly requested a tool";
-    return {
-      status: "interrupted",
-      reason,
-      text: `The turn was interrupted (${reason}), but its final response could not be generated: ${detail}.`,
-      consumedSteering,
-    };
   } catch (error) {
     if (error instanceof InterruptedError || error instanceof CancelledError) {
       throw error;
     }
-    return {
-      status: "interrupted",
-      reason,
-      text: `The turn was interrupted (${reason}), but its final response could not be generated: ${errorMessage(error)}.`,
-      consumedSteering,
-    };
+    text = `The turn was interrupted (${reason}), but its final response could not be generated: ${errorMessage(error)}.`;
   }
+  return {
+    status: "interrupted",
+    reason,
+    text,
+    consumedSteering,
+  };
 }
 
 // Run model -> tools -> model until there is a final answer or a graceful
@@ -443,7 +422,23 @@ export function* agentLoop({
   let consumedSteering = 0;
   let toolCallCount = 0;
   let modelRounds = 0;
-  let pending: PendingOperation[] = [];
+  const pending = createPendingOperations();
+  const finalize = (reason: string) =>
+    finalizeInterruption(
+      toolContext,
+      messages,
+      pending,
+      reason,
+      consumedSteering,
+    );
+  const fail = function* (error: unknown): Operation<AgentLoopResult> {
+    yield* pending.stop(error);
+    return {
+      status: "failed",
+      error: errorMessage(error),
+      consumedSteering,
+    };
+  };
 
   try {
     while (modelRounds < MAX_ROUNDS) {
@@ -456,17 +451,11 @@ export function* agentLoop({
       );
       const step = yield* runModelStep(agentId, messages, steering, interrupt);
       if (step.type === "interrupted") {
-        return yield* finalizeInterruption(
-          toolContext,
-          messages,
-          pending,
-          step.reason,
-          consumedSteering,
-        );
+        return yield* finalize(step.reason);
       }
       steering = step.nextSteering;
       consumedSteering += step.steering.length;
-      const {action} = step;
+      const action = step.result;
       modelRounds += 1;
 
       // A text/error response was produced before these instructions arrived.
@@ -494,37 +483,22 @@ export function* agentLoop({
           });
           continue;
         }
-        if (pending.length > 0) {
+        if (pending.size > 0) {
           yield* reportProgress(
             toolContext,
             "waiting",
-            `Waiting for ${pending.length} pending operation(s): ${pending
-              .map(({call}) => call.toolName)
-              .join(", ")}`,
+            `Waiting for ${pending.size} pending operation(s): ${pending.describe()}`,
           );
-          const next = yield* pendingOperations.next(
-            pending,
-            steering,
-            interrupt,
-          );
+          const next = yield* pending.next(steering, interrupt);
           if (next.type === "steering") {
             consumedSteering += 1;
-            steering = next.nextSteering;
+            steering = signal<SteeringSignal>(TURN_SIGNALS.steering);
             messages.push(toSteeringMessage(next.steering));
           } else if (next.type === "completion") {
-            pending = pending.filter(
-              ({call}) => call.toolCallId !== next.event.call.toolCallId,
-            );
             messages.push(agentTools.toRuntimeMessage(next.event));
           } else {
             messages.push({role: "assistant", content: action.content});
-            return yield* finalizeInterruption(
-              toolContext,
-              messages,
-              pending,
-              next.reason,
-              consumedSteering,
-            );
+            return yield* finalize(next.reason);
           }
           continue;
         }
@@ -537,15 +511,11 @@ export function* agentLoop({
 
       toolCallCount += action.calls.length;
       if (toolCallCount > MAX_TOOL_CALLS) {
-        yield* pendingOperations.stop(
-          pending,
-          new InterruptedError("agent exceeded its tool-call budget"),
+        return yield* fail(
+          new InterruptedError(
+            `agent exceeded its ${MAX_TOOL_CALLS}-tool-call budget`,
+          ),
         );
-        return {
-          status: "failed",
-          error: `agent exceeded its ${MAX_TOOL_CALLS}-tool-call budget`,
-          consumedSteering,
-        };
       }
 
       messages.push(action.message);
@@ -565,23 +535,14 @@ export function* agentLoop({
       if (toolStep.type === "interrupted") {
         messages.push(agentTools.toModelMessage(toolStep.outcomes));
         messages.push(...toolStep.events.map(agentTools.toRuntimeMessage));
-        return yield* finalizeInterruption(
-          toolContext,
-          messages,
-          pending,
-          toolStep.reason,
-          consumedSteering,
-        );
+        return yield* finalize(toolStep.reason);
       }
       steering = toolStep.nextSteering;
       consumedSteering += toolStep.steering.length;
 
-      const cancellation = yield* pendingOperations.applyCancellations(
-        toolStep.outcomes,
-        pending,
-      );
+      const cancellation = yield* pending.applyCancellations(toolStep.result);
       messages.push(agentTools.toModelMessage(cancellation.outcomes));
-      pending = [...cancellation.pending, ...toolStep.pending];
+      pending.add(toolStep.pending);
       messages.push(...cancellation.events.map(agentTools.toRuntimeMessage));
       messages.push(
         ...[...step.steering, ...toolStep.steering].map(toSteeringMessage),
@@ -593,24 +554,14 @@ export function* agentLoop({
       );
     }
 
-    yield* pendingOperations.stop(
-      pending,
-      new InterruptedError("agent exceeded its model-round budget"),
+    return yield* fail(
+      new InterruptedError(`agent did not finish within ${MAX_ROUNDS} rounds`),
     );
-    return {
-      status: "failed",
-      error: `agent did not finish within ${MAX_ROUNDS} rounds`,
-      consumedSteering,
-    };
   } catch (error) {
-    yield* pendingOperations.stop(pending, error);
     if (error instanceof InterruptedError || error instanceof CancelledError) {
+      yield* pending.stop(error);
       throw error;
     }
-    return {
-      status: "failed",
-      error: errorMessage(error),
-      consumedSteering,
-    };
+    return yield* fail(error);
   }
 }
