@@ -30,17 +30,20 @@ type FinishedTurn = {
   pending: string[];
 };
 
+function* readActiveTurn(): Operation<ActiveTurnState | undefined> {
+  return (yield* sharedState().get<ActiveTurnState>("turn")) ?? undefined;
+}
+
 /**
- * Owns active-turn and pending-message state for the current Agent object.
+ * Handler-scoped access to active-turn state for the current Agent object.
  *
- * Methods must run inside an Agent handler. Mutating methods rely on exclusive
- * handler serialization; this component deliberately does not access history.
+ * These operations must run inside an Agent handler. The object is a namespace
+ * over Restate's current context and holds no process-local state. Mutations
+ * rely on exclusive handler serialization; history remains a separate concern.
  */
 export const activeTurn = {
   /** Returns the current turn. */
-  *current(): Operation<ActiveTurnState | undefined> {
-    return (yield* sharedState().get<ActiveTurnState>("turn")) ?? undefined;
-  },
+  current: readActiveTurn,
 
   /**
    * Starts a Turn invocation and records it as active.
@@ -83,7 +86,7 @@ export const activeTurn = {
    * active or an interrupt is already in progress.
    */
   *interrupt(reason: string): Operation<string | undefined> {
-    const current = yield* this.current();
+    const current = yield* readActiveTurn();
     if (!current || current.interrupting) {
       return undefined;
     }
@@ -98,7 +101,7 @@ export const activeTurn = {
    * @returns Whether the steering signal was accepted.
    */
   *steer(message: string): Operation<boolean> {
-    const current = yield* this.current();
+    const current = yield* readActiveTurn();
     if (!current || current.interrupting) {
       return false;
     }
@@ -120,7 +123,7 @@ export const activeTurn = {
    * does not belong to the active turn.
    */
   *finish(outcome: TurnOutcome): Operation<FinishedTurn | undefined> {
-    const current = yield* this.current();
+    const current = yield* readActiveTurn();
     if (current?.id !== outcome.turnId) {
       return undefined;
     }

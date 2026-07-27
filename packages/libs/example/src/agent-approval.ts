@@ -7,30 +7,33 @@ import {
   sharedState,
   state,
 } from "@restatedev/restate-sdk-gen";
-import type {
-  ApprovalCancellation,
-  ApprovalDecision,
-  ApprovalRequest,
-  ApprovalResolution,
+import {
+  type ApprovalCancellation,
+  type ApprovalDecision,
+  type ApprovalRequest,
+  type ApprovalResolution,
+  approvalSignalName,
 } from "./types.js";
 
 const APPROVALS = "approvals";
 
-/** Signal name for one tool call waiting inside a Turn invocation. */
-export function approvalSignalName(approvalId: string): string {
-  return `approval-${approvalId}`;
+function* listApprovals(): Operation<ApprovalRequest[]> {
+  return (yield* sharedState().get<ApprovalRequest[]>(APPROVALS)) ?? [];
 }
 
-/** Owns pending human-approval state for the current Agent object. */
+/**
+ * Handler-scoped access to human approvals for the current Agent object.
+ *
+ * These operations must run inside an Agent handler. The object is a namespace
+ * over Restate's current context and holds no process-local state.
+ */
 export const approvals = {
   /** Returns every approval currently waiting for a human decision. */
-  *list(): Operation<ApprovalRequest[]> {
-    return (yield* sharedState().get<ApprovalRequest[]>(APPROVALS)) ?? [];
-  },
+  list: listApprovals,
 
   /** Registers a request idempotently. */
   *register(request: ApprovalRequest): Operation<boolean> {
-    const pending = yield* this.list();
+    const pending = yield* listApprovals();
     const existing = pending.find(
       (candidate) => candidate.approvalId === request.approvalId,
     );
@@ -47,7 +50,7 @@ export const approvals = {
 
   /** Removes one matching request. Safe to repeat during cleanup. */
   *cancel({approvalId, turnId}: ApprovalCancellation): Operation<void> {
-    const pending = yield* this.list();
+    const pending = yield* listApprovals();
     const remaining = pending.filter(
       (request) =>
         request.approvalId !== approvalId || request.turnId !== turnId,
@@ -64,7 +67,7 @@ export const approvals = {
 
   /** Removes every approval belonging to a completed Turn invocation. */
   *clearTurn(turnId: string): Operation<void> {
-    const pending = yield* this.list();
+    const pending = yield* listApprovals();
     const remaining = pending.filter((request) => request.turnId !== turnId);
     if (remaining.length === pending.length) {
       return;
@@ -78,7 +81,7 @@ export const approvals = {
 
   /** Removes a pending request and resolves its Turn-scoped signal. */
   *resolve(resolution: ApprovalResolution): Operation<boolean> {
-    const pending = yield* this.list();
+    const pending = yield* listApprovals();
     const request = pending.find(
       (candidate) => candidate.approvalId === resolution.approvalId,
     );

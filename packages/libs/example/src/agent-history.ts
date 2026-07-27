@@ -137,6 +137,12 @@ function isModelVisible(entry: ConversationEntry): boolean {
   );
 }
 
+/**
+ * Handler-scoped access to conversation history for the current Agent object.
+ *
+ * These operations must run inside an Agent handler. The object is a namespace
+ * over Restate's current context and holds no process-local state.
+ */
 export const history = {
   *read(): Operation<ConversationEntry[]> {
     const meta = yield* readMeta();

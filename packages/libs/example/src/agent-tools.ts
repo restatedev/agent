@@ -17,9 +17,8 @@ import {
 import type {ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
-import {approvalSignalName} from "./agent-approval.js";
 import type {ToolCall, ToolManifest} from "./model.js";
-import type {ApprovalDecision} from "./types.js";
+import {type ApprovalDecision, approvalSignalName} from "./types.js";
 
 type ToolExecution =
   | {status: "succeeded"; result: string}

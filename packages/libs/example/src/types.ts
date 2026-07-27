@@ -71,6 +71,12 @@ const ApprovalDecisionSchema = z.object({
 });
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
+// Approval tools and the Agent controller use this name as their shared
+// Turn-scoped signal contract.
+export function approvalSignalName(approvalId: string): string {
+  return `approval-${approvalId}`;
+}
+
 // Public input used to resolve one pending approval on the Agent object.
 export const ApprovalResolutionSchema = ApprovalDecisionSchema.extend({
   approvalId: z.string().min(1),

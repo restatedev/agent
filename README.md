@@ -27,6 +27,8 @@ flowchart LR
   `agentId`. It coordinates three independent components: `agent-turn.ts` owns
   turn state and signal lifecycle, `agent-history.ts` owns the durable
   transcript, and `agent-approval.ts` owns pending human approvals.
+  Each component exports a handler-scoped capability namespace: its operations
+  use Restate's current handler context and hold no process-local state.
 - `Turn` is stateless. One invocation supervises one agent turn and races the
   agent loop against hard interruption. The loop consumes steering itself at
   model/tool boundaries so it can retain its working context without

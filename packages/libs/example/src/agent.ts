@@ -15,7 +15,7 @@ import {
   sendClient,
 } from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
-import {approvals as approvalState} from "./agent-approval.js";
+import {approvals} from "./agent-approval.js";
 import {
   type ConversationCompactionPlan,
   type ConversationCompactionResult,
@@ -215,7 +215,7 @@ export const Agent = object({
         if (current?.id !== request.turnId || current.interrupting) {
           return false;
         }
-        return yield* approvalState.register(request);
+        return yield* approvals.register(request);
       },
     ),
 
@@ -224,7 +224,7 @@ export const Agent = object({
     cancelApproval: schemas(
       {input: ApprovalCancellationSchema, output: z.void()},
       function* (request): Operation<void> {
-        yield* approvalState.cancel(request);
+        yield* approvals.cancel(request);
       },
     ),
 
@@ -232,7 +232,7 @@ export const Agent = object({
     approvals: schemas(
       {input: z.void(), output: z.array(ApprovalRequestSchema)},
       function* (): Operation<ApprovalRequest[]> {
-        return yield* approvalState.list();
+        return yield* approvals.list();
       },
     ),
 
@@ -241,7 +241,7 @@ export const Agent = object({
     resolveApproval: schemas(
       {input: ApprovalResolutionSchema, output: z.boolean()},
       function* (resolution): Operation<boolean> {
-        const request = (yield* approvalState.list()).find(
+        const request = (yield* approvals.list()).find(
           (candidate) => candidate.approvalId === resolution.approvalId,
         );
         if (!request) {
@@ -249,10 +249,10 @@ export const Agent = object({
         }
         const current = yield* activeTurn.current();
         if (current?.id !== request.turnId || current.interrupting) {
-          yield* approvalState.cancel(request);
+          yield* approvals.cancel(request);
           return false;
         }
-        return yield* approvalState.resolve(resolution);
+        return yield* approvals.resolve(resolution);
       },
     ),
 
@@ -268,7 +268,7 @@ export const Agent = object({
         if (!finished) {
           return;
         }
-        yield* approvalState.clearTurn(outcome.turnId);
+        yield* approvals.clearTurn(outcome.turnId);
 
         const unconsumedSteering = yield* history.takeLatestSteering(
           finished.missedSteering,
