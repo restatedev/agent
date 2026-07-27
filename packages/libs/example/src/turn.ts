@@ -41,19 +41,66 @@ import {
   TurnRequestSchema,
 } from "./types.js";
 
-// Build summary + uncompacted model-visible history. Failed and interrupted
-// outcomes are operational events, not assistant answers.
+function interruptionBoundary(
+  entry: Extract<ConversationEntry, {role: "event"}>,
+): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Turn interruption boundary]",
+      `Turn: ${entry.turnId}`,
+      `Reason: ${JSON.stringify(entry.reason)}`,
+      "The prior turn was asked to stop or was externally cancelled.",
+      "Treat requests before this boundary as conversation context, not unfinished work to resume automatically.",
+      "Do not assume tools from that turn completed. Act on earlier requests only when the new turn messages explicitly refer to them.",
+    ].join("\n"),
+  };
+}
+
+function failureBoundary(
+  entry: Extract<ConversationEntry, {role: "assistant"}>,
+): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Previous turn failed]",
+      `Turn: ${entry.turnId}`,
+      `Failure: ${JSON.stringify(entry.text)}`,
+      "Treat requests before this boundary as conversation context, not unfinished work to resume automatically.",
+    ].join("\n"),
+  };
+}
+
+function userMessage(
+  entry: Extract<ConversationEntry, {role: "user"}>,
+): string {
+  if (entry.delivery !== "steer") {
+    return entry.text;
+  }
+  // A later Turn should retain the fact that this instruction redirected an
+  // earlier active Turn, just as that Turn saw it through its steering signal.
+  return [
+    "[Steering message delivered during the previous turn]",
+    entry.text,
+  ].join("\n");
+}
+
+// Project one canonical transcript into model messages. Delivery metadata and
+// lifecycle events remain visible without inventing a second message stream.
 function buildModelContext(
   history: ConversationEntry[],
   summary?: string,
 ): ModelMessage[] {
   const uncompacted = history.flatMap((entry): ModelMessage[] => {
     if (entry.role === "user") {
-      return [{role: "user", content: entry.text}];
+      return [{role: "user", content: userMessage(entry)}];
     }
-    return entry.role === "assistant" && entry.status === "completed"
+    if (entry.role === "event") {
+      return [interruptionBoundary(entry)];
+    }
+    return entry.status === "completed"
       ? [{role: "assistant", content: entry.text}]
-      : [];
+      : [failureBoundary(entry)];
   });
   return summary
     ? [

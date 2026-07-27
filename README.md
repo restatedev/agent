@@ -65,18 +65,21 @@ stable internal sequence numbers. Lazy state lets normal handlers load only
 the metadata and recent chunks they need; the public `history` handler still
 assembles the complete transcript.
 
-After a turn finishes, the Agent counts model-visible messages since the last
+After a turn finishes, the Agent counts conversation messages since the last
 checkpoint. At 32 messages it reserves that entire finished prefix and
 self-sends its cursor range to the shared `compact` handler. That handler reads
-the relevant summary and history chunks directly from Agent state, merges them
-with a cheap model, and one-way self-sends the derived checkpoint to the
-exclusive `applyCompaction` handler. Newer appended entries do not invalidate
-the checkpoint, and a failed compaction leaves the prior summary untouched.
+the relevant summary and history chunks directly from Agent state, including
+interruption and failure boundaries, merges them with a cheap model, and
+one-way self-sends the derived checkpoint to the exclusive `applyCompaction`
+handler. Newer appended entries do not invalidate the checkpoint, and a failed
+compaction leaves the prior summary untouched.
 
-Each turn receives the rolling summary followed by every exact model-visible
-entry since that checkpoint. Compaction happens only between turns: live model
-messages, tool calls, tool results, pending operations, and steering inside
-`agentLoop` are never summarized mid-turn.
+Each `TurnRequest` carries the rolling summary and exact uncompacted transcript
+after the new messages have been appended. The Turn projects steering metadata
+and interruption or failure entries as explicit model-visible boundaries.
+Compaction happens only between turns: live model messages, tool calls, tool
+results, pending operations, and steering inside `agentLoop` are never
+summarized mid-turn.
 
 ## Controller handlers
 
@@ -93,12 +96,26 @@ messages, tool calls, tool results, pending operations, and steering inside
 A successful interruption is visible immediately as
 `{ role: "event", type: "interrupt", turnId, reason }`. Its eventual
 interrupted outcome retires the active turn but is not appended as an assistant
-message. Pending tool cancellation remains in Restate observability.
+message. A later turn receives the event and reason as a boundary instructing
+the model not to resume unfinished work automatically. External cancellation
+creates the same kind of boundary; pending tool cancellation remains in
+Restate observability.
 
 `ask` deliberately makes no model decision: it starts work when idle and
 queues when busy. Clients choose `steer` or `interrupt` explicitly when a
 message should affect the active turn. The `interrupt` handler is control-only:
 it stops the active turn without creating another user request.
+
+The controller flow is therefore:
+
+- An idle `ask` records its message and starts a Turn with the resulting
+  transcript.
+- An `ask` received while a Turn is active remains in the pending FIFO queue
+  and is immediately visible through `history`.
+- `steer` promotes that queue into one structured steering signal.
+- `interrupt` leaves the queue intact. After the old Turn retires, the Agent
+  appends the queued messages after the interruption boundary and starts one
+  new Turn with the resulting transcript.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 `steer` call resolves one structured `{ queued, message }` signal: messages
@@ -145,9 +162,8 @@ cancellation is recovered into the next turn.
 - Invocation cancellation aborts model I/O, joins the spawned loop, retires the
   controller's active turn, and is rethrown so Restate records cancellation.
 - The complete transcript remains durable. The model sees the rolling summary
-  plus every exact usable message since its checkpoint. Interrupted outcomes
-  remain control events, while failed assistant entries are excluded from
-  future model context.
+  plus each exact entry since its checkpoint, with steering metadata and
+  interruption/failure boundaries preserved.
 - The loop stops after eight model rounds instead of running indefinitely.
 
 ## Model flow control

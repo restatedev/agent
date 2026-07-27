@@ -130,11 +130,8 @@ function* readLocated(
   );
 }
 
-function isModelVisible(entry: ConversationEntry): boolean {
-  return (
-    entry.role === "user" ||
-    (entry.role === "assistant" && entry.status === "completed")
-  );
+function isConversationMessage(entry: ConversationEntry): boolean {
+  return entry.role !== "event";
 }
 
 /**
@@ -229,8 +226,8 @@ export const history = {
     return messages.reverse();
   },
 
-  // Called after a turn outcome is appended. Once enough model-visible
-  // messages have accumulated, reserve the entire finished prefix.
+  // Called after a turn outcome is appended. Once enough conversation messages
+  // have accumulated, reserve the entire finished prefix.
   *beginCompaction(): Operation<ConversationCompactionPlan | undefined> {
     const meta = yield* ensureMeta();
     if (meta.compaction) {
@@ -245,7 +242,7 @@ export const history = {
       ({sequence}) => sequence > baseThrough.sequence,
     );
     const messageCount = uncompacted.filter(({entry}) =>
-      isModelVisible(entry),
+      isConversationMessage(entry),
     ).length;
     if (messageCount < COMPACT_AFTER_MESSAGES) {
       return undefined;
@@ -281,10 +278,9 @@ export const history = {
       plan.through.chunk,
     ))
       .filter(
-        ({sequence, entry}) =>
+        ({sequence}) =>
           sequence > plan.baseThrough.sequence &&
-          sequence <= plan.through.sequence &&
-          isModelVisible(entry),
+          sequence <= plan.through.sequence,
       )
       .map(({entry}) => entry);
     return {

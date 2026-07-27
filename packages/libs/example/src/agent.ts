@@ -207,8 +207,9 @@ export const Agent = object({
     // The active Turn sends exactly one structured outcome here. Verify it
     // belongs to the active turn, append a completed or failed assistant
     // result, retire the turn, and start one batch for anything still queued.
-    // Interrupted outcomes are lifecycle control, not assistant messages; an
-    // explicit interruption is already represented by its history event.
+    // Interrupted outcomes are lifecycle control, not assistant messages.
+    // Explicit interruption already has an event; external cancellation gets
+    // one here so a later turn still sees the conversation boundary.
     // This is intentionally high-level: detailed tool/model activity belongs
     // in Restate's invocation logs and observability, not conversation state.
     append: schemas(
@@ -223,7 +224,17 @@ export const Agent = object({
         const unconsumedSteering = yield* history.takeLatestSteering(
           finished.missedSteeringMessages,
         );
-        if (outcome.status !== "interrupted") {
+        if (
+          outcome.status === "interrupted" &&
+          !finished.interruptionRequested
+        ) {
+          yield* history.append({
+            role: "event",
+            type: "interrupt",
+            turnId: outcome.turnId,
+            reason: outcome.text,
+          });
+        } else if (outcome.status !== "interrupted") {
           yield* history.append({
             role: "assistant",
             text: outcome.text,

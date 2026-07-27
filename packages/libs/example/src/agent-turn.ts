@@ -33,6 +33,8 @@ type FinishedTurn = {
   missedSteeringMessages: number;
   /** Messages accepted for the next turn while this one was active. */
   pending: string[];
+  /** Whether the Agent explicitly requested this turn's interruption. */
+  interruptionRequested: boolean;
 };
 
 function* readActiveTurn(): Operation<ActiveTurnState | undefined> {
@@ -157,6 +159,10 @@ export const activeTurn = {
       : current.steeringBatches
           .slice(outcome.consumedSteering)
           .reduce((total, size) => total + size, 0);
-    return {missedSteeringMessages, pending};
+    return {
+      missedSteeringMessages,
+      pending,
+      interruptionRequested: current.interrupting,
+    };
   },
 };

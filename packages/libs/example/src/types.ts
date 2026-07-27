@@ -24,8 +24,8 @@ const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
 const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 
 // An entry in the general conversation. Messages record how they entered the
-// execution, interrupt requests are explicit events, and assistant entries are
-// terminal turn summaries that can be correlated with Restate observability.
+// execution, interruption boundaries are explicit events, and assistant
+// entries are terminal turn summaries correlated with Restate observability.
 export const ConversationEntrySchema = z.discriminatedUnion("role", [
   z.object({
     role: z.literal("user"),
@@ -48,7 +48,8 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
 // Input to a turn: which Agent object it belongs to, an optional checkpoint
-// over older turns, and the exact uncompacted history the model should see.
+// over older entries, and the exact uncompacted transcript the model should
+// see. New messages are already appended to this transcript before dispatch.
 export const TurnRequestSchema = z.object({
   agentId: z.string(),
   summary: z.string().min(1).optional(),
