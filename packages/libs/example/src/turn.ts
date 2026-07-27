@@ -44,7 +44,7 @@ type TurnState = {
   context: AgentToolContext;
   messages: ModelMessage[];
   interrupt: Future<string>;
-  steering: ReturnType<typeof createSteeringInbox>;
+  steeringInbox: ReturnType<typeof createSteeringInbox>;
   consumedSteering: number;
   steps: number;
   toolCalls: number;
@@ -134,6 +134,12 @@ function* failTurn(state: TurnState, error: unknown): Operation<TurnOutcome> {
   };
 }
 
+function drainSteering(state: TurnState): SteeringSignal[] {
+  const steering = state.steeringInbox.drain();
+  state.consumedSteering += steering.length;
+  return steering;
+}
+
 // Text is a candidate final answer. Pending work keeps the state machine alive
 // until a completion, steering update, or interruption chooses the next move.
 function* applyText(
@@ -162,11 +168,12 @@ function* applyText(
     "waiting",
     `Waiting for ${state.pending.size} pending operation(s): ${state.pending.describe()}`,
   );
-  const next = yield* state.pending.next(state.steering.ready, state.interrupt);
+  const next = yield* state.pending.next(
+    state.steeringInbox.ready,
+    state.interrupt,
+  );
   if (next.type === "steering") {
-    const steering = state.steering.drain();
-    state.consumedSteering += steering.length;
-    state.messages.push(...steering.map(steeringMessage));
+    state.messages.push(...drainSteering(state).map(steeringMessage));
     return undefined;
   }
   if (next.type === "completion") {
@@ -231,7 +238,7 @@ export const Turn = service({
           context: {agentId: req.agentId, turnId},
           messages: buildModelContext(req.history, req.summary),
           interrupt: signal<string>(TURN_SIGNALS.interrupt),
-          steering: createSteeringInbox(),
+          steeringInbox: createSteeringInbox(),
           consumedSteering: 0,
           steps: 0,
           toolCalls: 0,
@@ -266,8 +273,7 @@ export const Turn = service({
               break;
             }
 
-            const steering = state.steering.drain();
-            state.consumedSteering += steering.length;
+            const steering = drainSteering(state);
             state.steps += 1;
 
             // A text/error response produced before buffered steering arrived
@@ -321,10 +327,8 @@ export const Turn = service({
                 `agent did not finish within ${MAX_STEPS} steps`,
               ),
             ));
-          yield* state.steering.stop(new InterruptedError("Turn settled"));
           yield* sendClient(Agent, req.agentId).append(outcome);
         } catch (error) {
-          yield* state.steering.stop(error);
           yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
             yield* sendClient(Agent, req.agentId).append({

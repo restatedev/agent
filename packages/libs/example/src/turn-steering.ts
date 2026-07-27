@@ -3,11 +3,9 @@
 // changes from empty to non-empty.
 
 import {
-  allSettled,
   channel,
   type Future,
   gen,
-  type Operation,
   signal,
   spawn,
 } from "@restatedev/restate-sdk-gen";
@@ -15,39 +13,22 @@ import {type SteeringSignal, TURN_SIGNALS} from "./types.js";
 
 export function createSteeringInbox() {
   const queue: SteeringSignal[] = [];
-  let available = channel<void>();
-  let stopped = false;
+  let notification = channel<void>();
 
-  const receiver = spawn(
-    gen(function* () {
+  spawn(
+    gen(function* receiveSteering() {
       while (true) {
-        queue.push(yield* signal<SteeringSignal>(TURN_SIGNALS.steering));
-        yield* available.send();
+        const steering = yield* signal<SteeringSignal>(TURN_SIGNALS.steering);
+        if (queue.push(steering) === 1) {
+          yield* notification.send();
+        }
       }
     }),
   );
 
-  function resetWhenEmpty(): void {
-    if (queue.length === 0) {
-      available = channel<void>();
-    }
-  }
-
   return {
-    get empty(): boolean {
-      return queue.length === 0;
-    },
-
     get ready(): Future<void> {
-      return available.receive;
-    },
-
-    pop(): SteeringSignal | undefined {
-      const steering = queue.shift();
-      if (steering) {
-        resetWhenEmpty();
-      }
-      return steering;
+      return notification.receive;
     },
 
     drain(): SteeringSignal[] {
@@ -55,17 +36,8 @@ export function createSteeringInbox() {
         return [];
       }
       const steering = queue.splice(0);
-      resetWhenEmpty();
+      notification = channel<void>();
       return steering;
-    },
-
-    *stop(reason: unknown): Operation<void> {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
-      receiver.interrupt(reason);
-      yield* allSettled([receiver]);
     },
   };
 }

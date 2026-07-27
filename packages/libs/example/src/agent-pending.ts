@@ -117,12 +117,12 @@ export function createPendingOperations() {
     },
 
     *next(
-      steering: Future<void>,
+      steeringReady: Future<void>,
       interrupt: Future<string>,
     ): Operation<PendingStep> {
       const selected = yield* select({
         interrupt,
-        steering,
+        steering: steeringReady,
         completion: race([...active.values()].map(({task}) => task)),
       });
       if (selected.tag === "interrupt") {
