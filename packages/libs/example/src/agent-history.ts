@@ -152,31 +152,6 @@ export const history = {
     return (yield* readLocated(meta)).map(({entry}) => entry);
   },
 
-  *recent(limit: number): Operation<ConversationEntry[]> {
-    if (limit <= 0) {
-      return [];
-    }
-
-    const meta = yield* readMeta();
-    if (!meta) {
-      return [];
-    }
-
-    const recent: ConversationEntry[] = [];
-    for (
-      let index = meta.lastChunk;
-      index >= 0 && recent.length < limit;
-      index--
-    ) {
-      const chunk =
-        (yield* sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
-      recent.unshift(
-        ...chunk.slice(-(limit - recent.length)).map(({entry}) => entry),
-      );
-    }
-    return recent;
-  },
-
   *context(): Operation<ConversationContext> {
     const meta = yield* readMeta();
     if (!meta) {

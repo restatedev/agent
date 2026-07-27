@@ -35,13 +35,11 @@ import {Agent} from "./agent.js";
 import {agentLoop} from "./agent-loop.js";
 import {
   type ConversationEntry,
+  TURN_SIGNALS,
   type TurnOutcome,
   type TurnRequest,
   TurnRequestSchema,
 } from "./types.js";
-
-// Signal used to stop a running turn immediately.
-const INTERRUPT = "interrupt";
 
 // Build summary + uncompacted model-visible history. Failed and interrupted
 // outcomes are operational events, not assistant answers.
@@ -106,7 +104,7 @@ export const Turn = service({
         // when it started us.
         const turnId = handlerRequest().id;
 
-        const interrupt = signal<string>(INTERRUPT);
+        const interrupt = signal<string>(TURN_SIGNALS.interrupt);
         let activeTask: Task<unknown> | undefined;
 
         try {

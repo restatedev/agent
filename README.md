@@ -7,7 +7,6 @@ access, and the concrete agent loop without hiding them behind a framework.
 ```mermaid
 flowchart LR
   User -->|"ask / steer / interrupt"| Agent["Agent Virtual Object\nkeyed by agentId"]
-  Agent -->|"cheap route-message run"| Router["GPT-4o mini"]
   Agent -->|"one-way run"| Turn["Turn service"]
   Agent -.->|"control / approval signals"| Turn
   Turn --> Loop["agentLoop"]
@@ -43,8 +42,6 @@ flowchart LR
 - `model.ts` owns provider-specific inference and the shared model contracts. It
   reconstructs AI SDK tool definitions from serializable manifests while
   deliberately receiving no executors.
-- `message-router.ts` owns the cheap model decision for messages that arrive
-  during an active turn.
 - The shared `Agent.compact` handler asynchronously maintains a rolling summary
   of older finished turns without blocking exclusive conversation handlers.
   The model operation stays in `conversation-compactor.ts`; the exact
@@ -84,7 +81,7 @@ messages, tool calls, tool results, pending operations, and steering inside
 
 | Handler | Input | Behavior |
 | --- | --- | --- |
-| `ask` | `{ message: string }` | Returns the `start`, `steer`, `interrupt`, or `queue` decision, affected turn invocation ID, and queue/steering stats. A routed interrupt stops the current turn and queues the message for the next one. |
+| `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. Entries distinguish user messages, interruption events, and terminal turn summaries. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
 | `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
@@ -97,10 +94,10 @@ A successful interruption is visible immediately as
 records whether the turn actually ended as interrupted or won a completion
 race.
 
-An interruption selected by `ask` also preserves that conversational message
-in the pending queue, so a new turn processes it after the interrupted
-invocation retires. The explicit `interrupt` handler is control-only: it stops
-the active turn without creating another user request.
+`ask` deliberately makes no model decision: it starts work when idle and
+queues when busy. Clients choose `steer` or `interrupt` explicitly when a
+message should affect the active turn. The `interrupt` handler is control-only:
+it stops the active turn without creating another user request.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 successive `signal("steering")` consumes the next instruction in order.
@@ -110,17 +107,6 @@ unconsumed instruction moves behind that outcome and runs through the normal
 queued-turn path instead of being stranded in history. An explicit interrupt
 supersedes outstanding steering. External cancellation does not: steering
 accepted before cancellation is recovered into the next turn.
-
-The classifier uses GPT-4o mini directly from the exclusive `Agent` handler and
-falls back to `queue` on failure, so an accepted message is never lost. A real
-client with explicit stop and edit controls should call `interrupt` and `steer`
-directly and skip intent classification.
-
-While a turn is active, context-dependent additions, corrections, and follow-up
-questions route to `steer`; only clearly independent work routes to `queue`.
-The classifier also sees messages already waiting in the pending queue, so a
-follow-up to queued work stays with that next turn instead of steering the
-unrelated active turn.
 
 ## Durability and failure behavior
 
@@ -159,10 +145,10 @@ unrelated active turn.
 
 ## Model flow control
 
-Only full agent inference uses the scoped gateway. Routing stays directly in
-the controller because it is a small, latency-sensitive decision rather than
-part of the agent loop. Background compaction similarly owns its cheap model
-call in a shared Agent handler and cannot consume an agent-loop inference slot.
+Only full agent inference uses the scoped gateway. `ask` performs no inference;
+steering and interruption are explicit controller operations. Background
+compaction owns its cheap model call in a shared Agent handler and cannot
+consume an agent-loop inference slot.
 
 `ModelGateway` calls use scope `openai` and a two-level limit key:
 `gpt-5.6-terra/<agent-hash>`. Each invocation therefore draws from three
@@ -236,7 +222,7 @@ An idle agent returns a response shaped like:
 {
   "decision": "start",
   "turnId": "inv_...",
-  "stats": {"pendingMessages": 0, "steeringSignals": 0}
+  "stats": {"pendingMessages": 0}
 }
 ```
 
@@ -289,7 +275,6 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signal supervision
 - `packages/libs/example/src/agent-loop.ts` — bounded model/tool orchestration
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
-- `packages/libs/example/src/message-router.ts` — active-turn message classification
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — model protocol and provider calls
 - `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries

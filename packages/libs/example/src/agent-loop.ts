@@ -26,6 +26,7 @@ import {
 } from "./agent-tools.js";
 import type {ModelResult, ToolCall} from "./model.js";
 import {callModel} from "./model-gateway.js";
+import {TURN_SIGNALS} from "./types.js";
 
 type AgentLoopInput = {
   agentId: string;
@@ -68,7 +69,6 @@ type PendingStep =
 
 const MAX_ROUNDS = 8;
 const MAX_TOOL_CALLS = 24;
-const STEERING = "steering";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -98,7 +98,7 @@ function* runModelStep(
       };
     }
     buffered.push(yield* selected.future);
-    nextSteering = signal<string>(STEERING);
+    nextSteering = signal<string>(TURN_SIGNALS.steering);
   }
 }
 
@@ -121,7 +121,7 @@ function* runToolStep(
     });
     if (selected.tag === "steering") {
       buffered.push(yield* selected.future);
-      nextSteering = signal<string>(STEERING);
+      nextSteering = signal<string>(TURN_SIGNALS.steering);
       continue;
     }
 
@@ -218,7 +218,7 @@ const pendingOperations = {
       return {
         type: "steering",
         message: yield* selected.future,
-        nextSteering: signal<string>(STEERING),
+        nextSteering: signal<string>(TURN_SIGNALS.steering),
       };
     }
     return {type: "completion", event: yield* selected.future};
@@ -240,7 +240,7 @@ export function* agentLoop({
 }: AgentLoopInput): Operation<AgentLoopResult> {
   const messages = [...context];
   const toolContext = {agentId, turnId};
-  let steering = signal<string>(STEERING);
+  let steering = signal<string>(TURN_SIGNALS.steering);
   let consumedSteering = 0;
   let toolCallCount = 0;
   let modelRounds = 0;

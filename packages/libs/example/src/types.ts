@@ -3,6 +3,12 @@
 
 import {z} from "zod";
 
+// Durable signal names shared by the Agent sender and Turn receiver.
+export const TURN_SIGNALS = {
+  interrupt: "interrupt",
+  steering: "steering",
+} as const;
+
 // How a turn ended.
 const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
 

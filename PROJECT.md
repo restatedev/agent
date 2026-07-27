@@ -12,7 +12,9 @@ The application is split into a few concrete parts:
 - **`Agent`** is a Virtual Object keyed by `agentId`. It owns the durable
   conversation history, tracks the active turn, queues new messages, and holds
   pending human approvals. Alongside the conversation handlers, `approvals`
-  and `resolveApproval` expose the human-in-the-loop boundary.
+  and `resolveApproval` expose the human-in-the-loop boundary. `ask` starts
+  work when idle and queues when busy; clients explicitly select `steer` or
+  `interrupt` when they want to affect the active turn.
 - **`Turn`** is a stateless service invocation that supervises one turn. It
   runs the agent loop and listens for durable interruption. The loop consumes
   steering cooperatively without cancelling work from the current round.
@@ -25,9 +27,7 @@ The application is split into a few concrete parts:
   model can selectively stop those tasks through `cancelOperation` without
   interrupting the rest of the turn.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
-  concurrency controls. `message-router.ts` uses a separate cheap model to
-  classify messages that arrive during an active turn as `steer`, `interrupt`,
-  or `queue`.
+  concurrency controls.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the
@@ -68,11 +68,10 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signals
 - `packages/libs/example/src/agent-loop.ts` — agent loop orchestration
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
-- `packages/libs/example/src/message-router.ts` — active-turn message classification
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — AI SDK integration
 - `packages/libs/example/src/model-gateway.ts` — scoped model gateway
-- `packages/libs/example/src/types.ts` — public wire types and schemas
+- `packages/libs/example/src/types.ts` — shared wire contracts and schemas
 - `packages/libs/example/src/app.ts` — service endpoint
 
 See [`README.md`](./README.md) for setup instructions, example invocations, and

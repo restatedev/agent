@@ -2,9 +2,9 @@
 // by agent id, so its exclusive handlers serialize every decision about the
 // active turn, queued messages, user-facing history, and summary checkpoints.
 //
-// It never runs the agent loop itself. `ask` starts a stateless Turn service
-// with a one-way send, `interrupt` and `steer` resolve signals on that
-// invocation, and `append` accepts the Turn's single high-level outcome.
+// It never runs the agent loop itself. `ask` starts or queues work,
+// `interrupt` and `steer` resolve signals on the active stateless Turn
+// invocation, and `append` accepts that Turn's single high-level outcome.
 
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
@@ -23,7 +23,6 @@ import {
 } from "./agent-history.js";
 import {activeTurn} from "./agent-turn.js";
 import {compactConversation} from "./conversation-compactor.js";
-import {routeMessage} from "./message-router.js";
 import {
   ApprovalCancellationSchema,
   type ApprovalRequest,
@@ -46,18 +45,16 @@ function agentKey(): string {
 
 const DEFAULT_ASK =
   "What is the weather in the top 10 European capitals? Also sleep for 4 minutes.";
-const ROUTER_CONTEXT_ENTRIES = 8;
 
 const AskRequestSchema = z.object({
   message: z.string().default(DEFAULT_ASK),
 });
 
 const AskResultSchema = z.object({
-  decision: z.enum(["start", "steer", "interrupt", "queue"]),
+  decision: z.enum(["start", "queue"]),
   turnId: z.string(),
   stats: z.object({
     pendingMessages: z.number().int().nonnegative(),
-    steeringSignals: z.number().int().nonnegative(),
   }),
 });
 type AskResult = z.infer<typeof AskResultSchema>;
@@ -65,85 +62,28 @@ type AskResult = z.infer<typeof AskResultSchema>;
 export const Agent = object({
   name: "Agent",
   handlers: {
-    // The user entry point. When idle, the message starts a turn. When a turn
-    // is already running, a fast model classifies it as a steer, interrupt, or
-    // independent queued request. A routed interrupt also queues the message
-    // for a follow-up turn. Clients with explicit stop/edit UI still call the
-    // handlers below and skip classification entirely.
+    // The user entry point. A message starts a turn when the Agent is idle and
+    // joins the next-turn queue when one is active. Clients explicitly choose
+    // the handlers below when they want to steer or interrupt current work.
     ask: schemas(
       {input: AskRequestSchema, output: AskResultSchema},
       function* ({message}): Operation<AskResult> {
         const agentId = agentKey();
         const current = yield* activeTurn.current();
-        if (!current) {
-          const turnId = yield* dispatchTurn(agentId, [message], "turn");
-          return {
-            decision: "start",
-            turnId,
-            stats: {
-              pendingMessages: (yield* activeTurn.pending()).length,
-              steeringSignals: 0,
-            },
-          };
-        }
-
-        const route = current.interrupting
-          ? "queue"
-          : yield* routeMessage(
-              message,
-              (yield* history.recent(ROUTER_CONTEXT_ENTRIES)).map((entry) => {
-                if (entry.role === "user") {
-                  return `user${entry.delivery ? ` (${entry.delivery})` : ""}: ${entry.text}`;
-                }
-                return entry.role === "assistant"
-                  ? `assistant (${entry.status}): ${entry.text}`
-                  : `event (${entry.type}): ${entry.reason}`;
-              }),
-              yield* activeTurn.pending(),
-            );
-
-        if (route === "interrupt") {
+        if (current) {
           const pendingMessages = yield* activeTurn.enqueue(message);
-          yield* activeTurn.interrupt(message);
-          yield* history.append({
-            role: "event",
-            type: "interrupt",
-            turnId: current.id,
-            reason: message,
-          });
           return {
-            decision: "interrupt",
+            decision: "queue",
             turnId: current.id,
-            stats: {
-              pendingMessages,
-              steeringSignals: current.sentSteering,
-            },
+            stats: {pendingMessages},
           };
         }
-        if (route === "steer") {
-          yield* activeTurn.steer(message);
-          yield* history.append({
-            role: "user",
-            text: message,
-            delivery: "steer",
-          });
-          return {
-            decision: "steer",
-            turnId: current.id,
-            stats: {
-              pendingMessages: (yield* activeTurn.pending()).length,
-              steeringSignals: current.sentSteering + 1,
-            },
-          };
-        }
-        const pendingMessages = yield* activeTurn.enqueue(message);
+
+        const turnId = yield* dispatchTurn(agentId, [message], "turn");
         return {
-          decision: "queue",
-          turnId: current.id,
-          stats: {
-            pendingMessages,
-            steeringSignals: current.sentSteering,
-          },
+          decision: "start",
+          turnId,
+          stats: {pendingMessages: 0},
         };
       },
     ),

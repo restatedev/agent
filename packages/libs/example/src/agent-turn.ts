@@ -10,7 +10,7 @@ import {
   state,
 } from "@restatedev/restate-sdk-gen";
 import {Turn} from "./turn.js";
-import type {TurnOutcome, TurnRequest} from "./types.js";
+import {TURN_SIGNALS, type TurnOutcome, type TurnRequest} from "./types.js";
 
 /** Durable state for the invocation currently owned by the Agent. */
 type ActiveTurnState = {
@@ -90,7 +90,9 @@ export const activeTurn = {
     if (!current || current.interrupting) {
       return undefined;
     }
-    invocation(current.id).signal<string>("interrupt").resolve(reason);
+    invocation(current.id)
+      .signal<string>(TURN_SIGNALS.interrupt)
+      .resolve(reason);
     state().set("turn", {...current, interrupting: true});
     return current.id;
   },
@@ -109,7 +111,9 @@ export const activeTurn = {
       ...current,
       sentSteering: current.sentSteering + 1,
     });
-    invocation(current.id).signal<string>("steering").resolve(message);
+    invocation(current.id)
+      .signal<string>(TURN_SIGNALS.steering)
+      .resolve(message);
     return true;
   },
 
