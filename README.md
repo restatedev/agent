@@ -23,9 +23,10 @@ flowchart LR
 
 - `Agent` is the durable controller. Its exclusive handlers serialize changes
   to the active turn, pending messages, and conversation history for one
-  `agentId`. It coordinates three independent components: `agent-turn.ts` owns
+  `agentId`. It coordinates four independent components: `agent-turn.ts` owns
   turn state and signal lifecycle, `agent-history.ts` owns the durable
-  transcript, and `agent-approval.ts` owns pending human approvals.
+  transcript, `agent-approval.ts` owns pending human approvals, and
+  `agent-progress.ts` owns a bounded semantic progress feed.
   Each component exports a handler-scoped capability namespace: its operations
   use Restate's current handler context and hold no process-local state.
 - `Turn` is stateless. One invocation supervises one agent turn and passes its
@@ -86,7 +87,9 @@ inside `agentLoop` are never summarized mid-turn.
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | void | Returns the complete durable transcript in Agent observation order. Entries distinguish user messages, lifecycle events, and terminal turn summaries. |
+| `progress` | `{ afterSequence?: number }` | Returns the retained semantic progress events after a client cursor. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
+| `reportProgress` | progress report | Ingress-private one-way path used by the active loop; ignores stale Turn IDs. |
 | `interrupt` | reason string | Records an interruption event and signals the active loop to cancel unfinished work and produce a final response. Returns immediately. |
 | `steer` | instruction string | Promotes queued messages into the active turn, then sends the new instruction after them. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
@@ -132,9 +135,32 @@ positions, and a later dispatch event activates them. An explicit interrupt
 supersedes outstanding steering. External cancellation does not: steering
 accepted before cancellation is recovered into the next turn.
 
+## Progress
+
+The loop one-way sends semantic milestones to `Agent.reportProgress`. The Agent
+checks the originating `turnId`, assigns a monotonic sequence, and retains the
+latest 32 events separately from conversation history. It reports phases such
+as `thinking`, `tools`, `waiting`, and `finalizing`, followed by a terminal
+`completed`, `interrupted`, or `failed` event. Raw provider reasoning blocks
+are never exposed as progress.
+
+Clients can poll incrementally:
+
+```sh
+curl localhost:8080/Agent/demo/progress \
+  -H 'content-type: application/json' \
+  -d '{"afterSequence": 0}'
+```
+
+The last returned event's sequence is suitable as the next cursor. This durable
+feed can later be mirrored to pub/sub for live fan-out without making pub/sub
+the source of truth.
+
 ## Durability and failure behavior
 
 - Starting a turn and reporting its outcome are one-way Restate sends.
+- Progress milestones use private one-way sends and never block model or tool
+  execution on the Agent handler completing.
 - Each full model round is a scoped `ModelGateway` invocation containing one
   durable `run` step. Restate owns a bounded four-attempt retry policy; the
   AI SDK's internal retries are disabled.
@@ -299,6 +325,7 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
+- `packages/libs/example/src/agent-progress.ts` — bounded sequenced progress
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signal supervision
 - `packages/libs/example/src/agent-loop.ts` — bounded model/tool orchestration
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection

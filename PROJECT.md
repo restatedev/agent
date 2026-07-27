@@ -11,12 +11,13 @@ The application is split into a few concrete parts:
 
 - **`Agent`** is a Virtual Object keyed by `agentId`. It owns the durable
   conversation history, tracks the active turn, routes queued messages, and
-  holds pending human approvals. Every message is recorded when its exclusive
-  handler observes it; pending state controls execution without reordering the
-  transcript. Alongside the conversation handlers, `approvals` and
-  `resolveApproval` expose the human-in-the-loop boundary. `ask` starts work
-  when idle and queues when busy; clients explicitly select `steer` or
-  `interrupt` when they want to affect the active turn.
+  holds pending human approvals and a bounded progress feed. Every message is
+  recorded when its exclusive handler observes it; pending state controls
+  execution without reordering the transcript. Alongside the conversation
+  handlers, `approvals` and `resolveApproval` expose the human-in-the-loop
+  boundary, while `progress` exposes sequenced semantic milestones. `ask`
+  starts work when idle and queues when busy; clients explicitly select
+  `steer` or `interrupt` when they want to affect the active turn.
 - **`Turn`** is a stateless service invocation that supervises one turn. It
   runs the agent loop and supplies its durable interrupt signal. The loop
   consumes structured steering cooperatively; interruption cancels unfinished
@@ -31,7 +32,8 @@ The application is split into a few concrete parts:
   in parallel. Long-lived sleeps and approvals remain pending across model
   rounds, allowing steering and unrelated tools to progress around them. The
   model can selectively stop those tasks through `cancelOperation`; a graceful
-  interrupt stops everything outstanding and summarizes achieved work.
+  interrupt stops everything outstanding and summarizes achieved work. The
+  loop one-way reports semantic progress without exposing raw reasoning blocks.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
   concurrency controls.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
@@ -58,6 +60,7 @@ transcript.
 Restate provides the application-level guarantees that an agent needs:
 
 - durable conversation state and serialized controller decisions;
+- bounded, sequenced progress state driven by one-way loop reports;
 - lazy, chunked transcript storage and asynchronous summary checkpoints;
 - one-way invocation of long-running turns;
 - queued signals for steering and interruption;
@@ -73,6 +76,7 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
+- `packages/libs/example/src/agent-progress.ts` — bounded sequenced progress
 - `packages/libs/example/src/turn.ts` — turn lifecycle and signals
 - `packages/libs/example/src/agent-loop.ts` — agent loop orchestration
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection

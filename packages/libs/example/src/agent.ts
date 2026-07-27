@@ -21,6 +21,7 @@ import {
   type ConversationCompactionResult,
   history,
 } from "./agent-history.js";
+import {progress as progressLog} from "./agent-progress.js";
 import {activeTurn} from "./agent-turn.js";
 import {compactConversation} from "./conversation-compactor.js";
 import {
@@ -30,6 +31,10 @@ import {
   ApprovalResolutionSchema,
   type ConversationEntry,
   ConversationEntrySchema,
+  type ProgressEvent,
+  ProgressEventSchema,
+  type ProgressReport,
+  ProgressReportSchema,
   TurnOutcomeSchema,
 } from "./types.js";
 
@@ -58,6 +63,10 @@ const AskResultSchema = z.object({
   }),
 });
 type AskResult = z.infer<typeof AskResultSchema>;
+
+const ProgressQuerySchema = z.object({
+  afterSequence: z.number().int().nonnegative().default(0),
+});
 
 export const Agent = object({
   name: "Agent",
@@ -141,6 +150,27 @@ export const Agent = object({
       {input: z.void(), output: z.array(ConversationEntrySchema)},
       function* (): Operation<ConversationEntry[]> {
         return yield* history.read();
+      },
+    ),
+
+    // Internal one-way status path used by the active loop. Ignore late events
+    // from a Turn that the Agent has already retired.
+    reportProgress: schemas(
+      {input: ProgressReportSchema, output: z.void()},
+      function* (report: ProgressReport): Operation<void> {
+        const current = yield* activeTurn.current();
+        if (current?.id === report.turnId) {
+          yield* progressLog.append(report);
+        }
+      },
+    ),
+
+    // Incremental progress feed for UIs. Progress is deliberately separate
+    // from durable conversation history and retains only a bounded tail.
+    progress: schemas(
+      {input: ProgressQuerySchema, output: z.array(ProgressEventSchema)},
+      function* ({afterSequence}): Operation<ProgressEvent[]> {
+        return yield* progressLog.read(afterSequence);
       },
     ),
 
@@ -237,6 +267,16 @@ export const Agent = object({
             status: outcome.status,
           });
         }
+        yield* progressLog.append({
+          turnId: outcome.turnId,
+          phase: outcome.status,
+          message:
+            outcome.status === "completed"
+              ? "Turn completed"
+              : outcome.status === "interrupted"
+                ? "Turn interrupted after graceful finalization"
+                : `Turn failed: ${outcome.error}`,
+        });
         const agentId = agentKey();
         const plan = yield* history.beginCompaction();
         if (plan) {
@@ -281,7 +321,9 @@ export const Agent = object({
       },
       requestApproval: {ingressPrivate: true},
       cancelApproval: {ingressPrivate: true},
+      reportProgress: {ingressPrivate: true},
       approvals: {shared: true, idempotencyRetention: 0, journalRetention: 0},
+      progress: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       history: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       compact: {
         shared: true,

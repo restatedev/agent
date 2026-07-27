@@ -14,11 +14,13 @@ import {
   type Operation,
   race,
   select,
+  sendClient,
   signal,
   spawn,
   type Task,
 } from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
+import {Agent} from "./agent.js";
 import {
   type AgentToolContext,
   agentTools,
@@ -27,7 +29,11 @@ import {
 } from "./agent-tools.js";
 import type {ModelResult, ToolCall} from "./model.js";
 import {callModel} from "./model-gateway.js";
-import {type SteeringSignal, TURN_SIGNALS} from "./types.js";
+import {
+  type ProgressReport,
+  type SteeringSignal,
+  TURN_SIGNALS,
+} from "./types.js";
 
 type AgentLoopInput = {
   agentId: string;
@@ -93,6 +99,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function* reportProgress(
+  context: AgentToolContext,
+  phase: ProgressReport["phase"],
+  message: string,
+): Operation<void> {
+  yield* sendClient(Agent, context.agentId).reportProgress({
+    turnId: context.turnId,
+    phase,
+    message,
+  });
+}
+
 function toSteeringMessage({queued, message}: SteeringSignal): ModelMessage {
   const queuedMessages =
     queued.length === 0
@@ -109,6 +127,15 @@ function toSteeringMessage({queued, message}: SteeringSignal): ModelMessage {
       message,
     ].join("\n"),
   };
+}
+
+function toolBatchSummary(outcomes: ToolOutcome[]): string {
+  const succeeded = outcomes.filter(
+    ({status}) => status === "succeeded",
+  ).length;
+  const failed = outcomes.filter(({status}) => status === "failed").length;
+  const pending = outcomes.filter(({status}) => status === "pending").length;
+  return `Tool batch finished: ${succeeded} succeeded, ${failed} failed, ${pending} pending`;
 }
 
 // Steering is buffered while a model call is in flight. The completed model
@@ -346,21 +373,31 @@ function interruptionInstruction(reason: string): ModelMessage {
 }
 
 function* finalizeInterruption(
-  agentId: string,
+  context: AgentToolContext,
   messages: ModelMessage[],
   pending: PendingOperation[],
   reason: string,
   consumedSteering: number,
 ): Operation<AgentLoopResult> {
+  yield* reportProgress(
+    context,
+    "finalizing",
+    "Stopping unfinished work for graceful interruption",
+  );
   const stopped = yield* pendingOperations.stop(
     pending,
     new InterruptedError(reason),
   );
   messages.push(...stopped.map(agentTools.toRuntimeMessage));
   messages.push(interruptionInstruction(reason));
+  yield* reportProgress(
+    context,
+    "finalizing",
+    "Preparing a final response from completed results",
+  );
 
   try {
-    const final = yield* callModel(agentId, messages, []);
+    const final = yield* callModel(context.agentId, messages, []);
     if (final.type === "text" && final.content.trim()) {
       return {
         status: "interrupted",
@@ -410,10 +447,17 @@ export function* agentLoop({
 
   try {
     while (modelRounds < MAX_ROUNDS) {
+      yield* reportProgress(
+        toolContext,
+        "thinking",
+        modelRounds === 0
+          ? "Planning the turn"
+          : `Planning model round ${modelRounds + 1}`,
+      );
       const step = yield* runModelStep(agentId, messages, steering, interrupt);
       if (step.type === "interrupted") {
         return yield* finalizeInterruption(
-          agentId,
+          toolContext,
           messages,
           pending,
           step.reason,
@@ -451,6 +495,13 @@ export function* agentLoop({
           continue;
         }
         if (pending.length > 0) {
+          yield* reportProgress(
+            toolContext,
+            "waiting",
+            `Waiting for ${pending.length} pending operation(s): ${pending
+              .map(({call}) => call.toolName)
+              .join(", ")}`,
+          );
           const next = yield* pendingOperations.next(
             pending,
             steering,
@@ -468,7 +519,7 @@ export function* agentLoop({
           } else {
             messages.push({role: "assistant", content: action.content});
             return yield* finalizeInterruption(
-              agentId,
+              toolContext,
               messages,
               pending,
               next.reason,
@@ -498,6 +549,13 @@ export function* agentLoop({
       }
 
       messages.push(action.message);
+      yield* reportProgress(
+        toolContext,
+        "tools",
+        `Running ${action.calls.length} tool call(s): ${action.calls
+          .map(({toolName}) => toolName)
+          .join(", ")}`,
+      );
       const toolStep = yield* runToolStep(
         action.calls,
         toolContext,
@@ -508,7 +566,7 @@ export function* agentLoop({
         messages.push(agentTools.toModelMessage(toolStep.outcomes));
         messages.push(...toolStep.events.map(agentTools.toRuntimeMessage));
         return yield* finalizeInterruption(
-          agentId,
+          toolContext,
           messages,
           pending,
           toolStep.reason,
@@ -527,6 +585,11 @@ export function* agentLoop({
       messages.push(...cancellation.events.map(agentTools.toRuntimeMessage));
       messages.push(
         ...[...step.steering, ...toolStep.steering].map(toSteeringMessage),
+      );
+      yield* reportProgress(
+        toolContext,
+        "tools",
+        toolBatchSummary(cancellation.outcomes),
       );
     }
 

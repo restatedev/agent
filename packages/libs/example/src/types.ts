@@ -54,6 +54,30 @@ export const ConversationEntrySchema = z.union([
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
+const ProgressPhaseSchema = z.enum([
+  "thinking",
+  "tools",
+  "waiting",
+  "finalizing",
+  "completed",
+  "interrupted",
+  "failed",
+]);
+
+// A semantic progress update sent from one active Turn to its Agent.
+export const ProgressReportSchema = z.object({
+  turnId: z.string(),
+  phase: ProgressPhaseSchema,
+  message: z.string(),
+});
+export type ProgressReport = z.infer<typeof ProgressReportSchema>;
+
+// The Agent assigns a stable sequence so clients can poll incrementally.
+export const ProgressEventSchema = ProgressReportSchema.extend({
+  sequence: z.number().int().positive(),
+});
+export type ProgressEvent = z.infer<typeof ProgressEventSchema>;
+
 // Input to a turn: which Agent object it belongs to, an optional checkpoint
 // over older entries, and the exact uncompacted transcript the model should
 // see. New messages are already appended to this transcript before dispatch.
