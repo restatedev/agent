@@ -6,14 +6,14 @@ access, and the concrete agent loop without hiding them behind a framework.
 
 ```mermaid
 flowchart LR
-  User -->|"ask / steer / interrupt"| Agent["Agent Virtual Object\nkeyed by agentId"]
+  Client -->|"conversation + approval API"| Agent["Agent Virtual Object\nkeyed by agentId"]
   Agent -->|"one-way run"| Turn["Turn service"]
   Agent -.->|"control / approval signals"| Turn
   Turn --> Loop["agentLoop"]
   Loop -->|"scoped invocation"| Gateway["ModelGateway service"]
   Gateway -->|"durable model run"| Model["agent model"]
   Loop -->|"spawn + durable run"| Tools["local tools in parallel"]
-  Tools -->|"private approval request"| Agent
+  Tools -->|"approval registration"| Agent
   Turn -->|"one-way append outcome"| Agent
   Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
   Compactor -->|"one-way applyCompaction"| Agent
@@ -32,8 +32,9 @@ flowchart LR
   durable interrupt signal into the loop. The loop consumes steering and
   interruption at model/tool boundaries so it can retain completed work.
 - `agentLoop` owns only orchestration policy and the live state for model
-  rounds, steering, parallel tool batches, pending tasks, and graceful
-  finalization. It returns a structured `completed | interrupted | failed`
+  rounds, steering, parallel tool batches, and graceful finalization. A
+  turn-local registry owns pending task lookup, completion, cancellation, and
+  cleanup. The loop returns a structured `completed | interrupted | failed`
   result.
 - `agent-tools.ts` owns the concrete tools. Each definition keeps its model
   description, input schema, validation, local durable behavior, and result
@@ -57,6 +58,13 @@ tools. A turn reports exactly one structured outcome: `completed`,
 `interrupted`, or `failed`. A graceful interruption can include a final
 assistant response based on completed tool results; raw tool activity still
 stays out of the transcript.
+
+Every handler on `Agent`, `Turn`, and `ModelGateway` is ingress-public in this
+reference implementation. This keeps the complete protocol inspectable and
+easy to invoke while experimenting. Public visibility does not make every
+handler a user API: normal clients should use `ask`, `history`, `steer`,
+`interrupt`, `approvals`, and `resolveApproval`; the remaining handlers are
+coordination paths used by the services themselves.
 
 ## Conversation history and compaction
 
@@ -83,18 +91,35 @@ explicit model-visible boundaries. Compaction happens only between turns: live
 model messages, tool calls, tool results, pending operations, and steering
 inside `agentLoop` are never summarized mid-turn.
 
-## Controller handlers
+## Agent handlers
 
 | Handler | Input | Behavior |
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
-| `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
-| `reportProgress` | progress report | Ingress-private one-way path used by the active loop; appends an ordered transcript event and ignores stale Turn IDs. |
 | `interrupt` | reason string | Records an interruption event and signals the active loop to cancel unfinished work and produce a final response. Returns immediately. |
 | `steer` | instruction string | Promotes queued messages into the active turn, then sends the new instruction after them. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool with `approved` or `rejected`. |
+| `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active loop; appends an ordered transcript event only for the current Turn. |
+| `requestApproval` | `{ approvalId, turnId, question }` | Registers a tool's approval request only while its Turn remains active and is not interrupting. |
+| `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
+| `append` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, considers compaction, and dispatches queued work. Stale or duplicate Turn IDs are ignored. |
+| `compact` | reserved history cursor range | Shared handler that reads and summarizes one finished transcript prefix, then sends the result to `applyCompaction`. |
+| `applyCompaction` | structured compaction result | Exclusively validates and installs the current summary checkpoint, or clears a failed reservation. |
+
+`history`, `approvals`, and `compact` are shared handlers; the other Agent
+handlers are exclusive. Lazy state allows shared readers and the compactor to
+load only the state keys and history chunks they need.
+
+The two other services each expose one public handler:
+
+- `Turn/run` accepts the Agent's rolling summary and exact uncompacted
+  transcript, supervises one loop invocation, and one-way reports a structured
+  outcome to `Agent/append`.
+- `ModelGateway/complete` accepts model messages and serializable tool
+  manifests. `agentLoop` normally invokes it through the `openai` scope so the
+  configured concurrency limits apply.
 
 A successful interruption is visible immediately as
 `{ role: "event", type: "interrupt", turnId, reason }`. The active loop then
@@ -165,7 +190,7 @@ making pub/sub the source of truth.
 ## Durability and failure behavior
 
 - Starting a turn and reporting its outcome are one-way Restate sends.
-- Progress milestones use private one-way sends and never block model or tool
+- Progress milestones use one-way sends and never block model or tool
   execution on the Agent handler completing.
 - Each full model round is a scoped `ModelGateway` invocation containing one
   durable `run` step. Restate owns a bounded four-attempt retry policy; the
@@ -186,8 +211,9 @@ making pub/sub the source of truth.
   unrelated tools. A pending approval gates dependent actions without blocking
   unrelated work; its eventual signal result is injected as a runtime update.
 - `cancelOperation` lets the model selectively interrupt and join one pending
-  operation by its stable ID. Completion races are reported honestly, and
-  unrelated operations continue running.
+  operation by its stable tool-call ID. Pending tasks are held in a turn-local
+  keyed registry; completion races are reported honestly, and unrelated
+  operations continue running.
 - Graceful interruption cancels and joins foreground and pending tasks, records
   their completed or cancelled results in the loop context, and performs one
   final model call with no tools. Abandoned approval requests are cleaned up

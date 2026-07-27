@@ -27,35 +27,39 @@ The application is split into a few concrete parts:
   queue dispatch, and interruption reasons become explicit model-context
   boundaries.
 - **`agentLoop`** performs a bounded model → tools → model cycle. It owns the
-  orchestration policy and live task registry, while `agent-tools.ts` keeps
-  every concrete tool's description, schema, validation, local durable
-  behavior, and result projection together. Independent tool calls are spawned
-  in parallel. Long-lived sleeps and approvals remain pending across model
-  rounds, allowing steering and unrelated tools to progress around them. The
-  model can selectively stop those tasks through `cancelOperation`; a graceful
-  interrupt stops everything outstanding and summarizes achieved work. The
-  loop one-way reports semantic progress without exposing raw reasoning blocks.
-  Progress remains visible in the canonical transcript but is omitted from
-  future model context and compaction input.
+  orchestration policy and one turn-local pending-operation registry, while
+  `agent-tools.ts` keeps every concrete tool's description, schema, validation,
+  local durable behavior, and result projection together. Independent tool
+  calls are spawned in parallel. Long-lived sleeps and approvals remain pending
+  across model rounds, allowing steering and unrelated tools to progress around
+  them. The model can selectively stop those tasks through `cancelOperation`;
+  a graceful interrupt stops everything outstanding and summarizes achieved
+  work. The loop one-way reports semantic progress without exposing raw
+  reasoning blocks. Progress remains visible in the canonical transcript but
+  is omitted from future model context and compaction input.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
-  concurrency controls.
+  concurrency controls, retry policy, and cancellation propagation.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the
   chunked Agent transcript remains complete and authoritative.
 
+All handlers on `Agent`, `Turn`, and `ModelGateway` are ingress-public so the
+complete protocol is easy to inspect. Normal clients should still use only the
+conversation and approval handlers; the others are service coordination paths.
+
 ```text
-user → Agent → Turn → agentLoop → ModelGateway
-         ↑          ↕ tools
-         └── outcome / signals
+user/UI → Agent → Turn → agentLoop → ModelGateway
+            ↑          ↕ tools
+            └── outcome, progress, approvals, and signals
 ```
 
-The controller stores user-facing messages, answers, failures, lifecycle
+The controller stores user messages, final answers, failures, lifecycle
 boundaries, and semantic progress in one ordered transcript. Intermediate model
-responses, cancelled tool work, and other low-level execution details remain
-visible through Restate's invocation journal. Compaction preserves failure and
-interruption boundaries while older turns are summarized for model context
-without being removed from the canonical transcript.
+responses, tool calls, and tool results remain visible through Restate's
+invocation journal instead of becoming conversation entries. Compaction
+preserves failure and interruption boundaries while older turns are summarized
+for model context without being removed from the canonical transcript.
 
 ## Why Restate is useful here
 
@@ -65,9 +69,9 @@ Restate provides the application-level guarantees that an agent needs:
 - one cursor-consumable sequence for messages, lifecycle events, and progress;
 - lazy, chunked transcript storage and asynchronous summary checkpoints;
 - one-way invocation of long-running turns;
-- queued signals for steering and interruption;
+- durable signals for steering, interruption, and human approval;
 - durable sleeps, retries, and local tool operations;
-- durable background timers and signal-backed pending human approval;
+- turn-scoped pending timers and signal-backed human approval;
 - deterministic concurrent execution of independent tools;
 - concurrency limits around model traffic;
 - an observable invocation tree for the complete turn.
