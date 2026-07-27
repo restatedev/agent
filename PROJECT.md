@@ -80,7 +80,7 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signals
 - `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
-- `packages/libs/example/src/agent-step.ts` — bounded model/foreground-tool step
+- `packages/libs/example/src/turn-step.ts` — bounded step execution and supervision
 - `packages/libs/example/src/agent-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation

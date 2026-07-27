@@ -1,7 +1,7 @@
 // Concrete tools available to the example agent. Each definition owns its
 // model description, input schema, validation, and local durable behavior.
 // The exported object is deliberately concrete rather than a generic runtime:
-// Turn owns orchestration and agent-step owns foreground execution while this
+// Turn owns orchestration and turn-step owns foreground execution while this
 // module owns tool mechanics.
 
 import {setTimeout} from "node:timers/promises";

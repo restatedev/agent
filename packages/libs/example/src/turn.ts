@@ -4,13 +4,11 @@
 
 import {CancelledError} from "@restatedev/restate-sdk";
 import {
-  allSettled,
   type Future,
   handlerRequest,
   InterruptedError,
   type Operation,
   schemas,
-  select,
   sendClient,
   service,
   signal,
@@ -20,12 +18,6 @@ import type {ModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
 import {createPendingOperations} from "./agent-pending.js";
-import {
-  AgentStepInterrupt,
-  type AgentStepResult,
-  agentStep,
-  type ToolStep,
-} from "./agent-step.js";
 import {
   type AgentToolContext,
   agentTools,
@@ -37,6 +29,7 @@ import {
   interruptionInstruction,
   steeringMessage,
 } from "./turn-context.js";
+import {agentStep, settleStep, type ToolStep} from "./turn-step.js";
 import {
   type ProgressReport,
   type SteeringSignal,
@@ -262,46 +255,11 @@ export const Turn = service({
                 remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
               }),
             );
-            const buffered: SteeringSignal[] = [];
-            let nextSteering = state.steering;
-            let step: AgentStepResult;
-
-            try {
-              while (true) {
-                const selected = yield* select({
-                  interrupt: state.interrupt,
-                  steering: nextSteering,
-                  task,
-                });
-                if (selected.tag === "steering") {
-                  buffered.push(yield* selected.future);
-                  nextSteering = signal<SteeringSignal>(TURN_SIGNALS.steering);
-                  continue;
-                }
-                if (selected.tag === "task") {
-                  step = yield* selected.future;
-                  break;
-                }
-
-                const reason = yield* selected.future;
-                task.interrupt(new AgentStepInterrupt(reason));
-                const [settled] = yield* allSettled([task]);
-                const completed =
-                  settled.status === "fulfilled" ? settled.value : undefined;
-                const tools =
-                  completed?.type === "tools"
-                    ? completed
-                    : completed?.type === "interrupted"
-                      ? completed.tools
-                      : undefined;
-                step = {type: "interrupted", reason, tools};
-                break;
-              }
-            } catch (error) {
-              task.interrupt(error);
-              yield* allSettled([task]);
-              throw error;
-            }
+            const {step, steering, nextSteering} = yield* settleStep(
+              task,
+              state.steering,
+              state.interrupt,
+            );
 
             if (step.type === "interrupted") {
               if (step.tools) {
@@ -312,16 +270,16 @@ export const Turn = service({
             }
 
             state.steering = nextSteering;
-            state.consumedSteering += buffered.length;
+            state.consumedSteering += steering.length;
             state.steps += 1;
 
             // A text/error response produced before buffered steering arrived
             // has no side effects. Let the next step see the new messages.
             if (
               (step.type === "text" || step.type === "error") &&
-              buffered.length > 0
+              steering.length > 0
             ) {
-              state.messages.push(...buffered.map(steeringMessage));
+              state.messages.push(...steering.map(steeringMessage));
               continue;
             }
 
@@ -353,7 +311,7 @@ export const Turn = service({
 
               case "tools":
                 state.toolCalls += step.action.calls.length;
-                yield* applyTools(state, step, buffered);
+                yield* applyTools(state, step, steering);
                 continue;
             }
           }

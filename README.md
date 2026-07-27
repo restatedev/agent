@@ -33,10 +33,11 @@ flowchart LR
   operations, and graceful finalization. It repeatedly spawns one bounded
   `agentStep`, applies the returned data, and reports one structured
   `completed | interrupted | failed` result.
-- `agent-step.ts` is the functional execution seam. It receives a message
-  snapshot and remaining tool budget, performs one model call, runs that
-  response's foreground tools in parallel, and owns no work after returning.
-  `agent-pending.ts` owns tasks that survive across steps.
+- `turn-step.ts` owns the functional execution seam and the small supervisor
+  that settles each spawned step against steering and interruption. A step
+  receives a message snapshot and remaining tool budget, performs one model
+  call, runs that response's foreground tools in parallel, and owns no work
+  after returning. `agent-pending.ts` owns tasks that survive across steps.
 - `agent-tools.ts` owns the concrete tools. Each definition keeps its model
   description, input schema, validation, local durable behavior, and result
   projection together. It exposes each step a single concrete tool collection.
@@ -361,7 +362,7 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signal supervision
 - `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
-- `packages/libs/example/src/agent-step.ts` — one bounded model/foreground-tool step
+- `packages/libs/example/src/turn-step.ts` — bounded step execution and supervision
 - `packages/libs/example/src/agent-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation

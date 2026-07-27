@@ -1,6 +1,6 @@
 # Turn state-machine semantics
 
-This is the behavioral reference for `src/turn.ts` and `src/agent-step.ts`.
+This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 ## Ownership
 
@@ -10,10 +10,10 @@ This is the behavioral reference for `src/turn.ts` and `src/agent-step.ts`.
   working model messages, budgets, the steering cursor, pending tool tasks, and
   graceful interruption. This state is generator-local and replayed as part of
   the durable handler invocation; it is not Virtual Object state.
-- `agent-step.ts` is the bounded functional seam. A step receives a message
-  snapshot and remaining tool budget, performs one model call, executes that
-  response's foreground tools, and returns structured data. It owns no work
-  after returning.
+- `turn-step.ts` owns the bounded functional seam and its task supervision. A
+  step receives a message snapshot and remaining tool budget, performs one
+  model call, executes that response's foreground tools, and returns structured
+  data. It owns no work after returning.
 - `agent-pending.ts` owns tool tasks that survive across steps, including
   completion races, selective cancellation, and cleanup.
 - `agent-tools.ts` owns concrete tool definitions, validation, execution,
