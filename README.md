@@ -1,18 +1,18 @@
 # Restate durable agent reference
 
 A deliberately small reference implementation of an agentic application on
-Restate. It separates durable conversation control, turn supervision, model
-access, and the concrete agent loop without hiding them behind a framework.
+Restate. It separates durable conversation control, turn execution, model
+access, and bounded agent steps without hiding them behind a framework.
 
 ```mermaid
 flowchart LR
   Client -->|"conversation + approval API"| Agent["Agent Virtual Object\nkeyed by agentId"]
   Agent -->|"one-way run"| Turn["Turn service"]
   Agent -.->|"control / approval signals"| Turn
-  Turn --> Loop["agentLoop"]
-  Loop -->|"scoped invocation"| Gateway["ModelGateway service"]
+  Turn -->|"spawn each iteration"| Step["agentStep"]
+  Step -->|"scoped invocation"| Gateway["ModelGateway service"]
   Gateway -->|"durable model run"| Model["agent model"]
-  Loop -->|"spawn + durable run"| Tools["local tools in parallel"]
+  Step -->|"spawn + durable run"| Tools["local tools in parallel"]
   Tools -->|"approval registration"| Agent
   Turn -->|"one-way append outcome"| Agent
   Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
@@ -28,17 +28,18 @@ flowchart LR
   transcript, and `agent-approval.ts` owns pending human approvals.
   Each component exports a handler-scoped capability namespace: its operations
   use Restate's current handler context and hold no process-local state.
-- `Turn` is stateless. One invocation supervises one agent turn and passes its
-  durable interrupt signal into the loop. The loop consumes steering and
-  interruption at model/tool boundaries so it can retain completed work.
-- `agentLoop` owns only orchestration policy and the live state for model
-  rounds, steering, parallel tool batches, and graceful finalization. A
-  turn-local registry owns pending task lookup, completion, cancellation, and
-  cleanup. The loop returns a structured `completed | interrupted | failed`
-  result.
+- `Turn` has no service state, but one durable invocation owns the transient
+  state machine for an agent turn: model messages, budgets, steering, pending
+  operations, and graceful finalization. It repeatedly spawns one bounded
+  `agentStep`, applies the returned data, and reports one structured
+  `completed | interrupted | failed` result.
+- `agent-step.ts` is the functional execution seam. It receives a message
+  snapshot and remaining tool budget, performs one model call, runs that
+  response's foreground tools in parallel, and owns no work after returning.
+  `agent-pending.ts` owns tasks that survive across steps.
 - `agent-tools.ts` owns the concrete tools. Each definition keeps its model
   description, input schema, validation, local durable behavior, and result
-  projection together. It exposes the loop a single concrete tool collection.
+  projection together. It exposes each step a single concrete tool collection.
 - `model.ts` owns provider-specific inference and the shared model contracts. It
   reconstructs AI SDK tool definitions from serializable manifests while
   deliberately receiving no executors.
@@ -89,7 +90,7 @@ through the lifecycle event that dispatched it. The Turn projects steering
 metadata and interruption, queued-message dispatch, or failure entries as
 explicit model-visible boundaries. Compaction happens only between turns: live
 model messages, tool calls, tool results, pending operations, and steering
-inside `agentLoop` are never summarized mid-turn.
+inside an active Turn are never summarized mid-turn.
 
 ## Agent handlers
 
@@ -97,11 +98,11 @@ inside `agentLoop` are never summarized mid-turn.
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
-| `interrupt` | reason string | Records an interruption event and signals the active loop to cancel unfinished work and produce a final response. Returns immediately. |
+| `interrupt` | reason string | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. Returns immediately. |
 | `steer` | instruction string | Promotes queued messages into the active turn, then sends the new instruction after them. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool with `approved` or `rejected`. |
-| `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active loop; appends an ordered transcript event only for the current Turn. |
+| `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
 | `requestApproval` | `{ approvalId, turnId, question }` | Registers a tool's approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
 | `append` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, considers compaction, and dispatches queued work. Stale or duplicate Turn IDs are ignored. |
@@ -115,14 +116,14 @@ load only the state keys and history chunks they need.
 The two other services each expose one public handler:
 
 - `Turn/run` accepts the Agent's rolling summary and exact uncompacted
-  transcript, supervises one loop invocation, and one-way reports a structured
-  outcome to `Agent/append`.
+  transcript, runs one transient state machine made of bounded agent steps, and
+  one-way reports a structured outcome to `Agent/append`.
 - `ModelGateway/complete` accepts model messages and serializable tool
-  manifests. `agentLoop` normally invokes it through the `openai` scope so the
+  manifests. `agentStep` normally invokes it through the `openai` scope so the
   configured concurrency limits apply.
 
 A successful interruption is visible immediately as
-`{ role: "event", type: "interrupt", turnId, reason }`. The active loop then
+`{ role: "event", type: "interrupt", turnId, reason }`. The active Turn then
 cancels and joins unfinished tools, retains completed results, and makes one
 tool-free model call that answers as far as those results allow. That response
 is appended as an assistant entry with status `interrupted`. A later turn sees
@@ -150,11 +151,11 @@ The controller flow is therefore:
 Repeated resolutions of the `steering` signal form a durable queue. Each
 `steer` call resolves one structured `{ queued, message }` signal: messages
 waiting in the next-turn queue retain their FIFO order as `queued`, while the
-explicit instruction remains distinct as `message`. The loop converts that
+explicit instruction remains distinct as `message`. Turn converts that
 batch into one structured model update, while conversation history retains the
 individual user messages.
 
-The controller tracks each signal's message count, while the loop reports how
+The controller tracks each signal's message count, while Turn reports how
 many signals it consumed. If normal completion wins the race with a steer, the
 unconsumed entries are reclassified as queued without changing their transcript
 positions, and a later dispatch event activates them. An explicit interrupt
@@ -163,7 +164,7 @@ accepted before cancellation is recovered into the next turn.
 
 ## Progress
 
-The loop one-way sends semantic milestones to `Agent.reportProgress`. The Agent
+Turn one-way sends semantic milestones to `Agent.reportProgress`. The Agent
 checks the originating `turnId` and appends each accepted milestone to the
 canonical transcript as `{ role: "event", type: "progress", ... }`. It reports
 phases such as `thinking`, `tools`, `waiting`, and `finalizing`. Terminal state
@@ -192,22 +193,22 @@ making pub/sub the source of truth.
 - Starting a turn and reporting its outcome are one-way Restate sends.
 - Progress milestones use one-way sends and never block model or tool
   execution on the Agent handler completing.
-- Each full model round is a scoped `ModelGateway` invocation containing one
+- Each agent step makes one scoped `ModelGateway` invocation containing one
   durable `run` step. Restate owns a bounded four-attempt retry policy; the
   AI SDK's internal retries are disabled.
-- The loop carries AI SDK response messages into the next model call. This
+- Turn carries AI SDK response messages into the next model call. This
   preserves reasoning and tool-call state while OpenAI response storage is
   disabled.
-- If a model round emits several independent tool calls, `agentLoop` uses
+- If a model step emits several independent tool calls, `agentStep` uses
   Restate's [concurrent task primitives](https://docs.restate.dev/develop/ts/concurrent-tasks)
   to spawn all local tool `run` steps before joining them. Restate journals
   their concurrent execution and preserves deterministic replay.
 - Steering is buffered while the current model call and foreground tool batch
-  finish. Their results remain in context, and the next model round receives
+  finish. Their results remain in context, and the next agent step receives
   every buffered instruction in FIFO order.
 - `sleep` and `humanApproval` return protocol-complete pending acknowledgements
   to the model, while their turn-scoped Restate tasks continue across later
-  model rounds. A pending sleep therefore keeps its timer while steering starts
+  steps. A pending sleep therefore keeps its timer while steering starts
   unrelated tools. A pending approval gates dependent actions without blocking
   unrelated work; its eventual signal result is injected as a runtime update.
 - `cancelOperation` lets the model selectively interrupt and join one pending
@@ -215,25 +216,25 @@ making pub/sub the source of truth.
   keyed registry; completion races are reported honestly, and unrelated
   operations continue running.
 - Graceful interruption cancels and joins foreground and pending tasks, records
-  their completed or cancelled results in the loop context, and performs one
+  their completed or cancelled results in the Turn context, and performs one
   final model call with no tools. Abandoned approval requests are cleaned up
   idempotently.
 - Deterministic configuration and OpenAI 4xx request errors fail immediately.
   Transient transport, timeout, rate-limit, conflict, and 5xx errors retry.
-- Invocation cancellation aborts model I/O, joins the spawned loop, retires the
-  controller's active turn without finalization, and is rethrown so Restate
-  records cancellation.
+- Invocation cancellation aborts model I/O, joins the active step and pending
+  tasks, retires the controller's active turn without finalization, and is
+  rethrown so Restate records cancellation.
 - The complete transcript remains durable. The model sees the rolling summary
   plus each exact entry since its checkpoint, with steering metadata and
   interruption/failure boundaries preserved.
-- The loop stops after eight model rounds instead of running indefinitely.
+- Turn stops after eight model steps instead of running indefinitely.
 
 ## Model flow control
 
 Only full agent inference uses the scoped gateway. `ask` performs no inference;
 steering and interruption are explicit controller operations. Background
 compaction owns its cheap model call in a shared Agent handler and cannot
-consume an agent-loop inference slot.
+consume an agent inference slot.
 
 `ModelGateway` calls use scope `openai` and a two-level limit key:
 `gpt-5.6-terra/<agent-hash>`. Each invocation therefore draws from three
@@ -324,7 +325,7 @@ curl localhost:8080/Agent/demo/steer \
 ```
 
 The sleep call returns a pending acknowledgement and its Restate timer remains
-active. A steering message starts another model round after foreground tools
+active. A steering message starts another agent step after foreground tools
 finish. For the instruction above, the model can call `cancelOperation` with
 the timer's stable operation ID; that timer is interrupted while unrelated work
 continues. The turn publishes its final answer only after its remaining pending
@@ -344,7 +345,7 @@ curl localhost:8080/Agent/demo/resolveApproval \
 
 `approvals` returns the `approvalId`, originating Turn invocation ID, and the
 model's question. The initial tool result reports the pending request; approval
-or rejection later wakes the loop as a runtime update, allowing the model to
+or rejection later wakes Turn as a runtime update, allowing the model to
 perform approved work, explain a rejection, or choose a different action.
 
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
@@ -358,8 +359,10 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
-- `packages/libs/example/src/turn.ts` — turn lifecycle and signal supervision
-- `packages/libs/example/src/agent-loop.ts` — bounded model/tool orchestration
+- `packages/libs/example/src/turn.ts` — transient turn state machine and signal supervision
+- `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
+- `packages/libs/example/src/agent-step.ts` — one bounded model/foreground-tool step
+- `packages/libs/example/src/agent-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — model protocol and provider calls

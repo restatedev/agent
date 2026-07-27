@@ -1,7 +1,8 @@
 // Concrete tools available to the example agent. Each definition owns its
 // model description, input schema, validation, and local durable behavior.
 // The exported object is deliberately concrete rather than a generic runtime:
-// agent-loop owns orchestration while this module owns tool mechanics.
+// Turn owns orchestration and agent-step owns foreground execution while this
+// module owns tool mechanics.
 
 import {setTimeout} from "node:timers/promises";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
@@ -168,7 +169,7 @@ const getWeatherTool = defineAgentTool({
 const sleepTool = defineAgentTool({
   name: "sleep",
   description:
-    "Start a durable timer. The timer remains active across later model rounds, and the turn cannot finish until it completes.",
+    "Start a durable timer. The timer remains active across later agent steps, and the turn cannot finish until it completes.",
   inputSchema: z.object({
     durationSeconds: z
       .number()
@@ -199,7 +200,7 @@ const sleepTool = defineAgentTool({
 const humanApprovalTool = defineAgentTool({
   name: "humanApproval",
   description:
-    "Request human approval for a proposed action. The request remains pending across later model rounds. Call it by itself and do not perform dependent actions until a runtime update reports approval.",
+    "Request human approval for a proposed action. The request remains pending across later agent steps. Call it by itself and do not perform dependent actions until a runtime update reports approval.",
   inputSchema: z.object({
     question: z
       .string()

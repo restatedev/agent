@@ -1,242 +1,389 @@
-// Turn is the turn policy: a stateless service that supervises one
-// conversation turn. The thinking itself — the model -> tools -> model cycle —
-// is the concrete agent loop (see ./agent-loop). This file owns the durable
-// interrupt signal and reports how the turn ended; the loop handles steering
-// and graceful interruption without discarding its working context.
-//
-// It owns no state at all. The Agent owns the durable conversation transcript
-// and active turn id. This service sends exactly one structured outcome back
-// to `Agent.append`; model and tool details remain in Restate's invocation
-// observability instead of becoming user-facing conversation state.
-//
-// The turn's identity is its own invocation id: minted by the send that starts
-// the turn (so the Agent knows it without a handshake) and used as the target
-// for the control signals:
-//   - interrupt is passed into agentLoop for graceful finalization
-//   - steering is consumed cooperatively inside agentLoop
-// The Agent-side lifecycle and signal senders live in agent-turn.ts.
+// One Turn invocation is the durable agent-turn state machine. It owns the
+// transient model context, control-signal cursor, budgets, and pending tools.
+// Each iteration spawns one bounded agent step and applies its returned data.
 
 import {CancelledError} from "@restatedev/restate-sdk";
 import {
+  allSettled,
+  type Future,
   handlerRequest,
+  InterruptedError,
   type Operation,
   schemas,
+  select,
   sendClient,
   service,
   signal,
   spawn,
-  type Task,
 } from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
-import {agentLoop} from "./agent-loop.js";
+import {createPendingOperations} from "./agent-pending.js";
 import {
-  type ConversationEntry,
+  AgentStepInterrupt,
+  type AgentStepResult,
+  agentStep,
+  type ToolStep,
+} from "./agent-step.js";
+import {
+  type AgentToolContext,
+  agentTools,
+  type ToolOutcome,
+} from "./agent-tools.js";
+import {callModel} from "./model-gateway.js";
+import {
+  buildModelContext,
+  interruptionInstruction,
+  steeringMessage,
+} from "./turn-context.js";
+import {
+  type ProgressReport,
+  type SteeringSignal,
   TURN_SIGNALS,
   type TurnOutcome,
   type TurnRequest,
   TurnRequestSchema,
 } from "./types.js";
 
-function interruptionBoundary(
-  entry: Extract<ConversationEntry, {role: "event"; type: "interrupt"}>,
-): ModelMessage {
-  return {
-    role: "user",
-    content: [
-      "[Turn interruption boundary]",
-      `Turn: ${entry.turnId}`,
-      `Reason: ${JSON.stringify(entry.reason)}`,
-      "The prior turn was asked to stop or was externally cancelled.",
-      "Treat requests before this boundary as conversation context, not unfinished work to resume automatically.",
-      "Do not assume tools from that turn completed. Act on earlier requests only when the new turn messages explicitly refer to them.",
-    ].join("\n"),
-  };
-}
+type TurnState = {
+  context: AgentToolContext;
+  messages: ModelMessage[];
+  interrupt: Future<string>;
+  steering: Future<SteeringSignal>;
+  consumedSteering: number;
+  steps: number;
+  toolCalls: number;
+  pending: ReturnType<typeof createPendingOperations>;
+};
 
-function failureBoundary(
-  entry: Extract<ConversationEntry, {role: "assistant"}>,
-): ModelMessage {
-  return {
-    role: "user",
-    content: [
-      "[Previous turn failed]",
-      `Turn: ${entry.turnId}`,
-      `Failure: ${JSON.stringify(entry.text)}`,
-      "Treat requests before this boundary as conversation context, not unfinished work to resume automatically.",
-    ].join("\n"),
-  };
-}
-
-function dispatchBoundary(
-  entry: Extract<ConversationEntry, {role: "event"; type: "dispatch"}>,
-): ModelMessage {
-  return {
-    role: "user",
-    content: [
-      "[Queued messages activated]",
-      `The ${entry.queuedMessages} most recent user message(s) marked as queued are the input for this turn.`,
-      "Process them now. Assistant messages or lifecycle events appearing after their original transcript positions did not answer them.",
-    ].join("\n"),
-  };
-}
-
-function userMessage(
-  entry: Extract<ConversationEntry, {role: "user"}>,
-): string {
-  if (entry.delivery === "queued") {
-    return [
-      "[Queued user message]",
-      "This arrived while another turn was active and was not part of that turn's input.",
-      entry.text,
-    ].join("\n");
-  }
-  if (entry.delivery !== "steer") {
-    return entry.text;
-  }
-  // A later Turn should retain the fact that this instruction redirected an
-  // earlier active Turn, just as that Turn saw it through its steering signal.
-  return [
-    "[Steering message delivered during the previous turn]",
-    entry.text,
-  ].join("\n");
-}
-
-// Project one canonical transcript into model messages. Delivery metadata and
-// lifecycle events remain visible without inventing a second message stream.
-function buildModelContext(
-  history: ConversationEntry[],
-  summary?: string,
-): ModelMessage[] {
-  const uncompacted = history.flatMap((entry): ModelMessage[] => {
-    if (entry.role === "user") {
-      return [{role: "user", content: userMessage(entry)}];
-    }
-    if (entry.role === "event") {
-      // Progress is part of the canonical transcript for consumers, but it is
-      // derived execution status rather than conversation input.
-      if (entry.type === "progress") {
-        return [];
-      }
-      return [
-        entry.type === "interrupt"
-          ? interruptionBoundary(entry)
-          : dispatchBoundary(entry),
-      ];
-    }
-    return entry.status === "failed"
-      ? [failureBoundary(entry)]
-      : [{role: "assistant", content: entry.text}];
-  });
-  return summary
-    ? [
-        {
-          role: "user",
-          content: [
-            "[Earlier conversation summary]",
-            "This is context derived from older turns. Newer messages take precedence.",
-            summary,
-          ].join("\n"),
-        },
-        ...uncompacted,
-      ]
-    : uncompacted;
-}
+const MAX_STEPS = 8;
+const MAX_TOOL_CALLS = 24;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function* reportProgress(
+  context: AgentToolContext,
+  phase: ProgressReport["phase"],
+  message: string,
+): Operation<void> {
+  yield* sendClient(Agent, context.agentId).reportProgress({
+    turnId: context.turnId,
+    phase,
+    message,
+  });
+}
+
+function toolBatchSummary(outcomes: ToolOutcome[]): string {
+  const succeeded = outcomes.filter(
+    ({status}) => status === "succeeded",
+  ).length;
+  const failed = outcomes.filter(({status}) => status === "failed").length;
+  const pending = outcomes.filter(({status}) => status === "pending").length;
+  return `Tool batch finished: ${succeeded} succeeded, ${failed} failed, ${pending} pending`;
+}
+
+function* finalizeInterruption(
+  state: TurnState,
+  reason: string,
+): Operation<TurnOutcome> {
+  yield* reportProgress(
+    state.context,
+    "finalizing",
+    "Stopping unfinished work for graceful interruption",
+  );
+  const stopped = yield* state.pending.stop(new InterruptedError(reason));
+  state.messages.push(...stopped.map(agentTools.toRuntimeMessage));
+  state.messages.push(interruptionInstruction(reason));
+  yield* reportProgress(
+    state.context,
+    "finalizing",
+    "Preparing a final response from completed results",
+  );
+
+  let response: string;
+  try {
+    const final = yield* callModel(state.context.agentId, state.messages, []);
+    if (final.type === "text" && final.content.trim()) {
+      response = final.content;
+    } else {
+      const detail =
+        final.type === "error"
+          ? final.message
+          : "the finalizer unexpectedly requested a tool";
+      response = `The turn was interrupted (${reason}), but its final response could not be generated: ${detail}.`;
+    }
+  } catch (error) {
+    if (error instanceof InterruptedError || error instanceof CancelledError) {
+      throw error;
+    }
+    response = `The turn was interrupted (${reason}), but its final response could not be generated: ${errorMessage(error)}.`;
+  }
+  return {
+    turnId: state.context.turnId,
+    status: "interrupted",
+    reason,
+    response,
+    consumedSteering: state.consumedSteering,
+  };
+}
+
+function* failTurn(state: TurnState, error: unknown): Operation<TurnOutcome> {
+  yield* state.pending.stop(error);
+  return {
+    turnId: state.context.turnId,
+    status: "failed",
+    error: errorMessage(error),
+    consumedSteering: state.consumedSteering,
+  };
+}
+
+// Text is a candidate final answer. Pending work keeps the state machine alive
+// until a completion, steering update, or interruption chooses the next move.
+function* applyText(
+  state: TurnState,
+  text: string,
+): Operation<TurnOutcome | undefined> {
+  if (!text.trim()) {
+    state.messages.push({
+      role: "user",
+      content:
+        "Your last response was empty. Call a tool or give a final answer.",
+    });
+    return undefined;
+  }
+  if (state.pending.size === 0) {
+    return {
+      turnId: state.context.turnId,
+      status: "completed",
+      response: text,
+      consumedSteering: state.consumedSteering,
+    };
+  }
+
+  yield* reportProgress(
+    state.context,
+    "waiting",
+    `Waiting for ${state.pending.size} pending operation(s): ${state.pending.describe()}`,
+  );
+  const next = yield* state.pending.next(state.steering, state.interrupt);
+  if (next.type === "steering") {
+    state.consumedSteering += 1;
+    state.steering = signal<SteeringSignal>(TURN_SIGNALS.steering);
+    state.messages.push(steeringMessage(next.steering));
+    return undefined;
+  }
+  if (next.type === "completion") {
+    state.messages.push(agentTools.toRuntimeMessage(next.event));
+    return undefined;
+  }
+
+  state.messages.push({role: "assistant", content: text});
+  return yield* finalizeInterruption(state, next.reason);
+}
+
+function* applyTools(
+  state: TurnState,
+  step: ToolStep,
+  steering: SteeringSignal[],
+): Operation<void> {
+  const applied = yield* state.pending.apply(step.outcomes, state.context);
+  state.messages.push(
+    step.action.message,
+    agentTools.toModelMessage(applied.outcomes),
+    ...applied.events.map(agentTools.toRuntimeMessage),
+    ...steering.map(steeringMessage),
+  );
+  yield* reportProgress(
+    state.context,
+    "tools",
+    toolBatchSummary(applied.outcomes),
+  );
+}
+
+function retainInterruptedTools(
+  state: TurnState,
+  step: ToolStep,
+  reason: string,
+): void {
+  state.messages.push(
+    step.action.message,
+    agentTools.toModelMessage(step.outcomes),
+    ...step.outcomes.flatMap((outcome): ModelMessage[] =>
+      outcome.status === "pending"
+        ? [
+            agentTools.toRuntimeMessage({
+              call: outcome.call,
+              outcome: {status: "cancelled", reason},
+            }),
+          ]
+        : [],
+    ),
+  );
+}
+
 export const Turn = service({
   name: "Turn",
   handlers: {
-    // Drive one turn and report one structured outcome. Steering and graceful
-    // interruption are handled cooperatively by the loop.
-    // The input is validated against TurnRequestSchema.
-    //   - loop completes -> status "completed", response = the answer
-    //   - loop fails     -> status "failed", error = the reported error
-    //   - interrupt      -> status "interrupted", response = final answer
-    //   - loop throws    -> status "failed", error = the unexpected error
-    // Only one TurnOutcome reaches the transcript. It includes the number of
-    // steering signals consumed so the Agent can recover a completion race.
+    // One handler invocation owns the complete transient state machine and
+    // reports exactly one high-level outcome to the Agent.
     run: schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): Operation<void> {
-        // This turn's own invocation id is its identity; the Agent stored it
-        // when it started us.
         const turnId = handlerRequest().id;
-
-        const interrupt = signal<string>(TURN_SIGNALS.interrupt);
-        let activeTask: Task<unknown> | undefined;
+        const state: TurnState = {
+          context: {agentId: req.agentId, turnId},
+          messages: buildModelContext(req.history, req.summary),
+          interrupt: signal<string>(TURN_SIGNALS.interrupt),
+          steering: signal<SteeringSignal>(TURN_SIGNALS.steering),
+          consumedSteering: 0,
+          steps: 0,
+          toolCalls: 0,
+          pending: createPendingOperations(),
+        };
 
         try {
-          const task = spawn(
-            agentLoop({
-              agentId: req.agentId,
-              turnId,
-              messages: buildModelContext(req.history, req.summary),
-              interrupt,
-            }),
-          );
-          activeTask = task;
-          const result = yield* task;
-          let outcome: TurnOutcome;
-          if (result.status === "completed") {
-            outcome = {
-              turnId,
-              status: result.status,
-              response: result.text,
-              consumedSteering: result.consumedSteering,
-            };
-          } else if (result.status === "interrupted") {
-            outcome = {
-              turnId,
-              status: result.status,
-              reason: result.reason,
-              response: result.text,
-              consumedSteering: result.consumedSteering,
-            };
-          } else {
-            outcome = {
-              turnId,
-              status: result.status,
-              error: result.error,
-              consumedSteering: result.consumedSteering,
-            };
-          }
-          activeTask = undefined;
+          let result: TurnOutcome | undefined;
+          steps: while (state.steps < MAX_STEPS) {
+            yield* reportProgress(
+              state.context,
+              "thinking",
+              state.steps === 0
+                ? "Planning the turn"
+                : `Planning agent step ${state.steps + 1}`,
+            );
 
+            const task = spawn(
+              agentStep({
+                context: state.context,
+                messages: [...state.messages],
+                remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
+              }),
+            );
+            const buffered: SteeringSignal[] = [];
+            let nextSteering = state.steering;
+            let step: AgentStepResult;
+
+            try {
+              while (true) {
+                const selected = yield* select({
+                  interrupt: state.interrupt,
+                  steering: nextSteering,
+                  task,
+                });
+                if (selected.tag === "steering") {
+                  buffered.push(yield* selected.future);
+                  nextSteering = signal<SteeringSignal>(TURN_SIGNALS.steering);
+                  continue;
+                }
+                if (selected.tag === "task") {
+                  step = yield* selected.future;
+                  break;
+                }
+
+                const reason = yield* selected.future;
+                task.interrupt(new AgentStepInterrupt(reason));
+                const [settled] = yield* allSettled([task]);
+                const completed =
+                  settled.status === "fulfilled" ? settled.value : undefined;
+                const tools =
+                  completed?.type === "tools"
+                    ? completed
+                    : completed?.type === "interrupted"
+                      ? completed.tools
+                      : undefined;
+                step = {type: "interrupted", reason, tools};
+                break;
+              }
+            } catch (error) {
+              task.interrupt(error);
+              yield* allSettled([task]);
+              throw error;
+            }
+
+            if (step.type === "interrupted") {
+              if (step.tools) {
+                retainInterruptedTools(state, step.tools, step.reason);
+              }
+              result = yield* finalizeInterruption(state, step.reason);
+              break;
+            }
+
+            state.steering = nextSteering;
+            state.consumedSteering += buffered.length;
+            state.steps += 1;
+
+            // A text/error response produced before buffered steering arrived
+            // has no side effects. Let the next step see the new messages.
+            if (
+              (step.type === "text" || step.type === "error") &&
+              buffered.length > 0
+            ) {
+              state.messages.push(...buffered.map(steeringMessage));
+              continue;
+            }
+
+            switch (step.type) {
+              case "error":
+                state.messages.push({
+                  role: "user",
+                  content: `Your last response could not be used (${step.message}). Try again with the available tools or give a final answer.`,
+                });
+                continue;
+
+              case "text": {
+                const completed = yield* applyText(state, step.content);
+                if (!completed) {
+                  continue;
+                }
+                result = completed;
+                break steps;
+              }
+
+              case "tool_budget_exceeded":
+                result = yield* failTurn(
+                  state,
+                  new InterruptedError(
+                    `agent exceeded its ${MAX_TOOL_CALLS}-tool-call budget`,
+                  ),
+                );
+                break steps;
+
+              case "tools":
+                state.toolCalls += step.action.calls.length;
+                yield* applyTools(state, step, buffered);
+                continue;
+            }
+          }
+
+          const outcome =
+            result ??
+            (yield* failTurn(
+              state,
+              new InterruptedError(
+                `agent did not finish within ${MAX_STEPS} steps`,
+              ),
+            ));
           yield* sendClient(Agent, req.agentId).append(outcome);
         } catch (error) {
+          yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
-            // Cancellation aborts in-flight run I/O first. Join the spawned loop
-            // for cleanup, retire the controller's active turn, then rethrow so
-            // Restate still records this invocation as cancelled.
-            if (activeTask) {
-              activeTask.interrupt(error);
-              try {
-                yield* activeTask;
-              } catch {
-                // Preserve the invocation's original cancellation.
-              }
-            }
             yield* sendClient(Agent, req.agentId).append({
               turnId,
               status: "interrupted",
               reason: "Turn cancelled",
-              consumedSteering: 0,
+              consumedSteering: state.consumedSteering,
             });
             throw error;
           }
 
-          // Unexpected model/tool failures become one explicit turn outcome;
-          // the controller is never left permanently busy.
           yield* sendClient(Agent, req.agentId).append({
             turnId,
             status: "failed",
             error: errorMessage(error),
-            consumedSteering: 0,
+            consumedSteering: state.consumedSteering,
           });
         }
       },

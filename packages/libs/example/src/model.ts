@@ -38,7 +38,7 @@ const AGENT_SYSTEM = [
   "You are a concise assistant.",
   "Use the available tools whenever they are needed to fulfill the request.",
   "Group independent tool calls in one response so they can run in parallel.",
-  "A pending tool result means the operation is still running across model rounds; do not call it again.",
+  "A pending tool result means the operation is still running across agent steps; do not call it again.",
   "Runtime updates report when pending tools complete, fail, or are cancelled.",
   "When the user asks to stop pending work, call cancelOperation with its operationId and wait for the cancellation result before claiming it stopped.",
   "Call humanApproval by itself, and do not perform any dependent action while its result is pending.",

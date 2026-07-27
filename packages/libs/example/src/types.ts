@@ -10,7 +10,7 @@ export const TURN_SIGNALS = {
 } as const;
 
 // One controller steering decision. Queued messages keep their original order
-// and the explicit steering message remains distinguishable at the loop.
+// and the explicit steering message remains distinguishable inside Turn.
 export type SteeringSignal = {
   queued: string[];
   message: string;
@@ -57,11 +57,11 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-export const ConversationEntrySchema = z.union([
+const ConversationEntrySchema = z.union([
   z.object({
     role: z.literal("user"),
     text: z.string(),
-    delivery: UserMessageDeliverySchema.optional(),
+    delivery: UserMessageDeliverySchema,
   }),
   z.object({
     role: z.literal("assistant"),
@@ -99,7 +99,7 @@ const TurnOutcomeBaseSchema = z.object({
   // Number of steering signals this turn actually consumed, in FIFO order.
   // The Agent uses it to recover every history message carried by unconsumed
   // signal batches when completion races with steering.
-  consumedSteering: z.number().int().nonnegative().default(0),
+  consumedSteering: z.number().int().nonnegative(),
 });
 
 // The single structured outcome a Turn reports to its Agent.

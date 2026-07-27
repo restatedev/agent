@@ -49,7 +49,7 @@ function agentLimitKey(agentId: string): string {
   return `${AGENT_MODEL}/${agent}`;
 }
 
-// Only the agent loop goes through the scoped gateway. The `openai` scope is
+// Only agent steps go through the scoped gateway. The `openai` scope is
 // the provider-wide budget; the two limit-key levels are model and agent.
 export function* callModel(
   agentId: string,

@@ -19,24 +19,20 @@ The application is split into a few concrete parts:
   which clients consume through the cursor-based `history` handler. `ask`
   starts work when idle and queues when busy; clients explicitly select `steer`
   or `interrupt` when they want to affect the active turn.
-- **`Turn`** is a stateless service invocation that supervises one turn. It
-  runs the agent loop and supplies its durable interrupt signal. The loop
-  consumes structured steering cooperatively; interruption cancels unfinished
-  work but retains completed results for one tool-free final model response.
-  Each invocation receives the canonical transcript, where steering metadata,
-  queue dispatch, and interruption reasons become explicit model-context
-  boundaries.
-- **`agentLoop`** performs a bounded model → tools → model cycle. It owns the
-  orchestration policy and one turn-local pending-operation registry, while
-  `agent-tools.ts` keeps every concrete tool's description, schema, validation,
-  local durable behavior, and result projection together. Independent tool
-  calls are spawned in parallel. Long-lived sleeps and approvals remain pending
-  across model rounds, allowing steering and unrelated tools to progress around
-  them. The model can selectively stop those tasks through `cancelOperation`;
-  a graceful interrupt stops everything outstanding and summarizes achieved
-  work. The loop one-way reports semantic progress without exposing raw
-  reasoning blocks. Progress remains visible in the canonical transcript but
-  is omitted from future model context and compaction input.
+- **`Turn`** has no service state, but one durable invocation owns the
+  transient agent-turn state machine: live messages, budgets, steering, and
+  pending operations. It repeatedly spawns one bounded agent step, applies its
+  returned data, and retains completed work for a tool-free interruption
+  response. Each invocation receives the canonical transcript, where steering
+  metadata, queue dispatch, and interruption reasons become explicit
+  model-context boundaries.
+- **`agentStep`** is the functional model → foreground-tools seam. It receives
+  a message snapshot and remaining tool budget, runs independent tool calls in
+  parallel, and owns no work after returning. `agent-pending.ts` owns
+  long-lived sleeps and approvals across steps. The model can selectively stop
+  those tasks through `cancelOperation`; progress remains visible in the
+  canonical transcript but is omitted from future model context and compaction
+  input.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
   concurrency controls, retry policy, and cancellation propagation.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
@@ -49,8 +45,8 @@ complete protocol is easy to inspect. Normal clients should still use only the
 conversation and approval handlers; the others are service coordination paths.
 
 ```text
-user/UI → Agent → Turn → agentLoop → ModelGateway
-            ↑          ↕ tools
+user/UI → Agent → Turn → agentStep → ModelGateway
+            ↑         ↕ tools
             └── outcome, progress, approvals, and signals
 ```
 
@@ -82,8 +78,10 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
-- `packages/libs/example/src/turn.ts` — turn lifecycle and signals
-- `packages/libs/example/src/agent-loop.ts` — agent loop orchestration
+- `packages/libs/example/src/turn.ts` — transient turn state machine and signals
+- `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
+- `packages/libs/example/src/agent-step.ts` — bounded model/foreground-tool step
+- `packages/libs/example/src/agent-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — AI SDK integration

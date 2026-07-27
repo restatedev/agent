@@ -2,7 +2,7 @@
 // by agent id, so its exclusive handlers serialize every decision about the
 // active turn, queued messages, user-facing history, and summary checkpoints.
 //
-// It never runs the agent loop itself. `ask` starts or queues work,
+// It never runs turn execution itself. `ask` starts or queues work,
 // `interrupt` and `steer` resolve signals on the active stateless Turn
 // invocation, and `append` accepts that Turn's single high-level outcome.
 
@@ -151,7 +151,7 @@ export const Agent = object({
       },
     ),
 
-    // Internal one-way status path used by the active loop. Progress is an
+    // Internal one-way status path used by the active Turn. Progress is an
     // ordered lifecycle event in the transcript; late reports are ignored.
     reportProgress: schemas(
       {input: ProgressReportSchema, output: z.void()},
@@ -202,18 +202,11 @@ export const Agent = object({
     resolveApproval: schemas(
       {input: ApprovalResolutionSchema, output: z.boolean()},
       function* (resolution): Operation<boolean> {
-        const request = (yield* approvals.list()).find(
-          (candidate) => candidate.approvalId === resolution.approvalId,
-        );
-        if (!request) {
-          return false;
-        }
         const current = yield* activeTurn.current();
-        if (current?.id !== request.turnId || current.interrupting) {
-          yield* approvals.cancel(request);
-          return false;
-        }
-        return yield* approvals.resolve(resolution);
+        return yield* approvals.resolve(
+          resolution,
+          current?.interrupting ? undefined : current?.id,
+        );
       },
     ),
 

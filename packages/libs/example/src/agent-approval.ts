@@ -21,6 +21,14 @@ function* listApprovals(): Operation<ApprovalRequest[]> {
   return (yield* sharedState().get<ApprovalRequest[]>(APPROVALS)) ?? [];
 }
 
+function storeApprovals(pending: ApprovalRequest[]): void {
+  if (pending.length === 0) {
+    state().clear(APPROVALS);
+  } else {
+    state().set(APPROVALS, pending);
+  }
+}
+
 /**
  * Handler-scoped access to human approvals for the current Agent object.
  *
@@ -58,11 +66,7 @@ export const approvals = {
     if (remaining.length === pending.length) {
       return;
     }
-    if (remaining.length === 0) {
-      state().clear(APPROVALS);
-    } else {
-      state().set(APPROVALS, remaining);
-    }
+    storeApprovals(remaining);
   },
 
   /** Removes every approval belonging to a completed Turn invocation. */
@@ -72,15 +76,17 @@ export const approvals = {
     if (remaining.length === pending.length) {
       return;
     }
-    if (remaining.length === 0) {
-      state().clear(APPROVALS);
-    } else {
-      state().set(APPROVALS, remaining);
-    }
+    storeApprovals(remaining);
   },
 
-  /** Removes a pending request and resolves its Turn-scoped signal. */
-  *resolve(resolution: ApprovalResolution): Operation<boolean> {
+  /**
+   * Removes a pending request and resolves its Turn-scoped signal when its
+   * originating Turn is still eligible to receive the decision.
+   */
+  *resolve(
+    resolution: ApprovalResolution,
+    activeTurnId?: string,
+  ): Operation<boolean> {
     const pending = yield* listApprovals();
     const request = pending.find(
       (candidate) => candidate.approvalId === resolution.approvalId,
@@ -92,10 +98,9 @@ export const approvals = {
     const remaining = pending.filter(
       (candidate) => candidate.approvalId !== resolution.approvalId,
     );
-    if (remaining.length === 0) {
-      state().clear(APPROVALS);
-    } else {
-      state().set(APPROVALS, remaining);
+    storeApprovals(remaining);
+    if (request.turnId !== activeTurnId) {
+      return false;
     }
 
     const decision: ApprovalDecision = {

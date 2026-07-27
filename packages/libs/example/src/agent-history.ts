@@ -19,23 +19,14 @@ type StoredEntry = {
   entry: ConversationEntry;
 };
 
-type LocatedEntry = StoredEntry & {
-  chunk: number;
-};
-
-type HistoryCursor = {
-  sequence: number;
-  chunk: number;
-};
-
 type ConversationSummary = {
-  through: HistoryCursor;
+  through: number;
   text: string;
 };
 
 export type ConversationCompactionPlan = {
-  baseThrough: HistoryCursor;
-  through: HistoryCursor;
+  baseThrough: number;
+  through: number;
 };
 
 type HistoryMeta = {
@@ -54,19 +45,17 @@ export type ConversationCompactionInput = ConversationCompactionPlan & {
   entries: ConversationEntry[];
 };
 
-export type ConversationCompactionResult =
-  | {
-      status: "completed";
-      baseThrough: HistoryCursor;
-      through: HistoryCursor;
-      summary: string;
-    }
-  | {
-      status: "failed";
-      baseThrough: HistoryCursor;
-      through: HistoryCursor;
-      error: string;
-    };
+export type ConversationCompactionResult = ConversationCompactionPlan &
+  (
+    | {
+        status: "completed";
+        summary: string;
+      }
+    | {
+        status: "failed";
+        error: string;
+      }
+  );
 
 const HISTORY_META = "history/meta";
 const HISTORY_SUMMARY = "history/summary";
@@ -74,14 +63,10 @@ const HISTORY_CHUNK_PREFIX = "history/chunk/";
 
 const CHUNK_SIZE = 32;
 const COMPACT_AFTER_MESSAGES = 32;
-const START = {sequence: 0, chunk: 0};
+const START = 0;
 
 function chunkKey(index: number): string {
   return `${HISTORY_CHUNK_PREFIX}${index}`;
-}
-
-function sameCursor(left: HistoryCursor, right: HistoryCursor): boolean {
-  return left.sequence === right.sequence && left.chunk === right.chunk;
 }
 
 function samePlan(
@@ -89,8 +74,7 @@ function samePlan(
   right: ConversationCompactionPlan,
 ): boolean {
   return (
-    sameCursor(left.baseThrough, right.baseThrough) &&
-    sameCursor(left.through, right.through)
+    left.baseThrough === right.baseThrough && left.through === right.through
   );
 }
 
@@ -112,11 +96,11 @@ function* ensureMeta(): Operation<HistoryMeta> {
   return meta;
 }
 
-function* readLocated(
+function* readEntries(
   meta: HistoryMeta,
   fromChunk = 0,
   throughChunk = meta.lastChunk,
-): Operation<LocatedEntry[]> {
+): Operation<StoredEntry[]> {
   const indexes = Array.from(
     {length: throughChunk - fromChunk + 1},
     (_, index) => fromChunk + index,
@@ -124,12 +108,7 @@ function* readLocated(
   const chunks = yield* all(
     indexes.map((index) => sharedState().get<StoredEntry[]>(chunkKey(index))),
   );
-  return chunks.flatMap((chunk, index) =>
-    (chunk ?? []).map((stored) => ({
-      ...stored,
-      chunk: indexes[index],
-    })),
-  );
+  return chunks.flatMap((chunk) => chunk ?? []);
 }
 
 function* rewriteLatestDelivery(
@@ -168,10 +147,6 @@ function* rewriteLatestDelivery(
   }
 }
 
-function isConversationMessage(entry: ConversationEntry): boolean {
-  return entry.role !== "event";
-}
-
 /**
  * Handler-scoped access to conversation history for the current Agent object.
  *
@@ -189,7 +164,7 @@ export const history = {
     const offset = (fromSequence - 1) % CHUNK_SIZE;
     const chunksNeeded = Math.ceil((offset + limit) / CHUNK_SIZE);
     const throughChunk = Math.min(meta.lastChunk, fromChunk + chunksNeeded - 1);
-    const entries = (yield* readLocated(meta, fromChunk, throughChunk))
+    const entries = (yield* readEntries(meta, fromChunk, throughChunk))
       .filter(({sequence}) => sequence >= fromSequence)
       .slice(0, limit)
       .map(({sequence, entry}) => ({sequence, entry}));
@@ -210,8 +185,8 @@ export const history = {
       (yield* sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
       undefined;
     const through = summary?.through ?? START;
-    const entries = (yield* readLocated(meta, through.chunk))
-      .filter(({sequence}) => sequence > through.sequence)
+    const entries = (yield* readEntries(meta, Math.floor(through / CHUNK_SIZE)))
+      .filter(({sequence}) => sequence > through)
       .map(({entry}) => entry);
     return {summary: summary?.text, entries};
   },
@@ -265,11 +240,12 @@ export const history = {
       (yield* sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
       undefined;
     const baseThrough = summary?.through ?? START;
-    const uncompacted = (yield* readLocated(meta, baseThrough.chunk)).filter(
-      ({sequence}) => sequence > baseThrough.sequence,
-    );
-    const messageCount = uncompacted.filter(({entry}) =>
-      isConversationMessage(entry),
+    const uncompacted = (yield* readEntries(
+      meta,
+      Math.floor(baseThrough / CHUNK_SIZE),
+    )).filter(({sequence}) => sequence > baseThrough);
+    const messageCount = uncompacted.filter(
+      ({entry}) => entry.role !== "event",
     ).length;
     if (messageCount < COMPACT_AFTER_MESSAGES) {
       return undefined;
@@ -280,7 +256,7 @@ export const history = {
       return undefined;
     }
 
-    const through = {sequence: last.sequence, chunk: last.chunk};
+    const through = last.sequence;
     meta.compaction = {baseThrough, through};
     state().set(HISTORY_META, meta);
     return meta.compaction;
@@ -299,15 +275,13 @@ export const history = {
     const summary =
       (yield* sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
       undefined;
-    const entries = (yield* readLocated(
+    const entries = (yield* readEntries(
       meta,
-      plan.baseThrough.chunk,
-      plan.through.chunk,
+      Math.floor(plan.baseThrough / CHUNK_SIZE),
+      Math.floor((plan.through - 1) / CHUNK_SIZE),
     ))
       .filter(
-        ({sequence}) =>
-          sequence > plan.baseThrough.sequence &&
-          sequence <= plan.through.sequence,
+        ({sequence}) => sequence > plan.baseThrough && sequence <= plan.through,
       )
       .map(({entry}) => entry);
     return {

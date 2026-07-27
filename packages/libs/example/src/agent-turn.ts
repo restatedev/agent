@@ -6,7 +6,6 @@ import {
   invocation,
   type Operation,
   sendClient,
-  sharedState,
   state,
 } from "@restatedev/restate-sdk-gen";
 import {Turn} from "./turn.js";
@@ -38,7 +37,7 @@ type FinishedTurn = {
 };
 
 function* readActiveTurn(): Operation<ActiveTurnState | undefined> {
-  return (yield* sharedState().get<ActiveTurnState>("turn")) ?? undefined;
+  return (yield* state().get<ActiveTurnState>("turn")) ?? undefined;
 }
 
 /**
@@ -114,9 +113,7 @@ export const activeTurn = {
     }
 
     const pending = (yield* state().get<string[]>("pending")) ?? [];
-    if (pending.length > 0) {
-      state().clear("pending");
-    }
+    state().clear("pending");
     const steering = {queued: pending, message};
     state().set("turn", {
       ...current,
@@ -144,10 +141,8 @@ export const activeTurn = {
     }
 
     state().clear("turn");
-    const pending = (yield* sharedState().get<string[]>("pending")) ?? [];
-    if (pending.length > 0) {
-      state().clear("pending");
-    }
+    const pending = (yield* state().get<string[]>("pending")) ?? [];
+    state().clear("pending");
 
     const missedSteeringMessages = current.interrupting
       ? 0

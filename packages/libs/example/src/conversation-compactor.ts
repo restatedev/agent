@@ -35,7 +35,7 @@ function compactorInput(request: ConversationCompactionInput): string {
             {
               role: entry.role,
               text: entry.text,
-              delivery: entry.delivery ?? null,
+              delivery: entry.delivery,
             },
           ];
         }
