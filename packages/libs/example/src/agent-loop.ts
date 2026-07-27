@@ -1,8 +1,9 @@
 // The concrete model -> tools -> model policy for one agent turn.
 //
-// Turn owns hard interruption and agent-tools owns concrete tool behavior.
-// This module keeps only the live orchestration state that cannot cross either
-// boundary: model rounds, parallel tool batches, steering, and pending tasks.
+// Turn owns the interrupt signal and agent-tools owns concrete tool behavior.
+// This module keeps the live orchestration state needed to stop gracefully:
+// model rounds, parallel tool batches, steering, pending tasks, and the model
+// context used for a final interruption response.
 
 import {CancelledError} from "@restatedev/restate-sdk";
 import {
@@ -32,10 +33,12 @@ type AgentLoopInput = {
   agentId: string;
   turnId: string;
   messages: ModelMessage[];
+  interrupt: Future<string>;
 };
 
 type AgentLoopResult = (
   | {status: "completed"; text: string}
+  | {status: "interrupted"; reason: string; text: string}
   | {status: "failed"; error: string}
 ) & {consumedSteering: number};
 
@@ -44,18 +47,29 @@ type PendingOperation = {
   task: Task<PendingEvent>;
 };
 
-type ModelStep = {
-  action: ModelResult;
-  steering: SteeringSignal[];
-  nextSteering: Future<SteeringSignal>;
-};
+type ModelStep =
+  | {
+      type: "completed";
+      action: ModelResult;
+      steering: SteeringSignal[];
+      nextSteering: Future<SteeringSignal>;
+    }
+  | {type: "interrupted"; reason: string};
 
-type ToolStep = {
-  outcomes: ToolOutcome[];
-  pending: PendingOperation[];
-  steering: SteeringSignal[];
-  nextSteering: Future<SteeringSignal>;
-};
+type ToolStep =
+  | {
+      type: "completed";
+      outcomes: ToolOutcome[];
+      pending: PendingOperation[];
+      steering: SteeringSignal[];
+      nextSteering: Future<SteeringSignal>;
+    }
+  | {
+      type: "interrupted";
+      reason: string;
+      outcomes: ToolOutcome[];
+      events: PendingEvent[];
+    };
 
 type CancellationStep = {
   outcomes: ToolOutcome[];
@@ -69,7 +83,8 @@ type PendingStep =
       steering: SteeringSignal;
       nextSteering: Future<SteeringSignal>;
     }
-  | {type: "completion"; event: PendingEvent};
+  | {type: "completion"; event: PendingEvent}
+  | {type: "interrupted"; reason: string};
 
 const MAX_ROUNDS = 8;
 const MAX_TOOL_CALLS = 24;
@@ -102,6 +117,7 @@ function* runModelStep(
   agentId: string,
   messages: ModelMessage[],
   steering: Future<SteeringSignal>,
+  interrupt: Future<string>,
 ): Operation<ModelStep> {
   const modelTask = spawn(callModel(agentId, messages, agentTools.manifests));
   const buffered: SteeringSignal[] = [];
@@ -109,11 +125,19 @@ function* runModelStep(
 
   while (true) {
     const selected = yield* select({
+      interrupt,
       steering: nextSteering,
       model: modelTask,
     });
+    if (selected.tag === "interrupt") {
+      const reason = yield* selected.future;
+      modelTask.interrupt(new InterruptedError(reason));
+      yield* allSettled([modelTask]);
+      return {type: "interrupted", reason};
+    }
     if (selected.tag === "model") {
       return {
+        type: "completed",
         action: yield* selected.future,
         steering: buffered,
         nextSteering,
@@ -130,6 +154,7 @@ function* runToolStep(
   calls: ToolCall[],
   context: AgentToolContext,
   steering: Future<SteeringSignal>,
+  interrupt: Future<string>,
 ): Operation<ToolStep> {
   const tasks = calls.map((call) => spawn(agentTools.execute(call, context)));
   const completed = all(tasks);
@@ -138,9 +163,42 @@ function* runToolStep(
 
   while (true) {
     const selected = yield* select({
+      interrupt,
       steering: nextSteering,
       tools: completed,
     });
+    if (selected.tag === "interrupt") {
+      const reason = yield* selected.future;
+      for (const task of tasks) {
+        task.interrupt(new InterruptedError(reason));
+      }
+      const settled = yield* allSettled(tasks);
+      const outcomes = settled.map(
+        (result, index): ToolOutcome =>
+          result.status === "fulfilled"
+            ? result.value
+            : {
+                call: calls[index],
+                status: "failed",
+                error: `interrupted before completion: ${reason}`,
+              },
+      );
+      return {
+        type: "interrupted",
+        reason,
+        outcomes,
+        events: outcomes.flatMap((outcome): PendingEvent[] =>
+          outcome.status === "pending"
+            ? [
+                {
+                  call: outcome.call,
+                  outcome: {status: "cancelled", reason},
+                },
+              ]
+            : [],
+        ),
+      };
+    }
     if (selected.tag === "steering") {
       buffered.push(yield* selected.future);
       nextSteering = signal<SteeringSignal>(TURN_SIGNALS.steering);
@@ -149,6 +207,7 @@ function* runToolStep(
 
     const outcomes = yield* selected.future;
     return {
+      type: "completed",
       outcomes,
       pending: outcomes.flatMap((outcome): PendingOperation[] =>
         outcome.status === "pending"
@@ -231,11 +290,16 @@ const pendingOperations = {
   *next(
     pending: PendingOperation[],
     steering: Future<SteeringSignal>,
+    interrupt: Future<string>,
   ): Operation<PendingStep> {
     const selected = yield* select({
+      interrupt,
       steering,
       completion: race(pending.map(({task}) => task)),
     });
+    if (selected.tag === "interrupt") {
+      return {type: "interrupted", reason: yield* selected.future};
+    }
     if (selected.tag === "steering") {
       return {
         type: "steering",
@@ -246,19 +310,95 @@ const pendingOperations = {
     return {type: "completion", event: yield* selected.future};
   },
 
-  *stop(pending: PendingOperation[], reason: unknown): Operation<void> {
+  *stop(
+    pending: PendingOperation[],
+    reason: unknown,
+  ): Operation<PendingEvent[]> {
     for (const operation of pending) {
       operation.task.interrupt(reason);
     }
-    yield* allSettled(pending.map(({task}) => task));
+    const settled = yield* allSettled(pending.map(({task}) => task));
+    return settled.map((result, index) =>
+      result.status === "fulfilled"
+        ? result.value
+        : {
+            call: pending[index].call,
+            outcome: {
+              status: "cancelled",
+              reason: errorMessage(reason),
+            },
+          },
+    );
   },
 };
 
-// Run model -> tools -> model until there is a final answer.
+function interruptionInstruction(reason: string): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Graceful interruption]",
+      `User instruction: ${JSON.stringify(reason)}`,
+      "Stop the original execution now and do not request any more tools.",
+      "Using only completed results and runtime events already present above, give the best direct answer possible.",
+      "Honor the user's interruption instruction, distinguish completed work from cancelled or incomplete work, and never invent missing results.",
+    ].join("\n"),
+  };
+}
+
+function* finalizeInterruption(
+  agentId: string,
+  messages: ModelMessage[],
+  pending: PendingOperation[],
+  reason: string,
+  consumedSteering: number,
+): Operation<AgentLoopResult> {
+  const stopped = yield* pendingOperations.stop(
+    pending,
+    new InterruptedError(reason),
+  );
+  messages.push(...stopped.map(agentTools.toRuntimeMessage));
+  messages.push(interruptionInstruction(reason));
+
+  try {
+    const final = yield* callModel(agentId, messages, []);
+    if (final.type === "text" && final.content.trim()) {
+      return {
+        status: "interrupted",
+        reason,
+        text: final.content,
+        consumedSteering,
+      };
+    }
+    const detail =
+      final.type === "error"
+        ? final.message
+        : "the finalizer unexpectedly requested a tool";
+    return {
+      status: "interrupted",
+      reason,
+      text: `The turn was interrupted (${reason}), but its final response could not be generated: ${detail}.`,
+      consumedSteering,
+    };
+  } catch (error) {
+    if (error instanceof InterruptedError || error instanceof CancelledError) {
+      throw error;
+    }
+    return {
+      status: "interrupted",
+      reason,
+      text: `The turn was interrupted (${reason}), but its final response could not be generated: ${errorMessage(error)}.`,
+      consumedSteering,
+    };
+  }
+}
+
+// Run model -> tools -> model until there is a final answer or a graceful
+// interruption finalizes the work completed so far.
 export function* agentLoop({
   agentId,
   turnId,
   messages: context,
+  interrupt,
 }: AgentLoopInput): Operation<AgentLoopResult> {
   const messages = [...context];
   const toolContext = {agentId, turnId};
@@ -270,7 +410,16 @@ export function* agentLoop({
 
   try {
     while (modelRounds < MAX_ROUNDS) {
-      const step = yield* runModelStep(agentId, messages, steering);
+      const step = yield* runModelStep(agentId, messages, steering, interrupt);
+      if (step.type === "interrupted") {
+        return yield* finalizeInterruption(
+          agentId,
+          messages,
+          pending,
+          step.reason,
+          consumedSteering,
+        );
+      }
       steering = step.nextSteering;
       consumedSteering += step.steering.length;
       const {action} = step;
@@ -302,16 +451,29 @@ export function* agentLoop({
           continue;
         }
         if (pending.length > 0) {
-          const next = yield* pendingOperations.next(pending, steering);
+          const next = yield* pendingOperations.next(
+            pending,
+            steering,
+            interrupt,
+          );
           if (next.type === "steering") {
             consumedSteering += 1;
             steering = next.nextSteering;
             messages.push(toSteeringMessage(next.steering));
-          } else {
+          } else if (next.type === "completion") {
             pending = pending.filter(
               ({call}) => call.toolCallId !== next.event.call.toolCallId,
             );
             messages.push(agentTools.toRuntimeMessage(next.event));
+          } else {
+            messages.push({role: "assistant", content: action.content});
+            return yield* finalizeInterruption(
+              agentId,
+              messages,
+              pending,
+              next.reason,
+              consumedSteering,
+            );
           }
           continue;
         }
@@ -336,7 +498,23 @@ export function* agentLoop({
       }
 
       messages.push(action.message);
-      const toolStep = yield* runToolStep(action.calls, toolContext, steering);
+      const toolStep = yield* runToolStep(
+        action.calls,
+        toolContext,
+        steering,
+        interrupt,
+      );
+      if (toolStep.type === "interrupted") {
+        messages.push(agentTools.toModelMessage(toolStep.outcomes));
+        messages.push(...toolStep.events.map(agentTools.toRuntimeMessage));
+        return yield* finalizeInterruption(
+          agentId,
+          messages,
+          pending,
+          toolStep.reason,
+          consumedSteering,
+        );
+      }
       steering = toolStep.nextSteering;
       consumedSteering += toolStep.steering.length;
 

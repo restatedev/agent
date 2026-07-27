@@ -195,11 +195,10 @@ export const Agent = object({
     ),
 
     // The active Turn sends exactly one structured outcome here. Verify it
-    // belongs to the active turn, append a completed or failed assistant
-    // result, retire the turn, and start one batch for anything still queued.
-    // Interrupted outcomes are lifecycle control, not assistant messages.
-    // Explicit interruption already has an event; external cancellation gets
-    // one here so a later turn still sees the conversation boundary.
+    // belongs to the active turn, append its user-facing result, retire the
+    // turn, and dispatch anything still queued. An explicit interrupt event is
+    // already in history; external cancellation gets one here. A graceful
+    // interruption can additionally produce an assistant finalization.
     // This is intentionally high-level: detailed tool/model activity belongs
     // in Restate's invocation logs and observability, not conversation state.
     append: schemas(
@@ -212,20 +211,28 @@ export const Agent = object({
         yield* approvals.clearTurn(outcome.turnId);
 
         yield* history.requeueLatestSteering(finished.missedSteeringMessages);
-        if (
-          outcome.status === "interrupted" &&
-          !finished.interruptionRequested
-        ) {
-          yield* history.append({
-            role: "event",
-            type: "interrupt",
-            turnId: outcome.turnId,
-            reason: outcome.text,
-          });
-        } else if (outcome.status !== "interrupted") {
+        if (outcome.status === "interrupted") {
+          if (!finished.interruptionRequested) {
+            yield* history.append({
+              role: "event",
+              type: "interrupt",
+              turnId: outcome.turnId,
+              reason: outcome.reason,
+            });
+          }
+          if (outcome.response) {
+            yield* history.append({
+              role: "assistant",
+              text: outcome.response,
+              turnId: outcome.turnId,
+              status: "interrupted",
+            });
+          }
+        } else {
           yield* history.append({
             role: "assistant",
-            text: outcome.text,
+            text:
+              outcome.status === "completed" ? outcome.response : outcome.error,
             turnId: outcome.turnId,
             status: outcome.status,
           });

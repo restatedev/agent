@@ -28,14 +28,13 @@ flowchart LR
   transcript, and `agent-approval.ts` owns pending human approvals.
   Each component exports a handler-scoped capability namespace: its operations
   use Restate's current handler context and hold no process-local state.
-- `Turn` is stateless. One invocation supervises one agent turn and races the
-  agent loop against hard interruption. The loop consumes steering itself at
-  model/tool boundaries so it can retain its working context without
-  cancelling current work.
-- `agentLoop` has one small boundary: `{ agentId, turnId, messages }` in and a
-  `completed | failed` result out. It owns only orchestration policy and the
-  live state for model rounds, steering, parallel tool batches, and pending
-  tasks.
+- `Turn` is stateless. One invocation supervises one agent turn and passes its
+  durable interrupt signal into the loop. The loop consumes steering and
+  interruption at model/tool boundaries so it can retain completed work.
+- `agentLoop` owns only orchestration policy and the live state for model
+  rounds, steering, parallel tool batches, pending tasks, and graceful
+  finalization. It returns a structured `completed | interrupted | failed`
+  result.
 - `agent-tools.ts` owns the concrete tools. Each definition keeps its model
   description, input schema, validation, local durable behavior, and result
   projection together. It exposes the loop a single concrete tool collection.
@@ -54,8 +53,8 @@ flowchart LR
 The controller stores only user-facing history. Tool calls and intermediate
 model steps stay in Restate's invocation journal and observability tools. A
 turn reports exactly one structured outcome: `completed`, `interrupted`, or
-`failed`. Completed and failed outcomes become assistant entries; interrupted
-outcomes retire the turn without exposing cancelled tool work as an answer.
+`failed`. A graceful interruption can include a final assistant response based
+on completed tool results; raw tool activity still stays out of the transcript.
 
 ## Conversation history and compaction
 
@@ -88,23 +87,23 @@ inside `agentLoop` are never summarized mid-turn.
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | void | Returns the complete durable transcript in Agent observation order. Entries distinguish user messages, lifecycle events, and terminal turn summaries. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
-| `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
+| `interrupt` | reason string | Records an interruption event and signals the active loop to cancel unfinished work and produce a final response. Returns immediately. |
 | `steer` | instruction string | Promotes queued messages into the active turn, then sends the new instruction after them. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool with `approved` or `rejected`. |
 
 A successful interruption is visible immediately as
-`{ role: "event", type: "interrupt", turnId, reason }`. Its eventual
-interrupted outcome retires the active turn but is not appended as an assistant
-message. A later turn receives the event and reason as a boundary instructing
-the model not to resume unfinished work automatically. External cancellation
-creates the same kind of boundary; pending tool cancellation remains in
-Restate observability.
+`{ role: "event", type: "interrupt", turnId, reason }`. The active loop then
+cancels and joins unfinished tools, retains completed results, and makes one
+tool-free model call that answers as far as those results allow. That response
+is appended as an assistant entry with status `interrupted`. A later turn sees
+both the boundary and final response. External invocation cancellation still
+creates a boundary without attempting graceful finalization.
 
 `ask` deliberately makes no model decision: it starts work when idle and
 queues when busy. Clients choose `steer` or `interrupt` explicitly when a
-message should affect the active turn. The `interrupt` handler is control-only:
-it stops the active turn without creating another user request.
+message should affect the active turn. The interrupt reason is a control
+instruction for finalization; it does not create another user request or Turn.
 
 The controller flow is therefore:
 
@@ -115,9 +114,9 @@ The controller flow is therefore:
 - `steer` promotes that queue without moving its transcript entries, appends
   the new steering message, and sends one structured steering signal.
 - `interrupt` leaves the queue intact and appends its event after every message
-  the Agent had already observed. After the old Turn retires, a dispatch event
-  activates those queued entries and starts one new Turn with the complete
-  transcript.
+  the Agent had already observed. The old Turn appends its graceful final
+  response, then a dispatch event activates queued entries and starts one new
+  Turn with the complete transcript.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 `steer` call resolves one structured `{ queued, message }` signal: messages
@@ -157,12 +156,15 @@ accepted before cancellation is recovered into the next turn.
 - `cancelOperation` lets the model selectively interrupt and join one pending
   operation by its stable ID. Completion races are reported honestly, and
   unrelated operations continue running.
-- Hard interruption still cascades through the loop and all pending tasks.
-  Abandoned approval requests are cleaned up idempotently.
+- Graceful interruption cancels and joins foreground and pending tasks, records
+  their completed or cancelled results in the loop context, and performs one
+  final model call with no tools. Abandoned approval requests are cleaned up
+  idempotently.
 - Deterministic configuration and OpenAI 4xx request errors fail immediately.
   Transient transport, timeout, rate-limit, conflict, and 5xx errors retry.
 - Invocation cancellation aborts model I/O, joins the spawned loop, retires the
-  controller's active turn, and is rethrown so Restate records cancellation.
+  controller's active turn without finalization, and is rethrown so Restate
+  records cancellation.
 - The complete transcript remains durable. The model sees the rolling summary
   plus each exact entry since its checkpoint, with steering metadata and
   interruption/failure boundaries preserved.

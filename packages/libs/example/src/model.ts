@@ -106,12 +106,18 @@ export async function completeAgent(
   signal: AbortSignal,
 ): Promise<ModelResult> {
   return withOpenAI(async (openai) => {
+    const toolOptions =
+      tools.length > 0
+        ? {
+            tools: modelTools(tools),
+            toolChoice: "auto" as const,
+          }
+        : {};
     const result = await generateText({
       model: openai.responses(AGENT_MODEL),
       system: AGENT_SYSTEM,
       messages,
-      tools: modelTools(tools),
-      toolChoice: "auto",
+      ...toolOptions,
       maxOutputTokens: 2_000,
       maxRetries: 0,
       abortSignal: signal,

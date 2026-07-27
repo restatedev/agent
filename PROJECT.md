@@ -18,19 +18,20 @@ The application is split into a few concrete parts:
   when idle and queues when busy; clients explicitly select `steer` or
   `interrupt` when they want to affect the active turn.
 - **`Turn`** is a stateless service invocation that supervises one turn. It
-  runs the agent loop and listens for durable interruption. The loop consumes
-  structured steering batches cooperatively without cancelling work from the
-  current round. Each invocation receives the canonical transcript, where
-  steering metadata, queue dispatch, and interruption reasons become explicit
-  model-context boundaries.
+  runs the agent loop and supplies its durable interrupt signal. The loop
+  consumes structured steering cooperatively; interruption cancels unfinished
+  work but retains completed results for one tool-free final model response.
+  Each invocation receives the canonical transcript, where steering metadata,
+  queue dispatch, and interruption reasons become explicit model-context
+  boundaries.
 - **`agentLoop`** performs a bounded model → tools → model cycle. It owns the
   orchestration policy and live task registry, while `agent-tools.ts` keeps
   every concrete tool's description, schema, validation, local durable
   behavior, and result projection together. Independent tool calls are spawned
   in parallel. Long-lived sleeps and approvals remain pending across model
   rounds, allowing steering and unrelated tools to progress around them. The
-  model can selectively stop those tasks through `cancelOperation` without
-  interrupting the rest of the turn.
+  model can selectively stop those tasks through `cancelOperation`; a graceful
+  interrupt stops everything outstanding and summarizes achieved work.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
   concurrency controls.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
@@ -44,12 +45,13 @@ user → Agent → Turn → agentLoop → ModelGateway
          └── outcome / signals
 ```
 
-The controller stores only user-facing messages, answers, failures, and
-explicit interruption events. Intermediate model responses, cancelled tool
-work, and other execution details remain visible through Restate's invocation
-journal instead of becoming conversation history. Compaction preserves failure
-and interruption boundaries while older turns are summarized for model context
-without being removed from that user-facing transcript.
+The controller stores only user-facing messages, answers, failures, explicit
+interruption events, and graceful interruption responses. Intermediate model
+responses, cancelled tool work, and other execution details remain visible
+through Restate's invocation journal instead of becoming conversation history.
+Compaction preserves failure and interruption boundaries while older turns are
+summarized for model context without being removed from that user-facing
+transcript.
 
 ## Why Restate is useful here
 

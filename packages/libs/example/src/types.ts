@@ -16,9 +16,6 @@ export type SteeringSignal = {
   message: string;
 };
 
-// How a turn ended.
-const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
-
 // How a user message entered the agent's execution. A queued message can later
 // be promoted to steering or activated by a dispatch event without moving it
 // from its original transcript position.
@@ -51,7 +48,7 @@ export const ConversationEntrySchema = z.union([
     role: z.literal("assistant"),
     text: z.string(),
     turnId: z.string(),
-    status: z.enum(["completed", "failed"]),
+    status: z.enum(["completed", "interrupted", "failed"]),
   }),
   ConversationEventSchema,
 ]);
@@ -67,17 +64,32 @@ export const TurnRequestSchema = z.object({
 });
 export type TurnRequest = z.infer<typeof TurnRequestSchema>;
 
-// The single outcome a turn reports back to the general conversation: its own
-// id (so the Agent can confirm identity), how it ended, and the summary text.
-export const TurnOutcomeSchema = z.object({
+const TurnOutcomeBaseSchema = z.object({
   turnId: z.string(),
-  status: TurnStatusSchema,
-  text: z.string(),
   // Number of steering signals this turn actually consumed, in FIFO order.
   // The Agent uses it to recover every history message carried by unconsumed
   // signal batches when completion races with steering.
   consumedSteering: z.number().int().nonnegative().default(0),
 });
+
+// The single structured outcome a Turn reports to its Agent.
+export const TurnOutcomeSchema = z.discriminatedUnion("status", [
+  TurnOutcomeBaseSchema.extend({
+    status: z.literal("completed"),
+    response: z.string(),
+  }),
+  TurnOutcomeBaseSchema.extend({
+    status: z.literal("interrupted"),
+    reason: z.string(),
+    // Graceful interruption produces a final response. Hard invocation
+    // cancellation can still retire the Turn without one.
+    response: z.string().optional(),
+  }),
+  TurnOutcomeBaseSchema.extend({
+    status: z.literal("failed"),
+    error: z.string(),
+  }),
+]);
 export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
 
 // A human approval requested by a tool running inside a Turn invocation.
