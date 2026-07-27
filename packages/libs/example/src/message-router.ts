@@ -9,7 +9,7 @@ import {generateText, Output} from "ai";
 import {withOpenAI} from "./model.js";
 
 const MESSAGE_ROUTES = ["steer", "interrupt", "queue"] as const;
-export type MessageRoute = (typeof MESSAGE_ROUTES)[number];
+type MessageRoute = (typeof MESSAGE_ROUTES)[number];
 
 const ROUTER_MODEL = "gpt-4o-mini";
 

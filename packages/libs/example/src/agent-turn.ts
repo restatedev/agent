@@ -45,13 +45,11 @@ export const activeTurn = {
   /**
    * Starts a Turn invocation and records it as active.
    *
-   * @returns The new invocation ID, or `undefined` when a turn is already
-   * active.
+   * The exclusive Agent caller is responsible for ensuring no turn is active.
+   *
+   * @returns The new invocation ID.
    */
-  *start(request: TurnRequest): Operation<string | undefined> {
-    if (yield* this.current()) {
-      return undefined;
-    }
+  *start(request: TurnRequest): Operation<string> {
     const started = yield* sendClient(Turn).run(request);
     state().set("turn", {
       id: started.id,
@@ -61,11 +59,16 @@ export const activeTurn = {
     return started.id;
   },
 
-  /** Adds a message to the FIFO batch for the next turn. */
-  *enqueue(message: string): Operation<void> {
+  /**
+   * Adds a message to the FIFO batch for the next turn.
+   *
+   * @returns The new number of pending messages.
+   */
+  *enqueue(message: string): Operation<number> {
     const pending = (yield* sharedState().get<string[]>("pending")) ?? [];
     pending.push(message);
     state().set("pending", pending);
+    return pending.length;
   },
 
   /** Returns messages currently waiting for the next turn. */

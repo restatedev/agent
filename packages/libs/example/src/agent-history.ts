@@ -42,7 +42,7 @@ type HistoryMeta = {
   compaction?: ConversationCompactionPlan;
 };
 
-export type ConversationContext = {
+type ConversationContext = {
   summary?: string;
   entries: ConversationEntry[];
 };

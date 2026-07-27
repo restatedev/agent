@@ -45,7 +45,7 @@ const INTERRUPT = "interrupt";
 
 // Build summary + uncompacted model-visible history. Failed and interrupted
 // outcomes are operational events, not assistant answers.
-export function buildModelContext(
+function buildModelContext(
   history: ConversationEntry[],
   summary?: string,
 ): ModelMessage[] {

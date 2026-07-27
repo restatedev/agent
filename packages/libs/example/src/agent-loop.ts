@@ -27,13 +27,13 @@ import {
 import type {ModelResult, ToolCall} from "./model.js";
 import {callModel} from "./model-gateway.js";
 
-export type AgentLoopInput = {
+type AgentLoopInput = {
   agentId: string;
   turnId: string;
   messages: ModelMessage[];
 };
 
-export type AgentLoopResult = (
+type AgentLoopResult = (
   | {status: "completed"; text: string}
   | {status: "failed"; error: string}
 ) & {consumedSteering: number};

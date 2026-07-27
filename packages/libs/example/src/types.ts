@@ -1,18 +1,14 @@
-// Shared domain types, defined as zod schemas so the schema is the single
-// source of truth and the TypeScript types are derived from it (`z.infer`).
-// Both are exported: consumers use the `*Schema` value where they need runtime
-// validation / a JSON schema, and the plain type everywhere else.
+// Wire contracts shared by Restate handlers and signals. Zod schemas are the
+// source of truth; only values needed by another module are exported.
 
 import {z} from "zod";
 
 // How a turn ended.
-export const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
-export type TurnStatus = z.infer<typeof TurnStatusSchema>;
+const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
 
 // How a user message entered the agent's execution. Interruptions use the
 // dedicated event entry below instead of masquerading as a user message.
-export const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
-export type UserMessageDelivery = z.infer<typeof UserMessageDeliverySchema>;
+const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 
 // An entry in the general conversation. Messages record how they entered the
 // execution, interrupt requests are explicit events, and assistant entries are
@@ -69,7 +65,7 @@ export const ApprovalRequestSchema = z.object({
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
 // The decision delivered back to the waiting tool over a durable signal.
-export const ApprovalDecisionSchema = z.object({
+const ApprovalDecisionSchema = z.object({
   decision: z.enum(["approved", "rejected"]),
   reason: z.string().optional(),
 });

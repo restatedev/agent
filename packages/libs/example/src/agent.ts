@@ -32,7 +32,6 @@ import {
   type ConversationEntry,
   ConversationEntrySchema,
   TurnOutcomeSchema,
-  type UserMessageDelivery,
 } from "./types.js";
 
 // The agent id is this object's key. Object handlers always have one, but read
@@ -78,9 +77,6 @@ export const Agent = object({
         const current = yield* activeTurn.current();
         if (!current) {
           const turnId = yield* dispatchTurn(agentId, [message], "turn");
-          if (!turnId) {
-            throw new TerminalError("Failed to start turn");
-          }
           return {
             decision: "start",
             turnId,
@@ -107,7 +103,7 @@ export const Agent = object({
             );
 
         if (route === "interrupt") {
-          yield* activeTurn.enqueue(message);
+          const pendingMessages = yield* activeTurn.enqueue(message);
           yield* activeTurn.interrupt(message);
           yield* history.append({
             role: "event",
@@ -119,7 +115,7 @@ export const Agent = object({
             decision: "interrupt",
             turnId: current.id,
             stats: {
-              pendingMessages: (yield* activeTurn.pending()).length,
+              pendingMessages,
               steeringSignals: current.sentSteering,
             },
           };
@@ -140,12 +136,12 @@ export const Agent = object({
             },
           };
         }
-        yield* activeTurn.enqueue(message);
+        const pendingMessages = yield* activeTurn.enqueue(message);
         return {
           decision: "queue",
           turnId: current.id,
           stats: {
-            pendingMessages: (yield* activeTurn.pending()).length,
+            pendingMessages,
             steeringSignals: current.sentSteering,
           },
         };
@@ -283,12 +279,16 @@ export const Agent = object({
           turnId: outcome.turnId,
           status: outcome.status,
         });
-        yield* scheduleCompaction(agentKey());
-        yield* dispatchTurn(
-          agentKey(),
-          [...unconsumedSteering, ...finished.pending],
-          "queued",
-        );
+        const agentId = agentKey();
+        const plan = yield* history.beginCompaction();
+        if (plan) {
+          yield* sendClient(Agent, agentId).compact(plan);
+        }
+
+        const pending = [...unconsumedSteering, ...finished.pending];
+        if (pending.length > 0) {
+          yield* dispatchTurn(agentId, pending, "queued");
+        }
       },
     ),
 
@@ -339,23 +339,13 @@ export const Agent = object({
   },
 });
 
-function* scheduleCompaction(agentId: string): Operation<void> {
-  const plan = yield* history.beginCompaction();
-  if (plan) {
-    yield* sendClient(Agent, agentId).compact(plan);
-  }
-}
-
 // Cross-component coordination belongs here: record the input, prepare the
 // Turn request, then ask activeTurn to own its lifecycle.
 function* dispatchTurn(
   agentId: string,
   messages: string[],
-  delivery: Extract<UserMessageDelivery, "turn" | "queued">,
-): Operation<string | undefined> {
-  if (messages.length === 0 || (yield* activeTurn.current())) {
-    return undefined;
-  }
+  delivery: "turn" | "queued",
+): Operation<string> {
   yield* history.append(
     ...messages.map(
       (text): ConversationEntry => ({role: "user", text, delivery}),
