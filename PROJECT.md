@@ -39,11 +39,12 @@ user → Agent → Turn → agentLoop → ModelGateway
          └── outcome / signals
 ```
 
-The controller stores only user-facing messages and the final outcome of each
-turn. Intermediate model responses and tool calls remain visible through
-Restate's invocation journal instead of becoming conversation history.
-Older completed turns are summarized for model context without removing them
-from that user-facing transcript.
+The controller stores only user-facing messages, answers, failures, and
+explicit interruption events. Intermediate model responses, cancelled tool
+work, and other execution details remain visible through Restate's invocation
+journal instead of becoming conversation history. Older completed turns are
+summarized for model context without removing them from that user-facing
+transcript.
 
 ## Why Restate is useful here
 

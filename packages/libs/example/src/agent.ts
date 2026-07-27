@@ -109,18 +109,25 @@ export const Agent = object({
       },
     ),
 
-    // Explicitly redirect the active turn with a new instruction. Returns
-    // whether a turn will act on it; false means no turn is listening (idle,
-    // or winding down after an interrupt) and nothing was recorded — the
-    // caller decides the fallback (typically sending the message via `ask`,
-    // which queues it for the next turn).
+    // Explicitly redirect the active turn. Messages already queued by `ask`
+    // are promoted first, followed by the new instruction. Returns false when
+    // no turn is listening, in which case the queue remains untouched.
     steer: schemas(
       {input: z.string(), output: z.boolean()},
       function* (message): Operation<boolean> {
-        if (!(yield* activeTurn.steer(message))) {
+        const messages = yield* activeTurn.steer(message);
+        if (!messages) {
           return false;
         }
-        yield* history.append({role: "user", text: message, delivery: "steer"});
+        yield* history.append(
+          ...messages.map(
+            (text): ConversationEntry => ({
+              role: "user",
+              text,
+              delivery: "steer",
+            }),
+          ),
+        );
         return true;
       },
     ),
@@ -197,8 +204,10 @@ export const Agent = object({
     ),
 
     // The active Turn sends exactly one structured outcome here. Verify it
-    // belongs to the active turn, append the user-facing assistant entry,
-    // retire the turn, and start one batch turn for anything queued meanwhile.
+    // belongs to the active turn, append a completed or failed assistant
+    // result, retire the turn, and start one batch for anything still queued.
+    // Interrupted outcomes are lifecycle control, not assistant messages; an
+    // explicit interruption is already represented by its history event.
     // This is intentionally high-level: detailed tool/model activity belongs
     // in Restate's invocation logs and observability, not conversation state.
     append: schemas(
@@ -213,12 +222,14 @@ export const Agent = object({
         const unconsumedSteering = yield* history.takeLatestSteering(
           finished.missedSteering,
         );
-        yield* history.append({
-          role: "assistant",
-          text: outcome.text,
-          turnId: outcome.turnId,
-          status: outcome.status,
-        });
+        if (outcome.status !== "interrupted") {
+          yield* history.append({
+            role: "assistant",
+            text: outcome.text,
+            turnId: outcome.turnId,
+            status: outcome.status,
+          });
+        }
         const agentId = agentKey();
         const plan = yield* history.beginCompaction();
         if (plan) {

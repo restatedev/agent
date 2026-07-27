@@ -29,7 +29,7 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
     role: z.literal("assistant"),
     text: z.string(),
     turnId: z.string(),
-    status: TurnStatusSchema,
+    status: z.enum(["completed", "failed"]),
   }),
   z.object({
     role: z.literal("event"),

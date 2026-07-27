@@ -53,8 +53,9 @@ flowchart LR
 
 The controller stores only user-facing history. Tool calls and intermediate
 model steps stay in Restate's invocation journal and observability tools. A
-turn appends exactly one structured outcome: `completed`, `interrupted`, or
-`failed`.
+turn reports exactly one structured outcome: `completed`, `interrupted`, or
+`failed`. Completed and failed outcomes become assistant entries; interrupted
+outcomes retire the turn without exposing cancelled tool work as an answer.
 
 ## Conversation history and compaction
 
@@ -85,14 +86,14 @@ messages, tool calls, tool results, pending operations, and steering inside
 | `history` | void | Returns the complete durable transcript plus messages waiting for the next turn. Entries distinguish user messages, interruption events, and terminal turn summaries. |
 | `append` | turn outcome | Ingress-private completion path used by `Turn`; ignores stale or duplicate turn IDs. |
 | `interrupt` | reason string | Records an interruption event, resolves the active turn's interrupt signal, and returns immediately. |
-| `steer` | instruction string | Appends the instruction and resolves the active turn's steering signal. |
+| `steer` | instruction string | Promotes queued messages into the active turn, then sends the new instruction after them. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool with `approved` or `rejected`. |
 
 A successful interruption is visible immediately as
-`{ role: "event", type: "interrupt", turnId, reason }`. The later turn outcome
-records whether the turn actually ended as interrupted or won a completion
-race.
+`{ role: "event", type: "interrupt", turnId, reason }`. Its eventual
+interrupted outcome retires the active turn but is not appended as an assistant
+message. Pending tool cancellation remains in Restate observability.
 
 `ask` deliberately makes no model decision: it starts work when idle and
 queues when busy. Clients choose `steer` or `interrupt` explicitly when a
@@ -101,6 +102,8 @@ it stops the active turn without creating another user request.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 successive `signal("steering")` consumes the next instruction in order.
+Calling `steer` drains messages waiting in the next-turn queue and sends them
+before its new instruction, preserving their original FIFO order.
 The controller tracks how many signals it sent, while the loop reports how many
 it consumed. If normal completion wins the race with a steer, the
 unconsumed instruction moves behind that outcome and runs through the normal
@@ -139,8 +142,9 @@ accepted before cancellation is recovered into the next turn.
 - Invocation cancellation aborts model I/O, joins the spawned loop, retires the
   controller's active turn, and is rethrown so Restate records cancellation.
 - The complete transcript remains durable. The model sees the rolling summary
-  plus every exact usable message since its checkpoint. Interrupted and failed
-  outcome text is not misrepresented as an assistant answer.
+  plus every exact usable message since its checkpoint. Interrupted outcomes
+  remain control events, while failed assistant entries are excluded from
+  future model context.
 - The loop stops after eight model rounds instead of running indefinitely.
 
 ## Model flow control

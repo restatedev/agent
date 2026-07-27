@@ -68,7 +68,7 @@ export const activeTurn = {
    * @returns The new number of pending messages.
    */
   *enqueue(message: string): Operation<number> {
-    const pending = (yield* sharedState().get<string[]>("pending")) ?? [];
+    const pending = (yield* state().get<string[]>("pending")) ?? [];
     pending.push(message);
     state().set("pending", pending);
     return pending.length;
@@ -98,23 +98,35 @@ export const activeTurn = {
   },
 
   /**
-   * Sends one steering instruction to an active, listening Turn invocation.
+   * Promotes queued messages and a new instruction into the active Turn.
    *
-   * @returns Whether the steering signal was accepted.
+   * Pending messages are drained first and every instruction is signalled in
+   * FIFO order.
+   *
+   * @returns The messages accepted as steering, or `undefined` when no turn is
+   * listening.
    */
-  *steer(message: string): Operation<boolean> {
+  *steer(message: string): Operation<string[] | undefined> {
     const current = yield* readActiveTurn();
     if (!current || current.interrupting) {
-      return false;
+      return undefined;
     }
+
+    const pending = (yield* state().get<string[]>("pending")) ?? [];
+    if (pending.length > 0) {
+      state().clear("pending");
+    }
+    const messages = [...pending, message];
     state().set("turn", {
       ...current,
-      sentSteering: current.sentSteering + 1,
+      sentSteering: current.sentSteering + messages.length,
     });
-    invocation(current.id)
-      .signal<string>(TURN_SIGNALS.steering)
-      .resolve(message);
-    return true;
+    for (const instruction of messages) {
+      invocation(current.id)
+        .signal<string>(TURN_SIGNALS.steering)
+        .resolve(instruction);
+    }
+    return messages;
   },
 
   /**
