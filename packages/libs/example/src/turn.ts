@@ -29,6 +29,7 @@ import {
   interruptionInstruction,
   steeringMessage,
 } from "./turn-context.js";
+import {createSteeringInbox} from "./turn-steering.js";
 import {agentStep, settleStep, type ToolStep} from "./turn-step.js";
 import {
   type ProgressReport,
@@ -43,7 +44,7 @@ type TurnState = {
   context: AgentToolContext;
   messages: ModelMessage[];
   interrupt: Future<string>;
-  steering: Future<SteeringSignal>;
+  steering: ReturnType<typeof createSteeringInbox>;
   consumedSteering: number;
   steps: number;
   toolCalls: number;
@@ -161,11 +162,11 @@ function* applyText(
     "waiting",
     `Waiting for ${state.pending.size} pending operation(s): ${state.pending.describe()}`,
   );
-  const next = yield* state.pending.next(state.steering, state.interrupt);
+  const next = yield* state.pending.next(state.steering.ready, state.interrupt);
   if (next.type === "steering") {
-    state.consumedSteering += 1;
-    state.steering = signal<SteeringSignal>(TURN_SIGNALS.steering);
-    state.messages.push(steeringMessage(next.steering));
+    const steering = state.steering.drain();
+    state.consumedSteering += steering.length;
+    state.messages.push(...steering.map(steeringMessage));
     return undefined;
   }
   if (next.type === "completion") {
@@ -230,7 +231,7 @@ export const Turn = service({
           context: {agentId: req.agentId, turnId},
           messages: buildModelContext(req.history, req.summary),
           interrupt: signal<string>(TURN_SIGNALS.interrupt),
-          steering: signal<SteeringSignal>(TURN_SIGNALS.steering),
+          steering: createSteeringInbox(),
           consumedSteering: 0,
           steps: 0,
           toolCalls: 0,
@@ -255,11 +256,7 @@ export const Turn = service({
                 remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
               }),
             );
-            const {step, steering, nextSteering} = yield* settleStep(
-              task,
-              state.steering,
-              state.interrupt,
-            );
+            const step = yield* settleStep(task, state.interrupt);
 
             if (step.type === "interrupted") {
               if (step.tools) {
@@ -269,7 +266,7 @@ export const Turn = service({
               break;
             }
 
-            state.steering = nextSteering;
+            const steering = state.steering.drain();
             state.consumedSteering += steering.length;
             state.steps += 1;
 
@@ -324,8 +321,10 @@ export const Turn = service({
                 `agent did not finish within ${MAX_STEPS} steps`,
               ),
             ));
+          yield* state.steering.stop(new InterruptedError("Turn settled"));
           yield* sendClient(Agent, req.agentId).append(outcome);
         } catch (error) {
+          yield* state.steering.stop(error);
           yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
             yield* sendClient(Agent, req.agentId).append({

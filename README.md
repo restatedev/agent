@@ -34,10 +34,12 @@ flowchart LR
   `agentStep`, applies the returned data, and reports one structured
   `completed | interrupted | failed` result.
 - `turn-step.ts` owns the functional execution seam and the small supervisor
-  that settles each spawned step against steering and interruption. A step
-  receives a message snapshot and remaining tool budget, performs one model
-  call, runs that response's foreground tools in parallel, and owns no work
-  after returning. `agent-pending.ts` owns tasks that survive across steps.
+  that settles each spawned step against interruption. A step receives a
+  message snapshot and remaining tool budget, performs one model call, runs
+  that response's foreground tools in parallel, and owns no work after
+  returning. `turn-steering.ts` drains durable steering signals into a
+  Turn-scoped inbox, while `agent-pending.ts` owns tasks that survive across
+  steps.
 - `agent-tools.ts` owns the concrete tools. Each definition keeps its model
   description, input schema, validation, local durable behavior, and result
   projection together. It exposes each step a single concrete tool collection.
@@ -204,9 +206,10 @@ making pub/sub the source of truth.
   Restate's [concurrent task primitives](https://docs.restate.dev/develop/ts/concurrent-tasks)
   to spawn all local tool `run` steps before joining them. Restate journals
   their concurrent execution and preserves deterministic replay.
-- Steering is buffered while the current model call and foreground tool batch
-  finish. Their results remain in context, and the next agent step receives
-  every buffered instruction in FIFO order.
+- A background Turn fiber drains steering signals into a transient FIFO while
+  the current model call and foreground tool batch finish. After the step
+  settles, Turn commits its results and drains the inbox, so the next agent
+  step receives every buffered instruction in FIFO order.
 - `sleep` and `humanApproval` return protocol-complete pending acknowledgements
   to the model, while their turn-scoped Restate tasks continue across later
   steps. A pending sleep therefore keeps its timer while steering starts
@@ -363,6 +366,7 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signal supervision
 - `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
 - `packages/libs/example/src/turn-step.ts` — bounded step execution and supervision
+- `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
 - `packages/libs/example/src/agent-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation

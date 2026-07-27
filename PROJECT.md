@@ -28,11 +28,12 @@ The application is split into a few concrete parts:
   model-context boundaries.
 - **`agentStep`** is the functional model → foreground-tools seam. It receives
   a message snapshot and remaining tool budget, runs independent tool calls in
-  parallel, and owns no work after returning. `agent-pending.ts` owns
+  parallel, and owns no work after returning. `turn-steering.ts` drains durable
+  steering signals into a Turn-scoped inbox, while `agent-pending.ts` owns
   long-lived sleeps and approvals across steps. The model can selectively stop
   those tasks through `cancelOperation`; progress remains visible in the
-  canonical transcript but is omitted from future model context and compaction
-  input.
+  canonical transcript but is omitted from future model context and
+  compaction input.
 - **`ModelGateway`** performs full model inference behind Restate's scoped
   concurrency controls, retry policy, and cancellation propagation.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
@@ -81,6 +82,7 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signals
 - `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
 - `packages/libs/example/src/turn-step.ts` — bounded step execution and supervision
+- `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
 - `packages/libs/example/src/agent-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation

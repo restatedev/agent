@@ -10,7 +10,6 @@ import {
   type Operation,
   select,
   sendClient,
-  signal,
   spawn,
   type Task,
 } from "@restatedev/restate-sdk-gen";
@@ -23,7 +22,6 @@ import {
 } from "./agent-tools.js";
 import type {ModelResult} from "./model.js";
 import {callModel} from "./model-gateway.js";
-import {type SteeringSignal, TURN_SIGNALS} from "./types.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
 
@@ -38,12 +36,6 @@ type AgentStepResult =
   | ToolStep
   | {type: "tool_budget_exceeded"}
   | {type: "interrupted"; reason: string; tools?: ToolStep};
-
-type StepSettlement = {
-  step: AgentStepResult;
-  steering: SteeringSignal[];
-  nextSteering: Future<SteeringSignal>;
-};
 
 class AgentStepInterrupt extends InterruptedError {}
 
@@ -126,54 +118,31 @@ export function* agentStep({
   }
 }
 
-// Wait for one already-spawned step while buffering steering. Interruption
-// stops and joins the step, preserving any foreground tool results it managed
-// to produce. Turn remains responsible for committing the returned settlement.
+// Wait for one already-spawned step. Interruption stops and joins the step,
+// preserving any foreground tool results it managed to produce. Turn remains
+// responsible for committing the returned result.
 export function* settleStep(
   task: Task<AgentStepResult>,
-  steering: Future<SteeringSignal>,
   interrupt: Future<string>,
-): Operation<StepSettlement> {
-  const buffered: SteeringSignal[] = [];
-  let nextSteering = steering;
-
+): Operation<AgentStepResult> {
   try {
-    while (true) {
-      const selected = yield* select({
-        interrupt,
-        steering: nextSteering,
-        task,
-      });
-      if (selected.tag === "steering") {
-        buffered.push(yield* selected.future);
-        nextSteering = signal<SteeringSignal>(TURN_SIGNALS.steering);
-        continue;
-      }
-      if (selected.tag === "task") {
-        return {
-          step: yield* selected.future,
-          steering: buffered,
-          nextSteering,
-        };
-      }
-
-      const reason = yield* selected.future;
-      task.interrupt(new AgentStepInterrupt(reason));
-      const [settled] = yield* allSettled([task]);
-      const completed =
-        settled.status === "fulfilled" ? settled.value : undefined;
-      const tools =
-        completed?.type === "tools"
-          ? completed
-          : completed?.type === "interrupted"
-            ? completed.tools
-            : undefined;
-      return {
-        step: {type: "interrupted", reason, tools},
-        steering: buffered,
-        nextSteering,
-      };
+    const selected = yield* select({interrupt, task});
+    if (selected.tag === "task") {
+      return yield* selected.future;
     }
+
+    const reason = yield* selected.future;
+    task.interrupt(new AgentStepInterrupt(reason));
+    const [settled] = yield* allSettled([task]);
+    const completed =
+      settled.status === "fulfilled" ? settled.value : undefined;
+    const tools =
+      completed?.type === "tools"
+        ? completed
+        : completed?.type === "interrupted"
+          ? completed.tools
+          : undefined;
+    return {type: "interrupted", reason, tools};
   } catch (error) {
     task.interrupt(error);
     yield* allSettled([task]);

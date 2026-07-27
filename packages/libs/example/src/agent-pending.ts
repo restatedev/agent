@@ -18,7 +18,6 @@ import {
   type ToolOutcome,
 } from "./agent-tools.js";
 import type {ToolCall} from "./model.js";
-import type {SteeringSignal} from "./types.js";
 
 type PendingOperation = {
   call: ToolCall;
@@ -26,7 +25,7 @@ type PendingOperation = {
 };
 
 type PendingStep =
-  | {type: "steering"; steering: SteeringSignal}
+  | {type: "steering"}
   | {type: "completion"; event: PendingEvent}
   | {type: "interrupted"; reason: string};
 
@@ -118,7 +117,7 @@ export function createPendingOperations() {
     },
 
     *next(
-      steering: Future<SteeringSignal>,
+      steering: Future<void>,
       interrupt: Future<string>,
     ): Operation<PendingStep> {
       const selected = yield* select({
@@ -130,10 +129,8 @@ export function createPendingOperations() {
         return {type: "interrupted", reason: yield* selected.future};
       }
       if (selected.tag === "steering") {
-        return {
-          type: "steering",
-          steering: yield* selected.future,
-        };
+        yield* selected.future;
+        return {type: "steering"};
       }
       const event = yield* selected.future;
       active.delete(event.call.toolCallId);

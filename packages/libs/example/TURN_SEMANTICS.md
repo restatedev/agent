@@ -14,6 +14,8 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   step receives a message snapshot and remaining tool budget, performs one
   model call, executes that response's foreground tools, and returns structured
   data. It owns no work after returning.
+- `turn-steering.ts` owns one background signal receiver and a transient FIFO
+  for steering accepted during the Turn.
 - `agent-pending.ts` owns tool tasks that survive across steps, including
   completion races, selective cancellation, and cleanup.
 - `agent-tools.ts` owns concrete tool definitions, validation, execution,
@@ -24,7 +26,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 - `Turn.run` loops until it completes, is interrupted, or exhausts a budget.
 - Each iteration spawns exactly one agent step. Turn supervises that task
-  against steering and interruption, then joins it before applying its result.
+  against interruption, then joins it before applying its result.
+- The steering inbox receives signals concurrently with the step. Turn drains
+  the inbox only after the step settles.
 - The step owns one model request and the foreground tool batch it may produce.
   All foreground calls are spawned before the step waits for the batch.
 - Turn applies the returned action to its transient state. Tool outcomes are
@@ -53,8 +57,10 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - Turn increments `consumedSteering` once for every steering update committed
   to its working context. Agent uses that count to recover instructions that
   lost a completion race.
-- Steering never cancels a step. It is buffered while the model and foreground
-  tools run.
+- Steering never cancels a step. A background fiber drains the durable signal
+  queue into a transient FIFO while the model and foreground tools run.
+  The FIFO's resettable channel only announces empty-to-non-empty transitions;
+  it is not the durable source.
   - Tool outcomes are committed first, followed by buffered steering.
   - A text or model-error result has no side effects and is discarded as stale
     when steering arrived during its step.
