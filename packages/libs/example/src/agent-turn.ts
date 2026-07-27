@@ -10,7 +10,12 @@ import {
   state,
 } from "@restatedev/restate-sdk-gen";
 import {Turn} from "./turn.js";
-import {TURN_SIGNALS, type TurnOutcome, type TurnRequest} from "./types.js";
+import {
+  type SteeringSignal,
+  TURN_SIGNALS,
+  type TurnOutcome,
+  type TurnRequest,
+} from "./types.js";
 
 /** Durable state for the invocation currently owned by the Agent. */
 type ActiveTurnState = {
@@ -18,14 +23,14 @@ type ActiveTurnState = {
   id: string;
   /** Whether an interrupt was sent and the terminal outcome is still pending. */
   interrupting: boolean;
-  /** Number of steering signals sent to this invocation. */
-  sentSteering: number;
+  /** Number of user messages carried by each steering signal sent in order. */
+  steeringBatches: number[];
 };
 
 /** Information returned when an active turn is successfully retired. */
 type FinishedTurn = {
-  /** Number of steering signals left unconsumed when the Turn finished. */
-  missedSteering: number;
+  /** Number of user messages carried by unconsumed steering signals. */
+  missedSteeringMessages: number;
   /** Messages accepted for the next turn while this one was active. */
   pending: string[];
 };
@@ -57,7 +62,7 @@ export const activeTurn = {
     state().set("turn", {
       id: started.id,
       interrupting: false,
-      sentSteering: 0,
+      steeringBatches: [],
     });
     return started.id;
   },
@@ -100,13 +105,12 @@ export const activeTurn = {
   /**
    * Promotes queued messages and a new instruction into the active Turn.
    *
-   * Pending messages are drained first and every instruction is signalled in
-   * FIFO order.
+   * Pending messages are drained into the signal as a separate FIFO list.
    *
-   * @returns The messages accepted as steering, or `undefined` when no turn is
+   * @returns The structured steering signal, or `undefined` when no turn is
    * listening.
    */
-  *steer(message: string): Operation<string[] | undefined> {
+  *steer(message: string): Operation<SteeringSignal | undefined> {
     const current = yield* readActiveTurn();
     if (!current || current.interrupting) {
       return undefined;
@@ -116,17 +120,15 @@ export const activeTurn = {
     if (pending.length > 0) {
       state().clear("pending");
     }
-    const messages = [...pending, message];
+    const steering = {queued: pending, message};
     state().set("turn", {
       ...current,
-      sentSteering: current.sentSteering + messages.length,
+      steeringBatches: [...current.steeringBatches, steering.queued.length + 1],
     });
-    for (const instruction of messages) {
-      invocation(current.id)
-        .signal<string>(TURN_SIGNALS.steering)
-        .resolve(instruction);
-    }
-    return messages;
+    invocation(current.id)
+      .signal<SteeringSignal>(TURN_SIGNALS.steering)
+      .resolve(steering);
+    return steering;
   },
 
   /**
@@ -150,11 +152,11 @@ export const activeTurn = {
       state().clear("pending");
     }
 
-    return {
-      missedSteering: current.interrupting
-        ? 0
-        : Math.max(0, current.sentSteering - outcome.consumedSteering),
-      pending,
-    };
+    const missedSteeringMessages = current.interrupting
+      ? 0
+      : current.steeringBatches
+          .slice(outcome.consumedSteering)
+          .reduce((total, size) => total + size, 0);
+    return {missedSteeringMessages, pending};
   },
 };

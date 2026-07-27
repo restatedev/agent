@@ -195,8 +195,8 @@ export const history = {
 
   // Remove steering that lost a completion race so the Agent coordinator can
   // append it again after that outcome as normal queued input.
-  *takeLatestSteering(count: number): Operation<string[]> {
-    if (count === 0) {
+  *takeLatestSteering(messageCount: number): Operation<string[]> {
+    if (messageCount === 0) {
       return [];
     }
 
@@ -204,7 +204,7 @@ export const history = {
     const messages: string[] = [];
     for (
       let index = meta.lastChunk;
-      index >= 0 && messages.length < count;
+      index >= 0 && messages.length < messageCount;
       index--
     ) {
       const chunk =
@@ -212,7 +212,7 @@ export const history = {
       let changed = false;
       for (
         let entryIndex = chunk.length - 1;
-        entryIndex >= 0 && messages.length < count;
+        entryIndex >= 0 && messages.length < messageCount;
         entryIndex--
       ) {
         const entry = chunk[entryIndex].entry;

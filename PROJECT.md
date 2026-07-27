@@ -17,7 +17,8 @@ The application is split into a few concrete parts:
   `interrupt` when they want to affect the active turn.
 - **`Turn`** is a stateless service invocation that supervises one turn. It
   runs the agent loop and listens for durable interruption. The loop consumes
-  steering cooperatively without cancelling work from the current round.
+  structured steering batches cooperatively without cancelling work from the
+  current round.
 - **`agentLoop`** performs a bounded model → tools → model cycle. It owns the
   orchestration policy and live task registry, while `agent-tools.ts` keeps
   every concrete tool's description, schema, validation, local durable

@@ -101,15 +101,18 @@ message should affect the active turn. The `interrupt` handler is control-only:
 it stops the active turn without creating another user request.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
-successive `signal("steering")` consumes the next instruction in order.
-Calling `steer` drains messages waiting in the next-turn queue and sends them
-before its new instruction, preserving their original FIFO order.
-The controller tracks how many signals it sent, while the loop reports how many
-it consumed. If normal completion wins the race with a steer, the
-unconsumed instruction moves behind that outcome and runs through the normal
-queued-turn path instead of being stranded in history. An explicit interrupt
-supersedes outstanding steering. External cancellation does not: steering
-accepted before cancellation is recovered into the next turn.
+`steer` call resolves one structured `{ queued, message }` signal: messages
+waiting in the next-turn queue retain their FIFO order as `queued`, while the
+explicit instruction remains distinct as `message`. The loop converts that
+batch into one structured model update, while conversation history retains the
+individual user messages.
+
+The controller tracks each signal's message count, while the loop reports how
+many signals it consumed. If normal completion wins the race with a steer,
+every history entry carried by an unconsumed batch moves behind that outcome
+and runs through the normal queued-turn path. An explicit interrupt supersedes
+outstanding steering. External cancellation does not: steering accepted before
+cancellation is recovered into the next turn.
 
 ## Durability and failure behavior
 

@@ -26,7 +26,7 @@ import {
 } from "./agent-tools.js";
 import type {ModelResult, ToolCall} from "./model.js";
 import {callModel} from "./model-gateway.js";
-import {TURN_SIGNALS} from "./types.js";
+import {type SteeringSignal, TURN_SIGNALS} from "./types.js";
 
 type AgentLoopInput = {
   agentId: string;
@@ -46,15 +46,15 @@ type PendingOperation = {
 
 type ModelStep = {
   action: ModelResult;
-  steering: string[];
-  nextSteering: Future<string>;
+  steering: SteeringSignal[];
+  nextSteering: Future<SteeringSignal>;
 };
 
 type ToolStep = {
   outcomes: ToolOutcome[];
   pending: PendingOperation[];
-  steering: string[];
-  nextSteering: Future<string>;
+  steering: SteeringSignal[];
+  nextSteering: Future<SteeringSignal>;
 };
 
 type CancellationStep = {
@@ -64,7 +64,11 @@ type CancellationStep = {
 };
 
 type PendingStep =
-  | {type: "steering"; message: string; nextSteering: Future<string>}
+  | {
+      type: "steering";
+      steering: SteeringSignal;
+      nextSteering: Future<SteeringSignal>;
+    }
   | {type: "completion"; event: PendingEvent};
 
 const MAX_ROUNDS = 8;
@@ -74,15 +78,33 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function toSteeringMessage({queued, message}: SteeringSignal): ModelMessage {
+  const queuedMessages =
+    queued.length === 0
+      ? ["(none)"]
+      : queued.map((text, index) => `${index + 1}. ${JSON.stringify(text)}`);
+  return {
+    role: "user",
+    content: [
+      "[Steering update]",
+      "Queued user messages promoted into this turn:",
+      ...queuedMessages,
+      "",
+      "New steering message:",
+      message,
+    ].join("\n"),
+  };
+}
+
 // Steering is buffered while a model call is in flight. The completed model
 // action remains the current round; buffered instructions apply afterward.
 function* runModelStep(
   agentId: string,
   messages: ModelMessage[],
-  steering: Future<string>,
+  steering: Future<SteeringSignal>,
 ): Operation<ModelStep> {
   const modelTask = spawn(callModel(agentId, messages, agentTools.manifests));
-  const buffered: string[] = [];
+  const buffered: SteeringSignal[] = [];
   let nextSteering = steering;
 
   while (true) {
@@ -98,7 +120,7 @@ function* runModelStep(
       };
     }
     buffered.push(yield* selected.future);
-    nextSteering = signal<string>(TURN_SIGNALS.steering);
+    nextSteering = signal<SteeringSignal>(TURN_SIGNALS.steering);
   }
 }
 
@@ -107,11 +129,11 @@ function* runModelStep(
 function* runToolStep(
   calls: ToolCall[],
   context: AgentToolContext,
-  steering: Future<string>,
+  steering: Future<SteeringSignal>,
 ): Operation<ToolStep> {
   const tasks = calls.map((call) => spawn(agentTools.execute(call, context)));
   const completed = all(tasks);
-  const buffered: string[] = [];
+  const buffered: SteeringSignal[] = [];
   let nextSteering = steering;
 
   while (true) {
@@ -121,7 +143,7 @@ function* runToolStep(
     });
     if (selected.tag === "steering") {
       buffered.push(yield* selected.future);
-      nextSteering = signal<string>(TURN_SIGNALS.steering);
+      nextSteering = signal<SteeringSignal>(TURN_SIGNALS.steering);
       continue;
     }
 
@@ -208,7 +230,7 @@ const pendingOperations = {
 
   *next(
     pending: PendingOperation[],
-    steering: Future<string>,
+    steering: Future<SteeringSignal>,
   ): Operation<PendingStep> {
     const selected = yield* select({
       steering,
@@ -217,8 +239,8 @@ const pendingOperations = {
     if (selected.tag === "steering") {
       return {
         type: "steering",
-        message: yield* selected.future,
-        nextSteering: signal<string>(TURN_SIGNALS.steering),
+        steering: yield* selected.future,
+        nextSteering: signal<SteeringSignal>(TURN_SIGNALS.steering),
       };
     }
     return {type: "completion", event: yield* selected.future};
@@ -240,7 +262,7 @@ export function* agentLoop({
 }: AgentLoopInput): Operation<AgentLoopResult> {
   const messages = [...context];
   const toolContext = {agentId, turnId};
-  let steering = signal<string>(TURN_SIGNALS.steering);
+  let steering = signal<SteeringSignal>(TURN_SIGNALS.steering);
   let consumedSteering = 0;
   let toolCallCount = 0;
   let modelRounds = 0;
@@ -258,11 +280,7 @@ export function* agentLoop({
       // It has no side effects, so apply the buffered steering instead of
       // exposing a stale answer or retrying a stale model error.
       if (action.type !== "tool_calls" && step.steering.length > 0) {
-        messages.push(
-          ...step.steering.map(
-            (content): ModelMessage => ({role: "user", content}),
-          ),
-        );
+        messages.push(...step.steering.map(toSteeringMessage));
         continue;
       }
 
@@ -288,7 +306,7 @@ export function* agentLoop({
           if (next.type === "steering") {
             consumedSteering += 1;
             steering = next.nextSteering;
-            messages.push({role: "user", content: next.message});
+            messages.push(toSteeringMessage(next.steering));
           } else {
             pending = pending.filter(
               ({call}) => call.toolCallId !== next.event.call.toolCallId,
@@ -330,9 +348,7 @@ export function* agentLoop({
       pending = [...cancellation.pending, ...toolStep.pending];
       messages.push(...cancellation.events.map(agentTools.toRuntimeMessage));
       messages.push(
-        ...[...step.steering, ...toolStep.steering].map(
-          (content): ModelMessage => ({role: "user", content}),
-        ),
+        ...[...step.steering, ...toolStep.steering].map(toSteeringMessage),
       );
     }
 

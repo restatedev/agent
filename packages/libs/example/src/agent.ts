@@ -115,10 +115,11 @@ export const Agent = object({
     steer: schemas(
       {input: z.string(), output: z.boolean()},
       function* (message): Operation<boolean> {
-        const messages = yield* activeTurn.steer(message);
-        if (!messages) {
+        const steering = yield* activeTurn.steer(message);
+        if (!steering) {
           return false;
         }
+        const messages = [...steering.queued, steering.message];
         yield* history.append(
           ...messages.map(
             (text): ConversationEntry => ({
@@ -220,7 +221,7 @@ export const Agent = object({
         yield* approvals.clearTurn(outcome.turnId);
 
         const unconsumedSteering = yield* history.takeLatestSteering(
-          finished.missedSteering,
+          finished.missedSteeringMessages,
         );
         if (outcome.status !== "interrupted") {
           yield* history.append({

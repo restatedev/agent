@@ -9,6 +9,13 @@ export const TURN_SIGNALS = {
   steering: "steering",
 } as const;
 
+// One controller steering decision. Queued messages keep their original order
+// and the explicit steering message remains distinguishable at the loop.
+export type SteeringSignal = {
+  queued: string[];
+  message: string;
+};
+
 // How a turn ended.
 const TurnStatusSchema = z.enum(["completed", "interrupted", "failed"]);
 
@@ -56,8 +63,8 @@ export const TurnOutcomeSchema = z.object({
   status: TurnStatusSchema,
   text: z.string(),
   // Number of steering signals this turn actually consumed, in FIFO order.
-  // The Agent compares this with what it sent so completion cannot dead-letter
-  // a concurrently accepted steer.
+  // The Agent uses it to recover every history message carried by unconsumed
+  // signal batches when completion races with steering.
   consumedSteering: z.number().int().nonnegative().default(0),
 });
 export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
