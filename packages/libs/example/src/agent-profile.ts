@@ -2,12 +2,7 @@
 // guardrails are user-managed configuration; memories are a bounded keyed
 // collection managed by the model through an Agent handler.
 
-import {
-  all,
-  type Operation,
-  sharedState,
-  state,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import type {
   AgentProfile,
   Guardrail,
@@ -28,11 +23,11 @@ const MAX_MEMORIES = 32;
  * snapshot and never reads this state directly.
  */
 export const profile = {
-  *read(): Operation<AgentProfile> {
-    const [instructions, memories, guardrails] = yield* all([
-      sharedState().get<string>(INSTRUCTIONS),
-      sharedState().get<MemoryEntry[]>(MEMORIES),
-      sharedState().get<Guardrail[]>(GUARDRAILS),
+  *read(): restate.Operation<AgentProfile> {
+    const [instructions, memories, guardrails] = yield* restate.all([
+      restate.sharedState().get<string>(INSTRUCTIONS),
+      restate.sharedState().get<MemoryEntry[]>(MEMORIES),
+      restate.sharedState().get<Guardrail[]>(GUARDRAILS),
     ]);
     return {
       ...(instructions ? {instructions} : {}),
@@ -44,22 +39,23 @@ export const profile = {
   setInstructions(instructions: string | null): void {
     const value = instructions?.trim();
     if (value) {
-      state().set(INSTRUCTIONS, value);
+      restate.state().set(INSTRUCTIONS, value);
     } else {
-      state().clear(INSTRUCTIONS);
+      restate.state().clear(INSTRUCTIONS);
     }
   },
 
   setGuardrails(guardrails: Guardrail[]): void {
     if (guardrails.length > 0) {
-      state().set(GUARDRAILS, guardrails);
+      restate.state().set(GUARDRAILS, guardrails);
     } else {
-      state().clear(GUARDRAILS);
+      restate.state().clear(GUARDRAILS);
     }
   },
 
-  *applyMemory(changes: MemoryChange[]): Operation<MemoryUpdateResult> {
-    const memories = (yield* sharedState().get<MemoryEntry[]>(MEMORIES)) ?? [];
+  *applyMemory(changes: MemoryChange[]): restate.Operation<MemoryUpdateResult> {
+    const memories =
+      (yield* restate.sharedState().get<MemoryEntry[]>(MEMORIES)) ?? [];
     const updated = [...memories];
 
     for (const change of changes) {
@@ -83,9 +79,9 @@ export const profile = {
     }
 
     if (updated.length > 0) {
-      state().set(MEMORIES, updated);
+      restate.state().set(MEMORIES, updated);
     } else {
-      state().clear(MEMORIES);
+      restate.state().clear(MEMORIES);
     }
     return {applied: true, memoryCount: updated.length};
   },

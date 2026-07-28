@@ -6,7 +6,7 @@
 // events. A rolling summary is a replaceable model-context checkpoint over an
 // older prefix of that log.
 
-import {type Operation, sharedState, state} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import type {ConversationEntry, HistoryPage} from "./types.js";
 
 type StoredEntry = {
@@ -70,15 +70,17 @@ function samePlan(
   );
 }
 
-function* readMeta(): Operation<HistoryMeta> {
+function* readMeta(): restate.Operation<HistoryMeta> {
   return (
-    (yield* sharedState().get<HistoryMeta>(HISTORY_META)) ?? {nextSequence: 1}
+    (yield* restate.sharedState().get<HistoryMeta>(HISTORY_META)) ?? {
+      nextSequence: 1,
+    }
   );
 }
 
-function* readSummary(): Operation<ConversationSummary | undefined> {
+function* readSummary(): restate.Operation<ConversationSummary | undefined> {
   return (
-    (yield* sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
+    (yield* restate.sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
     undefined
   );
 }
@@ -95,14 +97,16 @@ function readEntries(
   let chunkIndex = -1;
   let chunk: StoredEntry[] = [];
 
-  function* next(): Operation<StoredEntry | undefined> {
+  function* next(): restate.Operation<StoredEntry | undefined> {
     if (sequence > through) {
       return undefined;
     }
     const nextChunk = Math.floor((sequence - 1) / CHUNK_SIZE);
     if (nextChunk !== chunkIndex) {
       chunk =
-        (yield* sharedState().get<StoredEntry[]>(chunkKey(nextChunk))) ?? [];
+        (yield* restate
+          .sharedState()
+          .get<StoredEntry[]>(chunkKey(nextChunk))) ?? [];
       chunkIndex = nextChunk;
     }
     const entry = chunk[(sequence - 1) % CHUNK_SIZE];
@@ -112,7 +116,9 @@ function readEntries(
 
   return {
     next,
-    *collect(limit = Number.POSITIVE_INFINITY): Operation<StoredEntry[]> {
+    *collect(
+      limit = Number.POSITIVE_INFINITY,
+    ): restate.Operation<StoredEntry[]> {
       const result: StoredEntry[] = [];
       while (result.length < limit) {
         const entry = yield* next();
@@ -133,7 +139,7 @@ function readEntries(
  * over Restate's current context and holds no process-local state.
  */
 export const history = {
-  *page(fromSequence: number, limit: number): Operation<HistoryPage> {
+  *page(fromSequence: number, limit: number): restate.Operation<HistoryPage> {
     const meta = yield* readMeta();
     if (fromSequence >= meta.nextSequence) {
       return {entries: [], nextSequence: fromSequence};
@@ -147,7 +153,7 @@ export const history = {
     };
   },
 
-  *context(): Operation<ConversationContext> {
+  *context(): restate.Operation<ConversationContext> {
     const meta = yield* readMeta();
     const summary = yield* readSummary();
     const entries = (yield* readEntries(
@@ -157,7 +163,7 @@ export const history = {
     return {summary: summary?.text, entries};
   },
 
-  *append(...entries: ConversationEntry[]): Operation<void> {
+  *append(...entries: ConversationEntry[]): restate.Operation<void> {
     if (entries.length === 0) {
       return;
     }
@@ -165,11 +171,11 @@ export const history = {
     const meta = yield* readMeta();
     let index = Math.floor((meta.nextSequence - 1) / CHUNK_SIZE);
     let chunk =
-      (yield* sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
+      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
 
     for (const entry of entries) {
       if (chunk.length >= CHUNK_SIZE) {
-        state().set(chunkKey(index), chunk);
+        restate.state().set(chunkKey(index), chunk);
         index += 1;
         chunk = [];
       }
@@ -177,13 +183,15 @@ export const history = {
       meta.nextSequence += 1;
     }
 
-    state().set(chunkKey(index), chunk);
-    state().set(HISTORY_META, meta);
+    restate.state().set(chunkKey(index), chunk);
+    restate.state().set(HISTORY_META, meta);
   },
 
   // Called after a turn outcome is appended. Once enough conversation messages
   // have accumulated, reserve the entire finished prefix.
-  *beginCompaction(): Operation<ConversationCompactionPlan | undefined> {
+  *beginCompaction(): restate.Operation<
+    ConversationCompactionPlan | undefined
+  > {
     const meta = yield* readMeta();
     if (meta.compaction) {
       return undefined;
@@ -204,7 +212,7 @@ export const history = {
     }
 
     meta.compaction = {baseThrough, through: meta.nextSequence - 1};
-    state().set(HISTORY_META, meta);
+    restate.state().set(HISTORY_META, meta);
     return meta.compaction;
   },
 
@@ -212,7 +220,7 @@ export const history = {
   // handler. No state is mutated here.
   *readCompaction(
     plan: ConversationCompactionPlan,
-  ): Operation<ConversationCompactionInput | undefined> {
+  ): restate.Operation<ConversationCompactionInput | undefined> {
     const meta = yield* readMeta();
     if (!meta.compaction || !samePlan(meta.compaction, plan)) {
       return undefined;
@@ -233,7 +241,9 @@ export const history = {
 
   // Apply only the result for the currently reserved finished-turn prefix.
   // Newer transcript entries do not invalidate that checkpoint.
-  *finishCompaction(result: ConversationCompactionResult): Operation<boolean> {
+  *finishCompaction(
+    result: ConversationCompactionResult,
+  ): restate.Operation<boolean> {
     const meta = yield* readMeta();
     const pending = meta.compaction;
     if (!pending || !samePlan(pending, result)) {
@@ -241,12 +251,12 @@ export const history = {
     }
 
     delete meta.compaction;
-    state().set(HISTORY_META, meta);
+    restate.state().set(HISTORY_META, meta);
     if (result.status === "failed" || !result.summary.trim()) {
       return false;
     }
 
-    state().set(HISTORY_SUMMARY, {
+    restate.state().set(HISTORY_SUMMARY, {
       through: pending.through,
       text: result.summary.trim(),
     } satisfies ConversationSummary);
