@@ -49,7 +49,7 @@ function compactorInput(request: ConversationCompactionInput): string {
             },
           ];
         }
-        if (entry.type === "progress") {
+        if (entry.type === "progress" || entry.type === "memory") {
           return [];
         }
         if (entry.type === "steer") {

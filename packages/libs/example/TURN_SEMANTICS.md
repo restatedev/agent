@@ -5,7 +5,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 ## Ownership
 
 - `Agent` owns the canonical transcript, queued user messages, active Turn
-  state, human approval state, and steering reconciliation.
+  state, persistent profile, human approval state, and steering reconciliation.
+- The per-Agent profile contains user-set instructions, model-managed memories,
+  and capability guardrails. Each Turn receives one stable snapshot.
 - The transcript is an append-only event log. User entries retain their
   original acceptance route; steering and later activation are separate
   lifecycle events rather than entry rewrites.
@@ -22,8 +24,11 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - `agent-pending.ts` owns tool tasks that survive across steps, including
   completion races, selective cancellation, and cleanup.
 - `agent-tools.ts` owns concrete tool definitions, validation, execution,
-  completion, and conversion of outcomes into model messages.
+  capability checks, completion, and conversion of outcomes into model
+  messages.
 - Tool calls execute locally inside the Turn handler. They are not RPCs.
+  `manageMemory` and `humanApproval` call Agent handlers only for durable state
+  that the Agent virtual object must own.
 
 ## Execution shape
 
@@ -44,6 +49,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - A Turn performs at most eight model steps and 24 total tool calls.
 - Each step receives a copy of the complete live model context accumulated by
   the Turn.
+- Every model call receives the same user-instruction and capability-guardrail
+  snapshot. Persistent memories are injected once into the Turn's initial
+  context as data, before the transcript.
 - A normal step returns text, tool outcomes, a recoverable model error, or a
   tool-budget failure.
 - Invalid or empty model output becomes a corrective user message and another
@@ -75,6 +83,13 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 ## Foreground and pending tools
 
+- Every tool declares a capability. After input validation and before local
+  execution, a matching guardrail produces a failed tool result without
+  running the tool.
+- `manageMemory` atomically sets or deletes keyed entries on the Agent. Only the
+  active non-interrupting Turn can write, and the Agent stores at most 32
+  memories. A successful tool result is a durable side effect even if later
+  Turn work fails.
 - Every foreground tool in one model response runs concurrently inside the
   spawned step and is joined before the step returns.
 - Turn commits the assistant tool-call message and one complete matching
@@ -137,3 +152,5 @@ Any rewrite must preserve:
 8. Honest completion-versus-cancellation races.
 9. Tool-free interruption finalization using only retained work.
 10. The eight-step and 24-tool-call budgets.
+11. Stable instructions, memories, and guardrails for the lifetime of a Turn.
+12. Guardrail checks after validation and before tool execution.

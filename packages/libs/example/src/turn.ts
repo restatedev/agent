@@ -32,6 +32,7 @@ import {
 
 type TurnState = {
   context: AgentToolContext;
+  instructions?: string;
   messages: ModelMessage[];
   interrupt: restate.Future<string>;
   steeringInbox: ReturnType<typeof createSteeringInbox>;
@@ -91,7 +92,13 @@ function* finalizeInterruption(
 
   let response: string;
   try {
-    const final = yield* callModel(state.context.agentId, state.messages, []);
+    const final = yield* callModel({
+      agentId: state.context.agentId,
+      instructions: state.instructions,
+      guardrails: state.context.guardrails,
+      messages: state.messages,
+      tools: [],
+    });
     if (final.type === "text" && final.content.trim()) {
       response = final.content;
     } else {
@@ -233,8 +240,13 @@ export const Turn = restate.service({
       function* (req: TurnRequest): restate.Operation<void> {
         const turnId = restate.handlerRequest().id;
         const state: TurnState = {
-          context: {agentId: req.agentId, turnId},
-          messages: buildModelContext(req.history, req.summary),
+          context: {
+            agentId: req.agentId,
+            turnId,
+            guardrails: req.guardrails,
+          },
+          instructions: req.instructions,
+          messages: buildModelContext(req.history, req.summary, req.memories),
           interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
           steeringInbox: createSteeringInbox(),
           consumedSteering: 0,
@@ -257,6 +269,7 @@ export const Turn = restate.service({
             const task = restate.spawn(
               agentStep({
                 context: state.context,
+                instructions: state.instructions,
                 messages: [...state.messages],
                 remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
               }),

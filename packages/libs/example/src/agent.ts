@@ -1,6 +1,7 @@
 // Agent is the durable conversation controller. It is a Virtual Object keyed
 // by agent id, so its exclusive handlers serialize every decision about the
-// active turn, queued messages, user-facing history, and summary checkpoints.
+// active turn, queued messages, user-facing history, persistent profile, and
+// summary checkpoints.
 //
 // It never runs turn execution itself. `ask` starts or queues work,
 // `interrupt` and `steer` resolve signals on the active stateless Turn
@@ -15,15 +16,23 @@ import {
   type ConversationCompactionResult,
   history,
 } from "./agent-history.js";
+import {profile} from "./agent-profile.js";
 import {activeTurn} from "./agent-turn.js";
 import {compactConversation} from "./conversation-compactor.js";
 import {
+  type AgentProfile,
+  AgentProfileSchema,
   ApprovalCancellationSchema,
   type ApprovalRequest,
   ApprovalRequestSchema,
   ApprovalResolutionSchema,
+  GuardrailSchema,
   type HistoryPage,
   HistoryPageSchema,
+  type MemoryUpdate,
+  type MemoryUpdateResult,
+  MemoryUpdateResultSchema,
+  MemoryUpdateSchema,
   type ProgressReport,
   ProgressReportSchema,
   TurnOutcomeSchema,
@@ -58,6 +67,14 @@ type AskResult = z.infer<typeof AskResultSchema>;
 const HistoryQuerySchema = z.object({
   fromSequence: z.number().int().positive().default(1),
   limit: z.number().int().min(1).max(100).default(50),
+});
+
+const SetInstructionsSchema = z.object({
+  instructions: z.string().nullable(),
+});
+
+const SetGuardrailsSchema = z.object({
+  guardrails: z.array(GuardrailSchema),
 });
 
 export const Agent = restate.object({
@@ -150,6 +167,71 @@ export const Agent = restate.object({
       {input: HistoryQuerySchema, output: HistoryPageSchema},
       function* ({fromSequence, limit}): restate.Operation<HistoryPage> {
         return yield* history.page(fromSequence, limit);
+      },
+    ),
+
+    // Read the durable instructions, model-managed memories, and capability
+    // guardrails that will be snapshotted into the next Turn.
+    profile: restate.schemas(
+      {input: z.void(), output: AgentProfileSchema},
+      function* (): restate.Operation<AgentProfile> {
+        return yield* profile.read();
+      },
+    ),
+
+    // Replace the user-authored persistent instructions. Null clears them.
+    // Running Turns retain the snapshot with which they started.
+    setInstructions: restate.schemas(
+      {input: SetInstructionsSchema, output: z.void()},
+      function* ({instructions}): restate.Operation<void> {
+        profile.setInstructions(instructions);
+      },
+    ),
+
+    // Replace the per-Agent capability deny list. Running Turns retain their
+    // current snapshot; subsequent Turns enforce the new list.
+    setGuardrails: restate.schemas(
+      {input: SetGuardrailsSchema, output: z.void()},
+      function* ({guardrails}): restate.Operation<void> {
+        profile.setGuardrails(guardrails);
+      },
+    ),
+
+    // Apply one atomic memory batch requested by the model. Only the active,
+    // non-interrupting Turn may mutate its Agent's memories.
+    updateMemory: restate.schemas(
+      {input: MemoryUpdateSchema, output: MemoryUpdateResultSchema},
+      function* ({
+        turnId,
+        changes,
+      }: MemoryUpdate): restate.Operation<MemoryUpdateResult> {
+        const current = yield* activeTurn.current();
+        if (current?.id !== turnId || current.interrupting) {
+          return {
+            applied: false,
+            error:
+              "memory update rejected because its Turn is no longer active",
+          };
+        }
+
+        const guardrail = yield* profile.denial("memory.write");
+        if (guardrail) {
+          return {
+            applied: false,
+            error: `capability memory.write is denied by guardrail: ${guardrail.reason}`,
+          };
+        }
+
+        const result = yield* profile.applyMemory(changes);
+        if (result.applied) {
+          yield* history.append({
+            role: "event",
+            type: "memory",
+            turnId,
+            changes: changes.map(({operation, key}) => ({operation, key})),
+          });
+        }
+        return result;
       },
     ),
 
@@ -299,6 +381,7 @@ export const Agent = restate.object({
       },
       approvals: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       history: {shared: true, idempotencyRetention: 0, journalRetention: 0},
+      profile: {shared: true, idempotencyRetention: 0, journalRetention: 0},
       compact: {
         shared: true,
         idempotencyRetention: 0,
@@ -326,8 +409,10 @@ function* startTurn(
     });
   }
   const context = yield* history.context();
+  const agentProfile = yield* profile.read();
   return yield* activeTurn.start({
     agentId,
+    ...agentProfile,
     summary: context.summary,
     history: context.entries,
   });

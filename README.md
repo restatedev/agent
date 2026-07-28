@@ -6,14 +6,14 @@ access, and bounded agent steps without hiding them behind a framework.
 
 ```mermaid
 flowchart LR
-  Client -->|"conversation + approval API"| Agent["Agent Virtual Object\nkeyed by agentId"]
+  Client -->|"conversation + profile + approval API"| Agent["Agent Virtual Object\nkeyed by agentId"]
   Agent -->|"one-way run"| Turn["Turn service"]
   Agent -.->|"control / approval signals"| Turn
   Turn -->|"spawn each iteration"| Step["agentStep"]
   Step -->|"scoped invocation"| Gateway["ModelGateway service"]
   Gateway -->|"durable model run"| Model["agent model"]
   Step -->|"spawn + durable run"| Tools["local tools in parallel"]
-  Tools -->|"approval registration"| Agent
+  Tools -->|"approval / memory updates"| Agent
   Turn -->|"one-way append outcome"| Agent
   Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
   Compactor -->|"one-way applyCompaction"| Agent
@@ -23,9 +23,10 @@ flowchart LR
 
 - `Agent` is the durable controller. Its exclusive handlers serialize changes
   to the active turn, pending messages, and conversation history for one
-  `agentId`. It coordinates three independent components: `agent-turn.ts` owns
+  `agentId`. It coordinates four independent components: `agent-turn.ts` owns
   turn state and signal lifecycle, `agent-history.ts` owns the durable
-  transcript, and `agent-approval.ts` owns pending human approvals.
+  transcript, `agent-profile.ts` owns instructions, memories, and guardrails,
+  and `agent-approval.ts` owns pending human approvals.
   Each component exports a handler-scoped capability namespace: its operations
   use Restate's current handler context and hold no process-local state.
 - `Turn` has no service state, but one durable invocation owns the transient
@@ -67,8 +68,9 @@ Every handler on `Agent`, `Turn`, and `ModelGateway` is ingress-public in this
 reference implementation. This keeps the complete protocol inspectable and
 easy to invoke while experimenting. Public visibility does not make every
 handler a user API: normal clients should use `ask`, `history`, `steer`,
-`interrupt`, `approvals`, and `resolveApproval`; the remaining handlers are
-coordination paths used by the services themselves.
+`interrupt`, `profile`, `setInstructions`, `setGuardrails`, `approvals`, and
+`resolveApproval`; the remaining handlers are coordination paths used by the
+services themselves.
 
 ## Conversation history and compaction
 
@@ -90,12 +92,38 @@ one-way self-sends the derived checkpoint to the exclusive `applyCompaction`
 handler. Newer appended entries do not invalidate the checkpoint, and a failed
 compaction leaves the prior summary untouched.
 
-Each `TurnRequest` carries the rolling summary and exact uncompacted transcript
-through the lifecycle event that dispatched it. The Turn projects steering
-metadata and interruption, queued-message dispatch, or failure entries as
-explicit model-visible boundaries. Compaction happens only between turns: live
-model messages, tool calls, tool results, pending operations, and steering
-inside an active Turn are never summarized mid-turn.
+Each `TurnRequest` carries a stable snapshot of the Agent's instructions,
+memories, guardrails, rolling summary, and exact uncompacted transcript. The
+Turn projects steering metadata and interruption, queued-message dispatch, or
+failure entries as explicit model-visible boundaries. Compaction happens only
+between turns: profile state, live model messages, tool calls, tool results,
+pending operations, and steering inside an active Turn are never summarized.
+
+## Instructions, memories, and guardrails
+
+Each Agent owns one durable profile. User-set instructions are appended to the
+application's system instructions and apply to every model call in a Turn,
+including graceful interruption finalization. Memories are a separate keyed
+collection of contextual data: they are injected before conversation history
+and explicitly marked as facts rather than instructions. Current user messages
+and newer tool results take precedence over stale memory.
+
+The model manages memory through one atomic `manageMemory` tool. A batch can set
+or delete keys, and the Agent accepts it only from its active,
+non-interrupting Turn. Memory is limited only by entry count: at most 32 entries
+per Agent. A successful update is durable even if later work in that Turn
+fails, and its keys are recorded as a metadata-only transcript event. Memory
+events are omitted from model context and compaction because the current
+profile snapshot is authoritative.
+
+Guardrails are explicit capability denies configured by the user. Every tool
+declares a capability, validates its input, and checks the Turn's guardrail
+snapshot before executing. A denial becomes a normal failed tool result, so the
+model protocol remains complete. Current capabilities are `weather.read`,
+`timer.start`, `human.approval`, `operation.cancel`, and `memory.write`. A
+future Git commit tool would declare `git.commit`; denying that capability
+would block the operation at runtime rather than relying on a prompt
+instruction. Instructions and guardrail changes affect the next Turn.
 
 ## Agent handlers
 
@@ -103,6 +131,9 @@ inside an active Turn are never summarized mid-turn.
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
+| `profile` | void | Returns this Agent's instructions, model-managed memories, and capability guardrails. |
+| `setInstructions` | `{ instructions: string \| null }` | Replaces the persistent user instructions; `null` clears them. Running Turns keep their snapshot. |
+| `setGuardrails` | `{ guardrails: [{ capability, reason }] }` | Replaces the persistent capability deny list. Running Turns keep their snapshot. |
 | `interrupt` | reason string | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. Returns immediately. |
 | `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
@@ -110,22 +141,23 @@ inside an active Turn are never summarized mid-turn.
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
 | `requestApproval` | `{ approvalId, turnId, question }` | Registers a tool's approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
+| `updateMemory` | `{ turnId, changes }` | Coordination path used by `manageMemory`; atomically applies a bounded memory batch only for the active Turn. |
 | `append` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, considers compaction, and dispatches queued work. Stale or duplicate Turn IDs are ignored. |
 | `compact` | reserved history cursor range | Shared handler that reads and summarizes one finished transcript prefix, then sends the result to `applyCompaction`. |
 | `applyCompaction` | structured compaction result | Exclusively validates and installs the current summary checkpoint, or clears a failed reservation. |
 
-`history`, `approvals`, and `compact` are shared handlers; the other Agent
-handlers are exclusive. Lazy state allows shared readers and the compactor to
-load only the state keys and history chunks they need.
+`history`, `profile`, `approvals`, and `compact` are shared handlers; the other
+Agent handlers are exclusive. Lazy state allows shared readers and the
+compactor to load only the state keys and history chunks they need.
 
 The two other services each expose one public handler:
 
-- `Turn/run` accepts the Agent's rolling summary and exact uncompacted
-  transcript, runs one transient state machine made of bounded agent steps, and
-  one-way reports a structured outcome to `Agent/append`.
-- `ModelGateway/complete` accepts model messages and serializable tool
-  manifests. `agentStep` normally invokes it through the `openai` scope so the
-  configured concurrency limits apply.
+- `Turn/run` accepts the Agent's profile snapshot, rolling summary, and exact
+  uncompacted transcript, runs one transient state machine made of bounded
+  agent steps, and one-way reports a structured outcome to `Agent/append`.
+- `ModelGateway/complete` accepts instructions, guardrails, model messages, and
+  serializable tool manifests. `agentStep` normally invokes it through the
+  `openai` scope so the configured concurrency limits apply.
 
 A successful interruption is visible immediately as
 `{ role: "event", type: "interrupt", turnId, reason }`. The active Turn then
@@ -297,8 +329,16 @@ The `ask` schema defaults a missing `message` to: “What is the weather in the
 top 10 European capitals? Also sleep for 4 minutes.”
 
 ```sh
+curl localhost:8080/Agent/demo/setInstructions \
+  --json '{"instructions":"Prefer concise answers and metric units."}'
+
+curl localhost:8080/Agent/demo/setGuardrails \
+  --json '{"guardrails":[{"capability":"timer.start","reason":"Do not start timers for this agent."}]}'
+
 curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
+
+curl -X POST localhost:8080/Agent/demo/profile
 
 curl localhost:8080/Agent/demo/history \
   --json '{"fromSequence":1,"limit":50}'
@@ -355,6 +395,19 @@ model's question. The initial tool result reports the pending request; approval
 or rejection later wakes Turn as a runtime update, allowing the model to
 perform approved work, explain a rejection, or choose a different action.
 
+To exercise model-managed memory, clear the timer guardrail, ask for a durable
+preference, and inspect the Agent profile:
+
+```sh
+curl localhost:8080/Agent/demo/setGuardrails \
+  --json '{"guardrails":[]}'
+
+curl localhost:8080/Agent/demo/ask \
+  --json '{"message":"Remember that I prefer temperatures in Celsius."}'
+
+curl -X POST localhost:8080/Agent/demo/profile
+```
+
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
 model/tool steps, retries, and signals. See Restate's
 [HTTP invocation guide](https://docs.restate.dev/services/invocation/http) for
@@ -364,6 +417,8 @@ request-response, one-way send, attach, and cancellation variants.
 
 - `packages/libs/example/src/agent.ts` — durable conversation controller
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
+- `packages/libs/example/src/agent-profile.ts` — instructions, memories, and
+  capability guardrails
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signal supervision

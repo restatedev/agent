@@ -4,18 +4,12 @@
 import {createHash} from "node:crypto";
 import {Opts} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import type {ModelMessage} from "ai";
 import {
   AGENT_MODEL,
+  type AgentModelRequest,
   completeAgent,
   type ModelResult,
-  type ToolManifest,
 } from "./model.js";
-
-type ModelRequest = {
-  messages: ModelMessage[];
-  tools: ToolManifest[];
-};
 
 const MODEL_SCOPE = "openai";
 
@@ -24,19 +18,16 @@ const MODEL_SCOPE = "openai";
 export const ModelGateway = restate.service({
   name: "ModelGateway",
   handlers: {
-    *complete({messages, tools}: ModelRequest): restate.Operation<ModelResult> {
-      return yield* restate.run(
-        ({signal}) => completeAgent(messages, tools, signal),
-        {
-          name: "agent-model",
-          retry: {
-            maxAttempts: 4,
-            initialInterval: 500,
-            maxInterval: 5_000,
-            exponentiationFactor: 2,
-          },
+    *complete(request: AgentModelRequest): restate.Operation<ModelResult> {
+      return yield* restate.run(({signal}) => completeAgent(request, signal), {
+        name: "agent-model",
+        retry: {
+          maxAttempts: 4,
+          initialInterval: 500,
+          maxInterval: 5_000,
+          exponentiationFactor: 2,
         },
-      );
+      });
     },
   },
 });
@@ -49,15 +40,14 @@ function agentLimitKey(agentId: string): string {
 // Only agent steps go through the scoped gateway. The `openai` scope is
 // the provider-wide budget; the two limit-key levels are model and agent.
 export function* callModel(
-  agentId: string,
-  messages: ModelMessage[],
-  tools: ToolManifest[],
+  request: AgentModelRequest & {agentId: string},
 ): restate.Operation<ModelResult> {
+  const {agentId, ...modelRequest} = request;
   const call = restate
     .scope(MODEL_SCOPE)
     .client(ModelGateway)
     .complete(
-      {messages, tools},
+      modelRequest,
       Opts.from({limitKey: agentLimitKey(agentId), name: "agent-model"}),
     );
   const invocation = yield* call.invocation;

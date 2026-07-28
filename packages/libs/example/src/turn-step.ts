@@ -41,10 +41,12 @@ class AgentStepInterrupt extends InterruptedError {}
 
 export function* agentStep({
   context,
+  instructions,
   messages,
   remainingToolCalls,
 }: {
   context: AgentToolContext;
+  instructions?: string;
   messages: ModelMessage[];
   remainingToolCalls: number;
 }): Operation<AgentStepResult> {
@@ -53,11 +55,13 @@ export function* agentStep({
     | undefined;
 
   try {
-    const action = yield* callModel(
-      context.agentId,
+    const action = yield* callModel({
+      agentId: context.agentId,
+      instructions,
+      guardrails: context.guardrails,
       messages,
-      agentTools.manifests,
-    );
+      tools: agentTools.manifests,
+    });
     if (action.type !== "tool_calls") {
       return action;
     }

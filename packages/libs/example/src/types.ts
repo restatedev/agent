@@ -35,6 +35,59 @@ export const ProgressReportSchema = z.object({
 });
 export type ProgressReport = z.infer<typeof ProgressReportSchema>;
 
+// Durable prompt context owned by one Agent. Instructions are authoritative
+// user configuration, memories are model-managed data, and guardrails deny
+// concrete runtime capabilities.
+export const MemoryEntrySchema = z.object({
+  key: z.string().trim().min(1),
+  content: z.string().trim().min(1),
+});
+export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
+
+export const MemoryChangeSchema = z.discriminatedUnion("operation", [
+  z.object({
+    operation: z.literal("set"),
+    key: z.string().trim().min(1),
+    content: z.string().trim().min(1),
+  }),
+  z.object({
+    operation: z.literal("delete"),
+    key: z.string().trim().min(1),
+  }),
+]);
+export type MemoryChange = z.infer<typeof MemoryChangeSchema>;
+
+export const GuardrailSchema = z.object({
+  capability: z.string().trim().min(1),
+  reason: z.string().trim().min(1),
+});
+export type Guardrail = z.infer<typeof GuardrailSchema>;
+
+export const AgentProfileSchema = z.object({
+  instructions: z.string().optional(),
+  memories: z.array(MemoryEntrySchema),
+  guardrails: z.array(GuardrailSchema),
+});
+export type AgentProfile = z.infer<typeof AgentProfileSchema>;
+
+export const MemoryUpdateSchema = z.object({
+  turnId: z.string().min(1),
+  changes: z.array(MemoryChangeSchema).min(1),
+});
+export type MemoryUpdate = z.infer<typeof MemoryUpdateSchema>;
+
+export const MemoryUpdateResultSchema = z.discriminatedUnion("applied", [
+  z.object({
+    applied: z.literal(true),
+    memoryCount: z.number().int().nonnegative(),
+  }),
+  z.object({
+    applied: z.literal(false),
+    error: z.string(),
+  }),
+]);
+export type MemoryUpdateResult = z.infer<typeof MemoryUpdateResultSchema>;
+
 // An entry in the general conversation. Messages record how they entered the
 // execution, lifecycle boundaries are explicit events, and assistant entries
 // are terminal turn summaries correlated with Restate observability.
@@ -55,6 +108,17 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
     type: z.literal("steer"),
     turnId: z.string(),
     queuedMessages: z.number().int().nonnegative(),
+  }),
+  z.object({
+    role: z.literal("event"),
+    type: z.literal("memory"),
+    turnId: z.string(),
+    changes: z.array(
+      z.object({
+        operation: z.enum(["set", "delete"]),
+        key: z.string(),
+      }),
+    ),
   }),
   ProgressReportSchema.extend({
     role: z.literal("event"),
@@ -89,11 +153,14 @@ export const HistoryPageSchema = z.object({
 });
 export type HistoryPage = z.infer<typeof HistoryPageSchema>;
 
-// Input to a turn: which Agent object it belongs to, an optional checkpoint
-// over older entries, and the exact uncompacted transcript the model should
-// see. New messages are already appended to this transcript before dispatch.
+// Input to a turn: which Agent object it belongs to, its stable profile
+// snapshot, an optional checkpoint over older entries, and the exact
+// uncompacted transcript. New messages are already appended before dispatch.
 export const TurnRequestSchema = z.object({
   agentId: z.string(),
+  instructions: z.string().optional(),
+  memories: z.array(MemoryEntrySchema),
+  guardrails: z.array(GuardrailSchema),
   summary: z.string().min(1).optional(),
   history: z.array(ConversationEntrySchema),
 });
