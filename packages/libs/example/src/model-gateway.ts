@@ -7,12 +7,16 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import {
   AGENT_MODEL,
   type AgentModelRequest,
+  AgentModelRequestSchema,
   completeAgent,
   evaluateGuardrails,
   GUARDRAIL_MODEL,
   type GuardrailDecision,
+  GuardrailDecisionSchema,
   type GuardrailEvaluationRequest,
+  GuardrailEvaluationRequestSchema,
   type ModelResult,
+  ModelResultSchema,
 } from "./model.js";
 
 const MODEL_SCOPE = "openai";
@@ -22,34 +26,46 @@ const MODEL_SCOPE = "openai";
 export const ModelGateway = restate.service({
   name: "ModelGateway",
   handlers: {
-    *complete(request: AgentModelRequest): restate.Operation<ModelResult> {
-      return yield* restate.run(({signal}) => completeAgent(request, signal), {
-        name: "agent-model",
-        retry: {
-          maxAttempts: 4,
-          initialInterval: 500,
-          maxInterval: 5_000,
-          exponentiationFactor: 2,
-        },
-      });
-    },
-
-    *evaluateGuardrails(
-      request: GuardrailEvaluationRequest,
-    ): restate.Operation<GuardrailDecision> {
-      return yield* restate.run(
-        ({signal}) => evaluateGuardrails(request, signal),
-        {
-          name: "guardrail-model",
-          retry: {
-            maxAttempts: 4,
-            initialInterval: 500,
-            maxInterval: 5_000,
-            exponentiationFactor: 2,
+    complete: restate.schemas(
+      {input: AgentModelRequestSchema, output: ModelResultSchema},
+      function* (request: AgentModelRequest): restate.Operation<ModelResult> {
+        return yield* restate.run(
+          ({signal}) => completeAgent(request, signal),
+          {
+            name: "agent-model",
+            retry: {
+              maxAttempts: 4,
+              initialInterval: 500,
+              maxInterval: 5_000,
+              exponentiationFactor: 2,
+            },
           },
-        },
-      );
-    },
+        );
+      },
+    ),
+
+    evaluateGuardrails: restate.schemas(
+      {
+        input: GuardrailEvaluationRequestSchema,
+        output: GuardrailDecisionSchema,
+      },
+      function* (
+        request: GuardrailEvaluationRequest,
+      ): restate.Operation<GuardrailDecision> {
+        return yield* restate.run(
+          ({signal}) => evaluateGuardrails(request, signal),
+          {
+            name: "guardrail-model",
+            retry: {
+              maxAttempts: 4,
+              initialInterval: 500,
+              maxInterval: 5_000,
+              exponentiationFactor: 2,
+            },
+          },
+        );
+      },
+    ),
   },
 });
 

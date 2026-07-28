@@ -13,7 +13,9 @@ import {z} from "zod";
 import {approvals} from "./agent-approval.js";
 import {
   type ConversationCompactionPlan,
+  ConversationCompactionPlanSchema,
   type ConversationCompactionResult,
+  ConversationCompactionResultSchema,
   history,
 } from "./agent-history.js";
 import {profile} from "./agent-profile.js";
@@ -400,24 +402,28 @@ export const Agent = restate.object({
     // Read and summarize one reserved history prefix without blocking the
     // Agent's exclusive conversation handlers, then self-send the result to
     // the exclusive checkpoint application path.
-    compact: function* (
-      plan: ConversationCompactionPlan,
-    ): restate.Operation<void> {
-      const input = yield* history.readCompaction(plan);
-      if (!input) {
-        return;
-      }
-      const result = yield* compactConversation(input);
-      yield* restate.sendClient(Agent, agentKey()).applyCompaction(result);
-    },
+    compact: restate.schemas(
+      {input: ConversationCompactionPlanSchema, output: z.void()},
+      function* (plan: ConversationCompactionPlan): restate.Operation<void> {
+        const input = yield* history.readCompaction(plan);
+        if (!input) {
+          return;
+        }
+        const result = yield* compactConversation(input);
+        yield* restate.sendClient(Agent, agentKey()).applyCompaction(result);
+      },
+    ),
 
     // The shared compaction handler returns a derived checkpoint here. History
     // validates the reserved prefix before replacing the previous summary.
-    applyCompaction: function* (
-      result: ConversationCompactionResult,
-    ): restate.Operation<void> {
-      yield* history.finishCompaction(result);
-    },
+    applyCompaction: restate.schemas(
+      {input: ConversationCompactionResultSchema, output: z.void()},
+      function* (
+        result: ConversationCompactionResult,
+      ): restate.Operation<void> {
+        yield* history.finishCompaction(result);
+      },
+    ),
   },
   options: {
     enableLazyState: true,

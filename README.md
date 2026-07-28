@@ -143,7 +143,9 @@ protocol inspectable and easy to invoke while experimenting. Public visibility
 does not make every handler a user API: normal clients should use `ask`,
 `history`, `steer`, `interrupt`, `profile`, `setInstructions`,
 `setGuardrails`, `approvals`, and `resolveApproval`; the remaining handlers are
-coordination paths used by the services themselves.
+coordination paths used by the services themselves. Every handler has a runtime
+input/output schema, including AI SDK model messages at the gateway and
+compaction cursor ranges on the Agent.
 
 ## Conversation history and compaction
 

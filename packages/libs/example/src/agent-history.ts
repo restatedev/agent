@@ -7,6 +7,7 @@
 // older prefix of that log.
 
 import * as restate from "@restatedev/restate-sdk-gen";
+import {z} from "zod";
 import type {ConversationEntry, HistoryPage} from "./types.js";
 
 type StoredEntry = {
@@ -19,10 +20,15 @@ type ConversationSummary = {
   text: string;
 };
 
-export type ConversationCompactionPlan = {
-  baseThrough: number;
-  through: number;
+const CompactionRangeShape = {
+  baseThrough: z.number().int().nonnegative(),
+  through: z.number().int().positive(),
 };
+
+export const ConversationCompactionPlanSchema = z.object(CompactionRangeShape);
+export type ConversationCompactionPlan = z.infer<
+  typeof ConversationCompactionPlanSchema
+>;
 
 type HistoryMeta = {
   nextSequence: number;
@@ -44,17 +50,24 @@ export type ConversationCompactionInput = ConversationCompactionPlan & {
   entries: ConversationEntry[];
 };
 
-export type ConversationCompactionResult = ConversationCompactionPlan &
-  (
-    | {
-        status: "completed";
-        summary: string;
-      }
-    | {
-        status: "failed";
-        error: string;
-      }
-  );
+export const ConversationCompactionResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({
+      ...CompactionRangeShape,
+      status: z.literal("completed"),
+      summary: z.string().trim().min(1),
+    }),
+    z.object({
+      ...CompactionRangeShape,
+      status: z.literal("failed"),
+      error: z.string().min(1),
+    }),
+  ],
+);
+export type ConversationCompactionResult = z.infer<
+  typeof ConversationCompactionResultSchema
+>;
 
 const HISTORY_META = "history/meta";
 const HISTORY_SUMMARY = "history/summary";
