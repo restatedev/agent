@@ -7,13 +7,7 @@
 // invocation, and `append` accepts that Turn's single high-level outcome.
 
 import {TerminalError} from "@restatedev/restate-sdk";
-import {
-  handlerRequest,
-  type Operation,
-  object,
-  schemas,
-  sendClient,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {approvals} from "./agent-approval.js";
 import {
@@ -38,7 +32,7 @@ import {
 // The agent id is this object's key. Object handlers always have one, but read
 // it through here so a missing key is a clear error, not a stray `!`.
 function agentKey(): string {
-  const key = handlerRequest().key;
+  const key = restate.handlerRequest().key;
   if (!key) {
     throw new TerminalError("Agent handlers require an agent key");
   }
@@ -66,15 +60,15 @@ const HistoryQuerySchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 });
 
-export const Agent = object({
+export const Agent = restate.object({
   name: "Agent",
   handlers: {
     // The user entry point. A message starts a turn when the Agent is idle and
     // joins the next-turn queue when one is active. Clients explicitly choose
     // the handlers below when they want to steer or interrupt current work.
-    ask: schemas(
+    ask: restate.schemas(
       {input: AskRequestSchema, output: AskResultSchema},
-      function* ({message}): Operation<AskResult> {
+      function* ({message}): restate.Operation<AskResult> {
         const agentId = agentKey();
         const current = yield* activeTurn.current();
         if (current) {
@@ -105,9 +99,9 @@ export const Agent = object({
     // guessing — this is the API a stop button calls. Returns whether the stop
     // was requested; false means there was nothing to stop (idle, or already
     // winding down from an earlier interrupt) and nothing happened.
-    interrupt: schemas(
+    interrupt: restate.schemas(
       {input: z.string(), output: z.boolean()},
-      function* (reason): Operation<boolean> {
+      function* (reason): restate.Operation<boolean> {
         const turnId = yield* activeTurn.interrupt(reason);
         if (!turnId) {
           return false;
@@ -125,9 +119,9 @@ export const Agent = object({
     // Explicitly redirect the active turn. Messages already queued by `ask`
     // are promoted first, followed by the new instruction. Returns false when
     // no turn is listening, in which case the queue remains untouched.
-    steer: schemas(
+    steer: restate.schemas(
       {input: z.string(), output: z.boolean()},
-      function* (message): Operation<boolean> {
+      function* (message): restate.Operation<boolean> {
         const steering = yield* activeTurn.steer(message);
         if (!steering) {
           return false;
@@ -144,18 +138,18 @@ export const Agent = object({
 
     // Incremental read of the canonical transcript. The cursor is inclusive:
     // a request from sequence K returns up to `limit` entries starting at K.
-    history: schemas(
+    history: restate.schemas(
       {input: HistoryQuerySchema, output: HistoryPageSchema},
-      function* ({fromSequence, limit}): Operation<HistoryPage> {
+      function* ({fromSequence, limit}): restate.Operation<HistoryPage> {
         return yield* history.page(fromSequence, limit);
       },
     ),
 
     // Internal one-way status path used by the active Turn. Progress is an
     // ordered lifecycle event in the transcript; late reports are ignored.
-    reportProgress: schemas(
+    reportProgress: restate.schemas(
       {input: ProgressReportSchema, output: z.void()},
-      function* (report: ProgressReport): Operation<void> {
+      function* (report: ProgressReport): restate.Operation<void> {
         const current = yield* activeTurn.current();
         if (current?.id === report.turnId) {
           yield* history.append({
@@ -169,9 +163,9 @@ export const Agent = object({
 
     // Internal registration path used by the humanApproval tool. The request
     // is accepted only while its originating Turn is still active.
-    requestApproval: schemas(
+    requestApproval: restate.schemas(
       {input: ApprovalRequestSchema, output: z.boolean()},
-      function* (request: ApprovalRequest): Operation<boolean> {
+      function* (request: ApprovalRequest): restate.Operation<boolean> {
         const current = yield* activeTurn.current();
         if (current?.id !== request.turnId || current.interrupting) {
           return false;
@@ -182,26 +176,26 @@ export const Agent = object({
 
     // Internal, idempotent cleanup when interruption or turn failure abandons
     // a tool that was waiting for approval.
-    cancelApproval: schemas(
+    cancelApproval: restate.schemas(
       {input: ApprovalCancellationSchema, output: z.void()},
-      function* (request): Operation<void> {
+      function* (request): restate.Operation<void> {
         yield* approvals.cancel(request);
       },
     ),
 
     // Read-only pending approvals for a UI or human operator.
-    approvals: schemas(
+    approvals: restate.schemas(
       {input: z.void(), output: z.array(ApprovalRequestSchema)},
-      function* (): Operation<ApprovalRequest[]> {
+      function* (): restate.Operation<ApprovalRequest[]> {
         return yield* approvals.list();
       },
     ),
 
     // Resolve one pending request and deliver the decision to the waiting tool
     // as a signal on its Turn invocation.
-    resolveApproval: schemas(
+    resolveApproval: restate.schemas(
       {input: ApprovalResolutionSchema, output: z.boolean()},
-      function* (resolution): Operation<boolean> {
+      function* (resolution): restate.Operation<boolean> {
         const current = yield* activeTurn.current();
         return yield* approvals.resolve(
           resolution,
@@ -217,9 +211,9 @@ export const Agent = object({
     // interruption can additionally produce an assistant finalization.
     // This is intentionally high-level: detailed tool/model activity belongs
     // in Restate's invocation logs and observability, not conversation state.
-    append: schemas(
+    append: restate.schemas(
       {input: TurnOutcomeSchema, output: z.void()},
-      function* (outcome): Operation<void> {
+      function* (outcome): restate.Operation<void> {
         const finished = yield* activeTurn.finish(outcome);
         if (!finished) {
           return;
@@ -256,7 +250,7 @@ export const Agent = object({
         const agentId = agentKey();
         const plan = yield* history.beginCompaction();
         if (plan) {
-          yield* sendClient(Agent, agentId).compact(plan);
+          yield* restate.sendClient(Agent, agentId).compact(plan);
         }
 
         const queuedMessages =
@@ -270,20 +264,22 @@ export const Agent = object({
     // Read and summarize one reserved history prefix without blocking the
     // Agent's exclusive conversation handlers, then self-send the result to
     // the exclusive checkpoint application path.
-    compact: function* (plan: ConversationCompactionPlan): Operation<void> {
+    compact: function* (
+      plan: ConversationCompactionPlan,
+    ): restate.Operation<void> {
       const input = yield* history.readCompaction(plan);
       if (!input) {
         return;
       }
       const result = yield* compactConversation(input);
-      yield* sendClient(Agent, agentKey()).applyCompaction(result);
+      yield* restate.sendClient(Agent, agentKey()).applyCompaction(result);
     },
 
     // The shared compaction handler returns a derived checkpoint here. History
     // validates the reserved prefix before replacing the previous summary.
     applyCompaction: function* (
       result: ConversationCompactionResult,
-    ): Operation<void> {
+    ): restate.Operation<void> {
       yield* history.finishCompaction(result);
     },
   },
@@ -311,7 +307,10 @@ export const Agent = object({
 
 // Cross-component coordination belongs here: mark queued messages as active,
 // prepare the complete transcript, then let activeTurn own the invocation.
-function* startTurn(agentId: string, queuedMessages = 0): Operation<string> {
+function* startTurn(
+  agentId: string,
+  queuedMessages = 0,
+): restate.Operation<string> {
   if (queuedMessages > 0) {
     yield* history.append({
       role: "event",

@@ -1,16 +1,7 @@
 // Pending tools outlive the agent step that started them. This registry owns
 // lookup, completion races, selective cancellation, and final cleanup.
 
-import {
-  allSettled,
-  type Future,
-  InterruptedError,
-  type Operation,
-  race,
-  select,
-  spawn,
-  type Task,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import {
   type AgentToolContext,
   agentTools,
@@ -21,7 +12,7 @@ import type {ToolCall} from "./model.js";
 
 type PendingOperation = {
   call: ToolCall;
-  task: Task<PendingEvent>;
+  task: restate.Task<PendingEvent>;
 };
 
 type PendingStep =
@@ -47,13 +38,13 @@ export function createPendingOperations() {
     *apply(
       outcomes: ToolOutcome[],
       context: AgentToolContext,
-    ): Operation<{outcomes: ToolOutcome[]; events: PendingEvent[]}> {
+    ): restate.Operation<{outcomes: ToolOutcome[]; events: PendingEvent[]}> {
       const starting = outcomes.flatMap((outcome): PendingOperation[] =>
         outcome.status === "pending"
           ? [
               {
                 call: outcome.call,
-                task: spawn(agentTools.complete(outcome.call, context)),
+                task: restate.spawn(agentTools.complete(outcome.call, context)),
               },
             ]
           : [],
@@ -78,8 +69,10 @@ export function createPendingOperations() {
             continue;
           }
 
-          operation.task.interrupt(new InterruptedError(outcome.reason));
-          const [settled] = yield* allSettled([operation.task]);
+          operation.task.interrupt(
+            new restate.InterruptedError(outcome.reason),
+          );
+          const [settled] = yield* restate.allSettled([operation.task]);
           active.delete(operation.call.toolCallId);
 
           if (settled.status === "fulfilled") {
@@ -111,19 +104,19 @@ export function createPendingOperations() {
         for (const operation of starting) {
           operation.task.interrupt(error);
         }
-        yield* allSettled(starting.map(({task}) => task));
+        yield* restate.allSettled(starting.map(({task}) => task));
         throw error;
       }
     },
 
     *next(
-      steeringReady: Future<void>,
-      interrupt: Future<string>,
-    ): Operation<PendingStep> {
-      const selected = yield* select({
+      steeringReady: restate.Future<void>,
+      interrupt: restate.Future<string>,
+    ): restate.Operation<PendingStep> {
+      const selected = yield* restate.select({
         interrupt,
         steering: steeringReady,
-        completion: race([...active.values()].map(({task}) => task)),
+        completion: restate.race([...active.values()].map(({task}) => task)),
       });
       if (selected.tag === "interrupt") {
         return {type: "interrupted", reason: yield* selected.future};
@@ -137,13 +130,13 @@ export function createPendingOperations() {
       return {type: "completion", event};
     },
 
-    *stop(reason: unknown): Operation<PendingEvent[]> {
+    *stop(reason: unknown): restate.Operation<PendingEvent[]> {
       const stopped = [...active.values()];
       active.clear();
       for (const operation of stopped) {
         operation.task.interrupt(reason);
       }
-      const settled = yield* allSettled(stopped.map(({task}) => task));
+      const settled = yield* restate.allSettled(stopped.map(({task}) => task));
       return settled.map((result, index) =>
         result.status === "fulfilled"
           ? result.value

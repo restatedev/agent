@@ -3,13 +3,7 @@
 
 import {createHash} from "node:crypto";
 import {Opts} from "@restatedev/restate-sdk";
-import {
-  InterruptedError,
-  type Operation,
-  run,
-  scope,
-  service,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {
   AGENT_MODEL,
@@ -27,19 +21,22 @@ const MODEL_SCOPE = "openai";
 
 // The main model call is a service so Restate can apply scope-based concurrency
 // control before the expensive provider request starts.
-export const ModelGateway = service({
+export const ModelGateway = restate.service({
   name: "ModelGateway",
   handlers: {
-    *complete({messages, tools}: ModelRequest): Operation<ModelResult> {
-      return yield* run(({signal}) => completeAgent(messages, tools, signal), {
-        name: "agent-model",
-        retry: {
-          maxAttempts: 4,
-          initialInterval: 500,
-          maxInterval: 5_000,
-          exponentiationFactor: 2,
+    *complete({messages, tools}: ModelRequest): restate.Operation<ModelResult> {
+      return yield* restate.run(
+        ({signal}) => completeAgent(messages, tools, signal),
+        {
+          name: "agent-model",
+          retry: {
+            maxAttempts: 4,
+            initialInterval: 500,
+            maxInterval: 5_000,
+            exponentiationFactor: 2,
+          },
         },
-      });
+      );
     },
   },
 });
@@ -55,8 +52,9 @@ export function* callModel(
   agentId: string,
   messages: ModelMessage[],
   tools: ToolManifest[],
-): Operation<ModelResult> {
-  const call = scope(MODEL_SCOPE)
+): restate.Operation<ModelResult> {
+  const call = restate
+    .scope(MODEL_SCOPE)
     .client(ModelGateway)
     .complete(
       {messages, tools},
@@ -66,7 +64,7 @@ export function* callModel(
   try {
     return yield* call;
   } catch (error) {
-    if (error instanceof InterruptedError) {
+    if (error instanceof restate.InterruptedError) {
       invocation.cancel();
     }
     throw error;

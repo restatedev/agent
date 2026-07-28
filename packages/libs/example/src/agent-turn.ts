@@ -2,12 +2,7 @@
 // `turn` and `pending` state keys plus the Turn invocation and signal lifecycle.
 // It deliberately knows nothing about conversation history.
 
-import {
-  invocation,
-  type Operation,
-  sendClient,
-  state,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import {Turn} from "./turn.js";
 import {
   type SteeringSignal,
@@ -36,8 +31,8 @@ type FinishedTurn = {
   interruptionRequested: boolean;
 };
 
-function* readActiveTurn(): Operation<ActiveTurnState | undefined> {
-  return (yield* state().get<ActiveTurnState>("turn")) ?? undefined;
+function* readActiveTurn(): restate.Operation<ActiveTurnState | undefined> {
+  return (yield* restate.state().get<ActiveTurnState>("turn")) ?? undefined;
 }
 
 /**
@@ -58,9 +53,9 @@ export const activeTurn = {
    *
    * @returns The new invocation ID.
    */
-  *start(request: TurnRequest): Operation<string> {
-    const started = yield* sendClient(Turn).run(request);
-    state().set("turn", {
+  *start(request: TurnRequest): restate.Operation<string> {
+    const started = yield* restate.sendClient(Turn).run(request);
+    restate.state().set("turn", {
       id: started.id,
       interrupting: false,
       steeringBatches: [],
@@ -73,10 +68,10 @@ export const activeTurn = {
    *
    * @returns The new number of pending messages.
    */
-  *enqueue(message: string): Operation<number> {
-    const pending = (yield* state().get<string[]>("pending")) ?? [];
+  *enqueue(message: string): restate.Operation<number> {
+    const pending = (yield* restate.state().get<string[]>("pending")) ?? [];
     pending.push(message);
-    state().set("pending", pending);
+    restate.state().set("pending", pending);
     return pending.length;
   },
 
@@ -86,15 +81,16 @@ export const activeTurn = {
    * @returns The interrupted invocation ID, or `undefined` when no turn is
    * active or an interrupt is already in progress.
    */
-  *interrupt(reason: string): Operation<string | undefined> {
+  *interrupt(reason: string): restate.Operation<string | undefined> {
     const current = yield* readActiveTurn();
     if (!current || current.interrupting) {
       return undefined;
     }
-    invocation(current.id)
+    restate
+      .invocation(current.id)
       .signal<string>(TURN_SIGNALS.interrupt)
       .resolve(reason);
-    state().set("turn", {...current, interrupting: true});
+    restate.state().set("turn", {...current, interrupting: true});
     return current.id;
   },
 
@@ -106,20 +102,21 @@ export const activeTurn = {
    * @returns The structured steering signal, or `undefined` when no turn is
    * listening.
    */
-  *steer(message: string): Operation<SteeringSignal | undefined> {
+  *steer(message: string): restate.Operation<SteeringSignal | undefined> {
     const current = yield* readActiveTurn();
     if (!current || current.interrupting) {
       return undefined;
     }
 
-    const pending = (yield* state().get<string[]>("pending")) ?? [];
-    state().clear("pending");
+    const pending = (yield* restate.state().get<string[]>("pending")) ?? [];
+    restate.state().clear("pending");
     const steering = {queued: pending, message};
-    state().set("turn", {
+    restate.state().set("turn", {
       ...current,
       steeringBatches: [...current.steeringBatches, steering.queued.length + 1],
     });
-    invocation(current.id)
+    restate
+      .invocation(current.id)
       .signal<SteeringSignal>(TURN_SIGNALS.steering)
       .resolve(steering);
     return steering;
@@ -134,15 +131,15 @@ export const activeTurn = {
    * @returns Reconciliation information, or `undefined` for an outcome that
    * does not belong to the active turn.
    */
-  *finish(outcome: TurnOutcome): Operation<FinishedTurn | undefined> {
+  *finish(outcome: TurnOutcome): restate.Operation<FinishedTurn | undefined> {
     const current = yield* readActiveTurn();
     if (current?.id !== outcome.turnId) {
       return undefined;
     }
 
-    state().clear("turn");
-    const pending = (yield* state().get<string[]>("pending")) ?? [];
-    state().clear("pending");
+    restate.state().clear("turn");
+    const pending = (yield* restate.state().get<string[]>("pending")) ?? [];
+    restate.state().clear("pending");
 
     const missedSteeringMessages = current.interrupting
       ? 0

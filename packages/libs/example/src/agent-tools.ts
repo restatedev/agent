@@ -6,15 +6,7 @@
 
 import {setTimeout} from "node:timers/promises";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
-import {
-  client,
-  InterruptedError,
-  type Operation,
-  run,
-  sendClient,
-  signal,
-  sleep,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
@@ -51,8 +43,14 @@ type AgentTool = {
   name: string;
   description: string;
   inputSchema: z.ZodType;
-  execute(input: unknown, context: ToolCallContext): Operation<ToolExecution>;
-  complete(input: unknown, context: ToolCallContext): Operation<ToolCompletion>;
+  execute(
+    input: unknown,
+    context: ToolCallContext,
+  ): restate.Operation<ToolExecution>;
+  complete(
+    input: unknown,
+    context: ToolCallContext,
+  ): restate.Operation<ToolCompletion>;
 };
 
 function errorMessage(error: unknown): string {
@@ -79,11 +77,11 @@ function defineAgentTool<
   run(
     input: z.output<Schema>,
     context: ToolCallContext,
-  ): Operation<ToolExecution>;
+  ): restate.Operation<ToolExecution>;
   complete?(
     input: z.output<Schema>,
     context: ToolCallContext,
-  ): Operation<ToolCompletion>;
+  ): restate.Operation<ToolCompletion>;
 }): AgentTool & Pick<typeof definition, "name" | "inputSchema"> {
   return {
     name: definition.name,
@@ -92,7 +90,7 @@ function defineAgentTool<
     *execute(
       input: unknown,
       context: ToolCallContext,
-    ): Operation<ToolExecution> {
+    ): restate.Operation<ToolExecution> {
       const parsed = definition.inputSchema.safeParse(input);
       if (!parsed.success) {
         return {
@@ -105,7 +103,7 @@ function defineAgentTool<
     *complete(
       input: unknown,
       context: ToolCallContext,
-    ): Operation<ToolCompletion> {
+    ): restate.Operation<ToolCompletion> {
       const parsed = definition.inputSchema.safeParse(input);
       if (!parsed.success) {
         return {
@@ -133,9 +131,9 @@ const getWeatherTool = defineAgentTool({
       .string()
       .describe("City name, optionally including state or country."),
   }),
-  *run({city}): Operation<ToolExecution> {
+  *run({city}): restate.Operation<ToolExecution> {
     try {
-      const weather = yield* run(
+      const weather = yield* restate.run(
         async ({signal}) => {
           await setTimeout(200, undefined, {signal});
           return {city, temp: 22, condition: "sunny"};
@@ -155,7 +153,10 @@ const getWeatherTool = defineAgentTool({
         result: `${weather.temp}°C, ${weather.condition} in ${weather.city}`,
       };
     } catch (error) {
-      if (error instanceof InterruptedError || error instanceof TerminalError) {
+      if (
+        error instanceof restate.InterruptedError ||
+        error instanceof TerminalError
+      ) {
         throw error;
       }
       return {
@@ -178,7 +179,7 @@ const sleepTool = defineAgentTool({
       .max(300)
       .describe("How long to sleep, from 1 to 300 seconds."),
   }),
-  *run({durationSeconds}, context): Operation<ToolExecution> {
+  *run({durationSeconds}, context): restate.Operation<ToolExecution> {
     return {
       status: "pending",
       result: {
@@ -188,8 +189,8 @@ const sleepTool = defineAgentTool({
       },
     };
   },
-  *complete({durationSeconds}): Operation<ToolCompletion> {
-    yield* sleep(durationSeconds * 1_000, "sleep");
+  *complete({durationSeconds}): restate.Operation<ToolCompletion> {
+    yield* restate.sleep(durationSeconds * 1_000, "sleep");
     return {
       status: "succeeded",
       result: `Slept for ${durationSeconds} seconds`,
@@ -207,15 +208,15 @@ const humanApprovalTool = defineAgentTool({
       .min(1)
       .describe("The specific action or decision the human should approve."),
   }),
-  *run({question}, context): Operation<ToolExecution> {
+  *run({question}, context): restate.Operation<ToolExecution> {
     const request = {
       approvalId: context.toolCallId,
       turnId: context.turnId,
       question,
     };
-    const registered = yield* client(Agent, context.agentId).requestApproval(
-      request,
-    );
+    const registered = yield* restate
+      .client(Agent, context.agentId)
+      .requestApproval(request);
     if (!registered) {
       return {
         status: "failed",
@@ -233,9 +234,9 @@ const humanApprovalTool = defineAgentTool({
       },
     };
   },
-  *complete({question: _question}, context): Operation<ToolCompletion> {
+  *complete({question: _question}, context): restate.Operation<ToolCompletion> {
     try {
-      const decision = yield* signal<ApprovalDecision>(
+      const decision = yield* restate.signal<ApprovalDecision>(
         approvalSignalName(context.toolCallId),
       );
       const reason = decision.reason ? ` Reason: ${decision.reason}` : "";
@@ -247,7 +248,7 @@ const humanApprovalTool = defineAgentTool({
             : `Human rejected the request.${reason}`,
       };
     } catch (error) {
-      yield* sendClient(Agent, context.agentId).cancelApproval({
+      yield* restate.sendClient(Agent, context.agentId).cancelApproval({
         approvalId: context.toolCallId,
         turnId: context.turnId,
       });
@@ -273,7 +274,7 @@ const cancelOperationTool = defineAgentTool({
         "Why the pending operation should be cancelled, or null when no reason was given.",
       ),
   }),
-  *run({operationId, reason}): Operation<ToolExecution> {
+  *run({operationId, reason}): restate.Operation<ToolExecution> {
     return {
       status: "cancel_requested",
       operationId,
@@ -342,7 +343,10 @@ function toRuntimeMessage({call, outcome}: PendingEvent): ModelMessage {
 export const agentTools = {
   manifests: definitions.map(toManifest),
 
-  *execute(call: ToolCall, context: AgentToolContext): Operation<ToolOutcome> {
+  *execute(
+    call: ToolCall,
+    context: AgentToolContext,
+  ): restate.Operation<ToolOutcome> {
     const tool = findTool(call.toolName);
     if (!tool) {
       return {
@@ -363,7 +367,7 @@ export const agentTools = {
   *complete(
     call: ToolCall,
     context: AgentToolContext,
-  ): Operation<PendingEvent> {
+  ): restate.Operation<PendingEvent> {
     const tool = findTool(call.toolName);
     if (!tool) {
       return {
@@ -381,7 +385,7 @@ export const agentTools = {
       };
     } catch (error) {
       if (
-        error instanceof InterruptedError ||
+        error instanceof restate.InterruptedError ||
         error instanceof CancelledError
       ) {
         throw error;

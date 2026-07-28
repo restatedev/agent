@@ -1,12 +1,7 @@
 // Pending human approvals for one Agent virtual object. The Agent owns their
 // durable state; the waiting tool remains inside the Turn invocation.
 
-import {
-  invocation,
-  type Operation,
-  sharedState,
-  state,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import {
   type ApprovalCancellation,
   type ApprovalDecision,
@@ -17,15 +12,15 @@ import {
 
 const APPROVALS = "approvals";
 
-function* listApprovals(): Operation<ApprovalRequest[]> {
-  return (yield* sharedState().get<ApprovalRequest[]>(APPROVALS)) ?? [];
+function* listApprovals(): restate.Operation<ApprovalRequest[]> {
+  return (yield* restate.sharedState().get<ApprovalRequest[]>(APPROVALS)) ?? [];
 }
 
 function storeApprovals(pending: ApprovalRequest[]): void {
   if (pending.length === 0) {
-    state().clear(APPROVALS);
+    restate.state().clear(APPROVALS);
   } else {
-    state().set(APPROVALS, pending);
+    restate.state().set(APPROVALS, pending);
   }
 }
 
@@ -40,7 +35,7 @@ export const approvals = {
   list: listApprovals,
 
   /** Registers a request idempotently. */
-  *register(request: ApprovalRequest): Operation<boolean> {
+  *register(request: ApprovalRequest): restate.Operation<boolean> {
     const pending = yield* listApprovals();
     const existing = pending.find(
       (candidate) => candidate.approvalId === request.approvalId,
@@ -52,12 +47,12 @@ export const approvals = {
       );
     }
     pending.push(request);
-    state().set(APPROVALS, pending);
+    restate.state().set(APPROVALS, pending);
     return true;
   },
 
   /** Removes one matching request. Safe to repeat during cleanup. */
-  *cancel({approvalId, turnId}: ApprovalCancellation): Operation<void> {
+  *cancel({approvalId, turnId}: ApprovalCancellation): restate.Operation<void> {
     const pending = yield* listApprovals();
     const remaining = pending.filter(
       (request) =>
@@ -70,7 +65,7 @@ export const approvals = {
   },
 
   /** Removes every approval belonging to a completed Turn invocation. */
-  *clearTurn(turnId: string): Operation<void> {
+  *clearTurn(turnId: string): restate.Operation<void> {
     const pending = yield* listApprovals();
     const remaining = pending.filter((request) => request.turnId !== turnId);
     if (remaining.length === pending.length) {
@@ -86,7 +81,7 @@ export const approvals = {
   *resolve(
     resolution: ApprovalResolution,
     activeTurnId?: string,
-  ): Operation<boolean> {
+  ): restate.Operation<boolean> {
     const pending = yield* listApprovals();
     const request = pending.find(
       (candidate) => candidate.approvalId === resolution.approvalId,
@@ -107,7 +102,8 @@ export const approvals = {
       decision: resolution.decision,
       ...(resolution.reason ? {reason: resolution.reason} : {}),
     };
-    invocation(request.turnId)
+    restate
+      .invocation(request.turnId)
       .signal<ApprovalDecision>(approvalSignalName(request.approvalId))
       .resolve(decision);
     return true;

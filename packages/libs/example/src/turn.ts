@@ -3,17 +3,7 @@
 // Each iteration spawns one bounded agent step and applies its returned data.
 
 import {CancelledError} from "@restatedev/restate-sdk";
-import {
-  type Future,
-  handlerRequest,
-  InterruptedError,
-  type Operation,
-  schemas,
-  sendClient,
-  service,
-  signal,
-  spawn,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
@@ -43,7 +33,7 @@ import {
 type TurnState = {
   context: AgentToolContext;
   messages: ModelMessage[];
-  interrupt: Future<string>;
+  interrupt: restate.Future<string>;
   steeringInbox: ReturnType<typeof createSteeringInbox>;
   consumedSteering: number;
   steps: number;
@@ -62,8 +52,8 @@ function* reportProgress(
   context: AgentToolContext,
   phase: ProgressReport["phase"],
   message: string,
-): Operation<void> {
-  yield* sendClient(Agent, context.agentId).reportProgress({
+): restate.Operation<void> {
+  yield* restate.sendClient(Agent, context.agentId).reportProgress({
     turnId: context.turnId,
     phase,
     message,
@@ -82,13 +72,15 @@ function toolBatchSummary(outcomes: ToolOutcome[]): string {
 function* finalizeInterruption(
   state: TurnState,
   reason: string,
-): Operation<TurnOutcome> {
+): restate.Operation<TurnOutcome> {
   yield* reportProgress(
     state.context,
     "finalizing",
     "Stopping unfinished work for graceful interruption",
   );
-  const stopped = yield* state.pending.stop(new InterruptedError(reason));
+  const stopped = yield* state.pending.stop(
+    new restate.InterruptedError(reason),
+  );
   state.messages.push(...stopped.map(agentTools.toRuntimeMessage));
   state.messages.push(interruptionInstruction(reason));
   yield* reportProgress(
@@ -110,7 +102,10 @@ function* finalizeInterruption(
       response = `The turn was interrupted (${reason}), but its final response could not be generated: ${detail}.`;
     }
   } catch (error) {
-    if (error instanceof InterruptedError || error instanceof CancelledError) {
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
       throw error;
     }
     response = `The turn was interrupted (${reason}), but its final response could not be generated: ${errorMessage(error)}.`;
@@ -124,7 +119,10 @@ function* finalizeInterruption(
   };
 }
 
-function* failTurn(state: TurnState, error: unknown): Operation<TurnOutcome> {
+function* failTurn(
+  state: TurnState,
+  error: unknown,
+): restate.Operation<TurnOutcome> {
   yield* state.pending.stop(error);
   return {
     turnId: state.context.turnId,
@@ -145,7 +143,7 @@ function drainSteering(state: TurnState): SteeringSignal[] {
 function* applyText(
   state: TurnState,
   text: string,
-): Operation<TurnOutcome | undefined> {
+): restate.Operation<TurnOutcome | undefined> {
   if (!text.trim()) {
     state.messages.push({
       role: "user",
@@ -189,7 +187,7 @@ function* applyTools(
   state: TurnState,
   step: ToolStep,
   steering: SteeringSignal[],
-): Operation<void> {
+): restate.Operation<void> {
   const applied = yield* state.pending.apply(step.outcomes, state.context);
   state.messages.push(
     step.action.message,
@@ -225,19 +223,19 @@ function retainInterruptedTools(
   );
 }
 
-export const Turn = service({
+export const Turn = restate.service({
   name: "Turn",
   handlers: {
     // One handler invocation owns the complete transient state machine and
     // reports exactly one high-level outcome to the Agent.
-    run: schemas(
+    run: restate.schemas(
       {input: TurnRequestSchema, output: z.void()},
-      function* (req: TurnRequest): Operation<void> {
-        const turnId = handlerRequest().id;
+      function* (req: TurnRequest): restate.Operation<void> {
+        const turnId = restate.handlerRequest().id;
         const state: TurnState = {
           context: {agentId: req.agentId, turnId},
           messages: buildModelContext(req.history, req.summary),
-          interrupt: signal<string>(TURN_SIGNALS.interrupt),
+          interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
           steeringInbox: createSteeringInbox(),
           consumedSteering: 0,
           steps: 0,
@@ -256,7 +254,7 @@ export const Turn = service({
                 : `Planning agent step ${state.steps + 1}`,
             );
 
-            const task = spawn(
+            const task = restate.spawn(
               agentStep({
                 context: state.context,
                 messages: [...state.messages],
@@ -306,7 +304,7 @@ export const Turn = service({
               case "tool_budget_exceeded":
                 result = yield* failTurn(
                   state,
-                  new InterruptedError(
+                  new restate.InterruptedError(
                     `agent exceeded its ${MAX_TOOL_CALLS}-tool-call budget`,
                   ),
                 );
@@ -323,15 +321,15 @@ export const Turn = service({
             result ??
             (yield* failTurn(
               state,
-              new InterruptedError(
+              new restate.InterruptedError(
                 `agent did not finish within ${MAX_STEPS} steps`,
               ),
             ));
-          yield* sendClient(Agent, req.agentId).append(outcome);
+          yield* restate.sendClient(Agent, req.agentId).append(outcome);
         } catch (error) {
           yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
-            yield* sendClient(Agent, req.agentId).append({
+            yield* restate.sendClient(Agent, req.agentId).append({
               turnId,
               status: "interrupted",
               reason: "Turn cancelled",
@@ -340,7 +338,7 @@ export const Turn = service({
             throw error;
           }
 
-          yield* sendClient(Agent, req.agentId).append({
+          yield* restate.sendClient(Agent, req.agentId).append({
             turnId,
             status: "failed",
             error: errorMessage(error),

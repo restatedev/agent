@@ -6,12 +6,7 @@
 // rolling summary is a replaceable model-context checkpoint over an older
 // prefix of that log.
 
-import {
-  all,
-  type Operation,
-  sharedState,
-  state,
-} from "@restatedev/restate-sdk-gen";
+import * as restate from "@restatedev/restate-sdk-gen";
 import type {ConversationEntry, HistoryPage} from "./types.js";
 
 type StoredEntry = {
@@ -78,11 +73,13 @@ function samePlan(
   );
 }
 
-function* readMeta(): Operation<HistoryMeta | undefined> {
-  return (yield* sharedState().get<HistoryMeta>(HISTORY_META)) ?? undefined;
+function* readMeta(): restate.Operation<HistoryMeta | undefined> {
+  return (
+    (yield* restate.sharedState().get<HistoryMeta>(HISTORY_META)) ?? undefined
+  );
 }
 
-function* ensureMeta(): Operation<HistoryMeta> {
+function* ensureMeta(): restate.Operation<HistoryMeta> {
   const existing = yield* readMeta();
   if (existing) {
     return existing;
@@ -92,7 +89,7 @@ function* ensureMeta(): Operation<HistoryMeta> {
     lastChunk: 0,
     nextSequence: 1,
   };
-  state().set(HISTORY_META, meta);
+  restate.state().set(HISTORY_META, meta);
   return meta;
 }
 
@@ -100,13 +97,15 @@ function* readEntries(
   meta: HistoryMeta,
   fromChunk = 0,
   throughChunk = meta.lastChunk,
-): Operation<StoredEntry[]> {
+): restate.Operation<StoredEntry[]> {
   const indexes = Array.from(
     {length: throughChunk - fromChunk + 1},
     (_, index) => fromChunk + index,
   );
-  const chunks = yield* all(
-    indexes.map((index) => sharedState().get<StoredEntry[]>(chunkKey(index))),
+  const chunks = yield* restate.all(
+    indexes.map((index) =>
+      restate.sharedState().get<StoredEntry[]>(chunkKey(index)),
+    ),
   );
   return chunks.flatMap((chunk) => chunk ?? []);
 }
@@ -115,7 +114,7 @@ function* rewriteLatestDelivery(
   messageCount: number,
   from: "queued" | "steer",
   to: "queued" | "steer",
-): Operation<void> {
+): restate.Operation<void> {
   if (messageCount === 0) {
     return;
   }
@@ -124,7 +123,7 @@ function* rewriteLatestDelivery(
   let remaining = messageCount;
   for (let index = meta.lastChunk; index >= 0 && remaining > 0; index--) {
     const chunk =
-      (yield* sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
+      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
     let changed = false;
     for (
       let entryIndex = chunk.length - 1;
@@ -142,7 +141,7 @@ function* rewriteLatestDelivery(
       }
     }
     if (changed) {
-      state().set(chunkKey(index), chunk);
+      restate.state().set(chunkKey(index), chunk);
     }
   }
 }
@@ -154,7 +153,7 @@ function* rewriteLatestDelivery(
  * over Restate's current context and holds no process-local state.
  */
 export const history = {
-  *page(fromSequence: number, limit: number): Operation<HistoryPage> {
+  *page(fromSequence: number, limit: number): restate.Operation<HistoryPage> {
     const meta = yield* readMeta();
     if (!meta || fromSequence >= meta.nextSequence) {
       return {entries: [], nextSequence: fromSequence};
@@ -175,15 +174,16 @@ export const history = {
     };
   },
 
-  *context(): Operation<ConversationContext> {
+  *context(): restate.Operation<ConversationContext> {
     const meta = yield* readMeta();
     if (!meta) {
       return {entries: []};
     }
 
     const summary =
-      (yield* sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
-      undefined;
+      (yield* restate
+        .sharedState()
+        .get<ConversationSummary>(HISTORY_SUMMARY)) ?? undefined;
     const through = summary?.through ?? START;
     const entries = (yield* readEntries(meta, Math.floor(through / CHUNK_SIZE)))
       .filter(({sequence}) => sequence > through)
@@ -191,7 +191,7 @@ export const history = {
     return {summary: summary?.text, entries};
   },
 
-  *append(...entries: ConversationEntry[]): Operation<void> {
+  *append(...entries: ConversationEntry[]): restate.Operation<void> {
     if (entries.length === 0) {
       return;
     }
@@ -199,11 +199,11 @@ export const history = {
     const meta = yield* ensureMeta();
     let index = meta.lastChunk;
     let chunk =
-      (yield* sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
+      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
 
     for (const entry of entries) {
       if (chunk.length >= CHUNK_SIZE) {
-        state().set(chunkKey(index), chunk);
+        restate.state().set(chunkKey(index), chunk);
         index += 1;
         chunk = [];
       }
@@ -211,34 +211,37 @@ export const history = {
       meta.nextSequence += 1;
     }
 
-    state().set(chunkKey(index), chunk);
+    restate.state().set(chunkKey(index), chunk);
     meta.lastChunk = index;
-    state().set(HISTORY_META, meta);
+    restate.state().set(HISTORY_META, meta);
   },
 
   // Keep accepted messages at their original transcript positions while their
   // execution route changes.
-  *promoteLatestQueued(messageCount: number): Operation<void> {
+  *promoteLatestQueued(messageCount: number): restate.Operation<void> {
     yield* rewriteLatestDelivery(messageCount, "queued", "steer");
   },
 
   // Steering that lost a completion race becomes input for the next Turn, but
   // remains ordered where the Agent originally observed it.
-  *requeueLatestSteering(messageCount: number): Operation<void> {
+  *requeueLatestSteering(messageCount: number): restate.Operation<void> {
     yield* rewriteLatestDelivery(messageCount, "steer", "queued");
   },
 
   // Called after a turn outcome is appended. Once enough conversation messages
   // have accumulated, reserve the entire finished prefix.
-  *beginCompaction(): Operation<ConversationCompactionPlan | undefined> {
+  *beginCompaction(): restate.Operation<
+    ConversationCompactionPlan | undefined
+  > {
     const meta = yield* ensureMeta();
     if (meta.compaction) {
       return undefined;
     }
 
     const summary =
-      (yield* sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
-      undefined;
+      (yield* restate
+        .sharedState()
+        .get<ConversationSummary>(HISTORY_SUMMARY)) ?? undefined;
     const baseThrough = summary?.through ?? START;
     const uncompacted = (yield* readEntries(
       meta,
@@ -258,7 +261,7 @@ export const history = {
 
     const through = last.sequence;
     meta.compaction = {baseThrough, through};
-    state().set(HISTORY_META, meta);
+    restate.state().set(HISTORY_META, meta);
     return meta.compaction;
   },
 
@@ -266,15 +269,16 @@ export const history = {
   // handler. No state is mutated here.
   *readCompaction(
     plan: ConversationCompactionPlan,
-  ): Operation<ConversationCompactionInput | undefined> {
+  ): restate.Operation<ConversationCompactionInput | undefined> {
     const meta = yield* readMeta();
     if (!meta?.compaction || !samePlan(meta.compaction, plan)) {
       return undefined;
     }
 
     const summary =
-      (yield* sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
-      undefined;
+      (yield* restate
+        .sharedState()
+        .get<ConversationSummary>(HISTORY_SUMMARY)) ?? undefined;
     const entries = (yield* readEntries(
       meta,
       Math.floor(plan.baseThrough / CHUNK_SIZE),
@@ -293,7 +297,9 @@ export const history = {
 
   // Apply only the result for the currently reserved finished-turn prefix.
   // Newer transcript entries do not invalidate that checkpoint.
-  *finishCompaction(result: ConversationCompactionResult): Operation<boolean> {
+  *finishCompaction(
+    result: ConversationCompactionResult,
+  ): restate.Operation<boolean> {
     const meta = yield* ensureMeta();
     const pending = meta.compaction;
     if (!pending || !samePlan(pending, result)) {
@@ -301,12 +307,12 @@ export const history = {
     }
 
     delete meta.compaction;
-    state().set(HISTORY_META, meta);
+    restate.state().set(HISTORY_META, meta);
     if (result.status === "failed" || !result.summary.trim()) {
       return false;
     }
 
-    state().set(HISTORY_SUMMARY, {
+    restate.state().set(HISTORY_SUMMARY, {
       through: pending.through,
       text: result.summary.trim(),
     } satisfies ConversationSummary);
