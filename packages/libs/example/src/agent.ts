@@ -57,6 +57,19 @@ const AskRequestSchema = z.object({
   message: MessageSchema.default(DEFAULT_ASK),
 });
 
+const InterruptRequestSchema = z
+  .object({
+    reason: MessageSchema.describe(
+      "Why the active Turn should stop and what its tool-free finalization should explain.",
+    ),
+    message: MessageSchema.describe(
+      "An optional replacement user request to queue for a new Turn after interruption finalization.",
+    ).optional(),
+  })
+  .describe(
+    "Interrupt the active Turn, optionally preserving a replacement request for the next Turn.",
+  );
+
 const AskResultSchema = z.object({
   decision: z.enum(["start", "queue"]),
   turnId: z.string(),
@@ -118,21 +131,35 @@ export const Agent = restate.object({
       },
     ),
 
-    // Explicitly stop the active turn; the input is the reason. No intent
-    // guessing — this is the API a stop button calls. Returns whether the stop
-    // was requested; false means there was nothing to stop (idle, or already
-    // winding down from an earlier interrupt) and nothing happened.
+    // Explicitly stop the active turn. `reason` guides its tool-free
+    // finalization; an optional replacement `message` is recorded and queued
+    // for the next Turn. A replacement remains accepted when interruption is
+    // already in progress. False means the Agent was idle, or it was already
+    // interrupting and the request carried no new message.
     interrupt: restate.schemas(
-      {input: MessageSchema, output: z.boolean()},
-      function* (reason): restate.Operation<boolean> {
-        const turnId = yield* activeTurn.interrupt(reason);
-        if (!turnId) {
+      {input: InterruptRequestSchema, output: z.boolean()},
+      function* ({reason, message}): restate.Operation<boolean> {
+        const interruption = yield* activeTurn.interrupt(reason);
+        if (!interruption) {
           return false;
         }
+
+        if (message) {
+          yield* activeTurn.enqueue(message);
+          yield* history.append({
+            role: "user",
+            text: message,
+            delivery: "queued",
+          });
+        }
+        if (!interruption.requested) {
+          return message !== undefined;
+        }
+
         yield* history.append({
           role: "event",
           type: "interrupt",
-          turnId,
+          turnId: interruption.turnId,
           reason,
         });
         return true;

@@ -134,7 +134,7 @@ instruction. Instructions and guardrail changes affect the next Turn.
 | `profile` | void | Returns this Agent's instructions, model-managed memories, and capability guardrails. |
 | `setInstructions` | `{ instructions: string \| null }` | Replaces the persistent user instructions; `null` clears them. Running Turns keep their snapshot. |
 | `setGuardrails` | `{ guardrails: [{ capability, reason }] }` | Replaces the persistent capability deny list. Running Turns keep their snapshot. |
-| `interrupt` | reason string | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. Returns immediately. |
+| `interrupt` | `{ reason, message? }` | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. An optional replacement message is appended immediately and queued for the next Turn. |
 | `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool with `approved` or `rejected`. |
@@ -169,8 +169,9 @@ creates a boundary without attempting graceful finalization.
 
 `ask` deliberately makes no model decision: it starts work when idle and
 queues when busy. Clients choose `steer` or `interrupt` explicitly when a
-message should affect the active turn. The interrupt reason is a control
-instruction for finalization; it does not create another user request or Turn.
+message should affect the active turn. The interrupt reason is only a control
+instruction for finalizing the old Turn. A distinct optional `message` is
+recorded as a user request and queued for the next Turn.
 
 The controller flow is therefore:
 
@@ -181,10 +182,11 @@ The controller flow is therefore:
 - `steer` drains that queue into one structured steering signal, then appends
   the steering request and a lifecycle event recording its target Turn and
   queued-message count.
-- `interrupt` leaves the queue intact and appends its event after every message
-  the Agent had already observed. The old Turn appends its graceful final
-  response, then a dispatch event activates queued entries and starts one new
-  Turn with the complete transcript.
+- `interrupt` leaves the queue intact. When it carries a replacement message,
+  the Agent appends and queues that user request before recording the
+  interruption event. The old Turn appends its graceful final response, then a
+  dispatch event activates all queued entries and starts one new Turn with the
+  complete transcript.
 
 Repeated resolutions of the `steering` signal form a durable queue. Each
 `steer` call resolves one structured `{ queued, message }` signal: messages
@@ -347,7 +349,7 @@ curl localhost:8080/Agent/demo/steer \
   --json '"Steer toward a one-sentence answer"'
 
 curl localhost:8080/Agent/demo/interrupt \
-  --json '"Stop; the user changed their mind"'
+  --json '{"reason":"The user changed tasks","message":"What is the weather in Japan?"}'
 ```
 
 An idle agent returns a response shaped like:

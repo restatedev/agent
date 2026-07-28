@@ -113,6 +113,11 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 - The interrupt signal asks Turn to end, while steering asks it to continue
   with new instructions.
+- The Agent keeps the interruption reason separate from an optional replacement
+  user message. The reason guides finalization of the old Turn; the message is
+  appended to the immutable transcript and queued for a new Turn.
+- A replacement message is still accepted if the old Turn is already
+  interrupting. A reason-only repeat is ignored.
 - During a step, Turn interrupts and joins the step task. The step joins every
   foreground tool, retains fulfilled outcomes, and represents interrupted
   calls as failures.

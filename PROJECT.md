@@ -20,7 +20,8 @@ The application is split into a few concrete parts:
   sequenced transcript, which clients consume through the cursor-based
   `history` handler. `ask` starts work when idle and queues when busy; clients
   explicitly select `steer` or `interrupt` when they want to affect the active
-  turn.
+  turn. Interruption can atomically preserve a replacement user message for a
+  new Turn after the old Turn finishes graceful finalization.
 - **`Turn`** has no service state, but one durable invocation owns the
   transient agent-turn state machine: live messages, budgets, steering, and
   pending operations. It repeatedly spawns one bounded agent step, applies its

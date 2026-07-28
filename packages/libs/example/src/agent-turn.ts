@@ -36,6 +36,13 @@ type SentSteering = SteeringSignal & {
   turnId: string;
 };
 
+type InterruptedTurn = {
+  /** Turn invocation receiving, or already processing, the interruption. */
+  turnId: string;
+  /** Whether this call sent the Turn's first interruption signal. */
+  requested: boolean;
+};
+
 function* readActiveTurn(): restate.Operation<ActiveTurnState | undefined> {
   return (yield* restate.state().get<ActiveTurnState>("turn")) ?? undefined;
 }
@@ -83,20 +90,23 @@ export const activeTurn = {
   /**
    * Signals the active invocation to interrupt and marks it as winding down.
    *
-   * @returns The interrupted invocation ID, or `undefined` when no turn is
-   * active or an interrupt is already in progress.
+   * @returns The target Turn and whether this call sent its first interrupt
+   * signal, or `undefined` when no Turn is active.
    */
-  *interrupt(reason: string): restate.Operation<string | undefined> {
+  *interrupt(reason: string): restate.Operation<InterruptedTurn | undefined> {
     const current = yield* readActiveTurn();
-    if (!current || current.interrupting) {
+    if (!current) {
       return undefined;
+    }
+    if (current.interrupting) {
+      return {turnId: current.id, requested: false};
     }
     restate
       .invocation(current.id)
       .signal<string>(TURN_SIGNALS.interrupt)
       .resolve(reason);
     restate.state().set("turn", {...current, interrupting: true});
-    return current.id;
+    return {turnId: current.id, requested: true};
   },
 
   /**
