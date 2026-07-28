@@ -382,15 +382,17 @@ export const Agent = restate.object({
           });
         }
         const agentId = agentKey();
-        const plan = yield* history.beginCompaction();
-        if (plan) {
-          yield* restate.sendClient(Agent, agentId).compact(plan);
-        }
-
         const queuedMessages =
           finished.missedSteeringMessages + finished.pendingMessages;
         if (queuedMessages > 0) {
+          // Keep queued messages and their activation boundary in the same
+          // compaction prefix.
           yield* startTurn(agentId, queuedMessages);
+        }
+
+        const plan = yield* history.beginCompaction();
+        if (plan) {
+          yield* restate.sendClient(Agent, agentId).compact(plan);
         }
       },
     ),
@@ -421,6 +423,26 @@ export const Agent = restate.object({
     enableLazyState: true,
     handlers: {
       append: {
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      watchHistory: {
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      updateMemory: {
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      reportProgress: {
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      requestApproval: {
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      cancelApproval: {
         idempotencyRetention: 0,
         journalRetention: 0,
       },

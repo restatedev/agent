@@ -42,7 +42,7 @@ cursor-consumable transcript after recovery.
 | Action | When idle | While a Turn is active |
 | --- | --- | --- |
 | `ask(message)` | Appends the user message and starts a Turn. | Appends the message immediately and queues it for the next Turn. |
-| `steer(message)` | Returns `false`. | Moves queued messages plus the new instruction into the active Turn. Current tools are not cancelled. |
+| `steer(message)` | Returns `false`. | Moves queued messages plus the new instruction into the active Turn. Current tools are not cancelled. Returns `false` once interruption has begun. |
 | `interrupt(reason, message?)` | Returns `false`. | Cancels and joins unfinished work, finalizes the current Turn, and optionally queues a replacement message for a new Turn. |
 | `cancelOperation(id)` | Not a controller action. | A model tool selectively stops one pending operation while the Turn continues. |
 | External invocation cancellation | Nothing to cancel. | Stops the invocation, cleans up owned work, records the boundary, and rethrows cancellation to Restate. |
@@ -160,21 +160,26 @@ when that cursor is already readable or stores it until the next relevant
 append. The caller waits outside the virtual object, so transcript writers are
 never blocked by a waiting exclusive handler.
 
-After a turn finishes, the Agent counts conversation messages since the last
-checkpoint. At 32 messages it reserves that entire finished prefix and
-self-sends its cursor range to the shared `compact` handler. That handler reads
-the relevant summary and history chunks directly from Agent state, including
-interruption and failure boundaries, merges them with a cheap model, and
-one-way self-sends the derived checkpoint to the exclusive `applyCompaction`
-handler. Newer appended entries do not invalidate the checkpoint, and a failed
-compaction leaves the prior summary untouched.
+After a turn finishes, the Agent first activates any queued work and starts its
+next Turn from the exact transcript. It then counts conversation messages since
+the last checkpoint. At 32 messages it reserves the observed prefix—including
+the dispatch boundary for those queued messages—and self-sends its cursor range
+to the shared `compact` handler. That handler reads the relevant summary and
+history chunks directly from Agent state, including interruption and failure
+boundaries, merges them with a cheap model, and one-way self-sends the derived
+checkpoint to the exclusive `applyCompaction` handler. Newer appended entries
+do not invalidate the checkpoint, and a failed compaction leaves the prior
+summary untouched.
 
 Each `TurnRequest` carries a stable snapshot of the Agent's instructions,
-memories, guardrails, rolling summary, and exact uncompacted transcript. The
-Turn projects steering metadata and interruption, queued-message dispatch, or
-failure entries as explicit model-visible boundaries. Compaction happens only
-between turns: profile state, live model messages, tool calls, tool results,
-pending operations, and steering inside an active Turn are never summarized.
+memories, guardrails, rolling summary, and exact model-relevant entries since
+the checkpoint. Progress and memory events remain in the canonical transcript
+but are filtered before the request is serialized. The Turn projects steering
+metadata and interruption, queued-message dispatch, or failure entries as
+explicit model-visible boundaries. Only the reserved handoff prefix is
+summarized: profile state, live model messages, tool calls, tool results,
+pending operations, and later steering inside the active Turn are never
+summarized.
 
 ## Instructions, memories, and guardrails
 
@@ -207,7 +212,9 @@ Guardrails are not included in the main agent model's system prompt. This keeps
 policy enforcement in one place: the agent proposes the actual work, and the
 runtime independently gates it. The explicit `humanApproval` tool remains
 available for approvals the agent decides it needs for reasons unrelated to a
-runtime guardrail.
+runtime guardrail. The evaluator receives the complete live model context so it
+can interpret references and prior results safely; “cheap” describes the model
+tier, not a bounded input size.
 
 Approval applies to the current request and matching policy; later steps do not
 ask again. Rejection blocks the proposal and prevents another approval loop for
@@ -231,12 +238,12 @@ returns. Instructions and guardrail changes affect the next Turn.
 | `interrupt` | `{ reason, message? }` | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. An optional replacement message is appended immediately and queued for the next Turn. |
 | `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
-| `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool or policy gate with `approved` or `rejected`. |
+| `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and returns whether its decision reached the waiting tool or policy gate. A stale request is still removed when its Turn is no longer eligible. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
 | `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
 | `updateMemory` | `{ turnId, changes }` | Coordination path used by `manageMemory`; atomically applies a bounded memory batch only for the active Turn. |
-| `append` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, considers compaction, and dispatches queued work. Stale or duplicate Turn IDs are ignored. |
+| `append` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, dispatches queued work, and then considers compaction. Stale or duplicate Turn IDs are ignored. |
 | `compact` | reserved history cursor range | Shared handler that reads and summarizes one finished transcript prefix, then sends the result to `applyCompaction`. |
 | `applyCompaction` | structured compaction result | Exclusively validates and installs the current summary checkpoint, or clears a failed reservation. |
 
@@ -368,13 +375,24 @@ making pub/sub the source of truth.
   idempotently.
 - Deterministic configuration and OpenAI 4xx request errors fail immediately.
   Transient transport, timeout, rate-limit, conflict, and 5xx errors retry.
+- A foreground tool whose durable retry policy is exhausted returns a failed
+  tool result to the model. It does not fail the whole Turn unless cancellation
+  or orchestration itself is failing.
 - Invocation cancellation aborts model I/O, joins the active step and pending
   tasks, retires the controller's active turn without finalization, and is
   rethrown so Restate records cancellation.
 - The complete transcript remains durable. The model sees the rolling summary
-  plus each exact entry since its checkpoint, with steering metadata and
-  interruption/failure boundaries preserved.
-- Turn stops after eight model steps instead of running indefinitely.
+  plus each exact model-relevant entry since its checkpoint, with steering
+  metadata and interruption/failure boundaries preserved.
+- Turn stops after eight agent-model steps or 24 tool calls instead of running
+  indefinitely. It cancels unfinished work and makes one guarded, tool-free
+  finalization call so completed results are not replaced by a budget error.
+
+This compact reference does not reconcile operator-killed invocations. A hard
+kill before `Turn/append` can leave the Agent pointing at a vanished Turn, and a
+hard-killed `compact` invocation can leave its cursor reservation active.
+Production adaptations should retain the child invocation ID and attach or
+schedule a reconciliation handler with a deadline.
 
 ## Model flow control
 

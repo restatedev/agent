@@ -46,10 +46,14 @@ The application is split into a few concrete parts:
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the
   chunked Agent transcript remains complete and authoritative.
+- **`Evals`** exposes one `all` handler that concurrently drives isolated Agents
+  through the public protocol and returns structured assertions with their
+  observed transcripts.
 
-All handlers on `Agent`, `Turn`, and `ModelGateway` are ingress-public so the
-complete protocol is easy to inspect. Normal clients should still use only the
-conversation and approval handlers; the others are service coordination paths.
+All handlers on `Agent`, `Turn`, `ModelGateway`, and `Evals` are ingress-public
+so the complete protocol is easy to inspect. Normal clients should still use
+only the conversation and approval handlers; the others are service
+coordination paths.
 
 ```text
 user/UI → Agent → Turn → agentStep → ModelGateway
@@ -97,8 +101,9 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — agent and guardrail AI SDK integration
 - `packages/libs/example/src/model-gateway.ts` — scoped agent and guardrail model gateway
+- `packages/libs/example/src/eval.ts` — durable black-box protocol evaluations
 - `packages/libs/example/src/types.ts` — shared wire contracts and schemas
-- `packages/libs/example/src/app.ts` — service endpoint
+- `packages/libs/example/src/app.ts` — Agent, Turn, gateway, and eval endpoint
 
 See [`README.md`](./README.md) for setup instructions, example invocations, and
 the detailed durability and flow-control behavior.

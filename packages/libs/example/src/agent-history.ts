@@ -196,7 +196,12 @@ export const history = {
     const entries = (yield* readEntries(
       meta,
       (summary?.through ?? 0) + 1,
-    ).collect()).map(({entry}) => entry);
+    ).collect()).flatMap(({entry}): ConversationEntry[] =>
+      entry.role === "event" &&
+      (entry.type === "progress" || entry.type === "memory")
+        ? []
+        : [entry],
+    );
     return {summary: summary?.text, entries};
   },
 
