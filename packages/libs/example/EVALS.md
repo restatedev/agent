@@ -5,8 +5,9 @@ black-box public protocol.
 
 ## Execution
 
-Each handler on the `Evals` service executes one durable scenario against a
-fresh Agent virtual object.
+Each handler on the `Evals` service executes durable scenarios against fresh
+Agent virtual objects. The `guardrails` handler spawns its four policy cases
+concurrently.
 
 ```mermaid
 sequenceDiagram
@@ -68,8 +69,10 @@ type EvalResult = {
 };
 ```
 
-Each case has its own service handler. The shared options and result assembly
-remain internal; there is no case-ID dispatcher or generic scenario language.
+The conversation cases have individual handlers. The guardrail scenarios are
+separate generator operations spawned by one `guardrails` handler. Shared
+options and result assembly remain internal; there is no case-ID dispatcher or
+generic scenario language.
 
 ## History notifications
 
@@ -98,15 +101,15 @@ the source of truth.
    Turn, and checks event order and retained/new results.
 3. `interruption` waits until sleep is pending, interrupts it, and checks
    graceful finalization and the interrupted terminal response.
-4. `guardrailApproval` waits for a runtime policy approval, verifies exactly
-   one pending request, approves it, and checks completion.
-5. `guardrailDenial` checks that a deny policy neither opens an approval nor
-   starts the protected weather tool.
-6. `guardrailRejection` rejects a required approval and checks that the Agent
-   produces a compliant explanation without requesting approval again.
-7. `guardrailSteering` approves one request, steers additional protected work
-   into the Turn, and checks that the old approval is invalidated and requested
-   again for the updated work.
+4. `guardrails` concurrently spawns four isolated cases:
+   - Approval verifies exactly one pending request, approves it, and checks
+     completion.
+   - Denial checks that a deny policy neither opens an approval nor starts the
+     protected weather tool.
+   - Rejection checks that a rejected request produces a compliant explanation
+     without requesting approval again.
+   - Steering approves one request, adds protected work, and checks that the
+     old approval is invalidated and requested again for the updated work.
 
 The cases assert transcript structure, event ordering, correlations, and
 durable state rather than exact model prose.

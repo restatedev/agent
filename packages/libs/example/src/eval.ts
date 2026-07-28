@@ -49,6 +49,12 @@ const EvalResultSchema = z.object({
 });
 type EvalResult = z.infer<typeof EvalResultSchema>;
 
+const EvalGroupResultSchema = z.object({
+  status: z.enum(["passed", "failed"]),
+  results: z.array(EvalResultSchema),
+});
+type EvalGroupResult = z.infer<typeof EvalGroupResultSchema>;
+
 type SequencedEntry = HistoryPage["entries"][number];
 type EntryPredicate = (candidate: SequencedEntry) => boolean;
 
@@ -744,40 +750,27 @@ export const Evals = restate.service({
         return yield* evaluate("interruption", options, interruption);
       },
     ),
-    guardrailApproval: restate.schemas(
-      {input: EvalOptionsSchema, output: EvalResultSchema},
-      function* (options: EvalOptions): restate.Operation<EvalResult> {
-        return yield* evaluate(
-          "guardrail-approval",
-          options,
-          guardrailApproval,
-        );
-      },
-    ),
-    guardrailDenial: restate.schemas(
-      {input: EvalOptionsSchema, output: EvalResultSchema},
-      function* (options: EvalOptions): restate.Operation<EvalResult> {
-        return yield* evaluate("guardrail-denial", options, guardrailDenial);
-      },
-    ),
-    guardrailRejection: restate.schemas(
-      {input: EvalOptionsSchema, output: EvalResultSchema},
-      function* (options: EvalOptions): restate.Operation<EvalResult> {
-        return yield* evaluate(
-          "guardrail-rejection",
-          options,
-          guardrailRejection,
-        );
-      },
-    ),
-    guardrailSteering: restate.schemas(
-      {input: EvalOptionsSchema, output: EvalResultSchema},
-      function* (options: EvalOptions): restate.Operation<EvalResult> {
-        return yield* evaluate(
-          "guardrail-steering",
-          options,
-          guardrailSteering,
-        );
+    guardrails: restate.schemas(
+      {input: EvalOptionsSchema, output: EvalGroupResultSchema},
+      function* (options: EvalOptions): restate.Operation<EvalGroupResult> {
+        const results = yield* restate.all([
+          restate.spawn(
+            evaluate("guardrail-approval", options, guardrailApproval),
+          ),
+          restate.spawn(evaluate("guardrail-denial", options, guardrailDenial)),
+          restate.spawn(
+            evaluate("guardrail-rejection", options, guardrailRejection),
+          ),
+          restate.spawn(
+            evaluate("guardrail-steering", options, guardrailSteering),
+          ),
+        ]);
+        return {
+          status: results.every(({status}) => status === "passed")
+            ? "passed"
+            : "failed",
+          results,
+        };
       },
     ),
   },

@@ -528,7 +528,7 @@ complete observed transcript.
 curl localhost:8080/Evals/basicTurn \
   --json '{}'
 
-curl localhost:8080/Evals/guardrailSteering \
+curl localhost:8080/Evals/guardrails \
   --json '{"timeoutSeconds":180}'
 ```
 
@@ -537,14 +537,13 @@ Available handlers are:
 - `basicTurn`
 - `steering`
 - `interruption`
-- `guardrailApproval`
-- `guardrailDenial`
-- `guardrailRejection`
-- `guardrailSteering`
+- `guardrails`
 
-The guardrail cases cover approval, denial before protected tools start,
-rejection without approval loops, and approval invalidation after steering.
-See [`packages/libs/example/EVALS.md`](packages/libs/example/EVALS.md) for the
+The `guardrails` handler spawns four isolated cases concurrently. Together they
+cover approval, denial before protected tools start, rejection without
+approval loops, and approval invalidation after steering. Its aggregate result
+contains the structured result and transcript for every case. See
+[`packages/libs/example/EVALS.md`](packages/libs/example/EVALS.md) for the
 protocol and planned extensions.
 
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
