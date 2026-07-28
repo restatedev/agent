@@ -31,6 +31,11 @@ type FinishedTurn = {
   interruptionRequested: boolean;
 };
 
+type SentSteering = SteeringSignal & {
+  /** Turn invocation to which this steering signal was sent. */
+  turnId: string;
+};
+
 function* readActiveTurn(): restate.Operation<ActiveTurnState | undefined> {
   return (yield* restate.state().get<ActiveTurnState>("turn")) ?? undefined;
 }
@@ -99,10 +104,10 @@ export const activeTurn = {
    *
    * Pending messages are drained into the signal as a separate FIFO list.
    *
-   * @returns The structured steering signal, or `undefined` when no turn is
-   * listening.
+   * @returns The structured steering signal and its target invocation, or
+   * `undefined` when no turn is listening.
    */
-  *steer(message: string): restate.Operation<SteeringSignal | undefined> {
+  *steer(message: string): restate.Operation<SentSteering | undefined> {
     const current = yield* readActiveTurn();
     if (!current || current.interrupting) {
       return undefined;
@@ -119,7 +124,7 @@ export const activeTurn = {
       .invocation(current.id)
       .signal<SteeringSignal>(TURN_SIGNALS.steering)
       .resolve(steering);
-    return steering;
+    return {...steering, turnId: current.id};
   },
 
   /**

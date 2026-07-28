@@ -41,8 +41,22 @@ function dispatchBoundary(
     role: "user",
     content: [
       "[Queued messages activated]",
-      `The ${entry.queuedMessages} most recent user message(s) marked as queued are the input for this turn.`,
+      `The ${entry.queuedMessages} most recent user request(s) not consumed by the preceding finished turn are the input for this turn.`,
       "Process them now. Assistant messages or lifecycle events appearing after their original transcript positions did not answer them.",
+    ].join("\n"),
+  };
+}
+
+function steeringBoundary(
+  entry: Extract<ConversationEntry, {role: "event"; type: "steer"}>,
+): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Turn steering boundary]",
+      `Turn: ${entry.turnId}`,
+      `The preceding steering request and ${entry.queuedMessages} previously queued user message(s) were sent to this active turn.`,
+      "A later queued-message activation boundary supersedes this if the turn finished before consuming that signal.",
     ].join("\n"),
   };
 }
@@ -53,17 +67,15 @@ function userMessage(
   if (entry.delivery === "queued") {
     return [
       "[Queued user message]",
-      "This arrived while another turn was active and was not part of that turn's input.",
+      "This arrived while another turn was active and was initially queued.",
+      "Later lifecycle events record when it entered a turn.",
       entry.text,
     ].join("\n");
   }
   if (entry.delivery !== "steer") {
     return entry.text;
   }
-  return [
-    "[Steering message delivered during the previous turn]",
-    entry.text,
-  ].join("\n");
+  return ["[Steering request for the active turn]", entry.text].join("\n");
 }
 
 export function buildModelContext(
@@ -81,7 +93,9 @@ export function buildModelContext(
       return [
         entry.type === "interrupt"
           ? interruptionBoundary(entry)
-          : dispatchBoundary(entry),
+          : entry.type === "steer"
+            ? steeringBoundary(entry)
+            : dispatchBoundary(entry),
       ];
     }
     return entry.status === "failed"

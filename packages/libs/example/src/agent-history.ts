@@ -1,10 +1,10 @@
 // Durable conversation history for one Agent virtual object. Turn lifecycle
 // state and pending work belong to agent-turn.ts.
 //
-// The complete transcript remains the source of truth. Its sequence is stable;
-// routing metadata can change when queued messages are promoted or requeued. A
-// rolling summary is a replaceable model-context checkpoint over an older
-// prefix of that log.
+// The append-only transcript remains the source of truth. User messages record
+// how they originally arrived; later routing decisions are separate lifecycle
+// events. A rolling summary is a replaceable model-context checkpoint over an
+// older prefix of that log.
 
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ConversationEntry, HistoryPage} from "./types.js";
@@ -28,6 +28,15 @@ type HistoryMeta = {
   lastChunk: number;
   nextSequence: number;
   compaction?: ConversationCompactionPlan;
+};
+
+type EntryRange = {
+  fromSequence?: number;
+  throughSequence?: number;
+};
+
+type EntryReader = {
+  next(): restate.Operation<StoredEntry | undefined>;
 };
 
 type ConversationContext = {
@@ -93,57 +102,58 @@ function* ensureMeta(): restate.Operation<HistoryMeta> {
   return meta;
 }
 
-function* readEntries(
+// Lazily walks a stable sequence range. Only the current chunk is loaded, so a
+// caller that stops reading also avoids every later state read.
+function createEntryReader(
   meta: HistoryMeta,
-  fromChunk = 0,
-  throughChunk = meta.lastChunk,
-): restate.Operation<StoredEntry[]> {
-  const indexes = Array.from(
-    {length: throughChunk - fromChunk + 1},
-    (_, index) => fromChunk + index,
-  );
-  const chunks = yield* restate.all(
-    indexes.map((index) =>
-      restate.sharedState().get<StoredEntry[]>(chunkKey(index)),
-    ),
-  );
-  return chunks.flatMap((chunk) => chunk ?? []);
+  {fromSequence = 1, throughSequence = meta.nextSequence - 1}: EntryRange = {},
+): EntryReader {
+  const from = Math.max(1, fromSequence);
+  const through = Math.min(throughSequence, meta.nextSequence - 1);
+  let nextChunk = Math.floor((from - 1) / CHUNK_SIZE);
+  const lastChunk =
+    from <= through ? Math.floor((through - 1) / CHUNK_SIZE) : -1;
+  let chunk: StoredEntry[] = [];
+  let offset = 0;
+
+  return {
+    *next(): restate.Operation<StoredEntry | undefined> {
+      while (true) {
+        while (offset < chunk.length) {
+          const stored = chunk[offset++];
+          if (stored.sequence >= from && stored.sequence <= through) {
+            return stored;
+          }
+        }
+
+        if (nextChunk > lastChunk) {
+          return undefined;
+        }
+
+        chunk =
+          (yield* restate
+            .sharedState()
+            .get<StoredEntry[]>(chunkKey(nextChunk))) ?? [];
+        nextChunk += 1;
+        offset = 0;
+      }
+    },
+  };
 }
 
-function* rewriteLatestDelivery(
-  messageCount: number,
-  from: "queued" | "steer",
-  to: "queued" | "steer",
-): restate.Operation<void> {
-  if (messageCount === 0) {
-    return;
-  }
-
-  const meta = yield* ensureMeta();
-  let remaining = messageCount;
-  for (let index = meta.lastChunk; index >= 0 && remaining > 0; index--) {
-    const chunk =
-      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
-    let changed = false;
-    for (
-      let entryIndex = chunk.length - 1;
-      entryIndex >= 0 && remaining > 0;
-      entryIndex--
-    ) {
-      const stored = chunk[entryIndex];
-      if (stored.entry.role === "user" && stored.entry.delivery === from) {
-        chunk[entryIndex] = {
-          ...stored,
-          entry: {...stored.entry, delivery: to},
-        };
-        remaining -= 1;
-        changed = true;
-      }
+function* collectEntries(
+  reader: EntryReader,
+  limit = Number.POSITIVE_INFINITY,
+): restate.Operation<StoredEntry[]> {
+  const entries: StoredEntry[] = [];
+  while (entries.length < limit) {
+    const entry = yield* reader.next();
+    if (!entry) {
+      break;
     }
-    if (changed) {
-      restate.state().set(chunkKey(index), chunk);
-    }
+    entries.push(entry);
   }
+  return entries;
 }
 
 /**
@@ -159,14 +169,10 @@ export const history = {
       return {entries: [], nextSequence: fromSequence};
     }
 
-    const fromChunk = Math.floor((fromSequence - 1) / CHUNK_SIZE);
-    const offset = (fromSequence - 1) % CHUNK_SIZE;
-    const chunksNeeded = Math.ceil((offset + limit) / CHUNK_SIZE);
-    const throughChunk = Math.min(meta.lastChunk, fromChunk + chunksNeeded - 1);
-    const entries = (yield* readEntries(meta, fromChunk, throughChunk))
-      .filter(({sequence}) => sequence >= fromSequence)
-      .slice(0, limit)
-      .map(({sequence, entry}) => ({sequence, entry}));
+    const entries = (yield* collectEntries(
+      createEntryReader(meta, {fromSequence}),
+      limit,
+    )).map(({sequence, entry}) => ({sequence, entry}));
     const last = entries.at(-1);
     return {
       entries,
@@ -185,9 +191,9 @@ export const history = {
         .sharedState()
         .get<ConversationSummary>(HISTORY_SUMMARY)) ?? undefined;
     const through = summary?.through ?? START;
-    const entries = (yield* readEntries(meta, Math.floor(through / CHUNK_SIZE)))
-      .filter(({sequence}) => sequence > through)
-      .map(({entry}) => entry);
+    const entries = (yield* collectEntries(
+      createEntryReader(meta, {fromSequence: through + 1}),
+    )).map(({entry}) => entry);
     return {summary: summary?.text, entries};
   },
 
@@ -216,18 +222,6 @@ export const history = {
     restate.state().set(HISTORY_META, meta);
   },
 
-  // Keep accepted messages at their original transcript positions while their
-  // execution route changes.
-  *promoteLatestQueued(messageCount: number): restate.Operation<void> {
-    yield* rewriteLatestDelivery(messageCount, "queued", "steer");
-  },
-
-  // Steering that lost a completion race becomes input for the next Turn, but
-  // remains ordered where the Agent originally observed it.
-  *requeueLatestSteering(messageCount: number): restate.Operation<void> {
-    yield* rewriteLatestDelivery(messageCount, "steer", "queued");
-  },
-
   // Called after a turn outcome is appended. Once enough conversation messages
   // have accumulated, reserve the entire finished prefix.
   *beginCompaction(): restate.Operation<
@@ -243,23 +237,21 @@ export const history = {
         .sharedState()
         .get<ConversationSummary>(HISTORY_SUMMARY)) ?? undefined;
     const baseThrough = summary?.through ?? START;
-    const uncompacted = (yield* readEntries(
-      meta,
-      Math.floor(baseThrough / CHUNK_SIZE),
-    )).filter(({sequence}) => sequence > baseThrough);
-    const messageCount = uncompacted.filter(
-      ({entry}) => entry.role !== "event",
-    ).length;
-    if (messageCount < COMPACT_AFTER_MESSAGES) {
-      return undefined;
+    const entries = createEntryReader(meta, {
+      fromSequence: baseThrough + 1,
+    });
+    let messageCount = 0;
+    while (messageCount < COMPACT_AFTER_MESSAGES) {
+      const stored = yield* entries.next();
+      if (!stored) {
+        return undefined;
+      }
+      if (stored.entry.role !== "event") {
+        messageCount += 1;
+      }
     }
 
-    const last = uncompacted.at(-1);
-    if (!last) {
-      return undefined;
-    }
-
-    const through = last.sequence;
+    const through = meta.nextSequence - 1;
     meta.compaction = {baseThrough, through};
     restate.state().set(HISTORY_META, meta);
     return meta.compaction;
@@ -279,15 +271,12 @@ export const history = {
       (yield* restate
         .sharedState()
         .get<ConversationSummary>(HISTORY_SUMMARY)) ?? undefined;
-    const entries = (yield* readEntries(
-      meta,
-      Math.floor(plan.baseThrough / CHUNK_SIZE),
-      Math.floor((plan.through - 1) / CHUNK_SIZE),
-    ))
-      .filter(
-        ({sequence}) => sequence > plan.baseThrough && sequence <= plan.through,
-      )
-      .map(({entry}) => entry);
+    const entries = (yield* collectEntries(
+      createEntryReader(meta, {
+        fromSequence: plan.baseThrough + 1,
+        throughSequence: plan.through,
+      }),
+    )).map(({entry}) => entry);
     return {
       ...plan,
       previousSummary: summary?.text,

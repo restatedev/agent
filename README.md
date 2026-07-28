@@ -72,12 +72,14 @@ coordination paths used by the services themselves.
 
 ## Conversation history and compaction
 
-The complete user-facing transcript is canonical and is never replaced by a
-model summary. `agent-history.ts` stores it in fixed-size state chunks with
-stable internal sequence numbers. Lazy state lets normal handlers load only
-the metadata and chunks they need. The public `history` handler exposes an
-inclusive cursor over those sequence numbers and reads only enough chunks to
-return the requested page.
+The complete user-facing transcript is a canonical append-only event log and
+is never replaced by a model summary. User entries record how they originally
+arrived; later steering and dispatch decisions are appended as lifecycle
+events instead of rewriting those entries. `agent-history.ts` stores the log in
+fixed-size state chunks with stable internal sequence numbers. Its lazy entry
+reader hides those chunks and stops loading state as soon as a consumer has
+enough entries. The public `history` handler exposes an inclusive cursor over
+the same sequence numbers.
 
 After a turn finishes, the Agent counts conversation messages since the last
 checkpoint. At 32 messages it reserves that entire finished prefix and
@@ -102,7 +104,7 @@ inside an active Turn are never summarized mid-turn.
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
 | `interrupt` | reason string | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. Returns immediately. |
-| `steer` | instruction string | Promotes queued messages into the active turn, then sends the new instruction after them. |
+| `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool with `approved` or `rejected`. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
@@ -144,8 +146,9 @@ The controller flow is therefore:
   transcript.
 - An `ask` received while a Turn is active is recorded immediately at its
   natural transcript position; the pending FIFO controls only when it runs.
-- `steer` promotes that queue without moving its transcript entries, appends
-  the new steering message, and sends one structured steering signal.
+- `steer` drains that queue into one structured steering signal, then appends
+  the steering request and a lifecycle event recording its target Turn and
+  queued-message count.
 - `interrupt` leaves the queue intact and appends its event after every message
   the Agent had already observed. The old Turn appends its graceful final
   response, then a dispatch event activates queued entries and starts one new
@@ -158,12 +161,12 @@ explicit instruction remains distinct as `message`. Turn converts that
 batch into one structured model update, while conversation history retains the
 individual user messages.
 
-The controller tracks each signal's message count, while Turn reports how
-many signals it consumed. If normal completion wins the race with a steer, the
-unconsumed entries are reclassified as queued without changing their transcript
-positions, and a later dispatch event activates them. An explicit interrupt
-supersedes outstanding steering. External cancellation does not: steering
-accepted before cancellation is recovered into the next turn.
+The controller tracks each signal's message count, while Turn reports how many
+signals it consumed. If normal completion wins the race with a steer, the
+original entries remain unchanged and a later dispatch event activates the
+unconsumed requests in a new Turn. An explicit interrupt supersedes outstanding
+steering. External cancellation does not: steering accepted before cancellation
+is recovered into the next turn.
 
 ## Progress
 

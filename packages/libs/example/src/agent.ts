@@ -117,8 +117,9 @@ export const Agent = restate.object({
     ),
 
     // Explicitly redirect the active turn. Messages already queued by `ask`
-    // are promoted first, followed by the new instruction. Returns false when
-    // no turn is listening, in which case the queue remains untouched.
+    // are sent first, followed by the new instruction. The transcript records
+    // this as an append-only lifecycle event. Returns false when no turn is
+    // listening, in which case the queue remains untouched.
     steer: restate.schemas(
       {input: z.string(), output: z.boolean()},
       function* (message): restate.Operation<boolean> {
@@ -126,12 +127,19 @@ export const Agent = restate.object({
         if (!steering) {
           return false;
         }
-        yield* history.promoteLatestQueued(steering.queued.length);
-        yield* history.append({
-          role: "user",
-          text: steering.message,
-          delivery: "steer",
-        });
+        yield* history.append(
+          {
+            role: "user",
+            text: steering.message,
+            delivery: "steer",
+          },
+          {
+            role: "event",
+            type: "steer",
+            turnId: steering.turnId,
+            queuedMessages: steering.queued.length,
+          },
+        );
         return true;
       },
     ),
@@ -220,7 +228,6 @@ export const Agent = restate.object({
         }
         yield* approvals.clearTurn(outcome.turnId);
 
-        yield* history.requeueLatestSteering(finished.missedSteeringMessages);
         if (outcome.status === "interrupted") {
           if (!finished.interruptionRequested) {
             yield* history.append({

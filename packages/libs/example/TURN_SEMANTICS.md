@@ -6,6 +6,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 - `Agent` owns the canonical transcript, queued user messages, active Turn
   state, human approval state, and steering reconciliation.
+- The transcript is an append-only event log. User entries retain their
+  original acceptance route; steering and later activation are separate
+  lifecycle events rather than entry rewrites.
 - One `Turn.run` invocation owns the transient agent-turn state machine:
   working model messages, budgets, the steering cursor, pending tool tasks, and
   graceful interruption. This state is generator-local and replayed as part of
@@ -57,6 +60,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - Turn increments `consumedSteering` once for every steering update committed
   to its working context. Agent uses that count to recover instructions that
   lost a completion race.
+- Agent appends a steering boundary for every signal it sends. If the Turn
+  finishes before consuming one, a later dispatch boundary activates those
+  unchanged user entries in the next Turn.
 - Steering never cancels a step. A background fiber drains the durable signal
   queue into a transient FIFO while the model and foreground tools run.
   The FIFO's resettable channel only announces empty-to-non-empty transitions;

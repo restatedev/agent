@@ -16,9 +16,8 @@ export type SteeringSignal = {
   message: string;
 };
 
-// How a user message entered the agent's execution. A queued message can later
-// be promoted to steering or activated by a dispatch event without moving it
-// from its original transcript position.
+// How the Agent originally accepted a user message. This never changes; later
+// steering and dispatch events record when queued work enters a Turn.
 const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 
 const ProgressPhaseSchema = z.enum([
@@ -50,6 +49,12 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
     role: z.literal("event"),
     type: z.literal("dispatch"),
     queuedMessages: z.number().int().positive(),
+  }),
+  z.object({
+    role: z.literal("event"),
+    type: z.literal("steer"),
+    turnId: z.string(),
+    queuedMessages: z.number().int().nonnegative(),
   }),
   ProgressReportSchema.extend({
     role: z.literal("event"),
