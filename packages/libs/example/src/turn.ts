@@ -147,7 +147,6 @@ function* finalizeInterruption(
     const final = yield* callModel({
       agentId: state.context.agentId,
       instructions: state.instructions,
-      guardrails: state.guardrails,
       messages: state.messages,
       tools: [],
     });

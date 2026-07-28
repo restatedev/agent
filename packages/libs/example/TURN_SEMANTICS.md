@@ -49,9 +49,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - A Turn performs at most eight model steps and 24 total tool calls.
 - Each step receives a copy of the complete live model context accumulated by
   the Turn.
-- Every agent-model call receives the same user-instruction and guardrail
-  snapshot. Persistent memories are injected once into the Turn's initial
-  context as data, before the transcript.
+- Every agent-model call receives the same user-instruction snapshot.
+  Persistent memories are injected once into the Turn's initial context as
+  data, before the transcript.
 - A normal step returns text, tool outcomes, a recoverable model error, or a
   tool-budget failure.
 - Invalid or empty model output becomes a corrective user message and another
@@ -64,6 +64,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 - A guardrail is a user-configured `{ id, rule }` policy. IDs are unique within
   the Agent profile and the complete list is snapshotted when a Turn starts.
+- The main agent model does not receive that policy list. It proposes the
+  requested work without trying to reproduce the runtime's approval behavior;
+  only the policy evaluator receives guardrails.
 - After the agent model proposes text or a complete tool batch, a cheap policy
   model evaluates that exact action before text is published or any tool in the
   batch starts. No guardrails means no policy-model call.

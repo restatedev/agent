@@ -126,6 +126,12 @@ as runtime feedback so it can refuse or choose a compliant alternative. An
 approval requirement creates a durable request on the Agent and waits for a
 human decision before executing the exact proposal.
 
+Guardrails are not included in the main agent model's system prompt. This keeps
+policy enforcement in one place: the agent proposes the actual work, and the
+runtime independently gates it. The explicit `humanApproval` tool remains
+available for approvals the agent decides it needs for reasons unrelated to a
+runtime guardrail.
+
 Approval applies to the current request and matching policy; later steps do not
 ask again. Rejection blocks the proposal and prevents another approval loop for
 that request. Steering changes the request, so Turn invalidates both decisions
@@ -165,8 +171,8 @@ The two other services expose three public handlers:
 - `Turn/run` accepts the Agent's profile snapshot, rolling summary, and exact
   uncompacted transcript, runs one transient state machine made of bounded
   agent steps, and one-way reports a structured outcome to `Agent/append`.
-- `ModelGateway/complete` accepts instructions, guardrails, model messages, and
-  serializable tool manifests. `ModelGateway/evaluateGuardrails` accepts the
+- `ModelGateway/complete` accepts instructions, model messages, and serializable
+  tool manifests. `ModelGateway/evaluateGuardrails` separately accepts the
   policy snapshot and exact proposed action. `agentStep` invokes both through
   the `openai` scope so model-specific concurrency limits apply.
 

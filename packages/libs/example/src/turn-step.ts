@@ -225,7 +225,6 @@ export function* agentStep({
     const action = yield* callModel({
       agentId: context.agentId,
       instructions,
-      guardrails,
       messages,
       tools: agentTools.manifests,
     });
