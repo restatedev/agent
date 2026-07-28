@@ -101,7 +101,8 @@ the source of truth.
 1. `basicTurn` checks idle dispatch, successful completion, one terminal
    entry, and a minimally relevant answer.
 2. `steering` waits until sleep is pending, steers more work into the same
-   Turn, and checks event order and retained/new results.
+   Turn, and checks event order, retained/new results, and that the model did
+   not restart the existing timer.
 3. `interruption` waits until sleep is pending, interrupts it, and checks
    graceful finalization and the interrupted terminal response.
 4. Four isolated guardrail cases cover:

@@ -193,6 +193,27 @@ function protectedWeatherRan(history: HistoryReader, turnId: string): boolean {
   );
 }
 
+function toolStartCount(
+  history: HistoryReader,
+  turnId: string,
+  toolName: string,
+): number {
+  return history.entries
+    .flatMap(({entry}) => {
+      if (
+        entry.role !== "event" ||
+        entry.type !== "progress" ||
+        entry.turnId !== turnId ||
+        entry.phase !== "tools"
+      ) {
+        return [];
+      }
+      const tools = /^Running \d+ tool call\(s\): (.+)$/.exec(entry.message);
+      return tools ? tools[1].split(", ") : [];
+    })
+    .filter((started) => started === toolName).length;
+}
+
 function* basicTurn({
   agentId,
   history,
@@ -268,6 +289,7 @@ function* steering({
       entry.type === "steer" &&
       entry.turnId === ask.turnId,
   );
+  const sleepStarts = toolStartCount(history, ask.turnId, "sleep");
 
   return [
     assertion("steering is accepted", accepted),
@@ -284,6 +306,11 @@ function* steering({
     assertion(
       "the final response retains Berlin and incorporates Paris",
       response.includes("berlin") && response.includes("paris"),
+    ),
+    assertion(
+      "steering does not restart the pending sleep",
+      sleepStarts === 1,
+      `found ${sleepStarts} sleep tool calls`,
     ),
   ];
 }
