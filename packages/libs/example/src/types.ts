@@ -57,10 +57,24 @@ export const MemoryChangeSchema = z.discriminatedUnion("operation", [
 ]);
 export type MemoryChange = z.infer<typeof MemoryChangeSchema>;
 
-export const GuardrailSchema = z.object({
-  capability: z.string().trim().min(1),
-  reason: z.string().trim().min(1),
-});
+export const GuardrailSchema = z
+  .object({
+    capability: z
+      .string()
+      .trim()
+      .min(1)
+      .describe(
+        "The exact capability identifier to deny, as declared by a tool, for example timer.start.",
+      ),
+    reason: z
+      .string()
+      .trim()
+      .min(1)
+      .describe(
+        "A human-readable explanation shown to the model and returned when the runtime rejects the capability.",
+      ),
+  })
+  .describe("A runtime-enforced denial of one agent tool capability.");
 export type Guardrail = z.infer<typeof GuardrailSchema>;
 
 export const AgentProfileSchema = z.object({

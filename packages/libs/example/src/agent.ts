@@ -76,7 +76,11 @@ const SetInstructionsSchema = z.object({
 });
 
 const SetGuardrailsSchema = z.object({
-  guardrails: z.array(GuardrailSchema),
+  guardrails: z
+    .array(GuardrailSchema)
+    .describe(
+      "The complete replacement capability deny list for future Turns. Use an empty list to clear all guardrails.",
+    ),
 });
 
 export const Agent = restate.object({
