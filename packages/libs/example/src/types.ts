@@ -36,8 +36,8 @@ export const ProgressReportSchema = z.object({
 export type ProgressReport = z.infer<typeof ProgressReportSchema>;
 
 // Durable prompt context owned by one Agent. Instructions are authoritative
-// user configuration, memories are model-managed data, and guardrails deny
-// concrete runtime capabilities.
+// user configuration, memories are model-managed data, and guardrails are
+// natural-language policies enforced against proposed agent actions.
 export const MemoryEntrySchema = z.object({
   key: z.string().trim().min(1),
   content: z.string().trim().min(1),
@@ -59,22 +59,22 @@ export type MemoryChange = z.infer<typeof MemoryChangeSchema>;
 
 export const GuardrailSchema = z
   .object({
-    capability: z
+    id: z
       .string()
       .trim()
       .min(1)
       .describe(
-        "The exact capability identifier to deny, as declared by a tool, for example timer.start.",
+        "A stable identifier used to correlate this policy with runtime decisions and human approvals.",
       ),
-    reason: z
+    rule: z
       .string()
       .trim()
       .min(1)
       .describe(
-        "A human-readable explanation shown to the model and returned when the runtime rejects the capability.",
+        "A natural-language policy describing behavior to allow, deny, or require human approval for.",
       ),
   })
-  .describe("A runtime-enforced denial of one agent tool capability.");
+  .describe("A natural-language policy evaluated before an agent action runs.");
 export type Guardrail = z.infer<typeof GuardrailSchema>;
 
 export const AgentProfileSchema = z.object({
@@ -205,23 +205,30 @@ export const TurnOutcomeSchema = z.discriminatedUnion("status", [
 ]);
 export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
 
-// A human approval requested by a tool running inside a Turn invocation.
+// A human approval requested by a tool or runtime policy gate inside a Turn.
 export const ApprovalRequestSchema = z.object({
   approvalId: z.string().min(1),
   turnId: z.string().min(1),
   question: z.string().min(1),
+  guardrailId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "The policy that opened this approval, omitted for approvals requested directly by the agent.",
+    ),
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
-// The decision delivered back to the waiting tool over a durable signal.
+// The decision delivered to the waiting tool or policy gate over a signal.
 const ApprovalDecisionSchema = z.object({
   decision: z.enum(["approved", "rejected"]),
   reason: z.string().optional(),
 });
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
-// Approval tools and the Agent controller use this name as their shared
-// Turn-scoped signal contract.
+// Approval producers and the Agent controller share this Turn-scoped signal
+// naming contract.
 export function approvalSignalName(approvalId: string): string {
   return `approval-${approvalId}`;
 }
@@ -232,7 +239,7 @@ export const ApprovalResolutionSchema = ApprovalDecisionSchema.extend({
 });
 export type ApprovalResolution = z.infer<typeof ApprovalResolutionSchema>;
 
-// Internal cleanup request used when a waiting tool is interrupted.
+// Internal cleanup request used when a waiting approval is interrupted.
 export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
   approvalId: true,
   turnId: true,

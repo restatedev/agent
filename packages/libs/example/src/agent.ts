@@ -91,8 +91,13 @@ const SetInstructionsSchema = z.object({
 const SetGuardrailsSchema = z.object({
   guardrails: z
     .array(GuardrailSchema)
+    .refine(
+      (guardrails) =>
+        new Set(guardrails.map(({id}) => id)).size === guardrails.length,
+      "guardrail ids must be unique",
+    )
     .describe(
-      "The complete replacement capability deny list for future Turns. Use an empty list to clear all guardrails.",
+      "The complete replacement policy list for future Turns. Use an empty list to clear all guardrails.",
     ),
 });
 
@@ -203,7 +208,7 @@ export const Agent = restate.object({
       },
     ),
 
-    // Read the durable instructions, model-managed memories, and capability
+    // Read the durable instructions, model-managed memories, and policy
     // guardrails that will be snapshotted into the next Turn.
     profile: restate.schemas(
       {input: z.void(), output: AgentProfileSchema},
@@ -221,8 +226,8 @@ export const Agent = restate.object({
       },
     ),
 
-    // Replace the per-Agent capability deny list. Running Turns retain their
-    // current snapshot; subsequent Turns enforce the new list.
+    // Replace the per-Agent natural-language policies. Running Turns retain
+    // their current snapshot; subsequent Turns enforce the new list.
     setGuardrails: restate.schemas(
       {input: SetGuardrailsSchema, output: z.void()},
       function* ({guardrails}): restate.Operation<void> {
@@ -276,8 +281,8 @@ export const Agent = restate.object({
       },
     ),
 
-    // Internal registration path used by the humanApproval tool. The request
-    // is accepted only while its originating Turn is still active.
+    // Internal registration path used by the humanApproval tool and runtime
+    // guardrails. The request is accepted only while its Turn is still active.
     requestApproval: restate.schemas(
       {input: ApprovalRequestSchema, output: z.boolean()},
       function* (request: ApprovalRequest): restate.Operation<boolean> {
@@ -290,7 +295,7 @@ export const Agent = restate.object({
     ),
 
     // Internal, idempotent cleanup when interruption or turn failure abandons
-    // a tool that was waiting for approval.
+    // a tool or policy gate that was waiting for approval.
     cancelApproval: restate.schemas(
       {input: ApprovalCancellationSchema, output: z.void()},
       function* (request): restate.Operation<void> {
@@ -307,7 +312,7 @@ export const Agent = restate.object({
     ),
 
     // Resolve one pending request and deliver the decision to the waiting tool
-    // as a signal on its Turn invocation.
+    // or policy gate as a signal on its Turn invocation.
     resolveApproval: restate.schemas(
       {input: ApprovalResolutionSchema, output: z.boolean()},
       function* (resolution): restate.Operation<boolean> {

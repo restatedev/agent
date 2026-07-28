@@ -10,9 +10,10 @@ flowchart LR
   Agent -->|"one-way run"| Turn["Turn service"]
   Agent -.->|"control / approval signals"| Turn
   Turn -->|"spawn each iteration"| Step["agentStep"]
-  Step -->|"scoped invocation"| Gateway["ModelGateway service"]
-  Gateway -->|"durable model run"| Model["agent model"]
-  Step -->|"spawn + durable run"| Tools["local tools in parallel"]
+  Step -->|"scoped agent + policy calls"| Gateway["ModelGateway service"]
+  Gateway -->|"durable model runs"| Model["agent + guardrail models"]
+  Step -->|"allowed batch: spawn + durable run"| Tools["local tools in parallel"]
+  Step -->|"policy approval request"| Agent
   Tools -->|"approval / memory updates"| Agent
   Turn -->|"one-way append outcome"| Agent
   Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
@@ -36,11 +37,11 @@ flowchart LR
   `completed | interrupted | failed` result.
 - `turn-step.ts` owns the functional execution seam and the small supervisor
   that settles each spawned step against interruption. A step receives a
-  message snapshot and remaining tool budget, performs one model call, runs
-  that response's foreground tools in parallel, and owns no work after
-  returning. `turn-steering.ts` drains durable steering signals into a
-  Turn-scoped inbox, while `turn-pending.ts` owns tasks that survive across
-  steps.
+  message snapshot and remaining tool budget, performs one agent-model call,
+  gates that proposed response against the guardrail snapshot, runs an allowed
+  foreground tool batch in parallel, and owns no work after returning.
+  `turn-steering.ts` drains durable steering signals into a Turn-scoped inbox,
+  while `turn-pending.ts` owns tasks that survive across steps.
 - `agent-tools.ts` owns the concrete tools. Each definition keeps its model
   description, input schema, validation, local durable behavior, and result
   projection together. It exposes each step a single concrete tool collection.
@@ -52,9 +53,10 @@ flowchart LR
   The model operation stays in `conversation-compactor.ts`; the exact
   transcript remains on the Agent and messages after the checkpoint remain
   verbatim.
-- `model-gateway.ts` is the Restate boundary for full agent inference. It owns
-  scoped admission, limit keys, retries, and cancellation propagation before
-  delegating the provider call to `model.ts`.
+- `model-gateway.ts` is the Restate boundary for full agent inference and cheap
+  guardrail evaluation. It owns scoped admission, model-specific limit keys,
+  retries, and cancellation propagation before delegating provider calls to
+  `model.ts`.
 
 The controller stores the canonical transcript: user and assistant messages,
 explicit lifecycle boundaries, and semantic progress events. Tool calls and
@@ -116,14 +118,22 @@ fails, and its keys are recorded as a metadata-only transcript event. Memory
 events are omitted from model context and compaction because the current
 profile snapshot is authoritative.
 
-Guardrails are explicit capability denies configured by the user. Every tool
-declares a capability, validates its input, and checks the Turn's guardrail
-snapshot before executing. A denial becomes a normal failed tool result, so the
-model protocol remains complete. Current capabilities are `weather.read`,
-`timer.start`, `human.approval`, `operation.cancel`, and `memory.write`. A
-future Git commit tool would declare `git.commit`; denying that capability
-would block the operation at runtime rather than relying on a prompt
-instruction. Instructions and guardrail changes affect the next Turn.
+Guardrails are user-configured natural-language policies with stable IDs. A
+cheap policy model evaluates every proposed assistant response or complete tool
+batch before text is published or any tool in that batch starts. It returns
+`allow`, `deny`, or `require_approval`. A denial is returned to the agent model
+as runtime feedback so it can refuse or choose a compliant alternative. An
+approval requirement creates a durable request on the Agent and waits for a
+human decision before executing the exact proposal.
+
+Approval applies to the current request and matching policy; later steps do not
+ask again. Rejection blocks the proposal and prevents another approval loop for
+that request. Steering changes the request, so Turn invalidates both decisions
+and evaluates the updated work again. Graceful interruption cannot open a new
+approval while ending the Turn: its final text is checked and withheld if the
+policy model does not allow it. The evaluator is deliberately model-based and
+therefore probabilistic; the runtime deterministically enforces the decision it
+returns. Instructions and guardrail changes affect the next Turn.
 
 ## Agent handlers
 
@@ -131,15 +141,15 @@ instruction. Instructions and guardrail changes affect the next Turn.
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
-| `profile` | void | Returns this Agent's instructions, model-managed memories, and capability guardrails. |
+| `profile` | void | Returns this Agent's instructions, model-managed memories, and natural-language guardrails. |
 | `setInstructions` | `{ instructions: string \| null }` | Replaces the persistent user instructions; `null` clears them. Running Turns keep their snapshot. |
-| `setGuardrails` | `{ guardrails: [{ capability, reason }] }` | Replaces the persistent capability deny list. Running Turns keep their snapshot. |
+| `setGuardrails` | `{ guardrails: [{ id, rule }] }` | Replaces the persistent policy list. IDs must be unique; running Turns keep their snapshot. |
 | `interrupt` | `{ reason, message? }` | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. An optional replacement message is appended immediately and queued for the next Turn. |
 | `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
-| `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool with `approved` or `rejected`. |
+| `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and signals its waiting tool or policy gate with `approved` or `rejected`. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
-| `requestApproval` | `{ approvalId, turnId, question }` | Registers a tool's approval request only while its Turn remains active and is not interrupting. |
+| `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
 | `updateMemory` | `{ turnId, changes }` | Coordination path used by `manageMemory`; atomically applies a bounded memory batch only for the active Turn. |
 | `append` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, considers compaction, and dispatches queued work. Stale or duplicate Turn IDs are ignored. |
@@ -150,14 +160,15 @@ instruction. Instructions and guardrail changes affect the next Turn.
 Agent handlers are exclusive. Lazy state allows shared readers and the
 compactor to load only the state keys and history chunks they need.
 
-The two other services each expose one public handler:
+The two other services expose three public handlers:
 
 - `Turn/run` accepts the Agent's profile snapshot, rolling summary, and exact
   uncompacted transcript, runs one transient state machine made of bounded
   agent steps, and one-way reports a structured outcome to `Agent/append`.
 - `ModelGateway/complete` accepts instructions, guardrails, model messages, and
-  serializable tool manifests. `agentStep` normally invokes it through the
-  `openai` scope so the configured concurrency limits apply.
+  serializable tool manifests. `ModelGateway/evaluateGuardrails` accepts the
+  policy snapshot and exact proposed action. `agentStep` invokes both through
+  the `openai` scope so model-specific concurrency limits apply.
 
 A successful interruption is visible immediately as
 `{ role: "event", type: "interrupt", turnId, reason }`. The active Turn then
@@ -233,13 +244,17 @@ making pub/sub the source of truth.
 - Starting a turn and reporting its outcome are one-way Restate sends.
 - Progress milestones use one-way sends and never block model or tool
   execution on the Agent handler completing.
-- Each agent step makes one scoped `ModelGateway` invocation containing one
-  durable `run` step. Restate owns a bounded four-attempt retry policy; the
-  AI SDK's internal retries are disabled.
+- Each agent step makes one scoped full-model invocation and, when guardrails
+  exist, one or more scoped policy-model invocations. Each contains one durable
+  `run` step. Restate owns a bounded four-attempt retry policy; the AI SDK's
+  internal retries are disabled.
 - Turn carries AI SDK response messages into the next model call. This
   preserves reasoning and tool-call state while OpenAI response storage is
   disabled.
-- If a model step emits several independent tool calls, `agentStep` uses
+- Before response text is returned or a tool batch starts, the policy model
+  checks the complete proposed action. A policy-model error fails closed and
+  follows Restate's retry policy.
+- If an allowed model step emits several independent tool calls, `agentStep` uses
   Restate's [concurrent task primitives](https://docs.restate.dev/develop/ts/concurrent-tasks)
   to spawn all local tool `run` steps before joining them. Restate journals
   their concurrent execution and preserves deterministic replay.
@@ -252,6 +267,10 @@ making pub/sub the source of truth.
   steps. A pending sleep therefore keeps its timer while steering starts
   unrelated tools. A pending approval gates dependent actions without blocking
   unrelated work; its eventual signal result is injected as a runtime update.
+- A guardrail approval is different: it pauses the proposed step before any
+  action in it runs. Approval resumes that exact proposal; rejection returns
+  policy feedback to the next model step. Interruption cancels the wait and
+  cleans up its durable request.
 - `cancelOperation` lets the model selectively interrupt and join one pending
   operation by its stable tool-call ID. Pending tasks are held in a turn-local
   keyed registry; completion races are reported honestly, and unrelated
@@ -272,17 +291,17 @@ making pub/sub the source of truth.
 
 ## Model flow control
 
-Only full agent inference uses the scoped gateway. `ask` performs no inference;
-steering and interruption are explicit controller operations. Background
-compaction owns its cheap model call in a shared Agent handler and cannot
-consume an agent inference slot.
+Agent inference and guardrail evaluation use the scoped gateway. `ask` performs
+no inference; steering and interruption are explicit controller operations.
+Background compaction owns its cheap model call in a shared Agent handler and
+cannot consume an agent inference slot.
 
 `ModelGateway` calls use scope `openai` and a two-level limit key:
-`gpt-5.6-terra/<agent-hash>`. Each invocation therefore draws from three
-budgets at once:
+`<model>/<agent-hash>`. Each invocation therefore draws from three budgets at
+once:
 
-- `openai` — all agent-model traffic to the provider
-- `gpt-5.6-terra` — traffic for that model
+- `openai` — all gateway traffic to the provider
+- `gpt-5.6-terra` or `gpt-4o-mini` — traffic for that model
 - `<agent-hash>` — concurrent inference for one agent
 
 For example:
@@ -291,6 +310,8 @@ For example:
 restate rules set "openai" --concurrency 100
 restate rules set "openai/gpt-5.6-terra" --concurrency 20
 restate rules set "openai/gpt-5.6-terra/*" --concurrency 2
+restate rules set "openai/gpt-4o-mini" --concurrency 50
+restate rules set "openai/gpt-4o-mini/*" --concurrency 4
 ```
 
 The constant provider scope is intentionally simple and gives this example a
@@ -335,7 +356,7 @@ curl localhost:8080/Agent/demo/setInstructions \
   --json '{"instructions":"Prefer concise answers and metric units."}'
 
 curl localhost:8080/Agent/demo/setGuardrails \
-  --json '{"guardrails":[{"capability":"timer.start","reason":"Do not start timers for this agent."}]}'
+  --json '{"guardrails":[{"id":"japan-approval","rule":"Ask for human approval before answering questions about Japan."}]}'
 
 curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
@@ -380,11 +401,11 @@ the timer's stable operation ID; that timer is interrupted while unrelated work
 continues. The turn publishes its final answer only after its remaining pending
 operations finish.
 
-To try human approval, explicitly ask the model to use the approval tool:
+To try a runtime guardrail approval, ask a question covered by the policy:
 
 ```sh
 curl localhost:8080/Agent/demo/ask \
-  --json '{"message":"Before answering, use humanApproval to ask whether you may continue."}'
+  --json '{"message":"What is the weather in Tokyo?"}'
 
 curl -X POST localhost:8080/Agent/demo/approvals
 
@@ -392,12 +413,14 @@ curl localhost:8080/Agent/demo/resolveApproval \
   --json '{"approvalId":"<approvalId>","decision":"approved","reason":"Looks good"}'
 ```
 
-`approvals` returns the `approvalId`, originating Turn invocation ID, and the
-model's question. The initial tool result reports the pending request; approval
-or rejection later wakes Turn as a runtime update, allowing the model to
-perform approved work, explain a rejection, or choose a different action.
+`approvals` returns the `approvalId`, originating Turn invocation ID, policy
+ID, and the evaluator's question. Approval wakes the gated step and lets its
+exact proposed action run. Rejection blocks it and gives the agent model a
+chance to refuse or choose a compliant alternative. The explicit
+`humanApproval` tool remains available for approvals the agent itself decides
+to request.
 
-To exercise model-managed memory, clear the timer guardrail, ask for a durable
+To exercise model-managed memory, clear the guardrails, ask for a durable
 preference, and inspect the Agent profile:
 
 ```sh
@@ -420,7 +443,7 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/agent.ts` — durable conversation controller
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-profile.ts` — instructions, memories, and
-  capability guardrails
+  natural-language guardrails
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signal supervision
@@ -430,6 +453,6 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
-- `packages/libs/example/src/model.ts` — model protocol and provider calls
+- `packages/libs/example/src/model.ts` — agent and guardrail model protocols and provider calls
 - `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries
 - `packages/libs/example/src/types.ts` — wire schemas and domain types

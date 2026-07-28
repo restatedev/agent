@@ -12,7 +12,7 @@ import {
   agentTools,
   type ToolOutcome,
 } from "./agent-tools.js";
-import {callModel} from "./model-gateway.js";
+import {callGuardrailModel, callModel} from "./model-gateway.js";
 import {
   buildModelContext,
   interruptionInstruction,
@@ -22,6 +22,7 @@ import {createPendingOperations} from "./turn-pending.js";
 import {createSteeringInbox} from "./turn-steering.js";
 import {agentStep, settleStep, type ToolStep} from "./turn-step.js";
 import {
+  type Guardrail,
   type ProgressReport,
   type SteeringSignal,
   TURN_SIGNALS,
@@ -33,6 +34,9 @@ import {
 type TurnState = {
   context: AgentToolContext;
   instructions?: string;
+  guardrails: Guardrail[];
+  approvedGuardrails: Set<string>;
+  rejectedGuardrails: Set<string>;
   messages: ModelMessage[];
   interrupt: restate.Future<string>;
   steeringInbox: ReturnType<typeof createSteeringInbox>;
@@ -70,6 +74,54 @@ function toolBatchSummary(outcomes: ToolOutcome[]): string {
   return `Tool batch finished: ${succeeded} succeeded, ${failed} failed, ${pending} pending`;
 }
 
+function rememberGuardrailApprovals(
+  state: TurnState,
+  guardrailIds: string[],
+): void {
+  for (const guardrailId of guardrailIds) {
+    state.approvedGuardrails.add(guardrailId);
+  }
+}
+
+function guardrailApprovalMessage(guardrailId: string): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Runtime guardrail]",
+      `Human approval was granted for guardrail ${JSON.stringify(guardrailId)} for the current request.`,
+      "The runtime will evaluate this policy again if steering changes the request.",
+    ].join("\n"),
+  };
+}
+
+function invalidateGuardrailApprovals(state: TurnState): void {
+  if (
+    state.approvedGuardrails.size === 0 &&
+    state.rejectedGuardrails.size === 0
+  ) {
+    return;
+  }
+  state.approvedGuardrails.clear();
+  state.rejectedGuardrails.clear();
+  state.messages.push({
+    role: "user",
+    content:
+      "[Runtime guardrail] Prior human approval decisions do not apply to the new steering update; all policies will be evaluated again.",
+  });
+}
+
+function guardrailFeedback(guardrailId: string, reason: string): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Runtime guardrail]",
+      `The proposed action was blocked by guardrail ${JSON.stringify(guardrailId)}.`,
+      `Reason: ${reason}`,
+      "Choose a compliant alternative or explain that the request cannot be completed. Do not repeat the blocked action.",
+    ].join("\n"),
+  };
+}
+
 function* finalizeInterruption(
   state: TurnState,
   reason: string,
@@ -95,12 +147,30 @@ function* finalizeInterruption(
     const final = yield* callModel({
       agentId: state.context.agentId,
       instructions: state.instructions,
-      guardrails: state.context.guardrails,
+      guardrails: state.guardrails,
       messages: state.messages,
       tools: [],
     });
     if (final.type === "text" && final.content.trim()) {
-      response = final.content;
+      const remaining = state.guardrails.filter(
+        ({id}) => !state.approvedGuardrails.has(id),
+      );
+      if (remaining.length === 0) {
+        response = final.content;
+      } else {
+        const decision = yield* callGuardrailModel({
+          agentId: state.context.agentId,
+          instructions: state.instructions,
+          guardrails: remaining,
+          rejectedGuardrailIds: [...state.rejectedGuardrails],
+          messages: state.messages,
+          action: {type: "text", content: final.content},
+        });
+        response =
+          decision.decision === "allow"
+            ? final.content
+            : "The turn was interrupted, but its final summary was withheld by a guardrail.";
+      }
     } else {
       const detail =
         final.type === "error"
@@ -178,7 +248,9 @@ function* applyText(
     state.interrupt,
   );
   if (next.type === "steering") {
-    state.messages.push(...drainSteering(state).map(steeringMessage));
+    const steering = drainSteering(state);
+    invalidateGuardrailApprovals(state);
+    state.messages.push(...steering.map(steeringMessage));
     return undefined;
   }
   if (next.type === "completion") {
@@ -243,9 +315,11 @@ export const Turn = restate.service({
           context: {
             agentId: req.agentId,
             turnId,
-            guardrails: req.guardrails,
           },
           instructions: req.instructions,
+          guardrails: req.guardrails,
+          approvedGuardrails: new Set(),
+          rejectedGuardrails: new Set(),
           messages: buildModelContext(req.history, req.summary, req.memories),
           interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
           steeringInbox: createSteeringInbox(),
@@ -271,6 +345,10 @@ export const Turn = restate.service({
                 context: state.context,
                 instructions: state.instructions,
                 messages: [...state.messages],
+                guardrails: state.guardrails,
+                approvedGuardrails: [...state.approvedGuardrails],
+                rejectedGuardrails: [...state.rejectedGuardrails],
+                stepNumber: state.steps + 1,
                 remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
               }),
             );
@@ -278,6 +356,10 @@ export const Turn = restate.service({
 
             if (step.type === "interrupted") {
               if (step.tools) {
+                rememberGuardrailApprovals(
+                  state,
+                  step.tools.approvedGuardrails,
+                );
                 retainInterruptedTools(state, step.tools, step.reason);
               }
               result = yield* finalizeInterruption(state, step.reason);
@@ -286,11 +368,29 @@ export const Turn = restate.service({
 
             const steering = drainSteering(state);
             state.steps += 1;
+            if (steering.length > 0) {
+              invalidateGuardrailApprovals(state);
+            } else if ("approvedGuardrails" in step) {
+              const newlyApproved = step.approvedGuardrails.filter(
+                (guardrailId) => !state.approvedGuardrails.has(guardrailId),
+              );
+              rememberGuardrailApprovals(state, newlyApproved);
+              state.messages.push(
+                ...newlyApproved.map(guardrailApprovalMessage),
+              );
+              if ("rejectedGuardrails" in step) {
+                for (const guardrailId of step.rejectedGuardrails) {
+                  state.rejectedGuardrails.add(guardrailId);
+                }
+              }
+            }
 
             // A text/error response produced before buffered steering arrived
             // has no side effects. Let the next step see the new messages.
             if (
-              (step.type === "text" || step.type === "error") &&
+              (step.type === "text" ||
+                step.type === "error" ||
+                step.type === "guardrail_blocked") &&
               steering.length > 0
             ) {
               state.messages.push(...steering.map(steeringMessage));
@@ -313,6 +413,12 @@ export const Turn = restate.service({
                 result = completed;
                 break steps;
               }
+
+              case "guardrail_blocked":
+                state.messages.push(
+                  guardrailFeedback(step.guardrailId, step.reason),
+                );
+                continue;
 
               case "tool_budget_exceeded":
                 result = yield* failTurn(

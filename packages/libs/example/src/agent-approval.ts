@@ -1,5 +1,5 @@
 // Pending human approvals for one Agent virtual object. The Agent owns their
-// durable state; the waiting tool remains inside the Turn invocation.
+// durable state; the waiting tool or policy gate remains inside the Turn.
 
 import * as restate from "@restatedev/restate-sdk-gen";
 import {
@@ -43,7 +43,8 @@ export const approvals = {
     if (existing) {
       return (
         existing.turnId === request.turnId &&
-        existing.question === request.question
+        existing.question === request.question &&
+        existing.guardrailId === request.guardrailId
       );
     }
     pending.push(request);

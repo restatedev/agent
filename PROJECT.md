@@ -30,15 +30,18 @@ The application is split into a few concrete parts:
   metadata, queue dispatch, and interruption reasons become explicit
   model-context boundaries.
 - **`agentStep`** is the functional model → foreground-tools seam. It receives
-  a message snapshot and remaining tool budget, runs independent tool calls in
-  parallel, and owns no work after returning. `turn-steering.ts` drains durable
+  a message snapshot and remaining tool budget, asks a cheap policy model to
+  gate the agent model's proposed text or complete tool batch, runs an allowed
+  batch in parallel, and owns no work after returning. A policy may allow,
+  deny, or durably wait for human approval. `turn-steering.ts` drains durable
   steering signals into a Turn-scoped inbox, while `turn-pending.ts` owns
   long-lived sleeps and approvals across steps. The model can selectively stop
   those tasks through `cancelOperation`; progress remains visible in the
   canonical transcript but is omitted from future model context and
   compaction input.
-- **`ModelGateway`** performs full model inference behind Restate's scoped
-  concurrency controls, retry policy, and cancellation propagation.
+- **`ModelGateway`** performs full agent inference and cheap guardrail
+  evaluation behind Restate's scoped concurrency controls, model-specific
+  limit keys, retry policy, and cancellation propagation.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the
@@ -50,7 +53,7 @@ conversation and approval handlers; the others are service coordination paths.
 
 ```text
 user/UI → Agent → Turn → agentStep → ModelGateway
-            ↑         ↕ tools
+            ↑         ↕ allowed tools
             └── outcome, progress, approvals, and signals
 ```
 
@@ -72,6 +75,7 @@ Restate provides the application-level guarantees that an agent needs:
 - durable signals for steering, interruption, and human approval;
 - durable sleeps, retries, and local tool operations;
 - turn-scoped pending timers and signal-backed human approval;
+- a fail-closed policy gate before publishing text or starting tool batches;
 - deterministic concurrent execution of independent tools;
 - concurrency limits around model traffic;
 - an observable invocation tree for the complete turn.
@@ -81,18 +85,18 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/agent.ts` — conversation controller
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-profile.ts` — durable instructions, memories,
-  and capability guardrails
+  and natural-language guardrails
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signals
 - `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
-- `packages/libs/example/src/turn-step.ts` — bounded step execution and supervision
+- `packages/libs/example/src/turn-step.ts` — bounded step execution, policy gating, and supervision
 - `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
 - `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
-- `packages/libs/example/src/model.ts` — AI SDK integration
-- `packages/libs/example/src/model-gateway.ts` — scoped model gateway
+- `packages/libs/example/src/model.ts` — agent and guardrail AI SDK integration
+- `packages/libs/example/src/model-gateway.ts` — scoped agent and guardrail model gateway
 - `packages/libs/example/src/types.ts` — shared wire contracts and schemas
 - `packages/libs/example/src/app.ts` — service endpoint
 

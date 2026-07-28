@@ -7,7 +7,7 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - `Agent` owns the canonical transcript, queued user messages, active Turn
   state, persistent profile, human approval state, and steering reconciliation.
 - The per-Agent profile contains user-set instructions, model-managed memories,
-  and capability guardrails. Each Turn receives one stable snapshot.
+  and natural-language guardrails. Each Turn receives one stable snapshot.
 - The transcript is an append-only event log. User entries retain their
   original acceptance route; steering and later activation are separate
   lifecycle events rather than entry rewrites.
@@ -17,15 +17,14 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   the durable handler invocation; it is not Virtual Object state.
 - `turn-step.ts` owns the bounded functional seam and its task supervision. A
   step receives a message snapshot and remaining tool budget, performs one
-  model call, executes that response's foreground tools, and returns structured
-  data. It owns no work after returning.
+  agent-model call, gates the proposed action, executes an allowed foreground
+  tool batch, and returns structured data. It owns no work after returning.
 - `turn-steering.ts` owns one background signal receiver and a transient FIFO
   for steering accepted during the Turn.
 - `turn-pending.ts` owns tool tasks that survive across steps, including
   completion races, selective cancellation, and cleanup.
 - `agent-tools.ts` owns concrete tool definitions, validation, execution,
-  capability checks, completion, and conversion of outcomes into model
-  messages.
+  completion, and conversion of outcomes into model messages.
 - Tool calls execute locally inside the Turn handler. They are not RPCs.
   `manageMemory` and `humanApproval` call Agent handlers only for durable state
   that the Agent virtual object must own.
@@ -37,8 +36,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   against interruption, then joins it before applying its result.
 - The steering inbox receives signals concurrently with the step. Turn drains
   the inbox only after the step settles.
-- The step owns one model request and the foreground tool batch it may produce.
-  All foreground calls are spawned before the step waits for the batch.
+- The step owns one agent-model request, any guardrail evaluations and approval
+  wait for its proposal, and the foreground tool batch it may produce. All
+  allowed foreground calls are spawned before the step waits for the batch.
 - Turn applies the returned action to its transient state. Tool outcomes are
   the declarative delta used to start or cancel pending operations.
 - Pending completion tasks are deliberately outside the step. They remain
@@ -49,7 +49,7 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - A Turn performs at most eight model steps and 24 total tool calls.
 - Each step receives a copy of the complete live model context accumulated by
   the Turn.
-- Every model call receives the same user-instruction and capability-guardrail
+- Every agent-model call receives the same user-instruction and guardrail
   snapshot. Persistent memories are injected once into the Turn's initial
   context as data, before the transcript.
 - A normal step returns text, tool outcomes, a recoverable model error, or a
@@ -59,6 +59,29 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - Provider or orchestration failures stop every foreground and pending task.
   Durable interruption and cancellation errors are rethrown; other failures
   become a structured failed Turn outcome.
+
+## Guardrails
+
+- A guardrail is a user-configured `{ id, rule }` policy. IDs are unique within
+  the Agent profile and the complete list is snapshotted when a Turn starts.
+- After the agent model proposes text or a complete tool batch, a cheap policy
+  model evaluates that exact action before text is published or any tool in the
+  batch starts. No guardrails means no policy-model call.
+- The policy decision is `allow`, `deny`, or `require_approval`. Model failure
+  fails closed under the gateway's Restate retry policy.
+- `deny` returns a runtime policy message to the next agent step. The blocked
+  text is not published and no tool in a blocked batch runs.
+- `require_approval` durably registers a request on the Agent and waits on a
+  Turn-scoped signal. Approval resumes the exact proposal; rejection blocks it
+  and prevents another approval request for that policy in the current
+  request.
+- An approval covers its policy for later steps in the same request. Several
+  applicable approval policies are resolved one at a time before the proposal
+  runs.
+- Steering changes the request. Turn clears approvals and rejections before the
+  next step so the updated work is evaluated again.
+- The evaluator is model-based and therefore probabilistic. Once returned,
+  however, its decision is enforced by deterministic Turn control flow.
 
 ## Steering
 
@@ -78,14 +101,16 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   - Tool outcomes are committed first, followed by buffered steering.
   - A text or model-error result has no side effects and is discarded as stale
     when steering arrived during its step.
+- A policy approval wait is part of the step. Steering does not cancel it;
+  interruption does. Any steering buffered before the step settles invalidates
+  its approval decision before the next proposal.
 - While Turn is waiting for pending work, steering is committed immediately
   and starts another step. Existing pending work continues.
 
 ## Foreground and pending tools
 
-- Every tool declares a capability. After input validation and before local
-  execution, a matching guardrail produces a failed tool result without
-  running the tool.
+- Tools validate their own inputs and run locally only after the complete
+  proposed batch passes the guardrail gate.
 - `manageMemory` atomically sets or deletes keyed entries on the Agent. Only the
   active non-interrupting Turn can write, and the Agent stores at most 32
   memories. A successful tool result is a durable side effect even if later
@@ -127,6 +152,10 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   remain honest completion events.
 - Turn adds the interruption instruction and retained tool/runtime results to
   its live context, then performs exactly one tool-free final model call.
+- The final text is checked against guardrails before publication. Finalization
+  cannot open a new approval while ending the Turn, so any `deny` or
+  `require_approval` decision produces a deterministic withheld-response
+  message instead.
 - If interruption arrives while waiting after candidate text, that text remains
   in finalization context but is not published as the Turn answer by itself.
 - If final response generation fails, Turn still returns an interrupted result
@@ -158,4 +187,5 @@ Any rewrite must preserve:
 9. Tool-free interruption finalization using only retained work.
 10. The eight-step and 24-tool-call budgets.
 11. Stable instructions, memories, and guardrails for the lifetime of a Turn.
-12. Guardrail checks after validation and before tool execution.
+12. Guardrail evaluation before publishing text or spawning any proposed tool.
+13. Durable approval before a protected proposal and reevaluation after steering.
