@@ -5,7 +5,7 @@
 // module owns tool mechanics.
 
 import {setTimeout} from "node:timers/promises";
-import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
+import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
@@ -159,7 +159,7 @@ const getWeatherTool = defineAgentTool({
     } catch (error) {
       if (
         error instanceof restate.InterruptedError ||
-        error instanceof TerminalError
+        error instanceof CancelledError
       ) {
         throw error;
       }

@@ -32,6 +32,8 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 ## Execution shape
 
 - `Turn.run` loops until it completes, is interrupted, or exhausts a budget.
+  Interruption and budget exhaustion share one guarded, tool-free finalization
+  path over completed work.
 - Each iteration spawns exactly one agent step. Turn supervises that task
   against interruption, then joins it before applying its result.
 - The steering inbox receives signals concurrently with the step. Turn drains
@@ -53,12 +55,15 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   Persistent memories are injected once into the Turn's initial context as
   data, before the transcript.
 - A normal step returns text, tool outcomes, a recoverable model error, or a
-  tool-budget failure.
+  tool-budget stop.
 - Invalid or empty model output becomes a corrective user message and another
   step, within the same budget.
 - Provider or orchestration failures stop every foreground and pending task.
   Durable interruption and cancellation errors are rethrown; other failures
   become a structured failed Turn outcome.
+- Reaching either execution budget stops pending work and performs one
+  tool-free final model call. The outcome is `interrupted`, preserving completed
+  work instead of publishing an internal budget error as the assistant answer.
 
 ## Guardrails
 
@@ -122,6 +127,8 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   Turn work fails.
 - Every foreground tool in one model response runs concurrently inside the
   spawned step and is joined before the step returns.
+- Exhausting a foreground tool's durable retry policy becomes a failed tool
+  outcome for the model. Cancellation and Turn interruption still propagate.
 - Turn commits the assistant tool-call message and one complete matching
   tool-result message together.
 - A foreground result is succeeded, failed, pending, or
@@ -139,10 +146,12 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - Text is only a candidate final answer while pending operations remain. Turn
   waits for completion, steering, or interruption before running another step.
 
-## Graceful interruption
+## Stopped-turn finalization
 
 - The interrupt signal asks Turn to end, while steering asks it to continue
   with new instructions.
+- Execution limits also stop the Turn through this path, but originate from the
+  runtime rather than an Agent interruption request.
 - The Agent keeps the interruption reason separate from an optional replacement
   user message. The reason guides finalization of the old Turn; the message is
   appended to the immutable transcript and queued for a new Turn.

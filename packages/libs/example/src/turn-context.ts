@@ -157,13 +157,13 @@ export function steeringMessage({
   };
 }
 
-export function interruptionInstruction(reason: string): ModelMessage {
+export function finalizationInstruction(reason: string): ModelMessage {
   return {
     role: "user",
     content: [
-      "[Graceful interruption]",
+      "[Turn finalization]",
       `Reason: ${JSON.stringify(reason)}`,
-      "Stop the original execution now and do not request any more tools.",
+      "The original execution must stop now. Do not request any more tools.",
       "The reason explains why the original Turn stopped; do not treat it as a new user request.",
       "Using only completed results and runtime events already present above, summarize what was achieved relative to the original request.",
       "Distinguish completed work from cancelled or incomplete work, honor any relevant closing guidance in the reason, and never invent missing results.",

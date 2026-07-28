@@ -15,7 +15,7 @@ import {
 import {callGuardrailModel, callModel} from "./model-gateway.js";
 import {
   buildModelContext,
-  interruptionInstruction,
+  finalizationInstruction,
   steeringMessage,
 } from "./turn-context.js";
 import {createPendingOperations} from "./turn-pending.js";
@@ -124,20 +124,20 @@ function guardrailFeedback(guardrailId: string, reason: string): ModelMessage {
   };
 }
 
-function* finalizeInterruption(
+function* finalizeStoppedTurn(
   state: TurnState,
   reason: string,
 ): restate.Operation<TurnOutcome> {
   yield* reportProgress(
     state.context,
     "finalizing",
-    "Stopping unfinished work for graceful interruption",
+    "Stopping unfinished work before finalization",
   );
   const stopped = yield* state.pending.stop(
     new restate.InterruptedError(reason),
   );
   state.messages.push(...stopped.map(agentTools.toRuntimeMessage));
-  state.messages.push(interruptionInstruction(reason));
+  state.messages.push(finalizationInstruction(reason));
   yield* reportProgress(
     state.context,
     "finalizing",
@@ -170,14 +170,14 @@ function* finalizeInterruption(
         response =
           decision.decision === "allow"
             ? final.content
-            : "The turn was interrupted, but its final summary was withheld by a guardrail.";
+            : "The turn stopped, but its final summary was withheld by a guardrail.";
       }
     } else {
       const detail =
         final.type === "error"
           ? final.message
           : "the finalizer unexpectedly requested a tool";
-      response = `The turn was interrupted (${reason}), but its final response could not be generated: ${detail}.`;
+      response = `The turn stopped (${reason}), but its final response could not be generated: ${detail}.`;
     }
   } catch (error) {
     if (
@@ -186,26 +186,13 @@ function* finalizeInterruption(
     ) {
       throw error;
     }
-    response = `The turn was interrupted (${reason}), but its final response could not be generated: ${errorMessage(error)}.`;
+    response = `The turn stopped (${reason}), but its final response could not be generated: ${errorMessage(error)}.`;
   }
   return {
     turnId: state.context.turnId,
     status: "interrupted",
     reason,
     response,
-    consumedSteering: state.consumedSteering,
-  };
-}
-
-function* failTurn(
-  state: TurnState,
-  error: unknown,
-): restate.Operation<TurnOutcome> {
-  yield* state.pending.stop(error);
-  return {
-    turnId: state.context.turnId,
-    status: "failed",
-    error: errorMessage(error),
     consumedSteering: state.consumedSteering,
   };
 }
@@ -260,7 +247,7 @@ function* applyText(
   }
 
   state.messages.push({role: "assistant", content: text});
-  return yield* finalizeInterruption(state, next.reason);
+  return yield* finalizeStoppedTurn(state, next.reason);
 }
 
 function* applyTools(
@@ -364,7 +351,7 @@ export const Turn = restate.service({
                 );
                 retainInterruptedTools(state, step.tools, step.reason);
               }
-              result = yield* finalizeInterruption(state, step.reason);
+              result = yield* finalizeStoppedTurn(state, step.reason);
               break;
             }
 
@@ -434,11 +421,9 @@ export const Turn = restate.service({
                 continue;
 
               case "tool_budget_exceeded":
-                result = yield* failTurn(
+                result = yield* finalizeStoppedTurn(
                   state,
-                  new restate.InterruptedError(
-                    `agent exceeded its ${MAX_TOOL_CALLS}-tool-call budget`,
-                  ),
+                  `The agent reached its ${MAX_TOOL_CALLS}-tool-call limit.`,
                 );
                 break steps;
 
@@ -451,11 +436,9 @@ export const Turn = restate.service({
 
           const outcome =
             result ??
-            (yield* failTurn(
+            (yield* finalizeStoppedTurn(
               state,
-              new restate.InterruptedError(
-                `agent did not finish within ${MAX_STEPS} steps`,
-              ),
+              `The agent reached its ${MAX_STEPS}-step limit.`,
             ));
           yield* restate.sendClient(Agent, req.agentId).append(outcome);
         } catch (error) {
