@@ -5,13 +5,12 @@ black-box public protocol.
 
 ## Execution
 
-Each handler on the `Evals` service executes durable scenarios against fresh
-Agent virtual objects. The `guardrails` handler spawns its four policy cases
-concurrently.
+The single `Evals/all` handler spawns every durable scenario concurrently
+against a fresh Agent virtual object.
 
 ```mermaid
 sequenceDiagram
-  participant E as Evals/caseHandler
+  participant E as Evals/all
   participant A as Agent/eval-agent-id
   participant T as Turn
   participant M as ModelGateway
@@ -31,12 +30,12 @@ sequenceDiagram
   E->>A: steer, interrupt, or resolveApproval
   E->>A: history
   E->>E: evaluate assertions
-  E-->>Caller: EvalResult
+  E-->>Caller: aggregate EvalResult[]
 ```
 
-A service handler is sufficient for an individual case because its invocation
-already provides durable execution, retries, cancellation, a stable invocation
-identity, and a stored result. One overall durable timer bounds every case.
+The service invocation provides durable execution, retries, cancellation, a
+stable invocation identity, and a stored aggregate result. Each spawned case
+also has its own durable timeout.
 
 Each attempt uses a fresh Agent key containing the eval handler invocation ID:
 
@@ -67,12 +66,16 @@ type EvalResult = {
   }>;
   transcript: SequencedConversationEntry[];
 };
+
+type EvalSuiteResult = {
+  status: "passed" | "failed";
+  results: EvalResult[];
+};
 ```
 
-The conversation cases have individual handlers. The guardrail scenarios are
-separate generator operations spawned by one `guardrails` handler. Shared
-options and result assembly remain internal; there is no case-ID dispatcher or
-generic scenario language.
+Every scenario is a separate generator operation spawned by `all`. Shared
+options and result assembly remain internal; there is no public case-ID
+dispatcher or generic scenario language.
 
 ## History notifications
 
@@ -101,7 +104,7 @@ the source of truth.
    Turn, and checks event order and retained/new results.
 3. `interruption` waits until sleep is pending, interrupts it, and checks
    graceful finalization and the interrupted terminal response.
-4. `guardrails` concurrently spawns four isolated cases:
+4. Four isolated guardrail cases cover:
    - Approval verifies exactly one pending request, approves it, and checks
      completion.
    - Denial checks that a deny policy neither opens an approval nor starts the
@@ -114,10 +117,10 @@ the source of truth.
 The cases assert transcript structure, event ordering, correlations, and
 durable state rather than exact model prose.
 
-Invoke a case through Restate ingress:
+Invoke the complete suite through Restate ingress:
 
 ```sh
-curl localhost:8080/Evals/basicTurn \
+curl localhost:8080/Evals/all \
   -H 'content-type: application/json' \
   -d '{}'
 ```

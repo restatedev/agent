@@ -124,9 +124,10 @@ flowchart LR
   guardrail evaluation. It owns scoped admission, model-specific limit keys,
   retries, and cancellation propagation before delegating provider calls to
   `model.ts`.
-- `eval.ts` contains durable black-box protocol evaluations. Each case
-  invocation drives a fresh Agent through public handlers and waits for
-  transcript milestones through caller-owned awakeables instead of polling.
+- `eval.ts` contains durable black-box protocol evaluations. One suite
+  invocation concurrently drives fresh Agents through public handlers and
+  waits for transcript milestones through caller-owned awakeables instead of
+  polling.
 
 The controller stores the canonical transcript: user and assistant messages,
 explicit lifecycle boundaries, and semantic progress events. Tool calls and
@@ -252,9 +253,9 @@ The remaining services expose these public handlers:
   tool manifests. `ModelGateway/evaluateGuardrails` separately accepts the
   policy snapshot and exact proposed action. `agentStep` invokes both through
   the `openai` scope so model-specific concurrency limits apply.
-- Each `Evals` handler is one discoverable case. It accepts optional isolation
-  settings, creates a fresh Agent, drives the scenario durably, and returns
-  structured assertions with the complete observed transcript.
+- `Evals/all` accepts optional isolation settings, concurrently drives every
+  scenario against a fresh Agent, and returns one aggregate of structured
+  assertions and complete observed transcripts.
 
 A successful interruption is visible immediately as
 `{ role: "event", type: "interrupt", turnId, reason }`. The active Turn then
@@ -521,30 +522,20 @@ curl -X POST localhost:8080/Agent/demo/profile
 
 ### Run a durable eval
 
-Each `Evals` handler creates a fresh Agent and drives it entirely through
-Restate. The case waits on history awakeables instead of polling and returns
-`passed | failed`, individual assertions, the isolated `agentId`, and its
-complete observed transcript.
+The single `Evals/all` handler concurrently drives every scenario against a
+fresh Agent entirely through Restate. Each case waits on history awakeables
+instead of polling. The aggregate returns `passed | failed` plus every case's
+assertions, isolated `agentId`, and complete observed transcript.
 
 ```sh
-curl localhost:8080/Evals/basicTurn \
-  --json '{}'
-
-curl localhost:8080/Evals/guardrails \
+curl localhost:8080/Evals/all \
   --json '{"timeoutSeconds":180}'
 ```
 
-Available handlers are:
-
-- `basicTurn`
-- `steering`
-- `interruption`
-- `guardrails`
-
-The `guardrails` handler spawns four isolated cases concurrently. Together they
-cover approval, denial before protected tools start, rejection without
-approval loops, and approval invalidation after steering. Its aggregate result
-contains the structured result and transcript for every case. See
+The handler spawns all seven isolated cases concurrently: a basic turn,
+steering, interruption, guardrail approval, denial before protected tools
+start, rejection without approval loops, and approval invalidation after
+steering. See
 [`packages/libs/example/EVALS.md`](packages/libs/example/EVALS.md) for the
 protocol and planned extensions.
 

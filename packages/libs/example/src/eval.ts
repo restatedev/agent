@@ -1,7 +1,7 @@
-// Durable black-box evaluations for the Agent protocol. Each Evals handler
-// drives a fresh Agent through its public handlers, observes the canonical
-// transcript through history awakeables, and returns structured assertions
-// rather than relying on exact model prose.
+// Durable black-box evaluations for the Agent protocol. One Evals handler
+// concurrently drives fresh Agents through their public handlers, observes
+// their canonical transcripts through history awakeables, and returns
+// structured assertions rather than relying on exact model prose.
 
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
@@ -26,7 +26,7 @@ const EvalOptionsSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Optional suite run identifier. Omit it to isolate this case by its invocation ID.",
+      "Optional suite run identifier. Omit it to isolate this run by its invocation ID.",
     ),
   attempt: z.number().int().positive().default(1),
   timeoutSeconds: z.number().int().min(10).max(600).default(120),
@@ -49,11 +49,11 @@ const EvalResultSchema = z.object({
 });
 type EvalResult = z.infer<typeof EvalResultSchema>;
 
-const EvalGroupResultSchema = z.object({
+const EvalSuiteResultSchema = z.object({
   status: z.enum(["passed", "failed"]),
   results: z.array(EvalResultSchema),
 });
-type EvalGroupResult = z.infer<typeof EvalGroupResultSchema>;
+type EvalSuiteResult = z.infer<typeof EvalSuiteResultSchema>;
 
 type SequencedEntry = HistoryPage["entries"][number];
 type EntryPredicate = (candidate: SequencedEntry) => boolean;
@@ -732,28 +732,13 @@ function* evaluate(
 export const Evals = restate.service({
   name: "Evals",
   handlers: {
-    basicTurn: restate.schemas(
-      {input: EvalOptionsSchema, output: EvalResultSchema},
-      function* (options: EvalOptions): restate.Operation<EvalResult> {
-        return yield* evaluate("basic-turn", options, basicTurn);
-      },
-    ),
-    steering: restate.schemas(
-      {input: EvalOptionsSchema, output: EvalResultSchema},
-      function* (options: EvalOptions): restate.Operation<EvalResult> {
-        return yield* evaluate("steering", options, steering);
-      },
-    ),
-    interruption: restate.schemas(
-      {input: EvalOptionsSchema, output: EvalResultSchema},
-      function* (options: EvalOptions): restate.Operation<EvalResult> {
-        return yield* evaluate("interruption", options, interruption);
-      },
-    ),
-    guardrails: restate.schemas(
-      {input: EvalOptionsSchema, output: EvalGroupResultSchema},
-      function* (options: EvalOptions): restate.Operation<EvalGroupResult> {
+    all: restate.schemas(
+      {input: EvalOptionsSchema, output: EvalSuiteResultSchema},
+      function* (options: EvalOptions): restate.Operation<EvalSuiteResult> {
         const results = yield* restate.all([
+          restate.spawn(evaluate("basic-turn", options, basicTurn)),
+          restate.spawn(evaluate("steering", options, steering)),
+          restate.spawn(evaluate("interruption", options, interruption)),
           restate.spawn(
             evaluate("guardrail-approval", options, guardrailApproval),
           ),
