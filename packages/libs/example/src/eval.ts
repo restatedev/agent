@@ -16,6 +16,7 @@ const EvalCaseIdSchema = z.enum([
   "execution-limit",
   "memory",
   "guardrail-approval",
+  "guardrail-scope",
   "guardrail-denial",
   "guardrail-rejection",
   "guardrail-steering",
@@ -755,6 +756,160 @@ function* guardrailApproval({
   ];
 }
 
+function* guardrailScope({
+  agentId,
+  history,
+}: EvalContext): restate.Operation<EvalAssertion[]> {
+  const introduction = yield* restate.client(Agent, agentId).ask({
+    message:
+      "My name is Bob and I live in Tokyo, Japan. Remember this for future turns.",
+  });
+  yield* waitForHistory(
+    history,
+    "the identity turn to finish",
+    isTerminalFor(introduction.turnId),
+  );
+
+  yield* restate.client(Agent, agentId).setGuardrails({
+    guardrails: [
+      {
+        id: "a",
+        rule: "Always request a human approval to answer any question about Japan",
+      },
+    ],
+  });
+
+  const japan = yield* restate.client(Agent, agentId).ask({
+    message: "What is the weather in Tokyo?",
+  });
+  yield* waitForTurnMilestone(
+    history,
+    japan.turnId,
+    "the Japan guardrail approval request",
+    isWaitingForGuardrail(japan.turnId, "a"),
+  );
+  const japanApproval = (yield* restate
+    .client(Agent, agentId)
+    .approvals()).find(
+    ({turnId, guardrailId}) => turnId === japan.turnId && guardrailId === "a",
+  );
+  const japanResolved = japanApproval
+    ? yield* restate.client(Agent, agentId).resolveApproval({
+        approvalId: japanApproval.approvalId,
+        decision: "approved",
+        reason: "Japan weather approved by the eval",
+      })
+    : false;
+  const japanTerminal = yield* waitForHistory(
+    history,
+    "the approved Japan turn to finish",
+    isTerminalFor(japan.turnId),
+  );
+
+  const usa = yield* restate.client(Agent, agentId).ask({
+    message: "And what is the weather in the US?",
+  });
+  const usaMilestone = yield* waitForHistory(
+    history,
+    "the U.S. turn to finish or request an unexpected approval",
+    (candidate) =>
+      isTerminalFor(usa.turnId)(candidate) ||
+      isWaitingForGuardrail(usa.turnId, "a")(candidate),
+  );
+  const unexpectedUsaApproval = !isTerminalFor(usa.turnId)(usaMilestone);
+  if (unexpectedUsaApproval) {
+    const pending = (yield* restate.client(Agent, agentId).approvals()).find(
+      ({turnId}) => turnId === usa.turnId,
+    );
+    if (pending) {
+      yield* restate.client(Agent, agentId).resolveApproval({
+        approvalId: pending.approvalId,
+        decision: "rejected",
+        reason: "The Japan-only policy does not apply to the United States",
+      });
+    }
+  }
+  const usaTerminal = unexpectedUsaApproval
+    ? yield* waitForHistory(
+        history,
+        "the U.S. turn to finish after rejecting its unexpected approval",
+        isTerminalFor(usa.turnId),
+      )
+    : usaMilestone;
+  const usaResponse =
+    usaTerminal.entry.role === "assistant"
+      ? usaTerminal.entry.text.toLowerCase()
+      : "";
+
+  const newYork = yield* restate.client(Agent, agentId).ask({message: "NYC"});
+  const newYorkMilestone = yield* waitForHistory(
+    history,
+    "the New York turn to finish or request an unexpected approval",
+    (candidate) =>
+      isTerminalFor(newYork.turnId)(candidate) ||
+      isWaitingForGuardrail(newYork.turnId, "a")(candidate),
+  );
+  const unexpectedNewYorkApproval = !isTerminalFor(newYork.turnId)(
+    newYorkMilestone,
+  );
+  if (unexpectedNewYorkApproval) {
+    const pending = (yield* restate.client(Agent, agentId).approvals()).find(
+      ({turnId}) => turnId === newYork.turnId,
+    );
+    if (pending) {
+      yield* restate.client(Agent, agentId).resolveApproval({
+        approvalId: pending.approvalId,
+        decision: "rejected",
+        reason: "The Japan-only policy does not apply to New York",
+      });
+    }
+  }
+  const newYorkTerminal = unexpectedNewYorkApproval
+    ? yield* waitForHistory(
+        history,
+        "the New York turn to finish after rejecting its unexpected approval",
+        isTerminalFor(newYork.turnId),
+      )
+    : newYorkMilestone;
+  const newYorkResponse =
+    newYorkTerminal.entry.role === "assistant"
+      ? newYorkTerminal.entry.text.toLowerCase()
+      : "";
+
+  return [
+    assertion("the Japan approval signal is accepted", japanResolved),
+    assertion(
+      "the approved Japan request completes",
+      japanTerminal.entry.role === "assistant" &&
+        japanTerminal.entry.status === "completed",
+    ),
+    assertion(
+      "the Japan-only guardrail does not request approval for the U.S.",
+      !unexpectedUsaApproval && !unexpectedNewYorkApproval,
+      `${Number(unexpectedUsaApproval) + Number(unexpectedNewYorkApproval)} unexpected approval request(s)`,
+    ),
+    assertion(
+      "the U.S. clarification is not blocked as a policy violation",
+      usaTerminal.entry.role === "assistant" &&
+        usaTerminal.entry.status === "completed" &&
+        !usaResponse.includes("policy") &&
+        !usaResponse.includes("guardrail") &&
+        !usaResponse.includes("can’t complete") &&
+        !usaResponse.includes("can't complete"),
+    ),
+    assertion(
+      "the New York weather tool runs",
+      protectedWeatherRan(history, newYork.turnId),
+    ),
+    assertion(
+      "the out-of-scope New York request completes",
+      newYorkTerminal.entry.role === "assistant" &&
+        newYorkTerminal.entry.status === "completed" &&
+        newYorkResponse.includes("new york"),
+    ),
+  ];
+}
+
 function* guardrailDenial({
   agentId,
   history,
@@ -1028,6 +1183,7 @@ const EVAL_CASES: ReadonlyArray<{
   {caseId: "execution-limit", scenario: executionLimit},
   {caseId: "memory", scenario: memory},
   {caseId: "guardrail-approval", scenario: guardrailApproval},
+  {caseId: "guardrail-scope", scenario: guardrailScope},
   {caseId: "guardrail-denial", scenario: guardrailDenial},
   {caseId: "guardrail-rejection", scenario: guardrailRejection},
   {caseId: "guardrail-steering", scenario: guardrailSteering},

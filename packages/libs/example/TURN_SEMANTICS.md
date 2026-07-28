@@ -75,6 +75,10 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - After the agent model proposes text or a complete tool batch, a cheap policy
   model evaluates that exact action before text is published or any tool in the
   batch starts. No guardrails means no policy-model call.
+- The evaluator receives context starting at the latest real user input,
+  including any tool and runtime evidence produced after it. Older turns and
+  historical approval prose cannot expand a conditional policy into an
+  allowlist; current-Turn approval and rejection state is supplied separately.
 - The policy decision is `allow`, `deny`, or `require_approval`. Model failure
   fails closed under the gateway's Restate retry policy.
 - `deny` returns a runtime policy message to the next agent step. The blocked

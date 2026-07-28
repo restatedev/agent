@@ -25,6 +25,7 @@ import {
 } from "./agent-tools.js";
 import type {GuardrailDecision, ModelResult, ProposedAction} from "./model.js";
 import {callGuardrailModel, callModel} from "./model-gateway.js";
+import {guardrailContext} from "./turn-context.js";
 import {
   type ApprovalDecision,
   approvalSignalName,
@@ -145,7 +146,7 @@ function* enforceGuardrails({
       instructions,
       guardrails: remaining,
       rejectedGuardrailIds: rejectedGuardrails,
-      messages,
+      messages: guardrailContext(messages),
       action,
     });
     if (decision.decision === "allow") {

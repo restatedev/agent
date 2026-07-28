@@ -214,9 +214,11 @@ Guardrails are not included in the main agent model's system prompt. This keeps
 policy enforcement in one place: the agent proposes the actual work, and the
 runtime independently gates it. The explicit `humanApproval` tool remains
 available for approvals the agent decides it needs for reasons unrelated to a
-runtime guardrail. The evaluator receives the complete live model context so it
-can interpret references and prior results safely; “cheap” describes the model
-tier, not a bounded input size.
+runtime guardrail. The evaluator receives the exact proposed action plus context
+starting at the latest real user input, including execution evidence produced
+after it. Historical approval prose remains available to the agent but cannot
+turn a conditional policy into an allowlist; current-Turn decisions are
+supplied to the evaluator separately.
 
 Approval applies to the current request and matching policy; later steps do not
 ask again. Rejection blocks the proposal and prevents another approval loop for
@@ -559,11 +561,11 @@ curl localhost:8080/Evals/all \
   --json '{"timeoutSeconds":180}'
 ```
 
-The handler spawns all ten isolated cases concurrently: a basic turn, steering,
+The handler spawns all eleven isolated cases concurrently: a basic turn, steering,
 interruption, interruption carrying a replacement request, execution-budget
-finalization, model-managed memory, guardrail approval, denial before protected
-tools start, rejection without approval loops, and approval invalidation after
-steering.
+finalization, model-managed memory, guardrail approval, guardrail scope
+isolation, denial before protected tools start, rejection without approval
+loops, and approval invalidation after steering.
 
 Pass `cases` to re-run a subset without paying for the rest, which matters
 because every case depends on probabilistic model behavior:

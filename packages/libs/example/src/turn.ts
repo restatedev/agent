@@ -16,6 +16,7 @@ import {callGuardrailModel, callModel} from "./model-gateway.js";
 import {
   buildModelContext,
   finalizationInstruction,
+  guardrailContext,
   steeringMessage,
 } from "./turn-context.js";
 import {createPendingOperations} from "./turn-pending.js";
@@ -197,7 +198,7 @@ function* finalizeStoppedTurn(
           instructions: state.instructions,
           guardrails: remaining,
           rejectedGuardrailIds: [...state.rejectedGuardrails],
-          messages: state.messages,
+          messages: guardrailContext(state.messages),
           action: {type: "text", content: final.content},
         });
         response =

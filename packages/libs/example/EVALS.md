@@ -117,10 +117,12 @@ the source of truth.
    work — rather than publishing an internal budget error as a failed answer.
 6. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
-7. Four isolated guardrail cases cover:
+7. Five isolated guardrail cases cover:
    - Approval verifies exactly one pending request, approves it, and checks
      that the decision is recorded before completion. A follow-up Turn must
      read that decision from history without reopening the approval.
+   - Scope approves a Japan request, then verifies that U.S. clarification and
+     New York weather remain outside the Japan-only policy.
    - Denial checks that a deny policy neither opens an approval nor starts the
      protected weather tool.
    - Rejection checks that a rejected request produces a compliant explanation

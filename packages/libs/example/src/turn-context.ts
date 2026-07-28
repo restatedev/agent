@@ -171,6 +171,36 @@ export function buildModelContext(
   return messages;
 }
 
+function isGuardrailInput(message: ModelMessage): boolean {
+  const content = message.content;
+  if (message.role !== "user" || typeof content !== "string") {
+    return false;
+  }
+  return ![
+    "[Earlier conversation summary]",
+    "[Persistent agent memory]",
+    "[Previous turn failed]",
+    "[Queued messages activated]",
+    "[Resolved human approval]",
+    "[Runtime guardrail]",
+    "[Turn finalization]",
+    "[Turn interruption boundary]",
+    "[Turn steering boundary]",
+  ].some((prefix) => content.startsWith(prefix));
+}
+
+// Policy evaluation starts at the latest real user input and retains any
+// tool/runtime evidence produced after it. Older turns and resolved approvals
+// remain agent context, but cannot accidentally expand a policy's scope.
+export function guardrailContext(messages: ModelMessage[]): ModelMessage[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isGuardrailInput(messages[index])) {
+      return messages.slice(index);
+    }
+  }
+  return [];
+}
+
 export function steeringMessage({
   queued,
   message,
