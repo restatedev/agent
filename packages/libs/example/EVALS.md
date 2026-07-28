@@ -53,6 +53,7 @@ type EvalOptions = {
   runId?: string;
   attempt?: number;
   timeoutSeconds?: number;
+  cases?: EvalCaseId[];
 };
 
 type EvalResult = {
@@ -105,7 +106,18 @@ the source of truth.
    not restart the existing timer.
 3. `interruption` waits until sleep is pending, interrupts it, and checks
    graceful finalization and the interrupted terminal response.
-4. Four isolated guardrail cases cover:
+4. `interruption-replacement` interrupts a pending turn while carrying a
+   replacement request, then checks that the replacement is recorded as a
+   queued user message *before* the interruption boundary, that the old Turn
+   finalizes before dispatch, that the dispatch boundary activates exactly one
+   message, and that a new Turn answers it.
+5. `execution-limit` asks for more weather lookups than the 24-tool-call budget
+   allows, in small batches. It checks that the budget stops the Turn through
+   the guarded finalization path — an `interrupted` outcome carrying completed
+   work — rather than publishing an internal budget error as a failed answer.
+6. `memory` asks the agent to remember a preference and checks the metadata-only
+   memory event, its ordering, and the durable profile entry.
+7. Four isolated guardrail cases cover:
    - Approval verifies exactly one pending request, approves it, and checks
      completion.
    - Denial checks that a deny policy neither opens an approval nor starts the
@@ -126,15 +138,33 @@ curl localhost:8080/Evals/all \
   -d '{}'
 ```
 
+Pass `cases` to re-run a subset with identical isolation and assertions, which
+keeps a probabilistic case cheap to repeat:
+
+```sh
+curl localhost:8080/Evals/all \
+  -H 'content-type: application/json' \
+  -d '{"cases":["execution-limit"],"timeoutSeconds":300}'
+```
+
 The user-facing transcript intentionally omits raw tool calls. Assertions about
 internal properties such as actual tool parallelism require a later
 journal-observation layer or a scripted model/tool mode; progress text alone
 does not prove those properties.
 
+Two assertions currently read tool activity out of progress *prose*
+(`steering`'s timer-restart check and `execution-limit`'s budget check) by
+matching the `Running N tool call(s): ...` message that `turn-step.ts` emits.
+That is the coupling the paragraph above warns about: editing that string turns
+these into confusing agent-looking failures. Promoting the tool names to a
+structured field on `ProgressReportSchema` would remove the coupling.
+
 ## Later extensions
 
-Add protocol cases for queued dispatch, interruption replacement messages,
-memory, and pagination.
+Add protocol cases for history pagination and for compaction: no case yet drives
+an Agent past the 32-message checkpoint, so the reserved-prefix ordering that
+keeps a dispatch boundary with the messages it activates is currently only
+covered indirectly by `interruption-replacement`.
 
 Add an `EvalSuite` virtual object, keyed by `runId`, only when suite
 coordination is useful. It can spawn case invocations, aggregate their results,

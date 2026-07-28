@@ -12,6 +12,9 @@ const EvalCaseIdSchema = z.enum([
   "basic-turn",
   "steering",
   "interruption",
+  "interruption-replacement",
+  "execution-limit",
+  "memory",
   "guardrail-approval",
   "guardrail-denial",
   "guardrail-rejection",
@@ -30,6 +33,13 @@ const EvalOptionsSchema = z.object({
     ),
   attempt: z.number().int().positive().default(1),
   timeoutSeconds: z.number().int().min(10).max(600).default(120),
+  cases: z
+    .array(EvalCaseIdSchema)
+    .min(1)
+    .optional()
+    .describe(
+      "Optional subset of cases to run. Omit to run the complete suite. A subset keeps each case's isolation and assertions identical, so one probabilistic case can be re-run without paying for the others.",
+    ),
 });
 type EvalOptions = z.infer<typeof EvalOptionsSchema>;
 
@@ -376,6 +386,244 @@ function* interruption({
   ];
 }
 
+// Interruption may carry a replacement request. The Agent must record it before
+// the interruption boundary, let the old Turn finalize, then activate it in a
+// new Turn through an explicit dispatch boundary.
+function* interruptionReplacement({
+  agentId,
+  history,
+}: EvalContext): restate.Operation<EvalAssertion[]> {
+  const ask = yield* restate.client(Agent, agentId).ask({
+    message:
+      "Get the weather in Berlin and start a durable 60-second sleep. Keep the sleep running until it completes, and only then answer.",
+  });
+  yield* waitForTurnMilestone(
+    history,
+    ask.turnId,
+    "the sleep operation to become pending",
+    isWaitingForPendingOperation(ask.turnId),
+  );
+
+  const accepted = yield* restate.client(Agent, agentId).interrupt({
+    reason: "Stop the sleep and summarize the completed weather work.",
+    message: "Never mind that. What is the current weather in Paris?",
+  });
+  const firstTerminal = yield* waitForHistory(
+    history,
+    "the interrupted turn to finish",
+    isTerminalFor(ask.turnId),
+  );
+  const replacement = history.entries.find(
+    ({entry}) =>
+      entry.role === "user" &&
+      entry.delivery === "queued" &&
+      entry.text.toLowerCase().includes("paris"),
+  );
+  const interruptEntry = history.entries.find(
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "interrupt" &&
+      entry.turnId === ask.turnId,
+  );
+  const dispatch = yield* waitForHistory(
+    history,
+    "the queued replacement to be dispatched into a new turn",
+    ({entry}) => entry.role === "event" && entry.type === "dispatch",
+  );
+  const secondTerminal = yield* waitForHistory(
+    history,
+    "the replacement turn to finish",
+    ({sequence, entry}) =>
+      entry.role === "assistant" &&
+      entry.turnId !== ask.turnId &&
+      sequence > dispatch.sequence,
+  );
+  const secondResponse =
+    secondTerminal.entry.role === "assistant"
+      ? secondTerminal.entry.text.toLowerCase()
+      : "";
+
+  return [
+    assertion("interruption with a replacement message is accepted", accepted),
+    assertion(
+      "the replacement is recorded as a queued user message",
+      replacement !== undefined,
+    ),
+    assertion(
+      "the replacement is recorded before the interruption boundary",
+      replacement !== undefined &&
+        interruptEntry !== undefined &&
+        replacement.sequence < interruptEntry.sequence,
+    ),
+    assertion(
+      "the old turn finalizes before the replacement is dispatched",
+      firstTerminal.entry.role === "assistant" &&
+        firstTerminal.entry.status === "interrupted" &&
+        firstTerminal.sequence < dispatch.sequence,
+    ),
+    assertion(
+      "the dispatch boundary activates exactly one queued message",
+      dispatch.entry.role === "event" &&
+        dispatch.entry.type === "dispatch" &&
+        dispatch.entry.queuedMessages === 1,
+      dispatch.entry.role === "event" && dispatch.entry.type === "dispatch"
+        ? `activated ${dispatch.entry.queuedMessages}`
+        : "no dispatch boundary",
+    ),
+    assertion(
+      "a new turn answers the replacement request",
+      secondResponse.includes("paris"),
+    ),
+  ];
+}
+
+// Reaching an execution budget must stop the Turn through the guarded,
+// tool-free finalization path rather than publishing an internal budget error
+// as a failed assistant answer.
+function* executionLimit({
+  agentId,
+  history,
+}: EvalContext): restate.Operation<EvalAssertion[]> {
+  // More cities than the 24-tool-call budget in turn.ts, requested in small
+  // batches so some weather work completes before the budget is refused.
+  const cities = [
+    "Lisbon",
+    "Madrid",
+    "Dublin",
+    "Oslo",
+    "Helsinki",
+    "Riga",
+    "Vilnius",
+    "Tallinn",
+    "Sofia",
+    "Bucharest",
+    "Zagreb",
+    "Ljubljana",
+    "Bratislava",
+    "Budapest",
+    "Valletta",
+    "Nicosia",
+    "Reykjavik",
+    "Bern",
+    "Vaduz",
+    "Monaco",
+    "Andorra la Vella",
+    "San Marino",
+    "Luxembourg",
+    "Brussels",
+    "Amsterdam",
+    "Copenhagen",
+    "Stockholm",
+    "Warsaw",
+  ];
+  const ask = yield* restate.client(Agent, agentId).ask({
+    message: `Report the current weather in each of these ${cities.length} cities: ${cities.join(", ")}. Call the weather tool for at most five cities per response.`,
+  });
+  const terminal = yield* waitForHistory(
+    history,
+    "the budget-limited turn to finish",
+    isTerminalFor(ask.turnId),
+  );
+  const response =
+    terminal.entry.role === "assistant"
+      ? terminal.entry.text.toLowerCase()
+      : "";
+  const limitBoundary = history.entries.find(
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "interrupt" &&
+      entry.turnId === ask.turnId &&
+      entry.reason.toLowerCase().includes("limit"),
+  );
+  const finalizing = history.entries.find(
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "progress" &&
+      entry.turnId === ask.turnId &&
+      entry.phase === "finalizing",
+  );
+  const weatherCalls = toolStartCount(history, ask.turnId, "getWeather");
+
+  return [
+    assertion(
+      "the turn stops with an interrupted outcome rather than a failure",
+      terminal.entry.role === "assistant" &&
+        terminal.entry.status === "interrupted",
+      terminal.entry.role === "assistant"
+        ? `status was ${terminal.entry.status}`
+        : "no terminal entry",
+    ),
+    assertion(
+      "the runtime records an execution-limit boundary",
+      limitBoundary !== undefined && limitBoundary.sequence < terminal.sequence,
+    ),
+    assertion(
+      "the Turn reports finalization before answering",
+      finalizing !== undefined && finalizing.sequence < terminal.sequence,
+    ),
+    assertion(
+      "the tool-call budget is enforced",
+      weatherCalls > 0 && weatherCalls <= 24,
+      `${weatherCalls} getWeather calls started`,
+    ),
+    assertion(
+      "completed tool work survives into the final answer",
+      cities.some((city) => response.includes(city.toLowerCase())),
+    ),
+  ];
+}
+
+// The model manages durable memory through one atomic Agent handler. The keys
+// it changes become a metadata-only transcript event.
+function* memory({
+  agentId,
+  history,
+}: EvalContext): restate.Operation<EvalAssertion[]> {
+  const ask = yield* restate.client(Agent, agentId).ask({
+    message:
+      "Remember for future conversations that I always want temperatures reported in Fahrenheit. Confirm once you have stored it.",
+  });
+  const terminal = yield* waitForHistory(
+    history,
+    "the memory turn to finish",
+    isTerminalFor(ask.turnId),
+  );
+  const memoryEvent = history.entries.find(
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "memory" &&
+      entry.turnId === ask.turnId,
+  );
+  const profile = yield* restate.client(Agent, agentId).profile();
+  const stored = profile.memories.some(({key, content}) =>
+    `${key} ${content}`.toLowerCase().includes("fahrenheit"),
+  );
+
+  return [
+    assertion(
+      "the memory turn completes",
+      terminal.entry.role === "assistant" &&
+        terminal.entry.status === "completed",
+    ),
+    assertion(
+      "a memory event records the changed keys",
+      memoryEvent !== undefined &&
+        memoryEvent.entry.role === "event" &&
+        memoryEvent.entry.type === "memory" &&
+        memoryEvent.entry.changes.some(({operation}) => operation === "set"),
+    ),
+    assertion(
+      "the memory event precedes the terminal answer",
+      memoryEvent !== undefined && memoryEvent.sequence < terminal.sequence,
+    ),
+    assertion(
+      "the durable profile retains the preference",
+      stored,
+      `profile holds ${profile.memories.length} memories`,
+    ),
+  ];
+}
+
 function* guardrailApproval({
   agentId,
   history,
@@ -700,6 +948,24 @@ type EvalScenario = (
   context: EvalContext,
 ) => restate.Operation<EvalAssertion[]>;
 
+// The complete suite in a stable order. `all` spawns every entry concurrently
+// unless the request selects a subset.
+const EVAL_CASES: ReadonlyArray<{
+  caseId: EvalCaseId;
+  scenario: EvalScenario;
+}> = [
+  {caseId: "basic-turn", scenario: basicTurn},
+  {caseId: "steering", scenario: steering},
+  {caseId: "interruption", scenario: interruption},
+  {caseId: "interruption-replacement", scenario: interruptionReplacement},
+  {caseId: "execution-limit", scenario: executionLimit},
+  {caseId: "memory", scenario: memory},
+  {caseId: "guardrail-approval", scenario: guardrailApproval},
+  {caseId: "guardrail-denial", scenario: guardrailDenial},
+  {caseId: "guardrail-rejection", scenario: guardrailRejection},
+  {caseId: "guardrail-steering", scenario: guardrailSteering},
+];
+
 function* evaluate(
   caseId: EvalCaseId,
   {runId, attempt, timeoutSeconds}: EvalOptions,
@@ -762,21 +1028,14 @@ export const Evals = restate.service({
     all: restate.schemas(
       {input: EvalOptionsSchema, output: EvalSuiteResultSchema},
       function* (options: EvalOptions): restate.Operation<EvalSuiteResult> {
-        const results = yield* restate.all([
-          restate.spawn(evaluate("basic-turn", options, basicTurn)),
-          restate.spawn(evaluate("steering", options, steering)),
-          restate.spawn(evaluate("interruption", options, interruption)),
-          restate.spawn(
-            evaluate("guardrail-approval", options, guardrailApproval),
+        const selected = options.cases;
+        const results = yield* restate.all(
+          EVAL_CASES.filter(
+            ({caseId}) => selected === undefined || selected.includes(caseId),
+          ).map(({caseId, scenario}) =>
+            restate.spawn(evaluate(caseId, options, scenario)),
           ),
-          restate.spawn(evaluate("guardrail-denial", options, guardrailDenial)),
-          restate.spawn(
-            evaluate("guardrail-rejection", options, guardrailRejection),
-          ),
-          restate.spawn(
-            evaluate("guardrail-steering", options, guardrailSteering),
-          ),
-        ]);
+        );
         return {
           status: results.every(({status}) => status === "passed")
             ? "passed"

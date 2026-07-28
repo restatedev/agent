@@ -262,9 +262,9 @@ The remaining services expose these public handlers:
   tool manifests. `ModelGateway/evaluateGuardrails` separately accepts the
   policy snapshot and exact proposed action. `agentStep` invokes both through
   the `openai` scope so model-specific concurrency limits apply.
-- `Evals/all` accepts optional isolation settings, concurrently drives every
-  scenario against a fresh Agent, and returns one aggregate of structured
-  assertions and complete observed transcripts.
+- `Evals/all` accepts optional isolation settings and an optional case subset,
+  concurrently drives each selected scenario against a fresh Agent, and returns
+  one aggregate of structured assertions and complete observed transcripts.
 
 A successful interruption is visible immediately as
 `{ role: "event", type: "interrupt", turnId, reason }`. The active Turn then
@@ -552,11 +552,21 @@ curl localhost:8080/Evals/all \
   --json '{"timeoutSeconds":180}'
 ```
 
-The handler spawns all seven isolated cases concurrently: a basic turn,
-steering, interruption, guardrail approval, denial before protected tools
-start, rejection without approval loops, and approval invalidation after
-steering. See
-[`packages/libs/example/EVALS.md`](packages/libs/example/EVALS.md) for the
+The handler spawns all ten isolated cases concurrently: a basic turn, steering,
+interruption, interruption carrying a replacement request, execution-budget
+finalization, model-managed memory, guardrail approval, denial before protected
+tools start, rejection without approval loops, and approval invalidation after
+steering.
+
+Pass `cases` to re-run a subset without paying for the rest, which matters
+because every case depends on probabilistic model behavior:
+
+```sh
+curl localhost:8080/Evals/all \
+  --json '{"cases":["execution-limit"],"timeoutSeconds":300}'
+```
+
+See [`packages/libs/example/EVALS.md`](packages/libs/example/EVALS.md) for the
 protocol and planned extensions.
 
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
