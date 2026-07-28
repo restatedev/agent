@@ -29,6 +29,11 @@ type HistoryMeta = {
   compaction?: ConversationCompactionPlan;
 };
 
+type HistoryWatcher = {
+  awakeableId: string;
+  fromSequence: number;
+};
+
 type ConversationContext = {
   summary?: string;
   entries: ConversationEntry[];
@@ -53,6 +58,7 @@ export type ConversationCompactionResult = ConversationCompactionPlan &
 
 const HISTORY_META = "history/meta";
 const HISTORY_SUMMARY = "history/summary";
+const HISTORY_WATCHERS = "history/watchers";
 
 const CHUNK_SIZE = 32;
 const COMPACT_AFTER_MESSAGES = 32;
@@ -83,6 +89,37 @@ function* readSummary(): restate.Operation<ConversationSummary | undefined> {
     (yield* restate.sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
     undefined
   );
+}
+
+function* readWatchers(): restate.Operation<HistoryWatcher[]> {
+  return (
+    (yield* restate.sharedState().get<HistoryWatcher[]>(HISTORY_WATCHERS)) ?? []
+  );
+}
+
+function storeWatchers(watchers: HistoryWatcher[]): void {
+  if (watchers.length === 0) {
+    restate.state().clear(HISTORY_WATCHERS);
+  } else {
+    restate.state().set(HISTORY_WATCHERS, watchers);
+  }
+}
+
+function* notifyWatchers(nextSequence: number): restate.Operation<void> {
+  const watchers = yield* readWatchers();
+  const waiting = watchers.filter(
+    ({fromSequence}) => fromSequence >= nextSequence,
+  );
+  if (waiting.length === watchers.length) {
+    return;
+  }
+
+  storeWatchers(waiting);
+  for (const watcher of watchers) {
+    if (watcher.fromSequence < nextSequence) {
+      restate.resolveAwakeable<void>(watcher.awakeableId);
+    }
+  }
 }
 
 // Lazily walks a stable sequence range. Only the current chunk is loaded, so a
@@ -185,6 +222,28 @@ export const history = {
 
     restate.state().set(chunkKey(index), chunk);
     restate.state().set(HISTORY_META, meta);
+    yield* notifyWatchers(meta.nextSequence);
+  },
+
+  /**
+   * Resolves a caller-owned awakeable when `fromSequence` becomes readable.
+   *
+   * Registration and the cursor check run in one exclusive Agent handler, so
+   * an append cannot get lost between them. Callers wait on their own
+   * awakeable and then read the regular cursor API.
+   */
+  *watch(fromSequence: number, awakeableId: string): restate.Operation<void> {
+    const meta = yield* readMeta();
+    if (fromSequence < meta.nextSequence) {
+      restate.resolveAwakeable<void>(awakeableId);
+      return;
+    }
+
+    const watchers = yield* readWatchers();
+    if (!watchers.some((watcher) => watcher.awakeableId === awakeableId)) {
+      watchers.push({awakeableId, fromSequence});
+      restate.state().set(HISTORY_WATCHERS, watchers);
+    }
   },
 
   // Called after a turn outcome is appended. Once enough conversation messages

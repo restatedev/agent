@@ -1,8 +1,73 @@
 # Restate durable agent reference
 
-A deliberately small reference implementation of an agentic application on
-Restate. It separates durable conversation control, turn execution, model
-access, and bounded agent steps without hiding them behind a framework.
+A small, end-to-end reference implementation of a modern agent runtime on
+Restate. The interesting part is not another prompt-and-tools loop: it is
+making that loop durable, steerable, interruptible, policy-gated, observable,
+bounded, and evaluable without hiding the control flow behind a framework.
+
+The project is intentionally compact enough to read from ingress to model call
+and back. It demonstrates production-oriented execution semantics around a
+simple weather agent, while keeping the model and tool domain deliberately
+unimportant.
+
+## State-of-the-art capabilities
+
+| Capability | What this implementation does |
+| --- | --- |
+| Durable agent turns | A Turn is a Restate invocation. Model calls, timers, signals, tool results, and control decisions survive process crashes and replay deterministically. |
+| Per-agent serialization | Each `Agent` virtual object is keyed by `agentId`; exclusive handlers serialize conversation control without a separate lock or database transaction protocol. |
+| Mid-turn steering | Steering is a durable FIFO signal protocol. It never cancels the current model/tool step: completed work is committed first, pending operations continue, and the update enters the next model round. |
+| Graceful interruption | Interruption stops and joins unfinished work, preserves completed results, and makes one tool-free final model call that explains what was achieved relative to the original request. |
+| Parallel tool batches | Independent tool calls from one model response are spawned together and joined as a batch. Restate journals the concurrency while preserving deterministic recovery. |
+| Long-running operations | Tools such as `sleep` and `humanApproval` can return a pending acknowledgement and continue across later agent steps. The Turn owns their stable IDs and lifecycle. |
+| Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
+| Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
+| Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. A rejected runtime policy cannot reopen approval for the same request; steering invalidates approvals for changed work. |
+| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, progress, memory metadata, and terminal outcomes retain their natural observation order. |
+| Push-style history updates | Restate callers register their own awakeable at a history cursor. Registration closes the empty-read race, while the actual transcript remains available through the cursor API. |
+| Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
+| Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
+| Semantic progress | `thinking`, `tools`, `waiting`, and `finalizing` milestones are part of the ordered transcript; raw provider reasoning and low-level tool traffic stay in Restate observability. |
+| Model admission control | Agent and policy calls go through a scoped gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
+| Restate-native evals | Durable eval invocations drive fresh Agents through the same public protocol, synchronize on history awakeables, inject control events, and return structured assertions plus the observed transcript. |
+
+These features compose rather than live as isolated demos. For example, a Turn
+can run ten weather calls as one parallel batch, keep a durable timer alive
+across later rounds, accept steering without losing either, request fresh
+approval for newly protected work, and still produce one ordered,
+cursor-consumable transcript after recovery.
+
+## Control semantics at a glance
+
+| Action | When idle | While a Turn is active |
+| --- | --- | --- |
+| `ask(message)` | Appends the user message and starts a Turn. | Appends the message immediately and queues it for the next Turn. |
+| `steer(message)` | Returns `false`. | Moves queued messages plus the new instruction into the active Turn. Current tools are not cancelled. |
+| `interrupt(reason, message?)` | Returns `false`. | Cancels and joins unfinished work, finalizes the current Turn, and optionally queues a replacement message for a new Turn. |
+| `cancelOperation(id)` | Not a controller action. | A model tool selectively stops one pending operation while the Turn continues. |
+| External invocation cancellation | Nothing to cancel. | Stops the invocation, cleans up owned work, records the boundary, and rethrows cancellation to Restate. |
+
+The distinction is deliberate: queueing changes *when* a request runs,
+steering changes *the active request without discarding work*, interruption
+ends the active request gracefully, and selective cancellation targets only
+one long-running operation.
+
+## Deliberate scope
+
+This is a reference runtime, not a complete agent product. The weather tool is
+synthetic so execution semantics stay visible. Sandbox provisioning,
+token-by-token output streaming, pub/sub fan-out, authentication, and
+multi-tenant policy administration are not implemented. History awakeables
+provide durable point-to-point change notification, not a replacement for a
+broadcast event bus.
+
+Natural-language guardrail classification and answer quality remain
+probabilistic model behavior; the runtime deterministically enforces the
+decision it receives. The current evals exercise the live stack and protocol
+semantics but do not yet include a suite coordinator, repeated statistical
+runs, a scripted model, or an independent semantic judge.
+
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -16,6 +81,8 @@ flowchart LR
   Step -->|"policy approval request"| Agent
   Tools -->|"approval / memory updates"| Agent
   Turn -->|"one-way append outcome"| Agent
+  Eval["Evals service"] -->|"public Agent protocol"| Agent
+  Agent -.->|"history awakeables"| Eval
   Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
   Compactor -->|"one-way applyCompaction"| Agent
 ```
@@ -57,6 +124,9 @@ flowchart LR
   guardrail evaluation. It owns scoped admission, model-specific limit keys,
   retries, and cancellation propagation before delegating provider calls to
   `model.ts`.
+- `eval.ts` contains durable black-box protocol evaluations. Each case
+  invocation drives a fresh Agent through public handlers and waits for
+  transcript milestones through caller-owned awakeables instead of polling.
 
 The controller stores the canonical transcript: user and assistant messages,
 explicit lifecycle boundaries, and semantic progress events. Tool calls and
@@ -66,13 +136,13 @@ tools. A turn reports exactly one structured outcome: `completed`,
 assistant response based on completed tool results; raw tool activity still
 stays out of the transcript.
 
-Every handler on `Agent`, `Turn`, and `ModelGateway` is ingress-public in this
-reference implementation. This keeps the complete protocol inspectable and
-easy to invoke while experimenting. Public visibility does not make every
-handler a user API: normal clients should use `ask`, `history`, `steer`,
-`interrupt`, `profile`, `setInstructions`, `setGuardrails`, `approvals`, and
-`resolveApproval`; the remaining handlers are coordination paths used by the
-services themselves.
+Every handler on `Agent`, `Turn`, `ModelGateway`, and `Evals` is
+ingress-public in this reference implementation. This keeps the complete
+protocol inspectable and easy to invoke while experimenting. Public visibility
+does not make every handler a user API: normal clients should use `ask`,
+`history`, `steer`, `interrupt`, `profile`, `setInstructions`,
+`setGuardrails`, `approvals`, and `resolveApproval`; the remaining handlers are
+coordination paths used by the services themselves.
 
 ## Conversation history and compaction
 
@@ -83,7 +153,11 @@ events instead of rewriting those entries. `agent-history.ts` stores the log in
 fixed-size state chunks with stable internal sequence numbers. Its lazy entry
 reader hides those chunks and stops loading state as soon as a consumer has
 enough entries. The public `history` handler exposes an inclusive cursor over
-the same sequence numbers.
+the same sequence numbers. A Restate caller can create an awakeable and pass
+its ID plus the next cursor to `watchHistory`. The Agent atomically resolves it
+when that cursor is already readable or stores it until the next relevant
+append. The caller waits outside the virtual object, so transcript writers are
+never blocked by a waiting exclusive handler.
 
 After a turn finishes, the Agent counts conversation messages since the last
 checkpoint. At 32 messages it reserves that entire finished prefix and
@@ -147,6 +221,7 @@ returns. Instructions and guardrail changes affect the next Turn.
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
+| `watchHistory` | `{ fromSequence, awakeableId }` | Atomically resolves a caller-owned awakeable now or when the requested cursor becomes readable. |
 | `profile` | void | Returns this Agent's instructions, model-managed memories, and natural-language guardrails. |
 | `setInstructions` | `{ instructions: string \| null }` | Replaces the persistent user instructions; `null` clears them. Running Turns keep their snapshot. |
 | `setGuardrails` | `{ guardrails: [{ id, rule }] }` | Replaces the persistent policy list. IDs must be unique; running Turns keep their snapshot. |
@@ -166,7 +241,7 @@ returns. Instructions and guardrail changes affect the next Turn.
 Agent handlers are exclusive. Lazy state allows shared readers and the
 compactor to load only the state keys and history chunks they need.
 
-The two other services expose three public handlers:
+The remaining services expose these public handlers:
 
 - `Turn/run` accepts the Agent's profile snapshot, rolling summary, and exact
   uncompacted transcript, runs one transient state machine made of bounded
@@ -175,6 +250,9 @@ The two other services expose three public handlers:
   tool manifests. `ModelGateway/evaluateGuardrails` separately accepts the
   policy snapshot and exact proposed action. `agentStep` invokes both through
   the `openai` scope so model-specific concurrency limits apply.
+- Each `Evals` handler is one discoverable case. It accepts optional isolation
+  settings, creates a fresh Agent, drives the scenario durably, and returns
+  structured assertions with the complete observed transcript.
 
 A successful interruption is visible immediately as
 `{ role: "event", type: "interrupt", turnId, reason }`. The active Turn then
@@ -439,6 +517,36 @@ curl localhost:8080/Agent/demo/ask \
 curl -X POST localhost:8080/Agent/demo/profile
 ```
 
+### Run a durable eval
+
+Each `Evals` handler creates a fresh Agent and drives it entirely through
+Restate. The case waits on history awakeables instead of polling and returns
+`passed | failed`, individual assertions, the isolated `agentId`, and its
+complete observed transcript.
+
+```sh
+curl localhost:8080/Evals/basicTurn \
+  --json '{}'
+
+curl localhost:8080/Evals/guardrailSteering \
+  --json '{"timeoutSeconds":180}'
+```
+
+Available handlers are:
+
+- `basicTurn`
+- `steering`
+- `interruption`
+- `guardrailApproval`
+- `guardrailDenial`
+- `guardrailRejection`
+- `guardrailSteering`
+
+The guardrail cases cover approval, denial before protected tools start,
+rejection without approval loops, and approval invalidation after steering.
+See [`packages/libs/example/EVALS.md`](packages/libs/example/EVALS.md) for the
+protocol and planned extensions.
+
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
 model/tool steps, retries, and signals. See Restate's
 [HTTP invocation guide](https://docs.restate.dev/services/invocation/http) for
@@ -461,4 +569,5 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — agent and guardrail model protocols and provider calls
 - `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries
+- `packages/libs/example/src/eval.ts` — durable black-box Agent protocol evals
 - `packages/libs/example/src/types.ts` — wire schemas and domain types

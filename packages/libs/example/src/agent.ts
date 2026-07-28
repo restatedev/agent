@@ -84,6 +84,11 @@ const HistoryQuerySchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 });
 
+const HistoryWatchSchema = z.object({
+  fromSequence: z.number().int().positive(),
+  awakeableId: z.string().min(1),
+});
+
 const SetInstructionsSchema = z.object({
   instructions: z.string().nullable(),
 });
@@ -205,6 +210,16 @@ export const Agent = restate.object({
       {input: HistoryQuerySchema, output: HistoryPageSchema},
       function* ({fromSequence, limit}): restate.Operation<HistoryPage> {
         return yield* history.page(fromSequence, limit);
+      },
+    ),
+
+    // Register a caller-owned awakeable for the next readable history entry.
+    // The exclusive cursor check prevents a lost append between an empty read
+    // and registration. The caller waits outside this virtual object.
+    watchHistory: restate.schemas(
+      {input: HistoryWatchSchema, output: z.void()},
+      function* ({fromSequence, awakeableId}): restate.Operation<void> {
+        yield* history.watch(fromSequence, awakeableId);
       },
     ),
 

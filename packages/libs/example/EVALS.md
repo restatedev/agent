@@ -1,16 +1,16 @@
 # Restate-native evals
 
-This is a parked design for evaluating the durable agent from inside Restate.
-It is intentionally not implemented yet.
+The first evaluation slice runs inside Restate and treats the Agent as a
+black-box public protocol.
 
-## Starting point
+## Execution
 
-Use one `EvalCase` service whose `run` handler executes a single durable
-scenario against a fresh Agent virtual object.
+Each handler on the `Evals` service executes one durable scenario against a
+fresh Agent virtual object.
 
 ```mermaid
 sequenceDiagram
-  participant E as EvalCase/run
+  participant E as Evals/caseHandler
   participant A as Agent/eval-agent-id
   participant T as Turn
   participant M as ModelGateway
@@ -20,10 +20,11 @@ sequenceDiagram
   A->>T: send run
   T->>M: model calls
 
-  loop Cursor-based observation
+  loop Awakeable cursor observation
     E->>A: history(fromSequence)
     A-->>E: new transcript entries
-    E->>E: durable sleep if condition is not reached
+    E->>A: watchHistory(fromSequence, awakeableId)
+    A-->>E: resolve awakeable after append
   end
 
   E->>A: steer, interrupt, or resolveApproval
@@ -34,21 +35,24 @@ sequenceDiagram
 
 A service handler is sufficient for an individual case because its invocation
 already provides durable execution, retries, cancellation, a stable invocation
-identity, and a stored result.
+identity, and a stored result. One overall durable timer bounds every case.
 
-Each attempt should use a fresh Agent key:
+Each attempt uses a fresh Agent key containing the eval handler invocation ID:
 
 ```ts
-const agentId = `eval-${runId}-${caseId}-${attempt}`;
+const agentId = `eval-${isolation}-${caseId}-${attempt}`;
 ```
 
-## Initial contracts
+An optional `runId` labels related suite work but never removes
+invocation-level isolation.
+
+## Contracts
 
 ```ts
-type EvalRequest = {
-  caseId: string;
-  runId: string;
+type EvalOptions = {
+  runId?: string;
   attempt?: number;
+  timeoutSeconds?: number;
 };
 
 type EvalResult = {
@@ -64,39 +68,56 @@ type EvalResult = {
 };
 ```
 
-Keep cases as generator functions selected by `caseId` at first. A generic
-scenario language is unnecessary until repeated patterns justify one, and
-functions or predicates cannot be passed through service inputs.
+Each case has its own service handler. The shared options and result assembly
+remain internal; there is no case-ID dispatcher or generic scenario language.
 
-An eval driver needs only a few operations:
+## History notifications
 
-- Configure instructions and guardrails on a fresh Agent.
-- Call `ask`, `steer`, `interrupt`, and `resolveApproval`.
-- Consume `history` incrementally from its existing sequence cursor.
-- Read `approvals` and `profile`.
-- Durably sleep between reads until a transcript or approval condition holds.
-- Return structured assertions and the observed transcript.
+The eval reads all currently available entries from the Agent's existing
+cursor API. When the cursor is empty, it creates an awakeable and passes its ID
+and the cursor to the exclusive `watchHistory` handler.
 
-## First cases
+Registration closes the empty-read race:
 
-Start with deterministic protocol assertions:
+- If history changed before registration ran, the Agent resolves the awakeable
+  immediately.
+- Otherwise, the Agent stores the watcher and `history.append` resolves it when
+  the cursor becomes readable.
+- The eval waits on the awakeable outside the Agent, so an exclusive handler is
+  never held open.
 
-1. A basic turn produces exactly one terminal assistant entry.
-2. `ask` while busy queues the message and dispatches it after the active Turn.
-3. Steering incorporates queued messages into the active Turn.
-4. Steering while sleep is pending preserves that operation.
-5. Interruption cancels unfinished work and produces an accurate interrupted
-   result.
-6. Interruption with a replacement message starts a new Turn with the complete
-   transcript.
-7. A guardrail opens exactly one approval and protected work runs only after
-   approval.
-8. Rejected approval prevents the protected action.
-9. Memory written in one Turn is available in a later Turn.
-10. History pagination never skips or duplicates sequence numbers.
+After the notification, the eval reads the regular cursor again. The
+notification contains no transcript data and the append-only history remains
+the source of truth.
 
-These cases should assert transcript structure, event ordering, correlations,
-and durable state rather than exact model prose.
+## Current cases
+
+1. `basicTurn` checks idle dispatch, successful completion, one terminal
+   entry, and a minimally relevant answer.
+2. `steering` waits until sleep is pending, steers more work into the same
+   Turn, and checks event order and retained/new results.
+3. `interruption` waits until sleep is pending, interrupts it, and checks
+   graceful finalization and the interrupted terminal response.
+4. `guardrailApproval` waits for a runtime policy approval, verifies exactly
+   one pending request, approves it, and checks completion.
+5. `guardrailDenial` checks that a deny policy neither opens an approval nor
+   starts the protected weather tool.
+6. `guardrailRejection` rejects a required approval and checks that the Agent
+   produces a compliant explanation without requesting approval again.
+7. `guardrailSteering` approves one request, steers additional protected work
+   into the Turn, and checks that the old approval is invalidated and requested
+   again for the updated work.
+
+The cases assert transcript structure, event ordering, correlations, and
+durable state rather than exact model prose.
+
+Invoke a case through Restate ingress:
+
+```sh
+curl localhost:8080/Evals/basicTurn \
+  -H 'content-type: application/json' \
+  -d '{}'
+```
 
 The user-facing transcript intentionally omits raw tool calls. Assertions about
 internal properties such as actual tool parallelism require a later
@@ -104,6 +125,9 @@ journal-observation layer or a scripted model/tool mode; progress text alone
 does not prove those properties.
 
 ## Later extensions
+
+Add protocol cases for queued dispatch, interruption replacement messages,
+memory, and pagination.
 
 Add an `EvalSuite` virtual object, keyed by `runId`, only when suite
 coordination is useful. It can spawn case invocations, aggregate their results,
