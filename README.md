@@ -196,9 +196,11 @@ Guardrails are user-configured natural-language policies with stable IDs. A
 cheap policy model evaluates every proposed assistant response or complete tool
 batch before text is published or any tool in that batch starts. It returns
 `allow`, `deny`, or `require_approval`. A denial is returned to the agent model
-as runtime feedback so it can refuse or choose a compliant alternative. An
-approval requirement creates a durable request on the Agent and waits for a
-human decision before executing the exact proposal.
+as runtime feedback so it gets one chance to refuse or choose a compliant
+alternative. If the same policy blocks the next proposal, Turn completes with
+a deterministic tool-free refusal instead of spending its remaining step
+budget in a policy loop. An approval requirement creates a durable request on
+the Agent and waits for a human decision before executing the exact proposal.
 
 Guardrails are not included in the main agent model's system prompt. This keeps
 policy enforcement in one place: the agent proposes the actual work, and the

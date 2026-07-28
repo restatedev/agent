@@ -37,6 +37,7 @@ type TurnState = {
   guardrails: Guardrail[];
   approvedGuardrails: Set<string>;
   rejectedGuardrails: Set<string>;
+  blockedGuardrails: Set<string>;
   messages: ModelMessage[];
   interrupt: restate.Future<string>;
   steeringInbox: ReturnType<typeof createSteeringInbox>;
@@ -94,7 +95,8 @@ function guardrailApprovalMessage(guardrailId: string): ModelMessage {
   };
 }
 
-function invalidateGuardrailApprovals(state: TurnState): void {
+function resetGuardrailsForSteering(state: TurnState): void {
+  state.blockedGuardrails.clear();
   if (
     state.approvedGuardrails.size === 0 &&
     state.rejectedGuardrails.size === 0
@@ -117,7 +119,7 @@ function guardrailFeedback(guardrailId: string, reason: string): ModelMessage {
       "[Runtime guardrail]",
       `The proposed action was blocked by guardrail ${JSON.stringify(guardrailId)}.`,
       `Reason: ${reason}`,
-      "Choose a compliant alternative or explain that the request cannot be completed. Do not repeat the blocked action.",
+      "Do not repeat the blocked action. Choose a clearly compliant alternative, or return a concise tool-free refusal.",
     ].join("\n"),
   };
 }
@@ -248,7 +250,7 @@ function* applyText(
   );
   if (next.type === "steering") {
     const steering = drainSteering(state);
-    invalidateGuardrailApprovals(state);
+    resetGuardrailsForSteering(state);
     state.messages.push(...steering.map(steeringMessage));
     return undefined;
   }
@@ -319,6 +321,7 @@ export const Turn = restate.service({
           guardrails: req.guardrails,
           approvedGuardrails: new Set(),
           rejectedGuardrails: new Set(),
+          blockedGuardrails: new Set(),
           messages: buildModelContext(req.history, req.summary, req.memories),
           interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
           steeringInbox: createSteeringInbox(),
@@ -368,7 +371,7 @@ export const Turn = restate.service({
             const steering = drainSteering(state);
             state.steps += 1;
             if (steering.length > 0) {
-              invalidateGuardrailApprovals(state);
+              resetGuardrailsForSteering(state);
             } else if ("approvedGuardrails" in step) {
               const newlyApproved = step.approvedGuardrails.filter(
                 (guardrailId) => !state.approvedGuardrails.has(guardrailId),
@@ -414,6 +417,17 @@ export const Turn = restate.service({
               }
 
               case "guardrail_blocked":
+                if (state.blockedGuardrails.has(step.guardrailId)) {
+                  result = {
+                    turnId,
+                    status: "completed",
+                    response:
+                      "I can’t complete that request because it conflicts with a configured policy.",
+                    consumedSteering: state.consumedSteering,
+                  };
+                  break steps;
+                }
+                state.blockedGuardrails.add(step.guardrailId);
                 state.messages.push(
                   guardrailFeedback(step.guardrailId, step.reason),
                 );

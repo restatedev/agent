@@ -73,7 +73,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - The policy decision is `allow`, `deny`, or `require_approval`. Model failure
   fails closed under the gateway's Restate retry policy.
 - `deny` returns a runtime policy message to the next agent step. The blocked
-  text is not published and no tool in a blocked batch runs.
+  text is not published and no tool in a blocked batch runs. If that model step
+  is blocked by the same policy again, Turn completes with a deterministic,
+  tool-free refusal instead of exhausting the step budget.
 - `require_approval` durably registers a request on the Agent and waits on a
   Turn-scoped signal. Approval resumes the exact proposal; rejection blocks it
   and prevents another approval request for that policy in the current
@@ -81,8 +83,8 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - An approval covers its policy for later steps in the same request. Several
   applicable approval policies are resolved one at a time before the proposal
   runs.
-- Steering changes the request. Turn clears approvals and rejections before the
-  next step so the updated work is evaluated again.
+- Steering changes the request. Turn clears approvals, rejections, and prior
+  block retries before the next step so the updated work is evaluated again.
 - The evaluator is model-based and therefore probabilistic. Once returned,
   however, its decision is enforced by deterministic Turn control flow.
 
