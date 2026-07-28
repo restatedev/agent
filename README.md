@@ -240,7 +240,7 @@ returns. Instructions and guardrail changes affect the next Turn.
 | `interrupt` | `{ reason, message? }` | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. An optional replacement message is appended immediately and queued for the next Turn. |
 | `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
-| `resolveApproval` | `{ approvalId, decision, reason? }` | Removes a pending approval and returns whether its decision reached the waiting tool or policy gate. A stale request is still removed when its Turn is no longer eligible. |
+| `resolveApproval` | `{ approvalId, decision, reason? }` | Resolves and removes a pending approval only while its Turn is still eligible to receive the decision. Returns whether the signal was delivered. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
 | `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |

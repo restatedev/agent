@@ -76,8 +76,8 @@ export const approvals = {
   },
 
   /**
-   * Removes a pending request and resolves its Turn-scoped signal when its
-   * originating Turn is still eligible to receive the decision.
+   * Resolves and removes a request only while its originating Turn remains
+   * eligible to receive the decision.
    */
   *resolve(
     resolution: ApprovalResolution,
@@ -90,14 +90,14 @@ export const approvals = {
     if (!request) {
       return false;
     }
+    if (request.turnId !== activeTurnId) {
+      return false;
+    }
 
     const remaining = pending.filter(
       (candidate) => candidate.approvalId !== resolution.approvalId,
     );
     storeApprovals(remaining);
-    if (request.turnId !== activeTurnId) {
-      return false;
-    }
 
     const decision: ApprovalDecision = {
       decision: resolution.decision,

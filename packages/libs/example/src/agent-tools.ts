@@ -193,8 +193,11 @@ const sleepTool = defineAgentTool({
       },
     };
   },
-  *complete({durationSeconds}): restate.Operation<ToolCompletion> {
-    yield* restate.sleep(durationSeconds * 1_000, "sleep");
+  *complete({durationSeconds}, context): restate.Operation<ToolCompletion> {
+    yield* restate.sleep(
+      durationSeconds * 1_000,
+      `sleep-${context.toolCallId}`,
+    );
     return {
       status: "succeeded",
       result: `Slept for ${durationSeconds} seconds`,
