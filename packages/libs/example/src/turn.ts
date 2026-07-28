@@ -20,7 +20,12 @@ import {
 } from "./turn-context.js";
 import {createPendingOperations} from "./turn-pending.js";
 import {createSteeringInbox} from "./turn-steering.js";
-import {agentStep, settleStep, type ToolStep} from "./turn-step.js";
+import {
+  agentStep,
+  type GuardrailDecisions,
+  settleStep,
+  type ToolStep,
+} from "./turn-step.js";
 import {
   type Guardrail,
   type ProgressReport,
@@ -50,6 +55,24 @@ type TurnState = {
 const MAX_STEPS = 8;
 const MAX_TOOL_CALLS = 24;
 
+function createTurnState(req: TurnRequest, turnId: string): TurnState {
+  return {
+    context: {agentId: req.agentId, turnId},
+    instructions: req.instructions,
+    guardrails: req.guardrails,
+    approvedGuardrails: new Set(),
+    rejectedGuardrails: new Set(),
+    blockedGuardrails: new Set(),
+    messages: buildModelContext(req.history, req.summary, req.memories),
+    interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
+    steeringInbox: createSteeringInbox(),
+    consumedSteering: 0,
+    steps: 0,
+    toolCalls: 0,
+    pending: createPendingOperations(),
+  };
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -75,15 +98,6 @@ function toolBatchSummary(outcomes: ToolOutcome[]): string {
   return `Tool batch finished: ${succeeded} succeeded, ${failed} failed, ${pending} pending`;
 }
 
-function rememberGuardrailApprovals(
-  state: TurnState,
-  guardrailIds: string[],
-): void {
-  for (const guardrailId of guardrailIds) {
-    state.approvedGuardrails.add(guardrailId);
-  }
-}
-
 function guardrailApprovalMessage(guardrailId: string): ModelMessage {
   return {
     role: "user",
@@ -93,6 +107,25 @@ function guardrailApprovalMessage(guardrailId: string): ModelMessage {
       "The runtime will evaluate this policy again if steering changes the request.",
     ].join("\n"),
   };
+}
+
+// Guardrail decisions observed by a settled step become cross-step state: an
+// approval covers its policy for the rest of the current request, and a human
+// rejection prevents reopening approval for it.
+function commitGuardrailDecisions(
+  state: TurnState,
+  decisions: GuardrailDecisions,
+): void {
+  const newlyApproved = decisions.approvedGuardrails.filter(
+    (guardrailId) => !state.approvedGuardrails.has(guardrailId),
+  );
+  for (const guardrailId of newlyApproved) {
+    state.approvedGuardrails.add(guardrailId);
+  }
+  state.messages.push(...newlyApproved.map(guardrailApprovalMessage));
+  for (const guardrailId of decisions.rejectedGuardrails) {
+    state.rejectedGuardrails.add(guardrailId);
+  }
 }
 
 function resetGuardrailsForSteering(state: TurnState): void {
@@ -290,6 +323,115 @@ function retainInterruptedTools(
   );
 }
 
+// Runs bounded agent steps until the turn completes, is interrupted, or
+// exhausts a budget. Every exit path returns exactly one outcome; failures
+// propagate to the caller.
+function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
+  while (state.steps < MAX_STEPS) {
+    yield* reportProgress(
+      state.context,
+      "thinking",
+      state.steps === 0
+        ? "Planning the turn"
+        : `Planning agent step ${state.steps + 1}`,
+    );
+
+    const task = restate.spawn(
+      agentStep({
+        context: state.context,
+        instructions: state.instructions,
+        messages: [...state.messages],
+        guardrails: state.guardrails,
+        approvedGuardrails: [...state.approvedGuardrails],
+        rejectedGuardrails: [...state.rejectedGuardrails],
+        stepNumber: state.steps + 1,
+        remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
+      }),
+    );
+    const step = yield* settleStep(task, state.interrupt);
+
+    if (step.type === "interrupted") {
+      if (step.tools) {
+        // Approvals the interrupted step obtained still cover the guardrail
+        // check on the finalization text; no approval message is pushed
+        // during shutdown.
+        for (const guardrailId of step.tools.approvedGuardrails) {
+          state.approvedGuardrails.add(guardrailId);
+        }
+        retainInterruptedTools(state, step.tools, step.reason);
+      }
+      return yield* finalizeStoppedTurn(state, step.reason);
+    }
+
+    const steering = drainSteering(state);
+    state.steps += 1;
+    if (steering.length > 0) {
+      resetGuardrailsForSteering(state);
+    } else {
+      commitGuardrailDecisions(state, step);
+    }
+
+    // A text/error response produced before buffered steering arrived has no
+    // side effects. Let the next step see the new messages.
+    if (
+      (step.type === "text" ||
+        step.type === "error" ||
+        step.type === "guardrail_blocked") &&
+      steering.length > 0
+    ) {
+      state.messages.push(...steering.map(steeringMessage));
+      continue;
+    }
+
+    switch (step.type) {
+      case "error":
+        state.messages.push({
+          role: "user",
+          content: `Your last response could not be used (${step.message}). Try again with the available tools or give a final answer.`,
+        });
+        continue;
+
+      case "text": {
+        const outcome = yield* applyText(state, step.content);
+        if (outcome) {
+          return outcome;
+        }
+        continue;
+      }
+
+      case "guardrail_blocked":
+        if (state.blockedGuardrails.has(step.guardrailId)) {
+          return {
+            turnId: state.context.turnId,
+            status: "completed",
+            response:
+              "I can’t complete that request because it conflicts with a configured policy.",
+            consumedSteering: state.consumedSteering,
+          };
+        }
+        state.blockedGuardrails.add(step.guardrailId);
+        state.messages.push(guardrailFeedback(step.guardrailId, step.reason));
+        continue;
+
+      case "tool_budget_exceeded":
+        return yield* finalizeStoppedTurn(
+          state,
+          `The agent reached its ${MAX_TOOL_CALLS}-tool-call limit.`,
+        );
+
+      case "tools":
+        state.toolCalls += step.action.calls.length;
+        yield* applyTools(state, step, steering);
+        continue;
+    }
+  }
+
+  return yield* finalizeStoppedTurn(
+    state,
+    `The agent reached its ${MAX_STEPS}-step limit.`,
+  );
+}
+
 export const Turn = restate.service({
   name: "Turn",
   handlers: {
@@ -298,154 +440,15 @@ export const Turn = restate.service({
     run: restate.schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): restate.Operation<void> {
-        const turnId = restate.handlerRequest().id;
-        const state: TurnState = {
-          context: {
-            agentId: req.agentId,
-            turnId,
-          },
-          instructions: req.instructions,
-          guardrails: req.guardrails,
-          approvedGuardrails: new Set(),
-          rejectedGuardrails: new Set(),
-          blockedGuardrails: new Set(),
-          messages: buildModelContext(req.history, req.summary, req.memories),
-          interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
-          steeringInbox: createSteeringInbox(),
-          consumedSteering: 0,
-          steps: 0,
-          toolCalls: 0,
-          pending: createPendingOperations(),
-        };
-
+        const state = createTurnState(req, restate.handlerRequest().id);
         try {
-          let result: TurnOutcome | undefined;
-          steps: while (state.steps < MAX_STEPS) {
-            yield* reportProgress(
-              state.context,
-              "thinking",
-              state.steps === 0
-                ? "Planning the turn"
-                : `Planning agent step ${state.steps + 1}`,
-            );
-
-            const task = restate.spawn(
-              agentStep({
-                context: state.context,
-                instructions: state.instructions,
-                messages: [...state.messages],
-                guardrails: state.guardrails,
-                approvedGuardrails: [...state.approvedGuardrails],
-                rejectedGuardrails: [...state.rejectedGuardrails],
-                stepNumber: state.steps + 1,
-                remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
-              }),
-            );
-            const step = yield* settleStep(task, state.interrupt);
-
-            if (step.type === "interrupted") {
-              if (step.tools) {
-                rememberGuardrailApprovals(
-                  state,
-                  step.tools.approvedGuardrails,
-                );
-                retainInterruptedTools(state, step.tools, step.reason);
-              }
-              result = yield* finalizeStoppedTurn(state, step.reason);
-              break;
-            }
-
-            const steering = drainSteering(state);
-            state.steps += 1;
-            if (steering.length > 0) {
-              resetGuardrailsForSteering(state);
-            } else if ("approvedGuardrails" in step) {
-              const newlyApproved = step.approvedGuardrails.filter(
-                (guardrailId) => !state.approvedGuardrails.has(guardrailId),
-              );
-              rememberGuardrailApprovals(state, newlyApproved);
-              state.messages.push(
-                ...newlyApproved.map(guardrailApprovalMessage),
-              );
-              if ("rejectedGuardrails" in step) {
-                for (const guardrailId of step.rejectedGuardrails) {
-                  state.rejectedGuardrails.add(guardrailId);
-                }
-              }
-            }
-
-            // A text/error response produced before buffered steering arrived
-            // has no side effects. Let the next step see the new messages.
-            if (
-              (step.type === "text" ||
-                step.type === "error" ||
-                step.type === "guardrail_blocked") &&
-              steering.length > 0
-            ) {
-              state.messages.push(...steering.map(steeringMessage));
-              continue;
-            }
-
-            switch (step.type) {
-              case "error":
-                state.messages.push({
-                  role: "user",
-                  content: `Your last response could not be used (${step.message}). Try again with the available tools or give a final answer.`,
-                });
-                continue;
-
-              case "text": {
-                const completed = yield* applyText(state, step.content);
-                if (!completed) {
-                  continue;
-                }
-                result = completed;
-                break steps;
-              }
-
-              case "guardrail_blocked":
-                if (state.blockedGuardrails.has(step.guardrailId)) {
-                  result = {
-                    turnId,
-                    status: "completed",
-                    response:
-                      "I can’t complete that request because it conflicts with a configured policy.",
-                    consumedSteering: state.consumedSteering,
-                  };
-                  break steps;
-                }
-                state.blockedGuardrails.add(step.guardrailId);
-                state.messages.push(
-                  guardrailFeedback(step.guardrailId, step.reason),
-                );
-                continue;
-
-              case "tool_budget_exceeded":
-                result = yield* finalizeStoppedTurn(
-                  state,
-                  `The agent reached its ${MAX_TOOL_CALLS}-tool-call limit.`,
-                );
-                break steps;
-
-              case "tools":
-                state.toolCalls += step.action.calls.length;
-                yield* applyTools(state, step, steering);
-                continue;
-            }
-          }
-
-          const outcome =
-            result ??
-            (yield* finalizeStoppedTurn(
-              state,
-              `The agent reached its ${MAX_STEPS}-step limit.`,
-            ));
+          const outcome = yield* executeTurn(state);
           yield* restate.sendClient(Agent, req.agentId).append(outcome);
         } catch (error) {
           yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
             yield* restate.sendClient(Agent, req.agentId).append({
-              turnId,
+              turnId: state.context.turnId,
               status: "interrupted",
               reason: "Turn cancelled",
               consumedSteering: state.consumedSteering,
@@ -454,7 +457,7 @@ export const Turn = restate.service({
           }
 
           yield* restate.sendClient(Agent, req.agentId).append({
-            turnId,
+            turnId: state.context.turnId,
             status: "failed",
             error: errorMessage(error),
             consumedSteering: state.consumedSteering,

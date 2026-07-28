@@ -21,6 +21,15 @@ import {
 
 const MODEL_SCOPE = "openai";
 
+// One durable run per handler invocation; Restate owns the retry policy and
+// the AI SDK's internal retries stay disabled.
+const MODEL_RETRY = {
+  maxAttempts: 4,
+  initialInterval: 500,
+  maxInterval: 5_000,
+  exponentiationFactor: 2,
+};
+
 // Model calls are service handlers so Restate can apply scope-based concurrency
 // control before provider requests start.
 export const ModelGateway = restate.service({
@@ -31,15 +40,7 @@ export const ModelGateway = restate.service({
       function* (request: AgentModelRequest): restate.Operation<ModelResult> {
         return yield* restate.run(
           ({signal}) => completeAgent(request, signal),
-          {
-            name: "agent-model",
-            retry: {
-              maxAttempts: 4,
-              initialInterval: 500,
-              maxInterval: 5_000,
-              exponentiationFactor: 2,
-            },
-          },
+          {name: "agent-model", retry: MODEL_RETRY},
         );
       },
     ),
@@ -54,15 +55,7 @@ export const ModelGateway = restate.service({
       ): restate.Operation<GuardrailDecision> {
         return yield* restate.run(
           ({signal}) => evaluateGuardrails(request, signal),
-          {
-            name: "guardrail-model",
-            retry: {
-              maxAttempts: 4,
-              initialInterval: 500,
-              maxInterval: 5_000,
-              exponentiationFactor: 2,
-            },
-          },
+          {name: "guardrail-model", retry: MODEL_RETRY},
         );
       },
     ),
@@ -74,22 +67,12 @@ function agentLimitKey(model: string, agentId: string): string {
   return `${model}/${agent}`;
 }
 
-// Agent-step model work goes through the scoped gateway. The `openai` scope is
-// the provider-wide budget; the two limit-key levels are model and agent.
-export function* callModel(
-  request: AgentModelRequest & {agentId: string},
-): restate.Operation<ModelResult> {
-  const {agentId, ...modelRequest} = request;
-  const call = restate
-    .scope(MODEL_SCOPE)
-    .client(ModelGateway)
-    .complete(
-      modelRequest,
-      Opts.from({
-        limitKey: agentLimitKey(AGENT_MODEL, agentId),
-        name: "agent-model",
-      }),
-    );
+// Await one scoped gateway call. The caller must also propagate interruption:
+// cancelling the child invocation releases its admission slot immediately
+// instead of leaving an abandoned request to run to completion.
+function* awaitCancellable<T>(
+  call: restate.ClientFuture<T>,
+): restate.Operation<T> {
   const invocation = yield* call.invocation;
   try {
     return yield* call;
@@ -104,30 +87,40 @@ export function* callModel(
   }
 }
 
+// Agent-step model work goes through the scoped gateway. The `openai` scope is
+// the provider-wide budget; the two limit-key levels are model and agent.
+export function* callModel(
+  request: AgentModelRequest & {agentId: string},
+): restate.Operation<ModelResult> {
+  const {agentId, ...modelRequest} = request;
+  return yield* awaitCancellable(
+    restate
+      .scope(MODEL_SCOPE)
+      .client(ModelGateway)
+      .complete(
+        modelRequest,
+        Opts.from({
+          limitKey: agentLimitKey(AGENT_MODEL, agentId),
+          name: "agent-model",
+        }),
+      ),
+  );
+}
+
 export function* callGuardrailModel(
   request: GuardrailEvaluationRequest & {agentId: string},
 ): restate.Operation<GuardrailDecision> {
   const {agentId, ...evaluationRequest} = request;
-  const call = restate
-    .scope(MODEL_SCOPE)
-    .client(ModelGateway)
-    .evaluateGuardrails(
-      evaluationRequest,
-      Opts.from({
-        limitKey: agentLimitKey(GUARDRAIL_MODEL, agentId),
-        name: "guardrail-model",
-      }),
-    );
-  const invocation = yield* call.invocation;
-  try {
-    return yield* call;
-  } catch (error) {
-    if (
-      error instanceof restate.InterruptedError ||
-      error instanceof CancelledError
-    ) {
-      invocation.cancel();
-    }
-    throw error;
-  }
+  return yield* awaitCancellable(
+    restate
+      .scope(MODEL_SCOPE)
+      .client(ModelGateway)
+      .evaluateGuardrails(
+        evaluationRequest,
+        Opts.from({
+          limitKey: agentLimitKey(GUARDRAIL_MODEL, agentId),
+          name: "guardrail-model",
+        }),
+      ),
+  );
 }

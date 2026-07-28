@@ -33,31 +33,29 @@ import {
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
 
-export type ToolStep = {
-  type: "tools";
-  action: ToolCallAction;
-  outcomes: ToolOutcome[];
-  approvedGuardrails: string[];
-};
-
-type TextStep = Extract<ModelResult, {type: "text"}> & {
-  approvedGuardrails: string[];
-};
-
-type GuardrailBlockedStep = {
-  type: "guardrail_blocked";
-  guardrailId: string;
-  reason: string;
+// Guardrail decisions observed while producing one step. Every settled step
+// carries both lists (possibly empty), so Turn commits them into cross-step
+// state without inspecting the step type.
+export type GuardrailDecisions = {
   approvedGuardrails: string[];
   rejectedGuardrails: string[];
 };
 
+export type ToolStep = GuardrailDecisions & {
+  type: "tools";
+  action: ToolCallAction;
+  outcomes: ToolOutcome[];
+};
+
 type AgentStepResult =
-  | TextStep
-  | Extract<ModelResult, {type: "error"}>
+  | (GuardrailDecisions & Extract<ModelResult, {type: "text" | "error"}>)
   | ToolStep
-  | GuardrailBlockedStep
-  | {type: "tool_budget_exceeded"}
+  | (GuardrailDecisions & {
+      type: "guardrail_blocked";
+      guardrailId: string;
+      reason: string;
+    })
+  | (GuardrailDecisions & {type: "tool_budget_exceeded"})
   | {type: "interrupted"; reason: string; tools?: ToolStep};
 
 class AgentStepInterrupt extends InterruptedError {}
@@ -122,14 +120,12 @@ function* enforceGuardrails({
   rejectedGuardrails: string[];
   stepNumber: number;
 }): Operation<
-  | {decision: "allow"; approvedGuardrails: string[]}
-  | {
+  | ({decision: "allow"} & GuardrailDecisions)
+  | ({
       decision: "blocked";
       guardrailId: string;
       reason: string;
-      approvedGuardrails: string[];
-      rejectedGuardrails: string[];
-    }
+    } & GuardrailDecisions)
 > {
   const approved = [...approvedGuardrails];
   let approvalNumber = 1;
@@ -137,7 +133,11 @@ function* enforceGuardrails({
   while (true) {
     const remaining = guardrails.filter(({id}) => !approved.includes(id));
     if (remaining.length === 0) {
-      return {decision: "allow", approvedGuardrails: approved};
+      return {
+        decision: "allow",
+        approvedGuardrails: approved,
+        rejectedGuardrails: [],
+      };
     }
 
     const decision = yield* callGuardrailModel({
@@ -149,7 +149,11 @@ function* enforceGuardrails({
       action,
     });
     if (decision.decision === "allow") {
-      return {decision: "allow", approvedGuardrails: approved};
+      return {
+        decision: "allow",
+        approvedGuardrails: approved,
+        rejectedGuardrails: [],
+      };
     }
     if (decision.decision === "deny") {
       return {
@@ -217,7 +221,7 @@ export function* agentStep({
     | {
         action: ToolCallAction;
         tasks: Task<ToolOutcome>[];
-        approvedGuardrails: string[];
+        decisions: GuardrailDecisions;
       }
     | undefined;
 
@@ -229,13 +233,17 @@ export function* agentStep({
       tools: agentTools.manifests,
     });
     if (action.type === "error") {
-      return action;
+      return {...action, approvedGuardrails: [], rejectedGuardrails: []};
     }
     if (
       action.type === "tool_calls" &&
       action.calls.length > remainingToolCalls
     ) {
-      return {type: "tool_budget_exceeded"};
+      return {
+        type: "tool_budget_exceeded",
+        approvedGuardrails: [],
+        rejectedGuardrails: [],
+      };
     }
 
     const guarded = yield* enforceGuardrails({
@@ -248,30 +256,26 @@ export function* agentStep({
       rejectedGuardrails,
       stepNumber,
     });
+    const decisions = {
+      approvedGuardrails: guarded.approvedGuardrails,
+      rejectedGuardrails: guarded.rejectedGuardrails,
+    };
     if (guarded.decision === "blocked") {
       return {
         type: "guardrail_blocked",
         guardrailId: guarded.guardrailId,
         reason: guarded.reason,
-        approvedGuardrails: guarded.approvedGuardrails,
-        rejectedGuardrails: guarded.rejectedGuardrails,
+        ...decisions,
       };
     }
     if (action.type === "text") {
-      return {
-        ...action,
-        approvedGuardrails: guarded.approvedGuardrails,
-      };
+      return {...action, ...decisions};
     }
 
     const tasks = action.calls.map((call) =>
       spawn(agentTools.execute(call, context)),
     );
-    activeTools = {
-      action,
-      tasks,
-      approvedGuardrails: guarded.approvedGuardrails,
-    };
+    activeTools = {action, tasks, decisions};
     yield* sendClient(Agent, context.agentId).reportProgress({
       turnId: context.turnId,
       phase: "tools",
@@ -283,7 +287,7 @@ export function* agentStep({
       type: "tools",
       action,
       outcomes: yield* all(tasks),
-      approvedGuardrails: guarded.approvedGuardrails,
+      ...decisions,
     };
   } catch (error) {
     if (!activeTools) {
@@ -293,7 +297,7 @@ export function* agentStep({
       return {type: "interrupted", reason: error.message};
     }
 
-    const {action, tasks, approvedGuardrails} = activeTools;
+    const {action, tasks, decisions} = activeTools;
     for (const task of tasks) {
       task.interrupt(error);
     }
@@ -307,7 +311,7 @@ export function* agentStep({
       tools: {
         type: "tools",
         action,
-        approvedGuardrails,
+        ...decisions,
         outcomes: settled.map(
           (result, index): ToolOutcome =>
             result.status === "fulfilled"

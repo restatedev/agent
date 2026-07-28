@@ -38,13 +38,13 @@ export type ProgressReport = z.infer<typeof ProgressReportSchema>;
 // Durable prompt context owned by one Agent. Instructions are authoritative
 // user configuration, memories are model-managed data, and guardrails are
 // natural-language policies enforced against proposed agent actions.
-export const MemoryEntrySchema = z.object({
+const MemoryEntrySchema = z.object({
   key: z.string().trim().min(1),
   content: z.string().trim().min(1),
 });
 export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
 
-export const MemoryChangeSchema = z.discriminatedUnion("operation", [
+const MemoryChangeSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("set"),
     key: z.string().trim().min(1),
@@ -140,7 +140,7 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-const ConversationEntrySchema = z.union([
+const ConversationEntrySchema = z.discriminatedUnion("role", [
   z.object({
     role: z.literal("user"),
     text: z.string(),

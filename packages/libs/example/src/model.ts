@@ -151,19 +151,15 @@ export async function withOpenAI<T>(
   try {
     return await call(openAI());
   } catch (error) {
-    rethrowProviderError(error);
+    // Restate owns retries. Invalid requests and authentication failures are
+    // terminal; throttling and transient provider failures remain retryable.
+    if (APICallError.isInstance(error) && !error.isRetryable) {
+      throw new TerminalError(`OpenAI rejected the request: ${error.message}`, {
+        errorCode: error.statusCode,
+      });
+    }
+    throw error;
   }
-}
-
-function rethrowProviderError(error: unknown): never {
-  // Restate owns retries. Invalid requests and authentication failures are
-  // terminal; throttling and transient provider failures remain retryable.
-  if (APICallError.isInstance(error) && !error.isRetryable) {
-    throw new TerminalError(`OpenAI rejected the request: ${error.message}`, {
-      errorCode: error.statusCode,
-    });
-  }
-  throw error;
 }
 
 function errorMessage(error: unknown): string {
@@ -188,18 +184,16 @@ function modelTools(tools: ToolManifest[]): ToolSet {
 }
 
 function modelSystem({instructions}: AgentModelRequest): string {
+  if (!instructions) {
+    return AGENT_SYSTEM;
+  }
   return [
     AGENT_SYSTEM,
-    instructions
-      ? [
-          "[Persistent user instructions]",
-          "These instructions apply across turns.",
-          instructions,
-        ].join("\n")
-      : undefined,
-  ]
-    .filter((section): section is string => section !== undefined)
-    .join("\n\n");
+    "",
+    "[Persistent user instructions]",
+    "These instructions apply across turns.",
+    instructions,
+  ].join("\n");
 }
 
 export async function evaluateGuardrails(

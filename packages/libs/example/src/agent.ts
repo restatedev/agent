@@ -108,6 +108,10 @@ const SetGuardrailsSchema = z.object({
     ),
 });
 
+// Internal coordination handlers are high-volume and their completed
+// invocations carry no information worth retaining.
+const noRetention = {idempotencyRetention: 0, journalRetention: 0};
+
 export const Agent = restate.object({
   name: "Agent",
   handlers: {
@@ -428,42 +432,19 @@ export const Agent = restate.object({
   options: {
     enableLazyState: true,
     handlers: {
-      append: {
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      watchHistory: {
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      updateMemory: {
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      reportProgress: {
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      requestApproval: {
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      cancelApproval: {
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      approvals: {shared: true, idempotencyRetention: 0, journalRetention: 0},
-      history: {shared: true, idempotencyRetention: 0, journalRetention: 0},
-      profile: {shared: true, idempotencyRetention: 0, journalRetention: 0},
-      compact: {
-        shared: true,
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      applyCompaction: {
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
+      // Coordination paths keep no completed-invocation state; the user-facing
+      // conversation handlers retain the server defaults.
+      append: noRetention,
+      watchHistory: noRetention,
+      updateMemory: noRetention,
+      reportProgress: noRetention,
+      requestApproval: noRetention,
+      cancelApproval: noRetention,
+      applyCompaction: noRetention,
+      approvals: {shared: true, ...noRetention},
+      history: {shared: true, ...noRetention},
+      profile: {shared: true, ...noRetention},
+      compact: {shared: true, ...noRetention},
     },
   },
 });

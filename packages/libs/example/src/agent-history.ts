@@ -120,18 +120,18 @@ function storeWatchers(watchers: HistoryWatcher[]): void {
 
 function* notifyWatchers(nextSequence: number): restate.Operation<void> {
   const watchers = yield* readWatchers();
-  const waiting = watchers.filter(
-    ({fromSequence}) => fromSequence >= nextSequence,
+  const ready = watchers.filter(
+    ({fromSequence}) => fromSequence < nextSequence,
   );
-  if (waiting.length === watchers.length) {
+  if (ready.length === 0) {
     return;
   }
 
-  storeWatchers(waiting);
-  for (const watcher of watchers) {
-    if (watcher.fromSequence < nextSequence) {
-      restate.resolveAwakeable<void>(watcher.awakeableId);
-    }
+  storeWatchers(
+    watchers.filter(({fromSequence}) => fromSequence >= nextSequence),
+  );
+  for (const watcher of ready) {
+    restate.resolveAwakeable<void>(watcher.awakeableId);
   }
 }
 
@@ -329,13 +329,15 @@ export const history = {
 
     delete meta.compaction;
     restate.state().set(HISTORY_META, meta);
-    if (result.status === "failed" || !result.summary.trim()) {
+    if (result.status === "failed") {
       return false;
     }
 
+    // ConversationCompactionResultSchema already trims the summary and
+    // rejects an empty one at the applyCompaction handler boundary.
     restate.state().set(HISTORY_SUMMARY, {
       through: pending.through,
-      text: result.summary.trim(),
+      text: result.summary,
     } satisfies ConversationSummary);
     return true;
   },

@@ -7,7 +7,7 @@
 import {setTimeout} from "node:timers/promises";
 import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import type {ModelMessage, ToolModelMessage} from "ai";
+import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
 import type {ToolCall, ToolManifest} from "./model.js";
@@ -71,11 +71,10 @@ function validationMessage(error: z.ZodError): string {
     .join("; ");
 }
 
-function defineAgentTool<
-  const Name extends string,
-  Schema extends z.ZodType,
->(definition: {
-  name: Name;
+// The schema type parameter exists only to type `run`/`complete` inputs from
+// `inputSchema`; callers see a plain AgentTool.
+function defineAgentTool<Schema extends z.ZodType>(definition: {
+  name: string;
   description: string;
   inputSchema: Schema;
   run(
@@ -86,7 +85,7 @@ function defineAgentTool<
     input: z.output<Schema>,
     context: ToolCallContext,
   ): restate.Operation<ToolCompletion>;
-}): AgentTool & Pick<typeof definition, "name" | "inputSchema"> {
+}): AgentTool {
   return {
     name: definition.name,
     description: definition.description,
@@ -364,6 +363,23 @@ function toManifest(tool: AgentTool): ToolManifest {
   };
 }
 
+// The JSON payload the model sees for one tool result.
+function toolResultValue(outcome: ToolOutcome): JSONValue {
+  switch (outcome.status) {
+    case "succeeded":
+      return {ok: true, result: outcome.result};
+    case "failed":
+      return {ok: false, error: outcome.error};
+    case "pending":
+      return {ok: true, pending: true, ...outcome.result};
+    case "cancel_requested":
+      return {
+        ok: false,
+        error: `cancellation request for ${outcome.operationId} was not applied`,
+      };
+  }
+}
+
 function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
   return {
     role: "tool",
@@ -371,20 +387,7 @@ function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
       type: "tool-result",
       toolCallId: outcome.call.toolCallId,
       toolName: outcome.call.toolName,
-      output: {
-        type: "json",
-        value:
-          outcome.status === "succeeded"
-            ? {ok: true, result: outcome.result}
-            : outcome.status === "failed"
-              ? {ok: false, error: outcome.error}
-              : outcome.status === "pending"
-                ? {ok: true, pending: true, ...outcome.result}
-                : {
-                    ok: false,
-                    error: `cancellation request for ${outcome.operationId} was not applied`,
-                  },
-      },
+      output: {type: "json", value: toolResultValue(outcome)},
     })),
   };
 }

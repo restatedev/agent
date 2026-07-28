@@ -193,14 +193,7 @@ function guardrailApprovalEvents(
 }
 
 function protectedWeatherRan(history: HistoryReader, turnId: string): boolean {
-  return history.entries.some(
-    ({entry}) =>
-      entry.role === "event" &&
-      entry.type === "progress" &&
-      entry.turnId === turnId &&
-      entry.phase === "tools" &&
-      entry.message.includes("getWeather"),
-  );
+  return toolStartCount(history, turnId, "getWeather") > 0;
 }
 
 function toolStartCount(
