@@ -51,8 +51,10 @@ function agentKey(): string {
 const DEFAULT_ASK =
   "What is the weather in the top 10 European capitals? Also sleep for 4 minutes.";
 
+const MessageSchema = z.string().trim().min(1);
+
 const AskRequestSchema = z.object({
-  message: z.string().default(DEFAULT_ASK),
+  message: MessageSchema.default(DEFAULT_ASK),
 });
 
 const AskResultSchema = z.object({
@@ -117,7 +119,7 @@ export const Agent = restate.object({
     // was requested; false means there was nothing to stop (idle, or already
     // winding down from an earlier interrupt) and nothing happened.
     interrupt: restate.schemas(
-      {input: z.string(), output: z.boolean()},
+      {input: MessageSchema, output: z.boolean()},
       function* (reason): restate.Operation<boolean> {
         const turnId = yield* activeTurn.interrupt(reason);
         if (!turnId) {
@@ -138,7 +140,7 @@ export const Agent = restate.object({
     // this as an append-only lifecycle event. Returns false when no turn is
     // listening, in which case the queue remains untouched.
     steer: restate.schemas(
-      {input: z.string(), output: z.boolean()},
+      {input: MessageSchema, output: z.boolean()},
       function* (message): restate.Operation<boolean> {
         const steering = yield* activeTurn.steer(message);
         if (!steering) {
@@ -211,14 +213,6 @@ export const Agent = restate.object({
             applied: false,
             error:
               "memory update rejected because its Turn is no longer active",
-          };
-        }
-
-        const guardrail = yield* profile.denial("memory.write");
-        if (guardrail) {
-          return {
-            applied: false,
-            error: `capability memory.write is denied by guardrail: ${guardrail.reason}`,
           };
         }
 

@@ -21,7 +21,7 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   data. It owns no work after returning.
 - `turn-steering.ts` owns one background signal receiver and a transient FIFO
   for steering accepted during the Turn.
-- `agent-pending.ts` owns tool tasks that survive across steps, including
+- `turn-pending.ts` owns tool tasks that survive across steps, including
   completion races, selective cancellation, and cleanup.
 - `agent-tools.ts` owns concrete tool definitions, validation, execution,
   capability checks, completion, and conversion of outcomes into model

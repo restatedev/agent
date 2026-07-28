@@ -11,14 +11,16 @@ The application is split into a few concrete parts:
 
 - **`Agent`** is a Virtual Object keyed by `agentId`. It owns the durable
   conversation history, tracks the active turn, routes queued messages, and
-  holds pending human approvals. Every message and lifecycle event is
-  recorded when its exclusive handler observes it; pending state controls
-  execution without reordering the transcript. Alongside the conversation
-  handlers, `approvals` and `resolveApproval` expose the human-in-the-loop
-  boundary. Semantic progress is appended to the same sequenced transcript,
-  which clients consume through the cursor-based `history` handler. `ask`
-  starts work when idle and queues when busy; clients explicitly select `steer`
-  or `interrupt` when they want to affect the active turn.
+  owns the persistent instructions, memories, guardrails, and pending human
+  approvals. Every message and lifecycle event is recorded when its exclusive
+  handler observes it; pending state controls execution without reordering the
+  transcript. Alongside the conversation handlers, `profile` exposes durable
+  prompt context, while `approvals` and `resolveApproval` expose the
+  human-in-the-loop boundary. Semantic progress is appended to the same
+  sequenced transcript, which clients consume through the cursor-based
+  `history` handler. `ask` starts work when idle and queues when busy; clients
+  explicitly select `steer` or `interrupt` when they want to affect the active
+  turn.
 - **`Turn`** has no service state, but one durable invocation owns the
   transient agent-turn state machine: live messages, budgets, steering, and
   pending operations. It repeatedly spawns one bounded agent step, applies its
@@ -29,7 +31,7 @@ The application is split into a few concrete parts:
 - **`agentStep`** is the functional model → foreground-tools seam. It receives
   a message snapshot and remaining tool budget, runs independent tool calls in
   parallel, and owns no work after returning. `turn-steering.ts` drains durable
-  steering signals into a Turn-scoped inbox, while `agent-pending.ts` owns
+  steering signals into a Turn-scoped inbox, while `turn-pending.ts` owns
   long-lived sleeps and approvals across steps. The model can selectively stop
   those tasks through `cancelOperation`; progress remains visible in the
   canonical transcript but is omitted from future model context and
@@ -77,13 +79,15 @@ Restate provides the application-level guarantees that an agent needs:
 
 - `packages/libs/example/src/agent.ts` — conversation controller
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
+- `packages/libs/example/src/agent-profile.ts` — durable instructions, memories,
+  and capability guardrails
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signals
 - `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
 - `packages/libs/example/src/turn-step.ts` — bounded step execution and supervision
 - `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
-- `packages/libs/example/src/agent-pending.ts` — cross-step pending tool tasks
+- `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — AI SDK integration

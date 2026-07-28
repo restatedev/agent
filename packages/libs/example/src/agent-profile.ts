@@ -21,18 +21,6 @@ const MEMORIES = "profile/memories";
 const GUARDRAILS = "profile/guardrails";
 const MAX_MEMORIES = 32;
 
-function* readMemories(): Operation<MemoryEntry[]> {
-  return (yield* sharedState().get<MemoryEntry[]>(MEMORIES)) ?? [];
-}
-
-function store<T>(key: string, value: T | undefined): void {
-  if (value === undefined || (Array.isArray(value) && value.length === 0)) {
-    state().clear(key);
-  } else {
-    state().set(key, value);
-  }
-}
-
 /**
  * Handler-scoped access to persistent prompt context for the current Agent.
  *
@@ -55,21 +43,23 @@ export const profile = {
 
   setInstructions(instructions: string | null): void {
     const value = instructions?.trim();
-    store(INSTRUCTIONS, value || undefined);
+    if (value) {
+      state().set(INSTRUCTIONS, value);
+    } else {
+      state().clear(INSTRUCTIONS);
+    }
   },
 
   setGuardrails(guardrails: Guardrail[]): void {
-    store(GUARDRAILS, guardrails);
-  },
-
-  *denial(capability: string): Operation<Guardrail | undefined> {
-    const guardrails =
-      (yield* sharedState().get<Guardrail[]>(GUARDRAILS)) ?? [];
-    return guardrails.find((guardrail) => guardrail.capability === capability);
+    if (guardrails.length > 0) {
+      state().set(GUARDRAILS, guardrails);
+    } else {
+      state().clear(GUARDRAILS);
+    }
   },
 
   *applyMemory(changes: MemoryChange[]): Operation<MemoryUpdateResult> {
-    const memories = yield* readMemories();
+    const memories = (yield* sharedState().get<MemoryEntry[]>(MEMORIES)) ?? [];
     const updated = [...memories];
 
     for (const change of changes) {
@@ -92,7 +82,11 @@ export const profile = {
       };
     }
 
-    store(MEMORIES, updated);
+    if (updated.length > 0) {
+      state().set(MEMORIES, updated);
+    } else {
+      state().clear(MEMORIES);
+    }
     return {applied: true, memoryCount: updated.length};
   },
 };

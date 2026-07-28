@@ -156,11 +156,8 @@ export type HistoryPage = z.infer<typeof HistoryPageSchema>;
 // Input to a turn: which Agent object it belongs to, its stable profile
 // snapshot, an optional checkpoint over older entries, and the exact
 // uncompacted transcript. New messages are already appended before dispatch.
-export const TurnRequestSchema = z.object({
+export const TurnRequestSchema = AgentProfileSchema.extend({
   agentId: z.string(),
-  instructions: z.string().optional(),
-  memories: z.array(MemoryEntrySchema),
-  guardrails: z.array(GuardrailSchema),
   summary: z.string().min(1).optional(),
   history: z.array(ConversationEntrySchema),
 });

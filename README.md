@@ -39,7 +39,7 @@ flowchart LR
   message snapshot and remaining tool budget, performs one model call, runs
   that response's foreground tools in parallel, and owns no work after
   returning. `turn-steering.ts` drains durable steering signals into a
-  Turn-scoped inbox, while `agent-pending.ts` owns tasks that survive across
+  Turn-scoped inbox, while `turn-pending.ts` owns tasks that survive across
   steps.
 - `agent-tools.ts` owns the concrete tools. Each definition keeps its model
   description, input schema, validation, local durable behavior, and result
@@ -425,7 +425,7 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
 - `packages/libs/example/src/turn-step.ts` — bounded step execution and supervision
 - `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
-- `packages/libs/example/src/agent-pending.ts` — cross-step pending tool tasks
+- `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — model protocol and provider calls

@@ -7,7 +7,6 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
-import {createPendingOperations} from "./agent-pending.js";
 import {
   type AgentToolContext,
   agentTools,
@@ -19,6 +18,7 @@ import {
   interruptionInstruction,
   steeringMessage,
 } from "./turn-context.js";
+import {createPendingOperations} from "./turn-pending.js";
 import {createSteeringInbox} from "./turn-steering.js";
 import {agentStep, settleStep, type ToolStep} from "./turn-step.js";
 import {

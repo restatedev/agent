@@ -2,7 +2,7 @@
 // calls. Provider-specific inference remains in model.ts.
 
 import {createHash} from "node:crypto";
-import {Opts} from "@restatedev/restate-sdk";
+import {CancelledError, Opts} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {
   AGENT_MODEL,
@@ -54,7 +54,10 @@ export function* callModel(
   try {
     return yield* call;
   } catch (error) {
-    if (error instanceof restate.InterruptedError) {
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
       invocation.cancel();
     }
     throw error;

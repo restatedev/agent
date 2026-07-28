@@ -1,5 +1,6 @@
-// Pending tools outlive the agent step that started them. This registry owns
-// lookup, completion races, selective cancellation, and final cleanup.
+// Pending tools outlive the agent step that started them. This Turn-scoped
+// registry owns lookup, completion races, selective cancellation, and final
+// cleanup.
 
 import * as restate from "@restatedev/restate-sdk-gen";
 import {
