@@ -78,20 +78,23 @@ export const approvals = {
   /**
    * Resolves and removes a request only while its originating Turn remains
    * eligible to receive the decision.
+   *
+   * @returns The resolved request when the signal was delivered, allowing the
+   * Agent to record the complete decision in its transcript.
    */
   *resolve(
     resolution: ApprovalResolution,
     activeTurnId?: string,
-  ): restate.Operation<boolean> {
+  ): restate.Operation<ApprovalRequest | undefined> {
     const pending = yield* listApprovals();
     const request = pending.find(
       (candidate) => candidate.approvalId === resolution.approvalId,
     );
     if (!request) {
-      return false;
+      return undefined;
     }
     if (request.turnId !== activeTurnId) {
-      return false;
+      return undefined;
     }
 
     const remaining = pending.filter(
@@ -107,6 +110,6 @@ export const approvals = {
       .invocation(request.turnId)
       .signal<ApprovalDecision>(approvalSignalName(request.approvalId))
       .resolve(decision);
-    return true;
+    return request;
   },
 };

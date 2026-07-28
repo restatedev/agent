@@ -102,6 +102,14 @@ export const MemoryUpdateResultSchema = z.discriminatedUnion("applied", [
 ]);
 export type MemoryUpdateResult = z.infer<typeof MemoryUpdateResultSchema>;
 
+// The decision delivered to a waiting tool or policy gate over a signal and
+// retained in history after successful delivery.
+const ApprovalDecisionSchema = z.object({
+  decision: z.enum(["approved", "rejected"]),
+  reason: z.string().optional(),
+});
+export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
+
 // An entry in the general conversation. Messages record how they entered the
 // execution, lifecycle boundaries are explicit events, and assistant entries
 // are terminal turn summaries correlated with Restate observability.
@@ -134,6 +142,16 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
       }),
     ),
   }),
+  z
+    .object({
+      role: z.literal("event"),
+      type: z.literal("approval"),
+      approvalId: z.string(),
+      turnId: z.string(),
+      question: z.string(),
+      guardrailId: z.string().optional(),
+    })
+    .extend(ApprovalDecisionSchema.shape),
   ProgressReportSchema.extend({
     role: z.literal("event"),
     type: z.literal("progress"),
@@ -219,13 +237,6 @@ export const ApprovalRequestSchema = z.object({
     ),
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
-
-// The decision delivered to the waiting tool or policy gate over a signal.
-const ApprovalDecisionSchema = z.object({
-  decision: z.enum(["approved", "rejected"]),
-  reason: z.string().optional(),
-});
-export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
 // Approval producers and the Agent controller share this Turn-scoped signal
 // naming contract.

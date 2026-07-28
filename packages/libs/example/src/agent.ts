@@ -338,10 +338,24 @@ export const Agent = restate.object({
       {input: ApprovalResolutionSchema, output: z.boolean()},
       function* (resolution): restate.Operation<boolean> {
         const current = yield* activeTurn.current();
-        return yield* approvals.resolve(
+        const request = yield* approvals.resolve(
           resolution,
           current?.interrupting ? undefined : current?.id,
         );
+        if (!request) {
+          return false;
+        }
+        yield* history.append({
+          role: "event",
+          type: "approval",
+          approvalId: request.approvalId,
+          turnId: request.turnId,
+          question: request.question,
+          ...(request.guardrailId ? {guardrailId: request.guardrailId} : {}),
+          decision: resolution.decision,
+          ...(resolution.reason ? {reason: resolution.reason} : {}),
+        });
+        return true;
       },
     ),
 

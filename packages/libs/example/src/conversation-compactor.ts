@@ -52,30 +52,48 @@ function compactorInput(request: ConversationCompactionInput): string {
         if (entry.type === "progress" || entry.type === "memory") {
           return [];
         }
-        if (entry.type === "steer") {
-          return [
-            {
-              role: entry.role,
-              type: entry.type,
-              turnId: entry.turnId,
-              queuedMessages: entry.queuedMessages,
-            },
-          ];
-        }
-        return [
-          entry.type === "interrupt"
-            ? {
+        switch (entry.type) {
+          case "steer":
+            return [
+              {
+                role: entry.role,
+                type: entry.type,
+                turnId: entry.turnId,
+                queuedMessages: entry.queuedMessages,
+              },
+            ];
+          case "interrupt":
+            return [
+              {
                 role: entry.role,
                 type: entry.type,
                 turnId: entry.turnId,
                 reason: entry.reason,
-              }
-            : {
+              },
+            ];
+          case "approval":
+            return [
+              {
+                role: entry.role,
+                type: entry.type,
+                approvalId: entry.approvalId,
+                turnId: entry.turnId,
+                question: entry.question,
+                guardrailId: entry.guardrailId,
+                decision: entry.decision,
+                reason: entry.reason,
+              },
+            ];
+          case "dispatch":
+            return [
+              {
                 role: entry.role,
                 type: entry.type,
                 queuedMessages: entry.queuedMessages,
               },
-        ];
+            ];
+        }
+        return [];
       },
     ),
   });

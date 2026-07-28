@@ -184,6 +184,15 @@ function isWaitingForGuardrail(
     entry.message.includes(guardrailId);
 }
 
+function isWaitingForApproval(turnId: string): EntryPredicate {
+  return ({entry}) =>
+    entry.role === "event" &&
+    entry.type === "progress" &&
+    entry.turnId === turnId &&
+    (entry.message.toLowerCase().includes("approval") ||
+      entry.message.includes("humanApproval"));
+}
+
 function guardrailApprovalEvents(
   history: HistoryReader,
   turnId: string,
@@ -656,6 +665,49 @@ function* guardrailApproval({
     "the approved turn to finish",
     isTerminalFor(ask.turnId),
   );
+  const approvalEvent = history.entries.find(
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "approval" &&
+      entry.turnId === ask.turnId &&
+      entry.approvalId === approval?.approvalId,
+  );
+
+  const followup = yield* restate.client(Agent, agentId).ask({
+    message:
+      "Without retrieving new weather, tell me whether the previous human approval was approved or rejected and include its recorded reason. Do not request another approval.",
+  });
+  const followupMilestone = yield* waitForHistory(
+    history,
+    "the approval-history follow-up to finish or request another approval",
+    (candidate) =>
+      isTerminalFor(followup.turnId)(candidate) ||
+      isWaitingForApproval(followup.turnId)(candidate),
+  );
+  const repeatedApproval = !isTerminalFor(followup.turnId)(followupMilestone);
+  if (repeatedApproval) {
+    const unexpected = (yield* restate.client(Agent, agentId).approvals()).find(
+      ({turnId}) => turnId === followup.turnId,
+    );
+    if (unexpected) {
+      yield* restate.client(Agent, agentId).resolveApproval({
+        approvalId: unexpected.approvalId,
+        decision: "rejected",
+        reason: "The prior decision is already in the transcript",
+      });
+    }
+  }
+  const followupTerminal = repeatedApproval
+    ? yield* waitForHistory(
+        history,
+        "the approval-history follow-up to finish",
+        isTerminalFor(followup.turnId),
+      )
+    : followupMilestone;
+  const followupText =
+    followupTerminal.entry.role === "assistant"
+      ? followupTerminal.entry.text.toLowerCase()
+      : "";
 
   return [
     assertion(
@@ -669,6 +721,17 @@ function* guardrailApproval({
     ),
     assertion("the approval signal is accepted", resolved),
     assertion(
+      "the resolution is recorded in conversation history",
+      approvalEvent?.entry.role === "event" &&
+        approvalEvent.entry.type === "approval" &&
+        approvalEvent.entry.decision === "approved" &&
+        approvalEvent.entry.reason === "Approved by the eval",
+    ),
+    assertion(
+      "the approval event precedes the terminal answer",
+      approvalEvent !== undefined && approvalEvent.sequence < terminal.sequence,
+    ),
+    assertion(
       "the approved turn completes",
       terminal.entry.role === "assistant" &&
         terminal.entry.status === "completed",
@@ -677,6 +740,17 @@ function* guardrailApproval({
       "the response identifies Tokyo",
       terminal.entry.role === "assistant" &&
         terminal.entry.text.toLowerCase().includes("tokyo"),
+    ),
+    assertion(
+      "a later turn does not reopen the resolved approval",
+      !repeatedApproval,
+    ),
+    assertion(
+      "a later turn can use the recorded decision",
+      followupTerminal.entry.role === "assistant" &&
+        followupTerminal.entry.status === "completed" &&
+        followupText.includes("approved") &&
+        followupText.includes("eval"),
     ),
   ];
 }

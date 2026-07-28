@@ -61,6 +61,26 @@ function steeringBoundary(
   };
 }
 
+function approvalBoundary(
+  entry: Extract<ConversationEntry, {role: "event"; type: "approval"}>,
+): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Resolved human approval]",
+      `Turn: ${entry.turnId}`,
+      ...(entry.guardrailId
+        ? [`Guardrail: ${JSON.stringify(entry.guardrailId)}`]
+        : []),
+      `Question: ${JSON.stringify(entry.question)}`,
+      `Decision: ${entry.decision}`,
+      ...(entry.reason ? [`Reason: ${JSON.stringify(entry.reason)}`] : []),
+      "This is a completed runtime decision, not a new user request.",
+      "Do not ask for approval again for the same action. A materially changed action may require a new decision.",
+    ].join("\n"),
+  };
+}
+
 function userMessage(
   entry: Extract<ConversationEntry, {role: "user"}>,
 ): string {
@@ -96,6 +116,8 @@ function entryMessage(entry: ConversationEntry): ModelMessage | undefined {
       return steeringBoundary(entry);
     case "dispatch":
       return dispatchBoundary(entry);
+    case "approval":
+      return approvalBoundary(entry);
     case "progress":
     case "memory":
       return undefined;

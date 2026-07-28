@@ -22,8 +22,8 @@ unimportant.
 | Long-running operations | Tools such as `sleep` and `humanApproval` can return a pending acknowledgement and continue across later agent steps. The Turn owns their stable IDs and lifecycle. |
 | Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
 | Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
-| Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. A rejected runtime policy cannot reopen approval for the same request; steering invalidates approvals for changed work. |
-| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, progress, memory metadata, and terminal outcomes retain their natural observation order. |
+| Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. Resolved decisions become model-visible transcript events, so later Turns retain what was decided without reopening the same request. |
+| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, progress, memory metadata, approval decisions, and terminal outcomes retain their natural observation order. |
 | Push-style history updates | Restate callers register their own awakeable at a history cursor. Registration closes the empty-read race, while the actual transcript remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
 | Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
@@ -227,6 +227,13 @@ policy model does not allow it. The evaluator is deliberately model-based and
 therefore probabilistic; the runtime deterministically enforces the decision it
 returns. Instructions and guardrail changes affect the next Turn.
 
+Every successfully delivered human decision is also appended as a structured
+approval event containing its question, outcome, optional reason, and policy
+identifier. Later Turns and conversation compaction retain that event. It
+prevents the agent from treating the same completed decision as unresolved,
+without turning one approval into blanket authorization for materially changed
+work.
+
 ## Agent handlers
 
 | Handler | Input | Behavior |
@@ -240,7 +247,7 @@ returns. Instructions and guardrail changes affect the next Turn.
 | `interrupt` | `{ reason, message? }` | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. An optional replacement message is appended immediately and queued for the next Turn. |
 | `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
-| `resolveApproval` | `{ approvalId, decision, reason? }` | Resolves and removes a pending approval only while its Turn is still eligible to receive the decision. Returns whether the signal was delivered. |
+| `resolveApproval` | `{ approvalId, decision, reason? }` | Resolves and removes a pending approval only while its Turn is still eligible to receive the decision, then records the delivered decision in history. Returns whether the signal was delivered. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
 | `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |

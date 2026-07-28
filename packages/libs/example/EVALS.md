@@ -119,7 +119,8 @@ the source of truth.
    memory event, its ordering, and the durable profile entry.
 7. Four isolated guardrail cases cover:
    - Approval verifies exactly one pending request, approves it, and checks
-     completion.
+     that the decision is recorded before completion. A follow-up Turn must
+     read that decision from history without reopening the approval.
    - Denial checks that a deny policy neither opens an approval nor starts the
      protected weather tool.
    - Rejection checks that a rejected request produces a compliant explanation
