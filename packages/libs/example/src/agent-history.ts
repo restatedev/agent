@@ -271,6 +271,27 @@ export const history = {
     }
   },
 
+  /** Whether `fromSequence` is already readable. Safe from shared handlers. */
+  *isReadable(fromSequence: number): restate.Operation<boolean> {
+    const meta = yield* readMeta();
+    return fromSequence < meta.nextSequence;
+  },
+
+  /**
+   * Withdraws one registered watcher after its wait window elapsed, so idle
+   * repeat watchers do not accumulate. Safe to repeat; a watcher that was
+   * already resolved by an append is simply gone.
+   */
+  *unwatch(awakeableId: string): restate.Operation<void> {
+    const watchers = yield* readWatchers();
+    const remaining = watchers.filter(
+      (watcher) => watcher.awakeableId !== awakeableId,
+    );
+    if (remaining.length !== watchers.length) {
+      storeWatchers(remaining);
+    }
+  },
+
   // Called after a turn outcome is appended. Once enough conversation messages
   // have accumulated, reserve the entire finished prefix.
   *beginCompaction(): restate.Operation<

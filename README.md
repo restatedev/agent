@@ -24,7 +24,7 @@ unimportant.
 | Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
 | Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. Request, resolution, and cancellation events make the complete lifecycle discoverable through history; resolved decisions also become model-visible context. |
 | Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, concise activity, structured tool lifecycle, profile changes, approval lifecycle, progress, sandbox lifecycle, and terminal outcomes retain their natural observation order. |
-| Push-style history updates | Restate callers register their own awakeable at a history cursor. Registration closes the empty-read race, while the actual transcript remains available through the cursor API. |
+| Push-style history updates | Any client long-polls the shared `watchHistory` handler, which parks inside the Agent until the cursor becomes readable or its wait window elapses. Registration closes the empty-read race; the transcript itself remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
 | Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
 | Turn-local context reduction | Large settled model/tool prefixes accumulated during one active Turn are reduced between steps. Initial conversation context and the newest working messages remain exact, while canonical history is untouched. |
@@ -32,7 +32,7 @@ unimportant.
 | Model admission control | Agent and policy calls go through a scoped gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes a sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. The demo provider uses `/tmp/restate-agent-sandboxes/<agentId>`. |
 | Explicit command lifetime | Sandbox commands are one-shot foreground calls returning an exit code, stdout, and stderr. Asynchronous work is an explicit shell concern rather than a hidden pending-tool protocol. |
-| Restate-native evals | Durable eval invocations drive fresh Agents through the same public protocol, synchronize on history awakeables, inject control events, and return structured assertions plus the observed transcript. |
+| Restate-native evals | Durable eval invocations drive fresh Agents through the same public protocol, synchronize on `watchHistory` wait windows, inject control events, and return structured assertions plus the observed transcript. |
 
 These features compose rather than live as isolated demos. For example, a Turn
 can run ten weather calls as one parallel batch, keep a durable timer alive
@@ -62,7 +62,7 @@ synthetic so execution semantics stay visible. The sandbox lifecycle and tool
 boundary use a tiny local `/tmp` provider; choosing and configuring a real,
 isolated sandbox vendor remains deliberately outside the example.
 Token-by-token output streaming, pub/sub fan-out, authentication, and
-multi-tenant policy administration are not implemented. History awakeables
+multi-tenant policy administration are not implemented. History watch windows
 provide durable point-to-point change notification, not a replacement for a
 broadcast event bus.
 
@@ -92,7 +92,7 @@ flowchart LR
   Turn -->|"large settled context"| Gateway
   Turn -->|"one-way onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
-  Agent -.->|"history awakeables"| Eval
+  Agent -.->|"watchHistory long-poll"| Eval
   Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
   Compactor -->|"one-way applyCompaction"| Agent
 ```
@@ -144,7 +144,7 @@ flowchart LR
   before delegating provider calls to `model.ts`.
 - `eval.ts` contains durable black-box protocol evaluations. One suite
   invocation concurrently drives fresh Agents through public handlers and
-  waits for transcript milestones through caller-owned awakeables instead of
+  waits for transcript milestones through `watchHistory` wait windows instead of
   polling.
 
 The controller stores the canonical transcript: user and assistant messages,
@@ -174,11 +174,14 @@ events instead of rewriting those entries. `agent-history.ts` stores the log in
 fixed-size state chunks with stable internal sequence numbers. Its lazy entry
 reader hides those chunks and stops loading state as soon as a consumer has
 enough entries. The public `history` handler exposes an inclusive cursor over
-the same sequence numbers. A Restate caller can create an awakeable and pass
-its ID plus the next cursor to `watchHistory`. The Agent atomically resolves it
-when that cursor is already readable or stores it until the next relevant
-append. The caller waits outside the virtual object, so transcript writers are
-never blocked by a waiting exclusive handler.
+the same sequence numbers. Any client — a Restate service or a plain HTTP
+caller — long-polls the shared `watchHistory` handler with that cursor. The
+handler checks shared state, registers an internal awakeable through a brief
+exclusive re-check that closes the empty-read race, and parks until the cursor
+becomes readable or its wait window elapses; callers simply loop. Waiting
+happens in a shared handler, so transcript writers are never blocked, and a
+timed-out window withdraws its registration so idle watchers do not
+accumulate.
 
 After a turn finishes, the Agent first activates any queued work and starts its
 next Turn from the exact transcript. It then counts conversation messages since
@@ -316,7 +319,9 @@ approval into blanket authorization for materially changed work.
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
-| `watchHistory` | `{ fromSequence, awakeableId }` | Atomically resolves a caller-owned awakeable now or when the requested cursor becomes readable. |
+| `watchHistory` | `{ fromSequence, timeoutSeconds? }` | Shared long-poll: returns `true` as soon as the cursor is readable, or `false` when the wait window (default 30s, max 120s) elapses. Callers loop and re-read `history`. |
+| `registerHistoryWatcher` | `{ fromSequence, awakeableId }` | Internal exclusive registration path used by `watchHistory`; re-checks the cursor so no append is lost. |
+| `unregisterHistoryWatcher` | `{ awakeableId }` | Internal cleanup path that withdraws a timed-out watch registration. |
 | `profile` | void | Returns this Agent's instructions, model-managed memories, and natural-language guardrails. |
 | `setInstructions` | `{ instructions: string \| null }` | Replaces the persistent user instructions and appends a profile-change event; `null` clears them. Running Turns keep their snapshot. |
 | `setGuardrails` | `{ guardrails: [{ id, rule }] }` | Replaces the persistent policy list and appends its IDs as a profile-change event. IDs must be unique; running Turns keep their snapshot. |
@@ -334,7 +339,8 @@ approval into blanket authorization for materially changed work.
 | `compact` | reserved history cursor range | Shared handler that reads and summarizes one finished transcript prefix, then sends the result to `applyCompaction`. |
 | `applyCompaction` | structured compaction result | Exclusively validates and installs the current summary checkpoint, or clears a failed reservation. |
 
-`history`, `profile`, `approvals`, and `compact` are shared handlers; the other
+`history`, `watchHistory`, `profile`, `approvals`, and `compact` are shared
+handlers; the other
 Agent handlers are exclusive. Lazy state allows shared readers and the
 compactor to load only the state keys and history chunks they need.
 
@@ -634,7 +640,7 @@ curl -X POST localhost:8080/Agent/demo/profile
 ### Run a durable eval
 
 The single `Evals/all` handler concurrently drives every scenario through
-Restate. Agent protocol cases use fresh Agents and history awakeables instead
+Restate. Agent protocol cases use fresh Agents and `watchHistory` wait windows instead
 of polling; a focused context-reduction contract calls the cheap reducer
 directly. The aggregate returns `passed | failed` plus every case's assertions,
 isolated `agentId`, and complete observed transcript.

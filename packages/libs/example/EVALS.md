@@ -23,8 +23,8 @@ sequenceDiagram
   loop Awakeable cursor observation
     E->>A: history(fromSequence)
     A-->>E: new transcript entries
-    E->>A: watchHistory(fromSequence, awakeableId)
-    A-->>E: resolve awakeable after append
+    E->>A: watchHistory(fromSequence, timeoutSeconds)
+    A-->>E: true after append (or false after the window)
   end
 
   E->>A: steer, interrupt, or resolveApproval
@@ -81,17 +81,18 @@ dispatcher or generic scenario language.
 ## History notifications
 
 The eval reads all currently available entries from the Agent's existing
-cursor API. When the cursor is empty, it creates an awakeable and passes its ID
-and the cursor to the exclusive `watchHistory` handler.
+cursor API. When the cursor is empty, it long-polls the shared `watchHistory`
+handler with that cursor and a bounded wait window.
 
 Registration closes the empty-read race:
 
-- If history changed before registration ran, the Agent resolves the awakeable
-  immediately.
+- If history changed before the wait registered, `watchHistory` returns
+  immediately: the internal exclusive registration re-checks the cursor.
 - Otherwise, the Agent stores the watcher and `history.append` resolves it when
   the cursor becomes readable.
-- The eval waits on the awakeable outside the Agent, so an exclusive handler is
-  never held open.
+- The wait parks in a shared handler, so no exclusive handler is held open and
+  transcript writers are never blocked. A timed-out window cleans up its own
+  registration; the eval simply selects the call against its case deadline.
 
 After the notification, the eval reads the regular cursor again. The
 notification contains no transcript data and the append-only history remains

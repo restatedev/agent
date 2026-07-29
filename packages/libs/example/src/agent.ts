@@ -91,8 +91,25 @@ const HistoryQuerySchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 });
 
-const HistoryWatchSchema = z.object({
+const WatchHistorySchema = z.object({
   fromSequence: z.number().int().positive(),
+  timeoutSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(120)
+    .default(30)
+    .describe(
+      "How long this wait window may park before returning false. Callers loop; the window bounds server-side residency, not the overall wait.",
+    ),
+});
+
+const RegisterHistoryWatcherSchema = z.object({
+  fromSequence: z.number().int().positive(),
+  awakeableId: z.string().min(1),
+});
+
+const UnregisterHistoryWatcherSchema = z.object({
   awakeableId: z.string().min(1),
 });
 
@@ -235,13 +252,58 @@ export const Agent = restate.object({
       },
     ),
 
-    // Register a caller-owned awakeable for the next readable history entry.
-    // The exclusive cursor check prevents a lost append between an empty read
-    // and registration. The caller waits outside this virtual object.
+    // Long-poll for the next readable history entry. Parks in a shared
+    // handler until `fromSequence` becomes readable or the wait window
+    // elapses, then returns whether the cursor is readable; the caller
+    // re-reads `history` and loops. The awakeable plumbing is internal.
+    //
+    // The fast path reads shared state that may lag the exclusive state
+    // slightly. That is deliberate and safe: lag can only cause a
+    // registration that resolves immediately through the exclusive cursor
+    // re-check, never a missed entry.
     watchHistory: restate.schemas(
-      {input: HistoryWatchSchema, output: z.void()},
+      {input: WatchHistorySchema, output: z.boolean()},
+      function* ({fromSequence, timeoutSeconds}): restate.Operation<boolean> {
+        if (yield* history.isReadable(fromSequence)) {
+          return true;
+        }
+
+        const changed = restate.awakeable<void>();
+        yield* restate.client(Agent, agentKey()).registerHistoryWatcher({
+          fromSequence,
+          awakeableId: changed.id,
+        });
+        const selected = yield* restate.select({
+          readable: changed.promise,
+          timeout: restate.sleep(timeoutSeconds * 1_000, "watch window"),
+        });
+        yield* selected.future;
+        if (selected.tag === "timeout") {
+          // Withdraw the registration so idle repeat watchers do not
+          // accumulate in Agent state.
+          yield* restate
+            .sendClient(Agent, agentKey())
+            .unregisterHistoryWatcher({awakeableId: changed.id});
+          return false;
+        }
+        return true;
+      },
+    ),
+
+    // Internal registration path for watchHistory. The exclusive cursor check
+    // prevents a lost append between an empty shared read and registration.
+    registerHistoryWatcher: restate.schemas(
+      {input: RegisterHistoryWatcherSchema, output: z.void()},
       function* ({fromSequence, awakeableId}): restate.Operation<void> {
         yield* history.watch(fromSequence, awakeableId);
+      },
+    ),
+
+    // Internal cleanup path used when a watch window times out.
+    unregisterHistoryWatcher: restate.schemas(
+      {input: UnregisterHistoryWatcherSchema, output: z.void()},
+      function* ({awakeableId}): restate.Operation<void> {
+        yield* history.unwatch(awakeableId);
       },
     ),
 
@@ -531,7 +593,9 @@ export const Agent = restate.object({
       // Coordination paths keep no completed-invocation state; the user-facing
       // conversation handlers retain the server defaults.
       onTurnEnd: noRetention,
-      watchHistory: noRetention,
+      watchHistory: {shared: true, ...noRetention},
+      registerHistoryWatcher: noRetention,
+      unregisterHistoryWatcher: noRetention,
       updateMemory: noRetention,
       reportProgress: noRetention,
       reportExecution: noRetention,

@@ -124,13 +124,15 @@ function* waitForHistory(
       return found;
     }
 
-    const changed = restate.awakeable<void>();
-    yield* restate.client(Agent, reader.agentId).watchHistory({
+    // watchHistory parks inside the Agent until the cursor becomes readable
+    // or its wait window elapses; either way the loop re-reads the cursor.
+    // A window abandoned by the case deadline times out and cleans itself up.
+    const watch = restate.client(Agent, reader.agentId).watchHistory({
       fromSequence: reader.nextSequence,
-      awakeableId: changed.id,
+      timeoutSeconds: 30,
     });
     const selected = yield* restate.select({
-      changed: changed.promise,
+      watch,
       deadline: reader.deadline,
     });
     yield* selected.future;
