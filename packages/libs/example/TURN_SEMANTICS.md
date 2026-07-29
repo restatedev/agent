@@ -66,8 +66,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   work instead of publishing an internal budget error as the assistant answer.
 - The Agent-provided context remains exact for the lifetime of the Turn. When
   settled model/tool context accumulated inside the Turn exceeds a bounded
-  character budget, a cheap scoped model reduces an older prefix between
-  steps. The four newest messages remain exact.
+  character budget, a cheap scoped model reduces the prefix already observed
+  by the agent model. Newly appended tool results, steering, and runtime events
+  remain exact until the agent model has seen them.
 - Turn context reduction never runs while an operation is pending, never
   rewrites the Agent transcript, and remains interruptible. If reduction
   exhausts its retries, the Turn keeps its exact context and disables further

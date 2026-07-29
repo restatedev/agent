@@ -188,8 +188,9 @@ that checkpoint.
 The active Turn separately bounds its private working context. Its initial
 Agent-provided messages stay exact. Between steps, once later settled
 model/tool messages exceed the Turn's character budget and no operation is
-pending, the Turn asks the scoped gateway to reduce an older prefix while
-retaining the four newest messages exactly. The result exists only inside that
+pending, the Turn asks the scoped gateway to reduce the prefix already seen by
+the agent model. Newly appended tool results, steering, and runtime events stay
+exact until that model has observed them. The result exists only inside that
 Turn invocation. It does not rewrite canonical history or affect future Turns,
 and a failed reduction leaves the exact working context in place.
 

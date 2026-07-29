@@ -50,6 +50,7 @@ type TurnState = {
   blockedGuardrails: Set<string>;
   messages: ModelMessage[];
   initialMessageCount: number;
+  modelSeenThrough: number;
   contextReductionEnabled: boolean;
   interrupt: restate.Future<string>;
   steeringInbox: ReturnType<typeof createSteeringInbox>;
@@ -62,7 +63,6 @@ type TurnState = {
 const MAX_STEPS = 8;
 const MAX_TOOL_CALLS = 24;
 const MAX_TURN_CONTEXT_CHARS = 32_000;
-const RETAINED_TURN_MESSAGES = 4;
 
 function createTurnState(req: TurnRequest, turnId: string): TurnState {
   const messages = buildModelContext(req.history, req.summary, req.memories);
@@ -75,6 +75,7 @@ function createTurnState(req: TurnRequest, turnId: string): TurnState {
     blockedGuardrails: new Set(),
     messages,
     initialMessageCount: messages.length,
+    modelSeenThrough: messages.length,
     contextReductionEnabled: true,
     interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
     steeringInbox: createSteeringInbox(),
@@ -98,19 +99,12 @@ function contextReductionPlan(
     return undefined;
   }
   const current = state.messages.slice(state.initialMessageCount);
-  if (
-    current.length <= RETAINED_TURN_MESSAGES ||
-    JSON.stringify(current).length <= MAX_TURN_CONTEXT_CHARS
-  ) {
+  if (JSON.stringify(current).length <= MAX_TURN_CONTEXT_CHARS) {
     return undefined;
   }
 
-  let end = state.messages.length - RETAINED_TURN_MESSAGES;
-  // Never separate an assistant tool-call message from its tool result.
-  if (state.messages[end]?.role === "tool") {
-    end -= 1;
-  }
-  if (end - state.initialMessageCount < 2) {
+  const end = state.modelSeenThrough;
+  if (end <= state.initialMessageCount) {
     return undefined;
   }
   return {
@@ -167,6 +161,9 @@ function* reduceCurrentContext(
       plan.end - plan.start,
       reducedContextMessage(summary),
     );
+    // The reducer output and everything after it must be seen by the agent
+    // model before either becomes eligible for another reduction.
+    state.modelSeenThrough = state.initialMessageCount;
   } catch (error) {
     task.interrupt(error);
     yield* restate.allSettled([task]);
@@ -449,6 +446,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
         : `Planning agent step ${state.steps + 1}`,
     );
 
+    const modelMessageCount = state.messages.length;
     const task = restate.spawn(
       agentStep({
         context: state.context,
@@ -476,6 +474,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
       return yield* finalizeStoppedTurn(state, step.reason);
     }
 
+    state.modelSeenThrough = modelMessageCount;
     const steering = drainSteering(state);
     state.steps += 1;
     if (steering.length > 0) {
