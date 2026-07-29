@@ -98,7 +98,7 @@ const WatchHistorySchema = z.object({
     .int()
     .min(1)
     .max(120)
-    .default(15)
+    .default(30)
     .describe(
       "How long this wait window may park before returning false. Callers loop; the window bounds server-side residency, not the overall wait.",
     ),
@@ -593,7 +593,11 @@ export const Agent = restate.object({
       // Coordination paths keep no completed-invocation state; the user-facing
       // conversation handlers retain the server defaults.
       onTurnEnd: noRetention,
-      watchHistory: {shared: true, ...noRetention},
+      watchHistory: {
+        shared: true,
+        inactivityTimeout: {seconds: 15},
+        ...noRetention,
+      },
       registerHistoryWatcher: noRetention,
       unregisterHistoryWatcher: noRetention,
       updateMemory: noRetention,
