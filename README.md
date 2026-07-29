@@ -189,9 +189,9 @@ exclusive re-check that closes the empty-read race, and parks until the cursor
 becomes readable or its wait window elapses; callers simply loop. Waiting
 happens in a shared handler, so transcript writers are never blocked, and a
 timed-out window withdraws its registration so idle watchers do not
-accumulate. The request window defaults to 60 seconds. Its handler-level
-`inactivityTimeout` is independently set to 15 seconds so Restate can suspend a
-parked endpoint session while preserving the longer durable wait.
+accumulate. The request window defaults to its five-minute safety ceiling. Its
+handler-level `inactivityTimeout` is independently set to 15 seconds so Restate
+can suspend a parked endpoint session while preserving the longer durable wait.
 
 After a turn finishes, the Agent first activates any queued work and starts its
 next Turn from the exact transcript. It then counts conversation messages since
@@ -359,7 +359,7 @@ approval into blanket authorization for materially changed work.
 | --- | --- | --- |
 | `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. `start` returns its new `turnId`; `queue` returns `turnId: null`, the currently active `activeTurnId`, and the pending-message count because the queued message has not yet been assigned to a Turn. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
-| `watchHistory` | `{ fromSequence, timeoutSeconds? }` | Shared long-poll: returns `true` as soon as the cursor is readable, or `false` when the wait window (default 60s, max 120s) elapses. Callers loop and re-read `history`. |
+| `watchHistory` | `{ fromSequence, timeoutSeconds? }` | Shared long-poll: returns `true` as soon as the cursor is readable, or `false` when the wait window (default and maximum 300s) elapses. Callers loop and re-read `history`. |
 | `registerHistoryWatcher` | `{ fromSequence, awakeableId }` | Internal exclusive registration path used by `watchHistory`; re-checks the cursor so no append is lost. |
 | `unregisterHistoryWatcher` | `{ awakeableId }` | Internal cleanup path that withdraws a timed-out watch registration. |
 | `profile` | void | Returns this Agent's instructions, model-managed memories, and natural-language guardrails. |
