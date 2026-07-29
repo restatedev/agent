@@ -5,7 +5,7 @@
 //
 // It never runs turn execution itself. `ask` starts or queues work,
 // `interrupt` and `steer` resolve signals on the active stateless Turn
-// invocation, and `append` accepts that Turn's single high-level outcome.
+// invocation, and `onTurnEnd` accepts that Turn's single high-level outcome.
 
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
@@ -366,7 +366,7 @@ export const Agent = restate.object({
     // interruption can additionally produce an assistant finalization.
     // This is intentionally high-level: detailed tool/model activity belongs
     // in Restate's invocation logs and observability, not conversation state.
-    append: restate.schemas(
+    onTurnEnd: restate.schemas(
       {input: TurnOutcomeSchema, output: z.void()},
       function* (outcome): restate.Operation<void> {
         const finished = yield* activeTurn.finish(outcome);
@@ -448,7 +448,7 @@ export const Agent = restate.object({
     handlers: {
       // Coordination paths keep no completed-invocation state; the user-facing
       // conversation handlers retain the server defaults.
-      append: noRetention,
+      onTurnEnd: noRetention,
       watchHistory: noRetention,
       updateMemory: noRetention,
       reportProgress: noRetention,

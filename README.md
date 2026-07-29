@@ -80,7 +80,7 @@ flowchart LR
   Step -->|"allowed batch: spawn + durable run"| Tools["local tools in parallel"]
   Step -->|"policy approval request"| Agent
   Tools -->|"approval / memory updates"| Agent
-  Turn -->|"one-way append outcome"| Agent
+  Turn -->|"one-way onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
   Agent -.->|"history awakeables"| Eval
   Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
@@ -254,7 +254,7 @@ work.
 | `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
 | `updateMemory` | `{ turnId, changes }` | Coordination path used by `manageMemory`; atomically applies a bounded memory batch only for the active Turn. |
-| `append` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, dispatches queued work, and then considers compaction. Stale or duplicate Turn IDs are ignored. |
+| `onTurnEnd` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, dispatches queued work, and then considers compaction. Stale or duplicate Turn IDs are ignored. |
 | `compact` | reserved history cursor range | Shared handler that reads and summarizes one finished transcript prefix, then sends the result to `applyCompaction`. |
 | `applyCompaction` | structured compaction result | Exclusively validates and installs the current summary checkpoint, or clears a failed reservation. |
 
@@ -266,7 +266,7 @@ The remaining services expose these public handlers:
 
 - `Turn/run` accepts the Agent's profile snapshot, rolling summary, and exact
   uncompacted transcript, runs one transient state machine made of bounded
-  agent steps, and one-way reports a structured outcome to `Agent/append`.
+  agent steps, and one-way reports a structured outcome to `Agent/onTurnEnd`.
 - `ModelGateway/complete` accepts instructions, model messages, and serializable
   tool manifests. `ModelGateway/evaluateGuardrails` separately accepts the
   policy snapshot and exact proposed action. `agentStep` invokes both through
@@ -400,7 +400,7 @@ making pub/sub the source of truth.
   finalization call so completed results are not replaced by a budget error.
 
 This compact reference does not reconcile operator-killed invocations. A hard
-kill before `Turn/append` can leave the Agent pointing at a vanished Turn, and a
+kill before `Agent/onTurnEnd` can leave the Agent pointing at a vanished Turn, and a
 hard-killed `compact` invocation can leave its cursor reservation active.
 Production adaptations should retain the child invocation ID and attach or
 schedule a reconciliation handler with a deadline.

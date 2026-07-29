@@ -444,11 +444,11 @@ export const Turn = restate.service({
         const state = createTurnState(req, restate.handlerRequest().id);
         try {
           const outcome = yield* executeTurn(state);
-          yield* restate.sendClient(Agent, req.agentId).append(outcome);
+          yield* restate.sendClient(Agent, req.agentId).onTurnEnd(outcome);
         } catch (error) {
           yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
-            yield* restate.sendClient(Agent, req.agentId).append({
+            yield* restate.sendClient(Agent, req.agentId).onTurnEnd({
               turnId: state.context.turnId,
               status: "interrupted",
               reason: "Turn cancelled",
@@ -457,7 +457,7 @@ export const Turn = restate.service({
             throw error;
           }
 
-          yield* restate.sendClient(Agent, req.agentId).append({
+          yield* restate.sendClient(Agent, req.agentId).onTurnEnd({
             turnId: state.context.turnId,
             status: "failed",
             error: errorMessage(error),
