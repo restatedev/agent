@@ -107,7 +107,7 @@ const AskResultSchema = z.discriminatedUnion("decision", [
     stats: AskStatsSchema,
   }),
 ]);
-type AskResult = z.infer<typeof AskResultSchema>;
+export type AskResult = z.infer<typeof AskResultSchema>;
 
 const HistoryQuerySchema = z.object({
   fromSequence: z.number().int().positive().default(1),

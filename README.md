@@ -777,4 +777,7 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context model protocols and provider calls
 - `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries
 - `packages/libs/example/src/eval.ts` — durable black-box Agent protocol evals
+- `packages/libs/example/src/client.ts` — typed HTTP mini-client: one method per
+  public handler, the cursor + `watchHistory` follow loop, and the transcript
+  projection that folds pending approvals and change signals
 - `packages/libs/example/src/types.ts` — wire schemas and domain types

@@ -130,6 +130,8 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context AI SDK integration
 - `packages/libs/example/src/model-gateway.ts` — scoped model gateway
 - `packages/libs/example/src/eval.ts` — durable black-box protocol evaluations
+- `packages/libs/example/src/client.ts` — typed HTTP mini-client and transcript
+  projection for external consumers
 - `packages/libs/example/src/types.ts` — shared wire contracts and schemas
 - `packages/libs/example/src/app.ts` — Agent, Turn, Sandbox, gateway, and eval endpoint
 
