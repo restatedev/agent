@@ -82,7 +82,7 @@ function* runSandboxTool(
     const ref = yield* restate
       .client(Sandbox, context.agentId)
       .borrow({turnId: context.turnId});
-    const client = sandboxProvider.connect(ref);
+    const client = sandboxProvider.connect(ref, {turnId: context.turnId});
     const result = yield* restate.run(({signal}) => operation(client, signal), {
       name,
     });
@@ -373,7 +373,7 @@ const manageMemoryTool = defineAgentTool({
 const listFilesTool = defineAgentTool({
   name: "listFiles",
   description:
-    "List files at one path in the agent's persistent sandbox. Use '.' for the working directory.",
+    "List files at one path in the current Turn's sandbox. Use '.' for the working directory.",
   inputSchema: z.object({
     path: z.string().min(1).describe("Directory path to list."),
   }),
@@ -389,7 +389,7 @@ const listFilesTool = defineAgentTool({
 
 const readFileTool = defineAgentTool({
   name: "readFile",
-  description: "Read one UTF-8 text file from the agent's persistent sandbox.",
+  description: "Read one UTF-8 text file from the current Turn's sandbox.",
   inputSchema: z.object({
     path: z.string().min(1).describe("Path of the text file to read."),
   }),
@@ -405,7 +405,7 @@ const readFileTool = defineAgentTool({
 const writeFileTool = defineAgentTool({
   name: "writeFile",
   description:
-    "Write one complete UTF-8 text file in the agent's persistent sandbox, replacing its previous contents.",
+    "Write one complete UTF-8 text file in the current Turn's sandbox, replacing its previous contents.",
   inputSchema: z.object({
     path: z.string().min(1).describe("Path of the text file to write."),
     content: z.string().describe("Complete new contents of the file."),
@@ -425,7 +425,7 @@ const writeFileTool = defineAgentTool({
 const executeCommandTool = defineAgentTool({
   name: "executeCommand",
   description:
-    "Execute one shell command in the agent's persistent sandbox and wait for its final exit result. This tool never becomes a pending agent operation. To intentionally leave work running, launch and track a background shell script from the command itself.",
+    "Execute one shell command in the current Turn's sandbox and wait for its final exit result. This tool never becomes a pending agent operation. To intentionally leave work running, launch and track a background shell script from the command itself.",
   inputSchema: z.object({
     command: z.string().min(1).describe("Shell command to execute."),
     cwd: z

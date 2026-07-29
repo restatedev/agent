@@ -45,9 +45,10 @@ The application is split into a few concrete parts:
   propagation.
 - **`Sandbox`** is a Virtual Object keyed by `agentId`. Sandbox tools borrow it
   lazily for their Turn; it provisions or resumes through a provider, and Turn
-  release schedules a cancellable idle suspension. The included provider is a
-  no-op implementation. File operations and commands are one-shot foreground
-  calls, with intentional asynchronous work left to explicit shell scripts.
+  release schedules a cancellable idle suspension. The included provider uses
+  `/tmp/restate-agent-sandboxes/<agentId>/<turnId>` as a local demo workspace.
+  File operations and commands are one-shot foreground calls, with intentional
+  asynchronous work left to explicit shell scripts.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the

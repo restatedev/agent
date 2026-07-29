@@ -30,7 +30,7 @@ unimportant.
 | Turn-local context reduction | Large settled model/tool prefixes accumulated during one active Turn are reduced between steps. Initial conversation context and the newest working messages remain exact, while canonical history is untouched. |
 | Semantic progress | `thinking`, `tools`, `waiting`, and `finalizing` milestones are part of the ordered transcript; raw provider reasoning and low-level tool traffic stay in Restate observability. |
 | Model admission control | Agent and policy calls go through a scoped gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
-| Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes an external sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. |
+| Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes a sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. The demo provider uses `/tmp/restate-agent-sandboxes/<agentId>/<turnId>`. |
 | Explicit command lifetime | Sandbox commands are one-shot foreground calls returning an exit code, stdout, and stderr. Asynchronous work is an explicit shell concern rather than a hidden pending-tool protocol. |
 | Restate-native evals | Durable eval invocations drive fresh Agents through the same public protocol, synchronize on history awakeables, inject control events, and return structured assertions plus the observed transcript. |
 
@@ -59,12 +59,12 @@ one long-running operation.
 
 This is a reference runtime, not a complete agent product. The weather tool is
 synthetic so execution semantics stay visible. The sandbox lifecycle and tool
-boundary are implemented against a no-op provider; choosing and configuring a
-real sandbox vendor remains deliberately outside the example. Token-by-token
-output streaming, pub/sub fan-out, authentication, and multi-tenant policy
-administration are not implemented. History awakeables provide durable
-point-to-point change notification, not a replacement for a broadcast event
-bus.
+boundary use a tiny local `/tmp` provider; choosing and configuring a real,
+isolated sandbox vendor remains deliberately outside the example.
+Token-by-token output streaming, pub/sub fan-out, authentication, and
+multi-tenant policy administration are not implemented. History awakeables
+provide durable point-to-point change notification, not a replacement for a
+broadcast event bus.
 
 Natural-language guardrail classification and answer quality remain
 probabilistic model behavior; the runtime deterministically enforces the
@@ -87,7 +87,7 @@ flowchart LR
   Tools -->|"approval / memory updates"| Agent
   Tools -->|"lazy borrow + one-shot I/O"| Sandbox["Sandbox Virtual Object\nkeyed by agentId"]
   Turn -->|"release at Turn end"| Sandbox
-  Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(no-op implementation)"]
+  Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(local /tmp demo)"]
   Turn -->|"large settled context"| Gateway
   Turn -->|"one-way onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
@@ -230,11 +230,14 @@ wants asynchronous work, it must launch and track a background shell script;
 the agent runtime does not turn a sandbox process into an implicit pending
 operation.
 
-The included provider is intentionally a no-op: lifecycle calls succeed and
-client operations return a terminal “not configured” tool failure rather than
-pretending an external effect occurred. Replacing `sandboxProvider` with a real
-implementation activates the same lifecycle and model-visible tools without
-changing Turn control flow.
+The included provider stores each Turn under
+`/tmp/restate-agent-sandboxes/<agentId>/<turnId>`. It uses Node filesystem APIs
+for files and executes commands as one bounded child process. Relative file
+paths and command working directories are constrained to that Turn directory.
+This is only a convenient demo workspace, not a security boundary: shell
+commands still run with the service process's host permissions. Replacing
+`sandboxProvider` with a real implementation preserves the lifecycle and
+model-visible tools without changing Turn control flow.
 
 ## Instructions, memories, and guardrails
 

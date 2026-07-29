@@ -51,8 +51,9 @@ export const Sandbox = restate.object({
 
         let ref: SandboxRef;
         if (!current) {
+          const agentId = sandboxKey();
           ref = yield* restate.run(
-            ({signal}) => sandboxProvider.provision({signal}),
+            ({signal}) => sandboxProvider.provision({agentId, signal}),
             {name: "provisionSandbox"},
           );
         } else {
