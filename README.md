@@ -190,7 +190,7 @@ becomes readable or its wait window elapses; callers simply loop. Waiting
 happens in a shared handler, so transcript writers are never blocked, and a
 timed-out window withdraws its registration so idle watchers do not
 accumulate. The request window defaults to its five-minute safety ceiling. Its
-handler-level `inactivityTimeout` is independently set to 15 seconds so Restate
+handler-level `inactivityTimeout` is independently set to 1 second so Restate
 can suspend a parked endpoint session while preserving the longer durable wait.
 
 After a turn finishes, the Agent first activates any queued work and starts its

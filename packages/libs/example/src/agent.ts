@@ -761,7 +761,7 @@ export const Agent = restate.object({
       onTurnEnd: noRetention,
       watchHistory: {
         shared: true,
-        inactivityTimeout: {seconds: 15},
+        inactivityTimeout: {seconds: 1},
         ...noRetention,
       },
       registerHistoryWatcher: noRetention,
