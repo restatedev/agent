@@ -562,21 +562,23 @@ curl -X POST localhost:8080/Agent/demo/profile
 
 ### Run a durable eval
 
-The single `Evals/all` handler concurrently drives every scenario against a
-fresh Agent entirely through Restate. Each case waits on history awakeables
-instead of polling. The aggregate returns `passed | failed` plus every case's
-assertions, isolated `agentId`, and complete observed transcript.
+The single `Evals/all` handler concurrently drives every scenario through
+Restate. Agent protocol cases use fresh Agents and history awakeables instead
+of polling; a focused context-reduction contract calls the cheap reducer
+directly. The aggregate returns `passed | failed` plus every case's assertions,
+isolated `agentId`, and complete observed transcript.
 
 ```sh
 curl localhost:8080/Evals/all \
   --json '{"timeoutSeconds":180}'
 ```
 
-The handler spawns all eleven isolated cases concurrently: a basic turn, steering,
-interruption, interruption carrying a replacement request, execution-budget
-finalization, model-managed memory, guardrail approval, guardrail scope
-isolation, denial before protected tools start, rejection without approval
-loops, and approval invalidation after steering.
+The handler spawns all twelve isolated cases concurrently: a basic turn,
+steering, interruption, interruption carrying a replacement request,
+execution-budget finalization, a low-cost context-reduction contract,
+model-managed memory, guardrail approval, guardrail scope isolation, denial
+before protected tools start, rejection without approval loops, and approval
+invalidation after steering.
 
 Pass `cases` to re-run a subset without paying for the rest, which matters
 because every case depends on probabilistic model behavior:
@@ -584,6 +586,14 @@ because every case depends on probabilistic model behavior:
 ```sh
 curl localhost:8080/Evals/all \
   --json '{"cases":["execution-limit"],"timeoutSeconds":300}'
+```
+
+The context-reduction case uses one small cheap-model call and no full agent
+inference:
+
+```sh
+curl localhost:8080/Evals/all \
+  --json '{"cases":["context-reduction"]}'
 ```
 
 See [`packages/libs/example/EVALS.md`](packages/libs/example/EVALS.md) for the

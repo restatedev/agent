@@ -116,9 +116,13 @@ the source of truth.
    the guarded finalization path — an `interrupted` outcome carrying completed
    work — rather than publishing an internal budget error as a failed answer,
    and that every completed city result survives into that answer.
-6. `memory` asks the agent to remember a preference and checks the metadata-only
+6. `context-reduction` makes one small call to the cheap Turn-context model
+   with synthetic completed, failed, and unresolved tool records. It verifies
+   that all three survive reduction without paying for enough full agent turns
+   to manufacture a 32 KB working context.
+7. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
-7. Five isolated guardrail cases cover:
+8. Five isolated guardrail cases cover:
    - Approval verifies exactly one pending request, approves it, and checks
      that the decision is recorded before completion. A follow-up Turn must
      read that decision from history without reopening the approval.
@@ -149,6 +153,15 @@ keeps a probabilistic case cheap to repeat:
 curl localhost:8080/Evals/all \
   -H 'content-type: application/json' \
   -d '{"cases":["execution-limit"],"timeoutSeconds":300}'
+```
+
+The focused context-reduction contract can be run by itself. It performs one
+small `gpt-4o-mini` call and no full agent inference:
+
+```sh
+curl localhost:8080/Evals/all \
+  -H 'content-type: application/json' \
+  -d '{"cases":["context-reduction"]}'
 ```
 
 The user-facing transcript intentionally omits raw tool calls. Assertions about
