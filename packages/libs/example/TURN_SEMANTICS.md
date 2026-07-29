@@ -204,8 +204,13 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 - Turn reports only semantic progress: `thinking`, `tools`, `waiting`, and
   `finalizing`.
+- Sandbox reports only successful `provisioned` and `suspended` lifecycle
+  transitions. Borrow, release, resume, and destroy remain runtime
+  observability details.
 - Progress is one-way and cannot block model or tool execution on the Agent
   handler.
+- Sandbox lifecycle events are transcript-visible for clients but are omitted
+  from model context and conversation compaction.
 - Raw model text, tool calls, and tool results remain outside the canonical
   user-facing transcript.
 - Every completed, interrupted, or failed outcome includes

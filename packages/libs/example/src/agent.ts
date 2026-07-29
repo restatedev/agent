@@ -37,6 +37,8 @@ import {
   MemoryUpdateSchema,
   type ProgressReport,
   ProgressReportSchema,
+  type SandboxEvent,
+  SandboxEventSchema,
   TurnOutcomeSchema,
 } from "./types.js";
 
@@ -302,6 +304,26 @@ export const Agent = restate.object({
       },
     ),
 
+    // Successful sandbox lifecycle transitions are semantic transcript events.
+    // Provisioning must still belong to the active Turn; suspension may arrive
+    // after that Turn has already completed.
+    reportSandbox: restate.schemas(
+      {input: SandboxEventSchema, output: z.void()},
+      function* (event: SandboxEvent): restate.Operation<void> {
+        if (event.status === "provisioned") {
+          const current = yield* activeTurn.current();
+          if (current?.id !== event.turnId) {
+            return;
+          }
+        }
+        yield* history.append({
+          role: "event",
+          type: "sandbox",
+          ...event,
+        });
+      },
+    ),
+
     // Internal registration path used by the humanApproval tool and runtime
     // guardrails. The request is accepted only while its Turn is still active.
     requestApproval: restate.schemas(
@@ -452,6 +474,7 @@ export const Agent = restate.object({
       watchHistory: noRetention,
       updateMemory: noRetention,
       reportProgress: noRetention,
+      reportSandbox: noRetention,
       requestApproval: noRetention,
       cancelApproval: noRetention,
       applyCompaction: noRetention,

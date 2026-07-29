@@ -23,7 +23,7 @@ unimportant.
 | Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
 | Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
 | Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. Resolved decisions become model-visible transcript events, so later Turns retain what was decided without reopening the same request. |
-| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, progress, memory metadata, approval decisions, and terminal outcomes retain their natural observation order. |
+| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, progress, memory metadata, sandbox provisioning/suspension, approval decisions, and terminal outcomes retain their natural observation order. |
 | Push-style history updates | Restate callers register their own awakeable at a history cursor. Registration closes the empty-read race, while the actual transcript remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
 | Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
@@ -88,6 +88,7 @@ flowchart LR
   Tools -->|"lazy borrow + one-shot I/O"| Sandbox["Sandbox Virtual Object\nkeyed by agentId"]
   Turn -->|"release at Turn end"| Sandbox
   Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(local /tmp demo)"]
+  Sandbox -.->|"provisioned / suspended events"| Agent
   Turn -->|"large settled context"| Gateway
   Turn -->|"one-way onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
@@ -220,6 +221,11 @@ When `Turn.run` reaches any terminal outcome, it calls `release(turnId)`.
 Release schedules a durable delayed `suspend` invocation and records its
 invocation ID. A subsequent borrow cancels that exact timer, and stale delayed
 invocations cannot suspend a resource that has been borrowed again.
+Successful `provisioned` and `suspended` transitions are appended to the
+Agent's transcript as structured sandbox events. Borrow, release, resume, and
+destroy remain infrastructure details visible through Restate observability.
+Sandbox events are intended for clients and are omitted from model context and
+conversation compaction.
 
 The provider interface separates connection from effects. `connect(ref)` is a
 synchronous, process-local operation. `listFiles`, `readFile`, `writeFile`, and
@@ -307,6 +313,7 @@ work.
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Resolves and removes a pending approval only while its Turn is still eligible to receive the decision, then records the delivered decision in history. Returns whether the signal was delivered. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
+| `reportSandbox` | `{ turnId, status: "provisioned" \| "suspended" }` | One-way lifecycle path used by the Sandbox VO; appends successful provisioning and suspension transitions. |
 | `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
 | `updateMemory` | `{ turnId, changes }` | Coordination path used by `manageMemory`; atomically applies a bounded memory batch only for the active Turn. |

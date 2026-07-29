@@ -49,7 +49,11 @@ function compactorInput(request: ConversationCompactionInput): string {
             },
           ];
         }
-        if (entry.type === "progress" || entry.type === "memory") {
+        if (
+          entry.type === "progress" ||
+          entry.type === "memory" ||
+          entry.type === "sandbox"
+        ) {
           return [];
         }
         switch (entry.type) {

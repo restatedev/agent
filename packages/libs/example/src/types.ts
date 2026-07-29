@@ -35,6 +35,12 @@ export const ProgressReportSchema = z.object({
 });
 export type ProgressReport = z.infer<typeof ProgressReportSchema>;
 
+export const SandboxEventSchema = z.object({
+  turnId: z.string(),
+  status: z.enum(["provisioned", "suspended"]),
+});
+export type SandboxEvent = z.infer<typeof SandboxEventSchema>;
+
 // Durable prompt context owned by one Agent. Instructions are authoritative
 // user configuration, memories are model-managed data, and guardrails are
 // natural-language policies enforced against proposed agent actions.
@@ -155,6 +161,10 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
   ProgressReportSchema.extend({
     role: z.literal("event"),
     type: z.literal("progress"),
+  }),
+  SandboxEventSchema.extend({
+    role: z.literal("event"),
+    type: z.literal("sandbox"),
   }),
 ]);
 

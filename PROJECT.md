@@ -48,7 +48,9 @@ The application is split into a few concrete parts:
   release schedules a cancellable idle suspension. The included provider uses
   `/tmp/restate-agent-sandboxes/<agentId>/<turnId>` as a local demo workspace.
   File operations and commands are one-shot foreground calls, with intentional
-  asynchronous work left to explicit shell scripts.
+  asynchronous work left to explicit shell scripts. Successful provisioning
+  and suspension transitions are appended to the Agent transcript for clients,
+  but omitted from model context.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the

@@ -211,7 +211,9 @@ export const history = {
       (summary?.through ?? 0) + 1,
     ).collect()).flatMap(({entry}): ConversationEntry[] =>
       entry.role === "event" &&
-      (entry.type === "progress" || entry.type === "memory")
+      (entry.type === "progress" ||
+        entry.type === "memory" ||
+        entry.type === "sandbox")
         ? []
         : [entry],
     );

@@ -98,8 +98,8 @@ function userMessage(
   return ["[Steering request for the active turn]", entry.text].join("\n");
 }
 
-// Projects one transcript entry into zero or one model messages. Progress and
-// memory events are derived status, never model context.
+// Projects one transcript entry into zero or one model messages. Progress,
+// memory, and sandbox events are derived status, never model context.
 function entryMessage(entry: ConversationEntry): ModelMessage | undefined {
   if (entry.role === "user") {
     return {role: "user", content: userMessage(entry)};
@@ -120,6 +120,7 @@ function entryMessage(entry: ConversationEntry): ModelMessage | undefined {
       return approvalBoundary(entry);
     case "progress":
     case "memory":
+    case "sandbox":
       return undefined;
   }
 }
