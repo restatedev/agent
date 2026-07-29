@@ -201,18 +201,20 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - If final response generation fails, Turn still returns an interrupted result
   with an explanatory fallback response.
 
-## Progress and transcript boundaries
+## Execution events and transcript boundaries
 
-- Turn reports only semantic progress: `thinking`, `tools`, `waiting`, and
-  `finalizing`.
+- Turn reports semantic progress as `thinking`, `waiting`, and `finalizing`.
+- Every allowed tool batch reports a structured `started` and `finished` event
+  containing call IDs, tool names, and final statuses. The model may also emit
+  one brief user-facing activity sentence before the batch starts.
 - Sandbox reports only successful `provisioned` and `suspended` lifecycle
   transitions. Borrow, release, resume, and destroy remain runtime
   observability details.
-- Progress is one-way and cannot block model or tool execution on the Agent
-  handler.
-- Sandbox lifecycle events are transcript-visible for clients but are omitted
-  from model context and conversation compaction.
-- Raw model text, tool calls, and tool results remain outside the canonical
+- Progress and execution reports are one-way and cannot block model or tool
+  execution on the Agent handler.
+- Progress, activity, tool lifecycle, and sandbox events are transcript-visible
+  for clients but omitted from model context and conversation compaction.
+- Raw reasoning, tool arguments, and tool results remain outside the canonical
   user-facing transcript.
 - Every completed, interrupted, or failed outcome includes
   `consumedSteering`.

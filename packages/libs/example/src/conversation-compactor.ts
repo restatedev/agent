@@ -51,6 +51,8 @@ function compactorInput(request: ConversationCompactionInput): string {
         }
         if (
           entry.type === "progress" ||
+          entry.type === "activity" ||
+          entry.type === "tools" ||
           entry.type === "memory" ||
           entry.type === "sandbox"
         ) {

@@ -42,6 +42,7 @@ export const ModelResultSchema = z.discriminatedUnion("type", [
     type: z.literal("tool_calls"),
     message: assistantModelMessageSchema,
     calls: z.array(ToolCallSchema),
+    activity: z.string().optional(),
   }),
   z.object({type: z.literal("error"), message: z.string()}),
 ]);
@@ -49,7 +50,11 @@ export type ModelResult = z.infer<typeof ModelResultSchema>;
 
 const ProposedActionSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("text"), content: z.string()}),
-  z.object({type: z.literal("tool_calls"), calls: z.array(ToolCallSchema)}),
+  z.object({
+    type: z.literal("tool_calls"),
+    calls: z.array(ToolCallSchema),
+    activity: z.string().optional(),
+  }),
 ]);
 export type ProposedAction = z.infer<typeof ProposedActionSchema>;
 
@@ -102,6 +107,7 @@ const AGENT_SYSTEM = [
   "You are a concise assistant.",
   "Use the available tools whenever they are needed to fulfill the request.",
   "Group independent tool calls in one response so they can run in parallel.",
+  "Before calling tools, include one brief user-facing sentence describing the immediate action; never reveal hidden reasoning.",
   "A pending tool result means the operation is still running across agent steps; do not call it again.",
   "Runtime updates report when pending tools complete, fail, or are cancelled.",
   "When the user asks to stop pending work, call cancelOperation with its operationId and wait for the cancellation result before claiming it stopped.",
@@ -381,6 +387,7 @@ export async function completeAgent(
           toolName,
           input,
         })),
+        ...(result.text.trim() ? {activity: result.text.trim()} : {}),
       };
     }
 

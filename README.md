@@ -23,12 +23,12 @@ unimportant.
 | Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
 | Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
 | Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. Resolved decisions become model-visible transcript events, so later Turns retain what was decided without reopening the same request. |
-| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, progress, memory metadata, sandbox provisioning/suspension, approval decisions, and terminal outcomes retain their natural observation order. |
+| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, concise activity, structured tool lifecycle, progress, memory metadata, sandbox provisioning/suspension, approval decisions, and terminal outcomes retain their natural observation order. |
 | Push-style history updates | Restate callers register their own awakeable at a history cursor. Registration closes the empty-read race, while the actual transcript remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
 | Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
 | Turn-local context reduction | Large settled model/tool prefixes accumulated during one active Turn are reduced between steps. Initial conversation context and the newest working messages remain exact, while canonical history is untouched. |
-| Semantic progress | `thinking`, `tools`, `waiting`, and `finalizing` milestones are part of the ordered transcript; raw provider reasoning and low-level tool traffic stay in Restate observability. |
+| Semantic execution events | Short model-authored activity plus structured tool-batch start/finish events make multi-step turns readable. `thinking`, `waiting`, and `finalizing` remain semantic milestones; raw reasoning, tool arguments, and tool results stay private. |
 | Model admission control | Agent and policy calls go through a scoped gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes a sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. The demo provider uses `/tmp/restate-agent-sandboxes/<agentId>`. |
 | Explicit command lifetime | Sandbox commands are one-shot foreground calls returning an exit code, stdout, and stderr. Asynchronous work is an explicit shell concern rather than a hidden pending-tool protocol. |
@@ -148,12 +148,12 @@ flowchart LR
   polling.
 
 The controller stores the canonical transcript: user and assistant messages,
-explicit lifecycle boundaries, and semantic progress events. Tool calls and
-intermediate model steps stay in Restate's invocation journal and observability
-tools. A turn reports exactly one structured outcome: `completed`,
-`interrupted`, or `failed`. A graceful interruption can include a final
-assistant response based on completed tool results; raw tool activity still
-stays out of the transcript.
+explicit lifecycle boundaries, semantic progress, short user-facing activity,
+and structured tool names and statuses. Raw provider reasoning, tool arguments,
+tool results, and intermediate model messages stay in Restate's invocation
+journal and observability tools. A turn reports exactly one structured outcome:
+`completed`, `interrupted`, or `failed`. A graceful interruption can include a
+final assistant response based on completed tool results.
 
 Every handler on `Agent`, `Turn`, `ModelGateway`, `Sandbox`, and `Evals` is
 ingress-public in this reference implementation. This keeps the complete
@@ -193,13 +193,13 @@ summary untouched.
 
 Each `TurnRequest` carries a stable snapshot of the Agent's instructions,
 memories, guardrails, rolling summary, and exact model-relevant entries since
-the checkpoint. Progress and memory events remain in the canonical transcript
-but are filtered before the request is serialized. The Turn projects steering
-metadata and interruption, queued-message dispatch, or failure entries as
-explicit model-visible boundaries. Only the reserved handoff prefix is
-summarized: profile state, live model messages, tool calls, tool results,
-pending operations, and later steering inside the active Turn are not part of
-that checkpoint.
+the checkpoint. Progress, activity, tool lifecycle, memory, and sandbox events
+remain in the canonical transcript but are filtered before the request is
+serialized. The Turn projects steering metadata and interruption,
+queued-message dispatch, or failure entries as explicit model-visible
+boundaries. Only the reserved handoff prefix is summarized: profile state,
+live model messages, tool calls, tool results, pending operations, and later
+steering inside the active Turn are not part of that checkpoint.
 
 The active Turn separately bounds its private working context. Its initial
 Agent-provided messages stay exact. Between steps, once later settled
@@ -315,6 +315,7 @@ work.
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Resolves and removes a pending approval only while its Turn is still eligible to receive the decision, then records the delivered decision in history. Returns whether the signal was delivered. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
+| `reportExecution` | structured activity/tool reports | One-way path used by the active Turn; atomically appends concise model-authored activity and tool-batch lifecycle events for the current invocation. |
 | `reportSandbox` | `{ turnId, status: "provisioned" \| "suspended" }` | One-way lifecycle path used by the Sandbox VO; appends successful provisioning and suspension transitions. |
 | `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
@@ -387,19 +388,21 @@ unconsumed requests in a new Turn. An explicit interrupt supersedes outstanding
 steering. External cancellation does not: steering accepted before cancellation
 is recovered into the next turn.
 
-## Progress
+## Execution activity
 
-Turn one-way sends semantic milestones to `Agent.reportProgress`. The Agent
-checks the originating `turnId` and appends each accepted milestone to the
-canonical transcript as `{ role: "event", type: "progress", ... }`. It reports
-phases such as `thinking`, `tools`, `waiting`, and `finalizing`. Terminal state
-is already represented by the turn's assistant outcome, so it is not duplicated
-as progress. Raw provider reasoning blocks are never exposed.
+Turn one-way sends semantic milestones to `Agent.reportProgress` and structured
+step detail to `Agent.reportExecution`. For each allowed tool batch, the latter
+records an optional short activity sentence followed by a `started` event with
+tool call IDs and names, then a `finished` event whose calls are `succeeded`,
+`failed`, `pending`, or `cancelled`. Tool arguments and results are never copied
+into history. Progress covers `thinking`, `waiting`, and `finalizing`; terminal
+state is already represented by the Turn's assistant outcome. Raw provider
+reasoning blocks are never exposed.
 
-Progress events retain their natural order relative to every other event the
-Agent observes. They are deliberately omitted from model context and
-conversation compaction because they are derived execution status, not user
-instructions. Clients consume all transcript activity through one cursor:
+These events retain their natural order relative to every other event the Agent
+observes. They are deliberately omitted from model context and conversation
+compaction because they are derived execution status, not user instructions.
+Clients consume all transcript activity through one cursor:
 
 ```sh
 curl localhost:8080/Agent/demo/history \
@@ -416,8 +419,8 @@ making pub/sub the source of truth.
 ## Durability and failure behavior
 
 - Starting a turn and reporting its outcome are one-way Restate sends.
-- Progress milestones use one-way sends and never block model or tool
-  execution on the Agent handler completing.
+- Progress and execution reports use one-way sends and never block model or
+  tool execution on the Agent handler completing.
 - Each agent step makes one scoped full-model invocation and, when guardrails
   exist, one or more scoped policy-model invocations. Each contains one durable
   `run` step. Restate owns a bounded four-attempt retry policy; the AI SDK's

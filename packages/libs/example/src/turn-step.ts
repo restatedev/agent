@@ -29,6 +29,7 @@ import {guardrailContext} from "./turn-context.js";
 import {
   type ApprovalDecision,
   approvalSignalName,
+  type ExecutionReport,
   type Guardrail,
 } from "./types.js";
 
@@ -44,6 +45,7 @@ export type GuardrailDecisions = {
 
 export type ToolStep = GuardrailDecisions & {
   type: "tools";
+  step: number;
   action: ToolCallAction;
   outcomes: ToolOutcome[];
 };
@@ -66,7 +68,40 @@ function proposedAction(
 ): ProposedAction {
   return action.type === "text"
     ? action
-    : {type: action.type, calls: action.calls};
+    : {
+        type: action.type,
+        calls: action.calls,
+        ...(action.activity ? {activity: action.activity} : {}),
+      };
+}
+
+function executionStarted(
+  context: AgentToolContext,
+  step: number,
+  action: ToolCallAction,
+): ExecutionReport[] {
+  return [
+    ...(action.activity
+      ? [
+          {
+            type: "activity" as const,
+            turnId: context.turnId,
+            step,
+            message: action.activity,
+          },
+        ]
+      : []),
+    {
+      type: "tools",
+      turnId: context.turnId,
+      step,
+      phase: "started",
+      calls: action.calls.map(({toolCallId, toolName}) => ({
+        id: toolCallId,
+        name: toolName,
+      })),
+    },
+  ];
 }
 
 function* requestGuardrailApproval(
@@ -273,19 +308,17 @@ export function* agentStep({
       return {...action, ...decisions};
     }
 
-    const tasks = action.calls.map((call) =>
-      spawn(agentTools.execute(call, context)),
-    );
+    const tasks: Task<ToolOutcome>[] = [];
     activeTools = {action, tasks, decisions};
-    yield* sendClient(Agent, context.agentId).reportProgress({
-      turnId: context.turnId,
-      phase: "tools",
-      message: `Running ${action.calls.length} tool call(s): ${action.calls
-        .map(({toolName}) => toolName)
-        .join(", ")}`,
-    });
+    yield* sendClient(Agent, context.agentId).reportExecution(
+      executionStarted(context, stepNumber, action),
+    );
+    tasks.push(
+      ...action.calls.map((call) => spawn(agentTools.execute(call, context))),
+    );
     return {
       type: "tools",
+      step: stepNumber,
       action,
       outcomes: yield* all(tasks),
       ...decisions,
@@ -311,18 +344,19 @@ export function* agentStep({
       reason: error.message,
       tools: {
         type: "tools",
+        step: stepNumber,
         action,
         ...decisions,
-        outcomes: settled.map(
-          (result, index): ToolOutcome =>
-            result.status === "fulfilled"
-              ? result.value
-              : {
-                  call: action.calls[index],
-                  status: "failed",
-                  error: `interrupted before completion: ${error.message}`,
-                },
-        ),
+        outcomes: action.calls.map((call, index): ToolOutcome => {
+          const result = settled[index];
+          return result?.status === "fulfilled"
+            ? result.value
+            : {
+                call,
+                status: "failed",
+                error: `interrupted before completion: ${error.message}`,
+              };
+        }),
       },
     };
   }

@@ -189,12 +189,23 @@ function isWaitingForGuardrail(
 }
 
 function isWaitingForApproval(turnId: string): EntryPredicate {
-  return ({entry}) =>
-    entry.role === "event" &&
-    entry.type === "progress" &&
-    entry.turnId === turnId &&
-    (entry.message.toLowerCase().includes("approval") ||
-      entry.message.includes("humanApproval"));
+  return ({entry}) => {
+    if (entry.role !== "event") {
+      return false;
+    }
+    if (entry.type === "progress") {
+      return (
+        entry.turnId === turnId &&
+        entry.message.toLowerCase().includes("approval")
+      );
+    }
+    return (
+      entry.type === "tools" &&
+      entry.turnId === turnId &&
+      entry.phase === "started" &&
+      entry.calls.some(({name}) => name === "humanApproval")
+    );
+  };
 }
 
 function guardrailApprovalEvents(
@@ -218,14 +229,13 @@ function toolStartCount(
     .flatMap(({entry}) => {
       if (
         entry.role !== "event" ||
-        entry.type !== "progress" ||
+        entry.type !== "tools" ||
         entry.turnId !== turnId ||
-        entry.phase !== "tools"
+        entry.phase !== "started"
       ) {
         return [];
       }
-      const tools = /^Running \d+ tool call\(s\): (.+)$/.exec(entry.message);
-      return tools ? tools[1].split(", ") : [];
+      return entry.calls.map(({name}) => name);
     })
     .filter((started) => started === toolName).length;
 }
@@ -1153,10 +1163,10 @@ function* guardrailSteering({
     "the approved Tokyo weather tool to start",
     ({entry}) =>
       entry.role === "event" &&
-      entry.type === "progress" &&
+      entry.type === "tools" &&
       entry.turnId === ask.turnId &&
-      entry.phase === "tools" &&
-      entry.message.includes("getWeather"),
+      entry.phase === "started" &&
+      entry.calls.some(({name}) => name === "getWeather"),
   );
   const steered = yield* restate
     .client(Agent, agentId)

@@ -16,12 +16,13 @@ The application is split into a few concrete parts:
   handler observes it; pending state controls execution without reordering the
   transcript. Alongside the conversation handlers, `profile` exposes durable
   prompt context, while `approvals` and `resolveApproval` expose the
-  human-in-the-loop boundary. Semantic progress is appended to the same
-  sequenced transcript, which clients consume through the cursor-based
-  `history` handler. `ask` starts work when idle and queues when busy; clients
-  explicitly select `steer` or `interrupt` when they want to affect the active
-  turn. Interruption can atomically preserve a replacement user message for a
-  new Turn after the old Turn finishes graceful finalization.
+  human-in-the-loop boundary. Semantic progress, concise model-authored
+  activity, and structured tool lifecycle are appended to the same sequenced
+  transcript, which clients consume through the cursor-based `history`
+  handler. `ask` starts work when idle and queues when busy; clients explicitly
+  select `steer` or `interrupt` when they want to affect the active turn.
+  Interruption can atomically preserve a replacement user message for a new
+  Turn after the old Turn finishes graceful finalization.
 - **`Turn`** has no service state, but one durable invocation owns the
   transient agent-turn state machine: live messages, budgets, steering, and
   pending operations. It repeatedly spawns one bounded agent step, applies its
@@ -36,9 +37,9 @@ The application is split into a few concrete parts:
   deny, or durably wait for human approval. `turn-steering.ts` drains durable
   steering signals into a Turn-scoped inbox, while `turn-pending.ts` owns
   long-lived sleeps and approvals across steps. The model can selectively stop
-  those tasks through `cancelOperation`; progress remains visible in the
-  canonical transcript but is omitted from future model context and
-  compaction input.
+  those tasks through `cancelOperation`; progress and execution activity remain
+  visible in the canonical transcript but are omitted from future model context
+  and compaction input.
 - **`ModelGateway`** performs full agent inference, cheap guardrail evaluation,
   and active-Turn context reduction behind Restate's scoped concurrency
   controls, model-specific limit keys, retry policy, and cancellation
@@ -72,18 +73,20 @@ user/UI → Agent → Turn → agentStep → ModelGateway
 ```
 
 The controller stores user messages, final answers, failures, lifecycle
-boundaries, and semantic progress in one ordered transcript. Intermediate model
-responses, tool calls, and tool results remain visible through Restate's
-invocation journal instead of becoming conversation entries. Compaction
-preserves failure and interruption boundaries while older turns are summarized
-for model context without being removed from the canonical transcript.
+boundaries, semantic progress, short activity, and structured tool names and
+statuses in one ordered transcript. Raw reasoning, tool arguments and results,
+and intermediate model messages remain visible through Restate's invocation
+journal instead of becoming conversation entries. Compaction preserves failure
+and interruption boundaries while older turns are summarized for model context
+without being removed from the canonical transcript.
 
 ## Why Restate is useful here
 
 Restate provides the application-level guarantees that an agent needs:
 
 - durable conversation state and serialized controller decisions;
-- one cursor-consumable sequence for messages, lifecycle events, and progress;
+- one cursor-consumable sequence for messages, lifecycle events, progress, and
+  structured execution activity;
 - lazy, chunked transcript storage and asynchronous summary checkpoints;
 - one-way invocation of long-running turns;
 - durable signals for steering, interruption, and human approval;

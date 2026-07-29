@@ -34,6 +34,7 @@ import {
   type ToolStep,
 } from "./turn-step.js";
 import {
+  type ExecutionReport,
   type Guardrail,
   type ProgressReport,
   type SteeringSignal,
@@ -196,13 +197,44 @@ function* reportProgress(
   });
 }
 
-function toolBatchSummary(outcomes: ToolOutcome[]): string {
-  const succeeded = outcomes.filter(
-    ({status}) => status === "succeeded",
-  ).length;
-  const failed = outcomes.filter(({status}) => status === "failed").length;
-  const pending = outcomes.filter(({status}) => status === "pending").length;
-  return `Tool batch finished: ${succeeded} succeeded, ${failed} failed, ${pending} pending`;
+type TranscriptToolStatus = Exclude<
+  Extract<ExecutionReport, {type: "tools"}>["calls"][number]["status"],
+  undefined
+>;
+
+function transcriptToolStatus(
+  outcome: ToolOutcome,
+  interrupted: boolean,
+): TranscriptToolStatus {
+  if (
+    interrupted &&
+    outcome.status === "failed" &&
+    outcome.error.startsWith("interrupted before completion:")
+  ) {
+    return "cancelled";
+  }
+  return outcome.status === "cancel_requested" ? "failed" : outcome.status;
+}
+
+function* reportToolsFinished(
+  state: TurnState,
+  step: ToolStep,
+  outcomes: ToolOutcome[],
+  interrupted = false,
+): restate.Operation<void> {
+  yield* restate.sendClient(Agent, state.context.agentId).reportExecution([
+    {
+      type: "tools",
+      turnId: state.context.turnId,
+      step: step.step,
+      phase: "finished",
+      calls: outcomes.map((outcome) => ({
+        id: outcome.call.toolCallId,
+        name: outcome.call.toolName,
+        status: transcriptToolStatus(outcome, interrupted),
+      })),
+    },
+  ]);
 }
 
 function guardrailApprovalMessage(guardrailId: string): ModelMessage {
@@ -402,11 +434,7 @@ function* applyTools(
     ...applied.events.map(agentTools.toRuntimeMessage),
     ...steering.map(steeringMessage),
   );
-  yield* reportProgress(
-    state.context,
-    "tools",
-    toolBatchSummary(applied.outcomes),
-  );
+  yield* reportToolsFinished(state, step, applied.outcomes);
 }
 
 function retainInterruptedTools(
@@ -472,6 +500,12 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
           state.approvedGuardrails.add(guardrailId);
         }
         retainInterruptedTools(state, step.tools, step.reason);
+        yield* reportToolsFinished(
+          state,
+          step.tools,
+          step.tools.outcomes,
+          true,
+        );
       }
       return yield* finalizeStoppedTurn(state, step.reason);
     }

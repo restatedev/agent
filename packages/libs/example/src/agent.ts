@@ -28,6 +28,9 @@ import {
   type ApprovalRequest,
   ApprovalRequestSchema,
   ApprovalResolutionSchema,
+  type ConversationEntry,
+  type ExecutionReport,
+  ExecutionReportSchema,
   GuardrailSchema,
   type HistoryPage,
   HistoryPageSchema,
@@ -113,6 +116,10 @@ const SetGuardrailsSchema = z.object({
 // Internal coordination handlers are high-volume and their completed
 // invocations carry no information worth retaining.
 const noRetention = {idempotencyRetention: 0, journalRetention: 0};
+
+function executionEntry(report: ExecutionReport): ConversationEntry {
+  return {role: "event", ...report};
+}
 
 export const Agent = restate.object({
   name: "Agent",
@@ -304,6 +311,19 @@ export const Agent = restate.object({
       },
     ),
 
+    // Structured user-facing execution detail from an active Turn. A batch
+    // keeps model-authored activity and the tool-start event adjacent.
+    reportExecution: restate.schemas(
+      {input: z.array(ExecutionReportSchema).min(1), output: z.void()},
+      function* (reports: ExecutionReport[]): restate.Operation<void> {
+        const current = yield* activeTurn.current();
+        if (reports.some(({turnId}) => turnId !== current?.id)) {
+          return;
+        }
+        yield* history.append(...reports.map(executionEntry));
+      },
+    ),
+
     // Successful sandbox lifecycle transitions are semantic transcript events.
     // Provisioning must still belong to the active Turn; suspension may arrive
     // after that Turn has already completed.
@@ -386,8 +406,8 @@ export const Agent = restate.object({
     // turn, and dispatch anything still queued. An explicit interrupt event is
     // already in history; external cancellation gets one here. A graceful
     // interruption can additionally produce an assistant finalization.
-    // This is intentionally high-level: detailed tool/model activity belongs
-    // in Restate's invocation logs and observability, not conversation state.
+    // Detailed execution activity is reported separately while the Turn runs;
+    // this path records only its terminal result.
     onTurnEnd: restate.schemas(
       {input: TurnOutcomeSchema, output: z.void()},
       function* (outcome): restate.Operation<void> {
@@ -474,6 +494,7 @@ export const Agent = restate.object({
       watchHistory: noRetention,
       updateMemory: noRetention,
       reportProgress: noRetention,
+      reportExecution: noRetention,
       reportSandbox: noRetention,
       requestApproval: noRetention,
       cancelApproval: noRetention,

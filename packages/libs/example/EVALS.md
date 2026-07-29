@@ -164,17 +164,12 @@ curl localhost:8080/Evals/all \
   -d '{"cases":["context-reduction"]}'
 ```
 
-The user-facing transcript intentionally omits raw tool calls. Assertions about
-internal properties such as actual tool parallelism require a later
-journal-observation layer or a scripted model/tool mode; progress text alone
-does not prove those properties.
-
-Two assertions currently read tool activity out of progress *prose*
-(`steering`'s timer-restart check and `execution-limit`'s budget check) by
-matching the `Running N tool call(s): ...` message that `turn-step.ts` emits.
-That is the coupling the paragraph above warns about: editing that string turns
-these into confusing agent-looking failures. Promoting the tool names to a
-structured field on `ProgressReportSchema` would remove the coupling.
+The user-facing transcript records tool call IDs, names, and lifecycle statuses,
+but intentionally omits tool inputs and results. Protocol assertions such as
+the steering timer-restart check and execution-budget check consume these
+structured events. Internal properties such as actual tool parallelism still
+require a later journal-observation layer or a scripted model/tool mode; the
+transcript proves intent and settlement order, not physical overlap.
 
 ## Later extensions
 

@@ -20,12 +20,7 @@ export type SteeringSignal = {
 // steering and dispatch events record when queued work enters a Turn.
 const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 
-const ProgressPhaseSchema = z.enum([
-  "thinking",
-  "tools",
-  "waiting",
-  "finalizing",
-]);
+const ProgressPhaseSchema = z.enum(["thinking", "waiting", "finalizing"]);
 
 // A semantic progress update sent from one active Turn to its Agent.
 export const ProgressReportSchema = z.object({
@@ -40,6 +35,40 @@ export const SandboxEventSchema = z.object({
   status: z.enum(["provisioned", "suspended"]),
 });
 export type SandboxEvent = z.infer<typeof SandboxEventSchema>;
+
+const ToolExecutionStatusSchema = z.enum([
+  "succeeded",
+  "failed",
+  "pending",
+  "cancelled",
+]);
+
+const ActivityReportSchema = z.object({
+  type: z.literal("activity"),
+  turnId: z.string(),
+  step: z.number().int().positive(),
+  message: z.string().trim().min(1),
+});
+
+const ToolReportSchema = z.object({
+  type: z.literal("tools"),
+  turnId: z.string(),
+  step: z.number().int().positive(),
+  phase: z.enum(["started", "finished"]),
+  calls: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      status: ToolExecutionStatusSchema.optional(),
+    }),
+  ),
+});
+
+export const ExecutionReportSchema = z.discriminatedUnion("type", [
+  ActivityReportSchema,
+  ToolReportSchema,
+]);
+export type ExecutionReport = z.infer<typeof ExecutionReportSchema>;
 
 // Durable prompt context owned by one Agent. Instructions are authoritative
 // user configuration, memories are model-managed data, and guardrails are
@@ -165,6 +194,12 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
   SandboxEventSchema.extend({
     role: z.literal("event"),
     type: z.literal("sandbox"),
+  }),
+  ActivityReportSchema.extend({
+    role: z.literal("event"),
+  }),
+  ToolReportSchema.extend({
+    role: z.literal("event"),
   }),
 ]);
 
