@@ -43,6 +43,11 @@ The application is split into a few concrete parts:
   and active-Turn context reduction behind Restate's scoped concurrency
   controls, model-specific limit keys, retry policy, and cancellation
   propagation.
+- **`Sandbox`** is a Virtual Object keyed by `agentId`. Sandbox tools borrow it
+  lazily for their Turn; it provisions or resumes through a provider, and Turn
+  release schedules a cancellable idle suspension. The included provider is a
+  no-op implementation. File operations and commands are one-shot foreground
+  calls, with intentional asynchronous work left to explicit shell scripts.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the
@@ -51,14 +56,14 @@ The application is split into a few concrete parts:
   through the public protocol and returns structured assertions with their
   observed transcripts.
 
-All handlers on `Agent`, `Turn`, `ModelGateway`, and `Evals` are ingress-public
-so the complete protocol is easy to inspect. Normal clients should still use
-only the conversation and approval handlers; the others are service
-coordination paths.
+All handlers on `Agent`, `Turn`, `ModelGateway`, `Sandbox`, and `Evals` are
+ingress-public so the complete protocol is easy to inspect. Normal clients
+should still use only the conversation and approval handlers; the others are
+service coordination paths.
 
 ```text
 user/UI → Agent → Turn → agentStep → ModelGateway
-            ↑         ↕ allowed tools
+            ↑         ↕ allowed tools → Sandbox
             └── outcome, progress, approvals, and signals
 ```
 
@@ -82,6 +87,7 @@ Restate provides the application-level guarantees that an agent needs:
 - turn-scoped pending timers and signal-backed human approval;
 - a fail-closed policy gate before publishing text or starting tool batches;
 - deterministic concurrent execution of independent tools;
+- durable ownership and idle lifecycle for an agent-scoped sandbox;
 - concurrency limits around model traffic;
 - an observable invocation tree for the complete turn.
 
@@ -99,12 +105,14 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
 - `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
+- `packages/libs/example/src/sandbox.ts` — agent-scoped sandbox lifecycle
+- `packages/libs/example/src/sandbox-provider.ts` — provider and one-shot client contracts
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context AI SDK integration
 - `packages/libs/example/src/model-gateway.ts` — scoped model gateway
 - `packages/libs/example/src/eval.ts` — durable black-box protocol evaluations
 - `packages/libs/example/src/types.ts` — shared wire contracts and schemas
-- `packages/libs/example/src/app.ts` — Agent, Turn, gateway, and eval endpoint
+- `packages/libs/example/src/app.ts` — Agent, Turn, Sandbox, gateway, and eval endpoint
 
 See [`README.md`](./README.md) for setup instructions, example invocations, and
 the detailed durability and flow-control behavior.

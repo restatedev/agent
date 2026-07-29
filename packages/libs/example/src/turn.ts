@@ -17,6 +17,7 @@ import {
   callGuardrailModel,
   callModel,
 } from "./model-gateway.js";
+import {Sandbox} from "./sandbox.js";
 import {
   buildModelContext,
   finalizationInstruction,
@@ -553,27 +554,36 @@ export const Turn = restate.service({
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): restate.Operation<void> {
         const state = createTurnState(req, restate.handlerRequest().id);
+        let outcome: TurnOutcome;
+        let cancellation: CancelledError | undefined;
         try {
-          const outcome = yield* executeTurn(state);
-          yield* restate.sendClient(Agent, req.agentId).onTurnEnd(outcome);
+          outcome = yield* executeTurn(state);
         } catch (error) {
           yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
-            yield* restate.sendClient(Agent, req.agentId).onTurnEnd({
+            outcome = {
               turnId: state.context.turnId,
               status: "interrupted",
               reason: "Turn cancelled",
               consumedSteering: state.consumedSteering,
-            });
-            throw error;
+            };
+            cancellation = error;
+          } else {
+            outcome = {
+              turnId: state.context.turnId,
+              status: "failed",
+              error: errorMessage(error),
+              consumedSteering: state.consumedSteering,
+            };
           }
+        }
 
-          yield* restate.sendClient(Agent, req.agentId).onTurnEnd({
-            turnId: state.context.turnId,
-            status: "failed",
-            error: errorMessage(error),
-            consumedSteering: state.consumedSteering,
-          });
+        yield* restate
+          .client(Sandbox, req.agentId)
+          .release({turnId: state.context.turnId});
+        yield* restate.sendClient(Agent, req.agentId).onTurnEnd(outcome);
+        if (cancellation) {
+          throw cancellation;
         }
       },
     ),

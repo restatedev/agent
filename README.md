@@ -30,6 +30,8 @@ unimportant.
 | Turn-local context reduction | Large settled model/tool prefixes accumulated during one active Turn are reduced between steps. Initial conversation context and the newest working messages remain exact, while canonical history is untouched. |
 | Semantic progress | `thinking`, `tools`, `waiting`, and `finalizing` milestones are part of the ordered transcript; raw provider reasoning and low-level tool traffic stay in Restate observability. |
 | Model admission control | Agent and policy calls go through a scoped gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
+| Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes an external sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. |
+| Explicit command lifetime | Sandbox commands are one-shot foreground calls returning an exit code, stdout, and stderr. Asynchronous work is an explicit shell concern rather than a hidden pending-tool protocol. |
 | Restate-native evals | Durable eval invocations drive fresh Agents through the same public protocol, synchronize on history awakeables, inject control events, and return structured assertions plus the observed transcript. |
 
 These features compose rather than live as isolated demos. For example, a Turn
@@ -56,11 +58,13 @@ one long-running operation.
 ## Deliberate scope
 
 This is a reference runtime, not a complete agent product. The weather tool is
-synthetic so execution semantics stay visible. Sandbox provisioning,
-token-by-token output streaming, pub/sub fan-out, authentication, and
-multi-tenant policy administration are not implemented. History awakeables
-provide durable point-to-point change notification, not a replacement for a
-broadcast event bus.
+synthetic so execution semantics stay visible. The sandbox lifecycle and tool
+boundary are implemented against a no-op provider; choosing and configuring a
+real sandbox vendor remains deliberately outside the example. Token-by-token
+output streaming, pub/sub fan-out, authentication, and multi-tenant policy
+administration are not implemented. History awakeables provide durable
+point-to-point change notification, not a replacement for a broadcast event
+bus.
 
 Natural-language guardrail classification and answer quality remain
 probabilistic model behavior; the runtime deterministically enforces the
@@ -81,6 +85,9 @@ flowchart LR
   Step -->|"allowed batch: spawn + durable run"| Tools["local tools in parallel"]
   Step -->|"policy approval request"| Agent
   Tools -->|"approval / memory updates"| Agent
+  Tools -->|"lazy borrow + one-shot I/O"| Sandbox["Sandbox Virtual Object\nkeyed by agentId"]
+  Turn -->|"release at Turn end"| Sandbox
+  Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(no-op implementation)"]
   Turn -->|"large settled context"| Gateway
   Turn -->|"one-way onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
@@ -114,6 +121,14 @@ flowchart LR
 - `agent-tools.ts` owns the concrete tools. Each definition keeps its model
   description, input schema, validation, local durable behavior, and result
   projection together. It exposes each step a single concrete tool collection.
+  Sandbox tools borrow the agent-scoped resource lazily; each file or command
+  operation remains an ordinary foreground tool call.
+- `sandbox.ts` owns durable lifecycle state for one agent's sandbox. It cancels
+  a pending idle suspension when a Turn borrows the resource, resumes it when
+  needed, and schedules suspension after the Turn releases it.
+  `sandbox-provider.ts` is the vendor-neutral boundary. Its synchronous
+  `connect` only constructs a client; every provider and client operation runs
+  separately inside `restate.run` with cancellation propagation.
 - `model.ts` owns provider-specific inference and the shared model contracts. It
   reconstructs AI SDK tool definitions from serializable manifests while
   deliberately receiving no executors.
@@ -139,7 +154,7 @@ tools. A turn reports exactly one structured outcome: `completed`,
 assistant response based on completed tool results; raw tool activity still
 stays out of the transcript.
 
-Every handler on `Agent`, `Turn`, `ModelGateway`, and `Evals` is
+Every handler on `Agent`, `Turn`, `ModelGateway`, `Sandbox`, and `Evals` is
 ingress-public in this reference implementation. This keeps the complete
 protocol inspectable and easy to invoke while experimenting. Public visibility
 does not make every handler a user API: normal clients should use `ask`,
@@ -193,6 +208,33 @@ the agent model. Newly appended tool results, steering, and runtime events stay
 exact until that model has observed them. The result exists only inside that
 Turn invocation. It does not rewrite canonical history or affect future Turns,
 and a failed reduction leaves the exact working context in place.
+
+## Sandbox lifecycle and tools
+
+`Sandbox` is a Virtual Object keyed by the same `agentId` as its `Agent`.
+Sandbox tools call `borrow(turnId)` before connecting to the provider. The
+first borrow provisions the resource; a later borrow resumes it if idle
+suspension has already occurred. Repeated borrows from parallel tools in the
+same Turn are idempotent, while a different Turn cannot take an active lease.
+When `Turn.run` reaches any terminal outcome, it calls `release(turnId)`.
+Release schedules a durable delayed `suspend` invocation and records its
+invocation ID. A subsequent borrow cancels that exact timer, and stale delayed
+invocations cannot suspend a resource that has been borrowed again.
+
+The provider interface separates connection from effects. `connect(ref)` is a
+synchronous, process-local operation. `listFiles`, `readFile`, `writeFile`, and
+`executeCommand` are one-shot client calls individually wrapped in
+`restate.run`, receiving its `AbortSignal`. `executeCommand` always waits for a
+terminal `{ exitCode, stdout, stderr }` result. If the model intentionally
+wants asynchronous work, it must launch and track a background shell script;
+the agent runtime does not turn a sandbox process into an implicit pending
+operation.
+
+The included provider is intentionally a no-op: lifecycle calls succeed and
+client operations return a terminal “not configured” tool failure rather than
+pretending an external effect occurred. Replacing `sandboxProvider` with a real
+implementation activates the same lifecycle and model-visible tools without
+changing Turn control flow.
 
 ## Instructions, memories, and guardrails
 
@@ -278,6 +320,9 @@ The remaining services expose these public handlers:
 - `Turn/run` accepts the Agent's profile snapshot, rolling summary, and exact
   uncompacted transcript, runs one transient state machine made of bounded
   agent steps, and one-way reports a structured outcome to `Agent/onTurnEnd`.
+- `Sandbox/borrow` lazily provisions or resumes the agent-scoped resource,
+  `release` schedules idle suspension, `suspend` applies that lifecycle
+  transition, and `destroy` removes an idle resource.
 - `ModelGateway/complete` accepts instructions, model messages, and serializable
   tool manifests. `ModelGateway/evaluateGuardrails` separately accepts the
   policy snapshot and exact proposed action. `ModelGateway/reduceContext`

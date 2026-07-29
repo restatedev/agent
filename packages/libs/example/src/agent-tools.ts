@@ -11,6 +11,8 @@ import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
 import type {ToolCall, ToolManifest} from "./model.js";
+import {Sandbox} from "./sandbox.js";
+import {type SandboxClient, sandboxProvider} from "./sandbox-provider.js";
 import {
   type ApprovalDecision,
   approvalSignalName,
@@ -69,6 +71,31 @@ function validationMessage(error: z.ZodError): string {
       return `${path}: ${issue.message}`;
     })
     .join("; ");
+}
+
+function* runSandboxTool(
+  name: string,
+  context: ToolCallContext,
+  operation: (client: SandboxClient, signal: AbortSignal) => Promise<string>,
+): restate.Operation<ToolExecution> {
+  try {
+    const ref = yield* restate
+      .client(Sandbox, context.agentId)
+      .borrow({turnId: context.turnId});
+    const client = sandboxProvider.connect(ref);
+    const result = yield* restate.run(({signal}) => operation(client, signal), {
+      name,
+    });
+    return {status: "succeeded", result};
+  } catch (error) {
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
+      throw error;
+    }
+    return {status: "failed", error: `${name} failed: ${errorMessage(error)}`};
+  }
 }
 
 // The schema type parameter exists only to type `run`/`complete` inputs from
@@ -343,12 +370,112 @@ const manageMemoryTool = defineAgentTool({
   },
 });
 
+const listFilesTool = defineAgentTool({
+  name: "listFiles",
+  description:
+    "List files at one path in the agent's persistent sandbox. Use '.' for the working directory.",
+  inputSchema: z.object({
+    path: z.string().min(1).describe("Directory path to list."),
+  }),
+  *run({path}, context): restate.Operation<ToolExecution> {
+    return yield* runSandboxTool(
+      "listSandboxFiles",
+      context,
+      async (client, signal) =>
+        JSON.stringify(await client.listFiles(path, {signal})),
+    );
+  },
+});
+
+const readFileTool = defineAgentTool({
+  name: "readFile",
+  description: "Read one UTF-8 text file from the agent's persistent sandbox.",
+  inputSchema: z.object({
+    path: z.string().min(1).describe("Path of the text file to read."),
+  }),
+  *run({path}, context): restate.Operation<ToolExecution> {
+    return yield* runSandboxTool(
+      "readSandboxFile",
+      context,
+      async (client, signal) => client.readFile(path, {signal}),
+    );
+  },
+});
+
+const writeFileTool = defineAgentTool({
+  name: "writeFile",
+  description:
+    "Write one complete UTF-8 text file in the agent's persistent sandbox, replacing its previous contents.",
+  inputSchema: z.object({
+    path: z.string().min(1).describe("Path of the text file to write."),
+    content: z.string().describe("Complete new contents of the file."),
+  }),
+  *run({path, content}, context): restate.Operation<ToolExecution> {
+    return yield* runSandboxTool(
+      "writeSandboxFile",
+      context,
+      async (client, signal) => {
+        await client.writeFile(path, content, {signal});
+        return `Wrote ${Buffer.byteLength(content)} bytes to ${path}`;
+      },
+    );
+  },
+});
+
+const executeCommandTool = defineAgentTool({
+  name: "executeCommand",
+  description:
+    "Execute one shell command in the agent's persistent sandbox and wait for its final exit result. This tool never becomes a pending agent operation. To intentionally leave work running, launch and track a background shell script from the command itself.",
+  inputSchema: z.object({
+    command: z.string().min(1).describe("Shell command to execute."),
+    cwd: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe("Working directory, or null for the sandbox default."),
+    timeoutSeconds: z
+      .number()
+      .int()
+      .min(1)
+      .max(3_600)
+      .nullable()
+      .describe(
+        "Command timeout in seconds, or null for the provider default.",
+      ),
+  }),
+  *run(
+    {command, cwd, timeoutSeconds},
+    context,
+  ): restate.Operation<ToolExecution> {
+    return yield* runSandboxTool(
+      "executeSandboxCommand",
+      context,
+      async (client, signal) => {
+        const result = await client.executeCommand(
+          {
+            command,
+            cwd: cwd ?? undefined,
+            timeoutMs:
+              timeoutSeconds === null ? undefined : timeoutSeconds * 1_000,
+          },
+          {signal},
+        );
+        return JSON.stringify(result);
+      },
+    );
+  },
+});
+
 const definitions = [
   getWeatherTool,
   sleepTool,
   humanApprovalTool,
   cancelOperationTool,
   manageMemoryTool,
+  listFilesTool,
+  readFileTool,
+  writeFileTool,
+  executeCommandTool,
 ] as const;
 
 function findTool(name: string): AgentTool | undefined {

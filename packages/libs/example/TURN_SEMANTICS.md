@@ -25,9 +25,13 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   completion races, selective cancellation, and cleanup.
 - `agent-tools.ts` owns concrete tool definitions, validation, execution,
   completion, and conversion of outcomes into model messages.
+- `Sandbox`, keyed by `agentId`, owns the external sandbox lifecycle. Sandbox
+  tools borrow it lazily for their Turn, while `Turn.run` releases it before
+  reporting its terminal outcome.
 - Tool calls execute locally inside the Turn handler. They are not RPCs.
   `manageMemory` and `humanApproval` call Agent handlers only for durable state
-  that the Agent virtual object must own.
+  that the Agent virtual object must own. Sandbox tools call the Sandbox object
+  only for its serialized lease and lifecycle.
 
 ## Execution shape
 
@@ -140,6 +144,14 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   Turn work fails.
 - Every foreground tool in one model response runs concurrently inside the
   spawned step and is joined before the step returns.
+- Sandbox file operations and commands are foreground tools. Each client
+  operation is one-shot and runs inside its own `restate.run` with cancellation
+  propagation. `executeCommand` returns only after a terminal exit result;
+  intentional background work must be launched and tracked explicitly by the
+  shell command.
+- Parallel sandbox tools may borrow the same agent-scoped resource
+  idempotently. Dependent operations must be proposed in separate model steps,
+  just like any other dependent tool calls.
 - Exhausting a foreground tool's durable retry policy becomes a failed tool
   outcome for the model. Cancellation and Turn interruption still propagate.
 - Turn commits the assistant tool-call message and one complete matching
