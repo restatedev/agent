@@ -123,7 +123,11 @@ the source of truth.
    to manufacture a 32 KB working context.
 7. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
-8. Five isolated guardrail cases cover:
+8. `scheduling` creates, lists, and cancels one delayed message without model
+   inference, then lets a one-shot schedule wake an idle Agent. It checks the
+   firing route, adjacent user entry, terminal response, and one-shot state
+   cleanup with one small agent turn.
+9. Five isolated guardrail cases cover:
    - Approval verifies that the guardrail profile update and pending request
      are discoverable as structured history events, approves exactly one
      request, and checks that the decision is recorded before completion. A

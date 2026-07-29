@@ -143,6 +143,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   active non-interrupting Turn can write, and the Agent stores at most 32
   memories. A successful tool result is a durable side effect even if later
   Turn work fails.
+- Schedule tools create, list, or cancel Agent-owned delayed messages as
+  foreground calls. The delayed invocation is not a Turn pending operation and
+  survives after the creating Turn completes.
 - Every foreground tool in one model response runs concurrently inside the
   spawned step and is joined before the step returns.
 - Sandbox file operations and commands are foreground tools. Each client

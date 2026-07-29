@@ -12,7 +12,9 @@ The application is split into a few concrete parts:
 - **`Agent`** is a Virtual Object keyed by `agentId`. It owns the durable
   conversation history, tracks the active turn, routes queued messages, and
   owns the persistent instructions, memories, guardrails, and pending human
-  approvals. Every message and lifecycle event is recorded when its exclusive
+  approvals. It also owns durable one-shot and fixed-interval messages:
+  delayed self-sends return through the same exclusive routing decision as
+  ordinary input. Every message and lifecycle event is recorded when its exclusive
   handler observes it; pending state controls execution without reordering the
   transcript. Alongside the conversation handlers, `profile` exposes durable
   prompt context, while `approvals` and `resolveApproval` expose the
@@ -69,6 +71,7 @@ service coordination paths.
 
 ```text
 user/UI → Agent → Turn → agentStep → ModelGateway
+            ↻ delayed schedules
             ↑         ↕ allowed tools → Sandbox
             └── outcome, progress, approvals, and signals
 ```
@@ -94,6 +97,8 @@ Restate provides the application-level guarantees that an agent needs:
 - one-way invocation of long-running turns;
 - durable signals for steering, interruption, and human approval;
 - durable sleeps, retries, and local tool operations;
+- durable Agent-owned scheduled messages with queue, steer, or interrupt
+  delivery;
 - turn-scoped pending timers and signal-backed human approval;
 - a fail-closed policy gate before publishing text or starting tool batches;
 - deterministic concurrent execution of independent tools;
@@ -107,6 +112,7 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-profile.ts` — durable instructions, memories,
   and natural-language guardrails
+- `packages/libs/example/src/agent-schedules.ts` — Agent-owned scheduled messages
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signals

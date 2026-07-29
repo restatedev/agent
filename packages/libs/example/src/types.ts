@@ -20,6 +20,107 @@ export type SteeringSignal = {
 // steering and dispatch events record when queued work enters a Turn.
 const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 
+const ScheduleWhenBusySchema = z
+  .enum(["queue", "steer", "interrupt"])
+  .describe(
+    "How a due message enters the conversation when a Turn is active. Queue is the default unless the user explicitly asks to affect current work.",
+  );
+
+const ScheduleIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .describe(
+    "A stable human-readable identifier. Reusing it replaces the existing schedule.",
+  );
+
+export const ScheduleSpecSchema = z.object({
+  scheduleId: ScheduleIdSchema,
+  message: z
+    .string()
+    .trim()
+    .min(1)
+    .describe("The user request to deliver when the schedule becomes due."),
+  delaySeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(31_536_000)
+    .describe("Seconds from now until the first delivery."),
+  repeatEverySeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(31_536_000)
+    .nullable()
+    .describe(
+      "Fixed delay between later deliveries, or null for a one-shot schedule.",
+    ),
+  whenBusy: ScheduleWhenBusySchema,
+});
+
+export const ScheduledMessageSchema = ScheduleSpecSchema.omit({
+  delaySeconds: true,
+}).extend({
+  nextRunAt: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe("Unix epoch milliseconds for the next delivery."),
+});
+export type ScheduledMessage = z.infer<typeof ScheduledMessageSchema>;
+
+export const ScheduleMutationSchema = z.object({
+  turnId: z.string().min(1).nullable(),
+  schedule: ScheduleSpecSchema.extend({
+    whenBusy: ScheduleWhenBusySchema.optional(),
+  }),
+});
+export type ScheduleMutation = z.infer<typeof ScheduleMutationSchema>;
+
+export const ScheduleMutationResultSchema = z.discriminatedUnion("accepted", [
+  z.object({
+    accepted: z.literal(true),
+    replaced: z.boolean(),
+    schedule: ScheduledMessageSchema,
+  }),
+  z.object({
+    accepted: z.literal(false),
+    error: z.string(),
+  }),
+]);
+export type ScheduleMutationResult = z.infer<
+  typeof ScheduleMutationResultSchema
+>;
+
+export const ScheduleCancellationSchema = z.object({
+  turnId: z.string().min(1).nullable(),
+  scheduleId: ScheduleIdSchema,
+});
+export type ScheduleCancellation = z.infer<typeof ScheduleCancellationSchema>;
+
+export const ScheduleCancellationResultSchema = z.discriminatedUnion(
+  "accepted",
+  [
+    z.object({
+      accepted: z.literal(true),
+      cancelled: z.boolean(),
+    }),
+    z.object({
+      accepted: z.literal(false),
+      error: z.string(),
+    }),
+  ],
+);
+export type ScheduleCancellationResult = z.infer<
+  typeof ScheduleCancellationResultSchema
+>;
+
+export const ScheduleFireSchema = z.object({
+  scheduleId: ScheduleIdSchema,
+});
+
 const ProgressPhaseSchema = z.enum(["thinking", "waiting", "finalizing"]);
 
 // A semantic progress update sent from one active Turn to its Agent.
@@ -207,6 +308,16 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
         key: z.string(),
       }),
     ),
+  }),
+  z.object({
+    role: z.literal("event"),
+    type: z.literal("schedule"),
+    scheduleId: ScheduleIdSchema,
+    action: z.enum(["created", "updated", "cancelled", "fired"]),
+    turnId: z.string().optional(),
+    nextRunAt: z.number().int().nonnegative().optional(),
+    whenBusy: ScheduleWhenBusySchema.optional(),
+    routing: z.enum(["start", "queue", "steer", "interrupt"]).optional(),
   }),
   z
     .object({

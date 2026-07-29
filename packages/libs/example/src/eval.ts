@@ -18,6 +18,7 @@ const EvalCaseIdSchema = z.enum([
   "execution-limit",
   "context-reduction",
   "memory",
+  "scheduling",
   "guardrail-approval",
   "guardrail-scope",
   "guardrail-denial",
@@ -266,6 +267,100 @@ function* basicTurn({
     assertion(
       "the response identifies Berlin",
       response.toLowerCase().includes("berlin"),
+    ),
+  ];
+}
+
+function* scheduling({
+  agentId,
+  history,
+}: EvalContext): restate.Operation<EvalAssertion[]> {
+  const pending = yield* restate.client(Agent, agentId).scheduleMessage({
+    turnId: null,
+    schedule: {
+      scheduleId: "cancelled-reminder",
+      message: "This message must never be delivered.",
+      delaySeconds: 60,
+      repeatEverySeconds: null,
+      whenBusy: "queue",
+    },
+  });
+  const beforeCancel = yield* restate.client(Agent, agentId).schedules();
+  const cancellation = yield* restate.client(Agent, agentId).cancelSchedule({
+    turnId: null,
+    scheduleId: "cancelled-reminder",
+  });
+  const afterCancel = yield* restate.client(Agent, agentId).schedules();
+
+  const scheduled = yield* restate.client(Agent, agentId).scheduleMessage({
+    turnId: null,
+    schedule: {
+      scheduleId: "one-shot",
+      message:
+        "Reply briefly that the scheduled delivery was received. Do not call tools.",
+      delaySeconds: 1,
+      repeatEverySeconds: null,
+      whenBusy: "queue",
+    },
+  });
+  const fired = yield* waitForHistory(
+    history,
+    "the one-shot schedule to fire",
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "schedule" &&
+      entry.scheduleId === "one-shot" &&
+      entry.action === "fired",
+  );
+  const terminal = yield* waitForHistory(
+    history,
+    "the scheduled turn to finish",
+    ({sequence, entry}) =>
+      sequence > fired.sequence && entry.role === "assistant",
+  );
+  const remaining = yield* restate.client(Agent, agentId).schedules();
+  const delivered = history.entries.find(
+    ({sequence, entry}) =>
+      sequence === fired.sequence + 1 &&
+      entry.role === "user" &&
+      entry.text.includes("scheduled delivery was received"),
+  );
+
+  return [
+    assertion(
+      "a schedule can be created and listed",
+      pending.accepted &&
+        beforeCancel.some(
+          ({scheduleId}) => scheduleId === "cancelled-reminder",
+        ),
+    ),
+    assertion(
+      "cancellation removes the durable schedule",
+      cancellation.accepted &&
+        cancellation.cancelled &&
+        !afterCancel.some(
+          ({scheduleId}) => scheduleId === "cancelled-reminder",
+        ),
+    ),
+    assertion("a one-shot schedule is accepted", scheduled.accepted),
+    assertion(
+      "an idle scheduled delivery starts a turn",
+      fired.entry.role === "event" &&
+        fired.entry.type === "schedule" &&
+        fired.entry.routing === "start",
+    ),
+    assertion(
+      "the due message immediately follows its firing event",
+      delivered !== undefined,
+    ),
+    assertion(
+      "the scheduled turn completes",
+      terminal.entry.role === "assistant" &&
+        terminal.entry.status === "completed",
+    ),
+    assertion(
+      "the one-shot schedule is removed before delivery",
+      !remaining.some(({scheduleId}) => scheduleId === "one-shot"),
     ),
   ];
 }
@@ -1260,6 +1355,7 @@ const EVAL_CASES: ReadonlyArray<{
   {caseId: "execution-limit", scenario: executionLimit},
   {caseId: "context-reduction", scenario: contextReduction},
   {caseId: "memory", scenario: memory},
+  {caseId: "scheduling", scenario: scheduling},
   {caseId: "guardrail-approval", scenario: guardrailApproval},
   {caseId: "guardrail-scope", scenario: guardrailScope},
   {caseId: "guardrail-denial", scenario: guardrailDenial},

@@ -57,7 +57,8 @@ function compactorInput(request: ConversationCompactionInput): string {
           entry.type === "approval_request" ||
           entry.type === "approval_cancelled" ||
           entry.type === "memory" ||
-          entry.type === "sandbox"
+          entry.type === "sandbox" ||
+          entry.type === "schedule"
         ) {
           return [];
         }

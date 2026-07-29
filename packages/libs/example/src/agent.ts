@@ -1,13 +1,14 @@
 // Agent is the durable conversation controller. It is a Virtual Object keyed
 // by agent id, so its exclusive handlers serialize every decision about the
 // active turn, queued messages, user-facing history, persistent profile, and
-// summary checkpoints.
+// scheduled messages and summary checkpoints.
 //
 // It never runs turn execution itself. `ask` starts or queues work,
 // `interrupt` and `steer` resolve signals on the active stateless Turn
-// invocation, and `onTurnEnd` accepts that Turn's single high-level outcome.
+// invocation, scheduled self-sends re-enter the same routing decisions, and
+// `onTurnEnd` accepts that Turn's single high-level outcome.
 
-import {TerminalError} from "@restatedev/restate-sdk";
+import {rpc, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {approvals} from "./agent-approval.js";
@@ -19,6 +20,7 @@ import {
   history,
 } from "./agent-history.js";
 import {profile} from "./agent-profile.js";
+import {schedules} from "./agent-schedules.js";
 import {activeTurn} from "./agent-turn.js";
 import {compactConversation} from "./conversation-compactor.js";
 import {
@@ -42,6 +44,17 @@ import {
   ProgressReportSchema,
   type SandboxEvent,
   SandboxEventSchema,
+  type ScheduleCancellation,
+  type ScheduleCancellationResult,
+  ScheduleCancellationResultSchema,
+  ScheduleCancellationSchema,
+  type ScheduledMessage,
+  ScheduledMessageSchema,
+  ScheduleFireSchema,
+  type ScheduleMutation,
+  type ScheduleMutationResult,
+  ScheduleMutationResultSchema,
+  ScheduleMutationSchema,
   TurnOutcomeSchema,
 } from "./types.js";
 
@@ -240,6 +253,131 @@ export const Agent = restate.object({
           },
         );
         return true;
+      },
+    ),
+
+    // Create or replace one Agent-owned scheduled message. A Turn mutation is
+    // accepted only while that Turn remains active; null permits direct
+    // user/API administration. The delayed self-send is durable and its
+    // invocation ID identifies the current timer.
+    scheduleMessage: restate.schemas(
+      {input: ScheduleMutationSchema, output: ScheduleMutationResultSchema},
+      function* ({
+        turnId,
+        schedule: spec,
+      }: ScheduleMutation): restate.Operation<ScheduleMutationResult> {
+        const rejection = yield* scheduleTurnRejection(turnId);
+        if (rejection) {
+          return {accepted: false, error: rejection};
+        }
+
+        const existing = yield* schedules.get(spec.scheduleId);
+        if (existing) {
+          restate.invocation(existing.timerId).cancel();
+        }
+
+        const timer = yield* createScheduleTimer(
+          spec.scheduleId,
+          spec.delaySeconds,
+        );
+        const schedule: ScheduledMessage = {
+          scheduleId: spec.scheduleId,
+          message: spec.message,
+          repeatEverySeconds: spec.repeatEverySeconds,
+          whenBusy: spec.whenBusy ?? "queue",
+          nextRunAt: timer.nextRunAt,
+        };
+        const stored = yield* schedules.set(schedule, timer.id);
+        if ("error" in stored) {
+          restate.invocation(timer.id).cancel();
+          return {accepted: false, error: stored.error};
+        }
+
+        yield* history.append({
+          role: "event",
+          type: "schedule",
+          action: stored.replaced ? "updated" : "created",
+          scheduleId: schedule.scheduleId,
+          ...(turnId ? {turnId} : {}),
+          nextRunAt: timer.nextRunAt,
+          whenBusy: schedule.whenBusy,
+        });
+        return {
+          accepted: true,
+          replaced: stored.replaced,
+          schedule,
+        };
+      },
+    ),
+
+    // Cancel one current timer. Stale delayed invocations also verify their
+    // invocation ID when they arrive, so cancellation races are harmless.
+    cancelSchedule: restate.schemas(
+      {
+        input: ScheduleCancellationSchema,
+        output: ScheduleCancellationResultSchema,
+      },
+      function* ({
+        turnId,
+        scheduleId,
+      }: ScheduleCancellation): restate.Operation<ScheduleCancellationResult> {
+        const rejection = yield* scheduleTurnRejection(turnId);
+        if (rejection) {
+          return {accepted: false, error: rejection};
+        }
+
+        const removed = yield* schedules.remove(scheduleId);
+        if (!removed) {
+          return {accepted: true, cancelled: false};
+        }
+        restate.invocation(removed.timerId).cancel();
+        yield* history.append({
+          role: "event",
+          type: "schedule",
+          action: "cancelled",
+          scheduleId,
+          ...(turnId ? {turnId} : {}),
+        });
+        return {accepted: true, cancelled: true};
+      },
+    ),
+
+    // Authoritative snapshot used by clients and the model's list tool.
+    schedules: restate.schemas(
+      {input: z.void(), output: z.array(ScheduledMessageSchema)},
+      function* (): restate.Operation<ScheduledMessage[]> {
+        return yield* schedules.list();
+      },
+    ),
+
+    // Durable timer target. Only the invocation recorded in schedule state may
+    // fire. Repeating schedules install their next fixed-delay timer before
+    // the due message is routed through normal Agent turn control.
+    fireSchedule: restate.schemas(
+      {input: ScheduleFireSchema, output: z.void()},
+      function* ({scheduleId}): restate.Operation<void> {
+        const schedule = yield* schedules.get(scheduleId);
+        if (schedule?.timerId !== restate.handlerRequest().id) {
+          return;
+        }
+
+        if (schedule.repeatEverySeconds === null) {
+          yield* schedules.remove(scheduleId);
+        } else {
+          const timer = yield* createScheduleTimer(
+            scheduleId,
+            schedule.repeatEverySeconds,
+          );
+          const stored = yield* schedules.set(
+            {...schedule, nextRunAt: timer.nextRunAt},
+            timer.id,
+          );
+          if ("error" in stored) {
+            throw new TerminalError(stored.error);
+          }
+        }
+
+        yield* deliverScheduledMessage(agentKey(), schedule);
       },
     ),
 
@@ -601,6 +739,9 @@ export const Agent = restate.object({
       registerHistoryWatcher: noRetention,
       unregisterHistoryWatcher: noRetention,
       updateMemory: noRetention,
+      scheduleMessage: noRetention,
+      cancelSchedule: noRetention,
+      fireSchedule: noRetention,
       reportProgress: noRetention,
       reportExecution: noRetention,
       reportSandbox: noRetention,
@@ -608,6 +749,7 @@ export const Agent = restate.object({
       cancelApproval: noRetention,
       applyCompaction: noRetention,
       approvals: {shared: true, ...noRetention},
+      schedules: {shared: true, ...noRetention},
       history: {shared: true, ...noRetention},
       profile: {shared: true, ...noRetention},
       compact: {shared: true, ...noRetention},
@@ -636,4 +778,96 @@ function* startTurn(
     summary: context.summary,
     history: context.entries,
   });
+}
+
+function* createScheduleTimer(
+  scheduleId: string,
+  delaySeconds: number,
+): restate.Operation<{id: string; nextRunAt: number}> {
+  const delay = delaySeconds * 1_000;
+  const nextRunAt = (yield* restate.date().now()) + delay;
+  const timer = yield* restate
+    .sendClient(Agent, agentKey())
+    .fireSchedule({scheduleId}, rpc.sendOpts({delay}));
+  return {id: timer.id, nextRunAt};
+}
+
+function* scheduleTurnRejection(
+  turnId: string | null,
+): restate.Operation<string | undefined> {
+  if (turnId === null) {
+    return undefined;
+  }
+  const current = yield* activeTurn.current();
+  return current?.id === turnId && !current.interrupting
+    ? undefined
+    : "schedule mutation rejected because its Turn is no longer active";
+}
+
+function* deliverScheduledMessage(
+  agentId: string,
+  schedule: ScheduledMessage,
+): restate.Operation<void> {
+  const current = yield* activeTurn.current();
+  const event = {
+    role: "event" as const,
+    type: "schedule" as const,
+    action: "fired" as const,
+    scheduleId: schedule.scheduleId,
+    whenBusy: schedule.whenBusy,
+  };
+
+  if (!current) {
+    yield* history.append(
+      {...event, routing: "start"},
+      {role: "user", text: schedule.message, delivery: "turn"},
+    );
+    yield* startTurn(agentId);
+    return;
+  }
+
+  if (current.interrupting || schedule.whenBusy === "queue") {
+    yield* activeTurn.enqueue(schedule.message);
+    yield* history.append(
+      {...event, routing: "queue"},
+      {role: "user", text: schedule.message, delivery: "queued"},
+    );
+    return;
+  }
+
+  if (schedule.whenBusy === "steer") {
+    const steering = yield* activeTurn.steer(schedule.message);
+    if (!steering) {
+      throw new TerminalError("active Turn rejected scheduled steering");
+    }
+    yield* history.append(
+      {...event, routing: "steer"},
+      {role: "user", text: schedule.message, delivery: "steer"},
+      {
+        role: "event",
+        type: "steer",
+        turnId: steering.turnId,
+        queuedMessages: steering.queued.length,
+      },
+    );
+    return;
+  }
+
+  yield* activeTurn.enqueue(schedule.message);
+  const interruption = yield* activeTurn.interrupt(
+    `Scheduled message "${schedule.scheduleId}" became due`,
+  );
+  if (!interruption?.requested) {
+    throw new TerminalError("active Turn rejected scheduled interruption");
+  }
+  yield* history.append(
+    {...event, routing: "interrupt"},
+    {role: "user", text: schedule.message, delivery: "queued"},
+    {
+      role: "event",
+      type: "interrupt",
+      turnId: interruption.turnId,
+      reason: `Scheduled message "${schedule.scheduleId}" became due`,
+    },
+  );
 }

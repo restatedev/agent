@@ -127,6 +127,7 @@ function entryMessage(entry: ConversationEntry): ModelMessage | undefined {
     case "progress":
     case "memory":
     case "sandbox":
+    case "schedule":
       return undefined;
   }
 }

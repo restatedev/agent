@@ -26,6 +26,7 @@ unimportant.
 | Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, concise activity, structured tool lifecycle, profile changes, approval lifecycle, progress, sandbox lifecycle, and terminal outcomes retain their natural observation order. |
 | Push-style history updates | Any client long-polls the shared `watchHistory` handler, which parks inside the Agent until the cursor becomes readable or its wait window elapses. Registration closes the empty-read race; the transcript itself remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
+| Agent-owned schedules | The model or an external client can create, replace, list, and cancel durable one-shot or fixed-interval messages. Delayed self-sends wake the Agent, which starts, queues, steers, or interrupts according to the schedule's busy policy. |
 | Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
 | Turn-local context reduction | Large settled model/tool prefixes accumulated during one active Turn are reduced between steps. Initial conversation context and the newest working messages remain exact, while canonical history is untouched. |
 | Semantic execution events | Short model-authored activity plus structured tool-batch start/finish events make multi-step turns readable. `thinking`, `waiting`, and `finalizing` remain semantic milestones; raw reasoning, tool arguments, and tool results stay private. |
@@ -48,6 +49,7 @@ cursor-consumable transcript after recovery.
 | `steer(message)` | Returns `false`. | Moves queued messages plus the new instruction into the active Turn. Current tools are not cancelled. Returns `false` once interruption has begun. |
 | `interrupt(reason, message?)` | Returns `false`. | Cancels and joins unfinished work, finalizes the current Turn, and optionally queues a replacement message for a new Turn. |
 | `cancelOperation(id)` | Not a controller action. | A model tool selectively stops one pending operation while the Turn continues. |
+| Scheduled message | Starts a Turn. | Queues by default, or uses its configured `steer` or `interrupt` policy. A due message never disappears while a Turn is already interrupting; it falls back to the next-Turn queue. |
 | External invocation cancellation | Nothing to cancel. | Stops the invocation, cleans up owned work, records the boundary, and rethrows cancellation to Restate. |
 
 The distinction is deliberate: queueing changes *when* a request runs,
@@ -64,7 +66,9 @@ isolated sandbox vendor remains deliberately outside the example.
 Token-by-token output streaming, pub/sub fan-out, authentication, and
 multi-tenant policy administration are not implemented. History watch windows
 provide durable point-to-point change notification, not a replacement for a
-broadcast event bus.
+broadcast event bus. Scheduling intentionally supports relative one-shot and
+fixed-interval delivery rather than cron expressions, timezones, or catch-up
+calendars.
 
 Natural-language guardrail classification and answer quality remain
 probabilistic model behavior; the runtime deterministically enforces the
@@ -78,6 +82,7 @@ runs, a scripted model, or an independent semantic judge.
 flowchart LR
   Client -->|"conversation + profile + approval API"| Agent["Agent Virtual Object\nkeyed by agentId"]
   Agent -->|"one-way run"| Turn["Turn service"]
+  Agent -->|"durable delayed self-send"| Agent
   Agent -.->|"control / approval signals"| Turn
   Turn -->|"spawn each iteration"| Step["agentStep"]
   Step -->|"scoped agent + policy calls"| Gateway["ModelGateway service"]
@@ -101,10 +106,11 @@ flowchart LR
 
 - `Agent` is the durable controller. Its exclusive handlers serialize changes
   to the active turn, pending messages, and conversation history for one
-  `agentId`. It coordinates four independent components: `agent-turn.ts` owns
+  `agentId`. It coordinates five independent components: `agent-turn.ts` owns
   turn state and signal lifecycle, `agent-history.ts` owns the durable
   transcript, `agent-profile.ts` owns instructions, memories, and guardrails,
-  and `agent-approval.ts` owns pending human approvals.
+  `agent-approval.ts` owns pending human approvals, and `agent-schedules.ts`
+  owns scheduled-message state.
   Each component exports a handler-scoped capability namespace: its operations
   use Restate's current handler context and hold no process-local state.
 - `Turn` has no service state, but one durable invocation owns the transient
@@ -160,10 +166,11 @@ ingress-public in this reference implementation. This keeps the complete
 protocol inspectable and easy to invoke while experimenting. Public visibility
 does not make every handler a user API: normal clients should use `ask`,
 `history`, `steer`, `interrupt`, `profile`, `setInstructions`,
-`setGuardrails`, `approvals`, and `resolveApproval`; the remaining handlers are
-coordination paths used by the services themselves. Every handler has a runtime
-input/output schema, including AI SDK model messages at the gateway and
-compaction cursor ranges on the Agent.
+`setGuardrails`, `scheduleMessage`, `cancelSchedule`, `schedules`, `approvals`,
+and `resolveApproval`; the remaining handlers are coordination paths used by
+the services themselves. Every handler has a runtime input/output schema,
+including AI SDK model messages at the gateway and compaction cursor ranges on
+the Agent.
 
 ## Conversation history and compaction
 
@@ -181,7 +188,9 @@ exclusive re-check that closes the empty-read race, and parks until the cursor
 becomes readable or its wait window elapses; callers simply loop. Waiting
 happens in a shared handler, so transcript writers are never blocked, and a
 timed-out window withdraws its registration so idle watchers do not
-accumulate.
+accumulate. The request window defaults to 60 seconds. Its handler-level
+`inactivityTimeout` is independently set to 15 seconds so Restate can suspend a
+parked endpoint session while preserving the longer durable wait.
 
 After a turn finishes, the Agent first activates any queued work and starts its
 next Turn from the exact transcript. It then counts conversation messages since
@@ -197,9 +206,10 @@ summary untouched.
 Each `TurnRequest` carries a stable snapshot of the Agent's instructions,
 memories, guardrails, rolling summary, and exact model-relevant entries since
 the checkpoint. Progress, activity, tool lifecycle, profile-change metadata,
-pending approval lifecycle, memory, and sandbox events remain in the canonical
-transcript but are filtered before the request is serialized. Resolved approval
-decisions remain model-visible. The Turn projects steering metadata and
+pending approval lifecycle, memory, sandbox, and schedule events remain in the
+canonical transcript but are filtered before the request is serialized. The
+due scheduled user message remains model-visible. Resolved approval decisions
+remain model-visible. The Turn projects steering metadata and
 interruption, queued-message dispatch, or failure entries as explicit
 model-visible boundaries. Only the reserved handoff prefix is summarized:
 profile state, live model messages, tool calls, tool results, pending
@@ -214,6 +224,31 @@ the agent model. Newly appended tool results, steering, and runtime events stay
 exact until that model has observed them. The result exists only inside that
 Turn invocation. It does not rewrite canonical history or affect future Turns,
 and a failed reduction leaves the exact working context in place.
+
+## Scheduled messages
+
+Schedules are durable Agent state rather than a separate service. The
+`scheduleMessage` tool or handler creates or replaces a stable `scheduleId`,
+then records the invocation ID of a delayed `Agent/fireSchedule` self-send.
+Cancellation stops that timer, and every fire checks that its invocation ID is
+still current. A cancelled or replaced delayed invocation therefore cannot act
+on newer schedule state.
+
+A schedule carries a message, a relative first delay, an optional fixed repeat
+delay, and a `whenBusy` policy. When the Agent is idle, the due message is
+appended and starts a Turn. While busy, `queue` appends it for the next Turn,
+`steer` promotes the existing queue plus the due message into the active Turn,
+and `interrupt` gracefully stops current work while preserving the due message
+for the next Turn. An already-interrupting Turn always falls back to `queue`.
+One-shot schedules are removed before delivery; repeating schedules install
+their next fixed-delay timer first.
+
+Creation, replacement, cancellation, and firing are immutable `schedule`
+events in history. The firing event records the routing decision and is
+immediately followed by the corresponding user message. Schedule metadata is
+omitted from model context and compaction; the user message itself remains
+ordinary conversation input. `schedules` is the authoritative current
+snapshot. The demo bounds each Agent to 32 active schedules.
 
 ## Sandbox lifecycle and tools
 
@@ -327,6 +362,10 @@ approval into blanket authorization for materially changed work.
 | `setGuardrails` | `{ guardrails: [{ id, rule }] }` | Replaces the persistent policy list and appends its IDs as a profile-change event. IDs must be unique; running Turns keep their snapshot. |
 | `interrupt` | `{ reason, message? }` | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. An optional replacement message is appended immediately and queued for the next Turn. |
 | `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
+| `scheduleMessage` | `{ turnId: string \| null, schedule: { scheduleId, message, delaySeconds, repeatEverySeconds, whenBusy? } }` | Creates or replaces a durable one-shot or fixed-interval message. A Turn supplies its ID; external administration uses `null`; omitted `whenBusy` defaults to `queue`. |
+| `cancelSchedule` | `{ turnId: string \| null, scheduleId }` | Idempotently removes a schedule and cancels its current delayed invocation. |
+| `schedules` | void | Shared read of the Agent's authoritative active schedules and next delivery times. |
+| `fireSchedule` | `{ scheduleId }` | Delayed self-send target. Rejects stale invocation IDs, advances recurrence, and routes the due message. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Resolves and removes a pending approval only while its Turn is still eligible to receive the decision, then records the delivered decision in history. Returns whether the signal was delivered. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
@@ -339,10 +378,10 @@ approval into blanket authorization for materially changed work.
 | `compact` | reserved history cursor range | Shared handler that reads and summarizes one finished transcript prefix, then sends the result to `applyCompaction`. |
 | `applyCompaction` | structured compaction result | Exclusively validates and installs the current summary checkpoint, or clears a failed reservation. |
 
-`history`, `watchHistory`, `profile`, `approvals`, and `compact` are shared
-handlers; the other
-Agent handlers are exclusive. Lazy state allows shared readers and the
-compactor to load only the state keys and history chunks they need.
+`history`, `watchHistory`, `profile`, `schedules`, `approvals`, and `compact`
+are shared handlers; the other Agent handlers are exclusive. Lazy state allows
+shared readers and the compactor to load only the state keys and history chunks
+they need.
 
 The remaining services expose these public handlers:
 
@@ -468,6 +507,9 @@ making pub/sub the source of truth.
   operation by its stable tool-call ID. Pending tasks are held in a turn-local
   keyed registry; completion races are reported honestly, and unrelated
   operations continue running.
+- `scheduleMessage`, `cancelSchedule`, and `listSchedules` are foreground tools
+  over Agent state. Creating a schedule journals a delayed self-send rather
+  than leaving a Turn task pending, so the timer survives after that Turn ends.
 - Graceful interruption cancels and joins foreground and pending tasks, records
   their completed or cancelled results in the Turn context, and performs one
   final model call with no tools. Abandoned approval requests are cleaned up
@@ -637,6 +679,19 @@ curl localhost:8080/Agent/demo/ask \
 curl -X POST localhost:8080/Agent/demo/profile
 ```
 
+The model can manage schedules through tools, or a client can administer the
+same Agent state directly:
+
+```sh
+curl localhost:8080/Agent/demo/scheduleMessage \
+  --json '{"turnId":null,"schedule":{"scheduleId":"weather-check","message":"Check the weather in Berlin","delaySeconds":60,"repeatEverySeconds":null,"whenBusy":"queue"}}'
+
+curl -X POST localhost:8080/Agent/demo/schedules
+
+curl localhost:8080/Agent/demo/cancelSchedule \
+  --json '{"turnId":null,"scheduleId":"weather-check"}'
+```
+
 ### Run a durable eval
 
 The single `Evals/all` handler concurrently drives every scenario through
@@ -650,12 +705,12 @@ curl localhost:8080/Evals/all \
   --json '{"timeoutSeconds":180}'
 ```
 
-The handler spawns all twelve isolated cases concurrently: a basic turn,
+The handler spawns all thirteen isolated cases concurrently: a basic turn,
 steering, interruption, interruption carrying a replacement request,
 execution-budget finalization, a low-cost context-reduction contract,
-model-managed memory, guardrail approval, guardrail scope isolation, denial
-before protected tools start, rejection without approval loops, and approval
-invalidation after steering.
+model-managed memory, scheduled delivery, guardrail approval, guardrail scope
+isolation, denial before protected tools start, rejection without approval
+loops, and approval invalidation after steering.
 
 Pass `cases` to re-run a subset without paying for the rest, which matters
 because every case depends on probabilistic model behavior:
@@ -687,6 +742,7 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
 - `packages/libs/example/src/agent-profile.ts` — instructions, memories, and
   natural-language guardrails
+- `packages/libs/example/src/agent-schedules.ts` — Agent-owned scheduled messages
 - `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
 - `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
 - `packages/libs/example/src/turn.ts` — transient turn state machine and signal supervision

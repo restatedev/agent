@@ -21,6 +21,8 @@ import {
   type ApprovalDecision,
   approvalSignalName,
   type MemoryChange,
+  ScheduleCancellationSchema,
+  ScheduleSpecSchema,
 } from "./types.js";
 
 type ToolExecution =
@@ -396,6 +398,71 @@ const manageMemoryTool = defineAgentTool({
   },
 });
 
+const scheduleMessageTool = defineAgentTool({
+  name: "scheduleMessage",
+  description:
+    "Create or replace an Agent-owned durable schedule that will deliver a future user request. Scheduling returns immediately and survives this Turn. Reuse a scheduleId to update it. Use queue unless the user explicitly asks the due message to steer or interrupt active work.",
+  inputSchema: ScheduleSpecSchema,
+  *run(schedule, context): restate.Operation<ToolExecution> {
+    const result = yield* restate
+      .client(Agent, context.agentId)
+      .scheduleMessage({turnId: context.turnId, schedule});
+    if (!result.accepted) {
+      return {status: "failed", error: result.error};
+    }
+    return {
+      status: "succeeded",
+      result: JSON.stringify({
+        ...result,
+        schedule: {
+          ...result.schedule,
+          nextRunAt: new Date(result.schedule.nextRunAt).toISOString(),
+        },
+      }),
+    };
+  },
+});
+
+const cancelScheduleTool = defineAgentTool({
+  name: "cancelSchedule",
+  description:
+    "Cancel one Agent-owned scheduled message by its scheduleId. This is idempotent; cancelling an unknown schedule succeeds without changing anything.",
+  inputSchema: ScheduleCancellationSchema.pick({scheduleId: true}),
+  *run({scheduleId}, context): restate.Operation<ToolExecution> {
+    const result = yield* restate
+      .client(Agent, context.agentId)
+      .cancelSchedule({turnId: context.turnId, scheduleId});
+    if (!result.accepted) {
+      return {status: "failed", error: result.error};
+    }
+    return {
+      status: "succeeded",
+      result: result.cancelled
+        ? `Cancelled schedule ${scheduleId}`
+        : `Schedule ${scheduleId} was not active`,
+    };
+  },
+});
+
+const listSchedulesTool = defineAgentTool({
+  name: "listSchedules",
+  description:
+    "List the Agent's active scheduled messages, including their next delivery time, recurrence, and busy-turn policy.",
+  inputSchema: z.object({}),
+  *run(_input, context): restate.Operation<ToolExecution> {
+    const active = yield* restate.client(Agent, context.agentId).schedules();
+    return {
+      status: "succeeded",
+      result: JSON.stringify(
+        active.map((schedule) => ({
+          ...schedule,
+          nextRunAt: new Date(schedule.nextRunAt).toISOString(),
+        })),
+      ),
+    };
+  },
+});
+
 const listFilesTool = defineAgentTool({
   name: "listFiles",
   description:
@@ -498,6 +565,9 @@ const definitions = [
   humanApprovalTool,
   cancelOperationTool,
   manageMemoryTool,
+  scheduleMessageTool,
+  cancelScheduleTool,
+  listSchedulesTool,
   listFilesTool,
   readFileTool,
   writeFileTool,
