@@ -98,7 +98,7 @@ const WatchHistorySchema = z.object({
     .int()
     .min(1)
     .max(120)
-    .default(30)
+    .default(15)
     .describe(
       "How long this wait window may park before returning false. Callers loop; the window bounds server-side residency, not the overall wait.",
     ),
