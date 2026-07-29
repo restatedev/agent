@@ -145,6 +145,37 @@ const ApprovalDecisionSchema = z.object({
 });
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
+const ProfileEventSchema = z.object({
+  role: z.literal("event"),
+  type: z.literal("profile"),
+  change: z.discriminatedUnion("field", [
+    z.object({
+      field: z.literal("instructions"),
+      configured: z.boolean(),
+    }),
+    z.object({
+      field: z.literal("guardrails"),
+      ids: z.array(z.string()),
+    }),
+  ]),
+});
+
+const ApprovalRequestEventSchema = z.object({
+  role: z.literal("event"),
+  type: z.literal("approval_request"),
+  approvalId: z.string(),
+  turnId: z.string(),
+  question: z.string(),
+  guardrailId: z.string().optional(),
+});
+
+const ApprovalCancelledEventSchema = z.object({
+  role: z.literal("event"),
+  type: z.literal("approval_cancelled"),
+  approvalId: z.string(),
+  turnId: z.string(),
+});
+
 // An entry in the general conversation. Messages record how they entered the
 // execution, lifecycle boundaries are explicit events, and assistant entries
 // are terminal turn summaries correlated with Restate observability.
@@ -187,6 +218,9 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
       guardrailId: z.string().optional(),
     })
     .extend(ApprovalDecisionSchema.shape),
+  ApprovalRequestEventSchema,
+  ApprovalCancelledEventSchema,
+  ProfileEventSchema,
   ProgressReportSchema.extend({
     role: z.literal("event"),
     type: z.literal("progress"),

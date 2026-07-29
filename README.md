@@ -22,8 +22,8 @@ unimportant.
 | Long-running operations | Tools such as `sleep` and `humanApproval` can return a pending acknowledgement and continue across later agent steps. The Turn owns their stable IDs and lifecycle. |
 | Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
 | Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
-| Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. Resolved decisions become model-visible transcript events, so later Turns retain what was decided without reopening the same request. |
-| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, concise activity, structured tool lifecycle, progress, memory metadata, sandbox provisioning/suspension, approval decisions, and terminal outcomes retain their natural observation order. |
+| Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. Request, resolution, and cancellation events make the complete lifecycle discoverable through history; resolved decisions also become model-visible context. |
+| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, concise activity, structured tool lifecycle, profile changes, approval lifecycle, progress, sandbox lifecycle, and terminal outcomes retain their natural observation order. |
 | Push-style history updates | Restate callers register their own awakeable at a history cursor. Registration closes the empty-read race, while the actual transcript remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
 | Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
@@ -193,13 +193,15 @@ summary untouched.
 
 Each `TurnRequest` carries a stable snapshot of the Agent's instructions,
 memories, guardrails, rolling summary, and exact model-relevant entries since
-the checkpoint. Progress, activity, tool lifecycle, memory, and sandbox events
-remain in the canonical transcript but are filtered before the request is
-serialized. The Turn projects steering metadata and interruption,
-queued-message dispatch, or failure entries as explicit model-visible
-boundaries. Only the reserved handoff prefix is summarized: profile state,
-live model messages, tool calls, tool results, pending operations, and later
-steering inside the active Turn are not part of that checkpoint.
+the checkpoint. Progress, activity, tool lifecycle, profile-change metadata,
+pending approval lifecycle, memory, and sandbox events remain in the canonical
+transcript but are filtered before the request is serialized. Resolved approval
+decisions remain model-visible. The Turn projects steering metadata and
+interruption, queued-message dispatch, or failure entries as explicit
+model-visible boundaries. Only the reserved handoff prefix is summarized:
+profile state, live model messages, tool calls, tool results, pending
+operations, and later steering inside the active Turn are not part of that
+checkpoint.
 
 The active Turn separately bounds its private working context. Its initial
 Agent-provided messages stay exact. Between steps, once later settled
@@ -264,6 +266,12 @@ fails, and its keys are recorded as a metadata-only transcript event. Memory
 events are omitted from model context and compaction because the current
 profile snapshot is authoritative.
 
+Changing instructions or guardrails likewise appends a metadata-only `profile`
+event. It identifies the changed section, whether instructions are configured,
+or the current guardrail IDs without duplicating instruction or policy text in
+the immutable log. A history consumer can therefore invalidate its cached
+profile and read the authoritative `profile` snapshot.
+
 Guardrails are user-configured natural-language policies with stable IDs. A
 cheap policy model evaluates every proposed assistant response or complete tool
 batch before text is published or any tool in that batch starts. It returns
@@ -293,12 +301,14 @@ policy model does not allow it. The evaluator is deliberately model-based and
 therefore probabilistic; the runtime deterministically enforces the decision it
 returns. Instructions and guardrail changes affect the next Turn.
 
-Every successfully delivered human decision is also appended as a structured
-approval event containing its question, outcome, optional reason, and policy
-identifier. Later Turns and conversation compaction retain that event. It
-prevents the agent from treating the same completed decision as unresolved,
-without turning one approval into blanket authorization for materially changed
-work.
+Every newly registered request is appended as `approval_request` with its ID,
+question, Turn, and optional policy ID. Resolution appends the existing
+structured `approval` event with the decision and optional reason; abandoned
+requests append `approval_cancelled`. History is therefore sufficient to
+discover approval changes, while `approvals` remains the authoritative snapshot
+of what is pending now. Later Turns and conversation compaction retain resolved
+decisions so the agent does not treat them as unresolved, without turning one
+approval into blanket authorization for materially changed work.
 
 ## Agent handlers
 
@@ -308,8 +318,8 @@ work.
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
 | `watchHistory` | `{ fromSequence, awakeableId }` | Atomically resolves a caller-owned awakeable now or when the requested cursor becomes readable. |
 | `profile` | void | Returns this Agent's instructions, model-managed memories, and natural-language guardrails. |
-| `setInstructions` | `{ instructions: string \| null }` | Replaces the persistent user instructions; `null` clears them. Running Turns keep their snapshot. |
-| `setGuardrails` | `{ guardrails: [{ id, rule }] }` | Replaces the persistent policy list. IDs must be unique; running Turns keep their snapshot. |
+| `setInstructions` | `{ instructions: string \| null }` | Replaces the persistent user instructions and appends a profile-change event; `null` clears them. Running Turns keep their snapshot. |
+| `setGuardrails` | `{ guardrails: [{ id, rule }] }` | Replaces the persistent policy list and appends its IDs as a profile-change event. IDs must be unique; running Turns keep their snapshot. |
 | `interrupt` | `{ reason, message? }` | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. An optional replacement message is appended immediately and queued for the next Turn. |
 | `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
 | `approvals` | void | Returns the human approvals currently waiting on this agent. |
@@ -317,8 +327,8 @@ work.
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
 | `reportExecution` | structured activity/tool reports | One-way path used by the active Turn; atomically appends concise model-authored activity and tool-batch lifecycle events for the current invocation. |
 | `reportSandbox` | `{ turnId, status: "provisioned" \| "suspended" }` | One-way lifecycle path used by the Sandbox VO; appends successful provisioning and suspension transitions. |
-| `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting. |
-| `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request. |
+| `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting, then appends a structured request event. |
+| `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request and records the cancellation when one existed. |
 | `updateMemory` | `{ turnId, changes }` | Coordination path used by `manageMemory`; atomically applies a bounded memory batch only for the active Turn. |
 | `onTurnEnd` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, dispatches queued work, and then considers compaction. Stale or duplicate Turn IDs are ignored. |
 | `compact` | reserved history cursor range | Shared handler that reads and summarizes one finished transcript prefix, then sends the result to `applyCompaction`. |

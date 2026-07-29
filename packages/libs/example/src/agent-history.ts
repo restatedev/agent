@@ -214,6 +214,9 @@ export const history = {
       (entry.type === "progress" ||
         entry.type === "activity" ||
         entry.type === "tools" ||
+        entry.type === "profile" ||
+        entry.type === "approval_request" ||
+        entry.type === "approval_cancelled" ||
         entry.type === "memory" ||
         entry.type === "sandbox")
         ? []

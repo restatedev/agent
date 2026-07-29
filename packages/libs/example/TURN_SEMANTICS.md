@@ -214,6 +214,12 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   execution on the Agent handler.
 - Progress, activity, tool lifecycle, and sandbox events are transcript-visible
   for clients but omitted from model context and conversation compaction.
+- Instruction and guardrail setters append metadata-only `profile` events.
+  Approval registration and abandonment append `approval_request` and
+  `approval_cancelled`; a delivered decision remains the model-visible
+  `approval` event.
+- History is the ordered change feed, while `profile` and `approvals` are the
+  authoritative current-state snapshots.
 - Raw reasoning, tool arguments, and tool results remain outside the canonical
   user-facing transcript.
 - Every completed, interrupted, or failed outcome includes

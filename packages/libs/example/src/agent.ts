@@ -121,6 +121,13 @@ function executionEntry(report: ExecutionReport): ConversationEntry {
   return {role: "event", ...report};
 }
 
+function approvalCancelledEntry({
+  approvalId,
+  turnId,
+}: ApprovalRequest): ConversationEntry {
+  return {role: "event", type: "approval_cancelled", approvalId, turnId};
+}
+
 export const Agent = restate.object({
   name: "Agent",
   handlers: {
@@ -253,6 +260,14 @@ export const Agent = restate.object({
       {input: SetInstructionsSchema, output: z.void()},
       function* ({instructions}): restate.Operation<void> {
         profile.setInstructions(instructions);
+        yield* history.append({
+          role: "event",
+          type: "profile",
+          change: {
+            field: "instructions",
+            configured: Boolean(instructions?.trim()),
+          },
+        });
       },
     ),
 
@@ -262,6 +277,14 @@ export const Agent = restate.object({
       {input: SetGuardrailsSchema, output: z.void()},
       function* ({guardrails}): restate.Operation<void> {
         profile.setGuardrails(guardrails);
+        yield* history.append({
+          role: "event",
+          type: "profile",
+          change: {
+            field: "guardrails",
+            ids: guardrails.map(({id}) => id),
+          },
+        });
       },
     ),
 
@@ -353,7 +376,18 @@ export const Agent = restate.object({
         if (current?.id !== request.turnId || current.interrupting) {
           return false;
         }
-        return yield* approvals.register(request);
+        const registration = yield* approvals.register(request);
+        if (registration === "rejected") {
+          return false;
+        }
+        if (registration === "added") {
+          yield* history.append({
+            role: "event",
+            type: "approval_request",
+            ...request,
+          });
+        }
+        return true;
       },
     ),
 
@@ -362,7 +396,10 @@ export const Agent = restate.object({
     cancelApproval: restate.schemas(
       {input: ApprovalCancellationSchema, output: z.void()},
       function* (request): restate.Operation<void> {
-        yield* approvals.cancel(request);
+        const cancelled = yield* approvals.cancel(request);
+        if (cancelled) {
+          yield* history.append(approvalCancelledEntry(cancelled));
+        }
       },
     ),
 
@@ -415,7 +452,10 @@ export const Agent = restate.object({
         if (!finished) {
           return;
         }
-        yield* approvals.clearTurn(outcome.turnId);
+        const cancelledApprovals = yield* approvals.clearTurn(outcome.turnId);
+        yield* history.append(
+          ...cancelledApprovals.map(approvalCancelledEntry),
+        );
 
         if (outcome.status === "interrupted") {
           if (!finished.interruptionRequested) {

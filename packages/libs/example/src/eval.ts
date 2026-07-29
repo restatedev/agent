@@ -182,30 +182,16 @@ function isWaitingForGuardrail(
   return ({sequence, entry}) =>
     sequence > afterSequence &&
     entry.role === "event" &&
-    entry.type === "progress" &&
+    entry.type === "approval_request" &&
     entry.turnId === turnId &&
-    entry.phase === "waiting" &&
-    entry.message.includes(guardrailId);
+    entry.guardrailId === guardrailId;
 }
 
 function isWaitingForApproval(turnId: string): EntryPredicate {
-  return ({entry}) => {
-    if (entry.role !== "event") {
-      return false;
-    }
-    if (entry.type === "progress") {
-      return (
-        entry.turnId === turnId &&
-        entry.message.toLowerCase().includes("approval")
-      );
-    }
-    return (
-      entry.type === "tools" &&
-      entry.turnId === turnId &&
-      entry.phase === "started" &&
-      entry.calls.some(({name}) => name === "humanApproval")
-    );
-  };
+  return ({entry}) =>
+    entry.role === "event" &&
+    entry.type === "approval_request" &&
+    entry.turnId === turnId;
 }
 
 function guardrailApprovalEvents(
@@ -712,11 +698,18 @@ function* guardrailApproval({
   const ask = yield* restate.client(Agent, agentId).ask({
     message: "What is the current weather in Tokyo, Japan?",
   });
-  yield* waitForTurnMilestone(
+  const approvalRequestEvent = yield* waitForTurnMilestone(
     history,
     ask.turnId,
     "the guardrail approval request",
     isWaitingForGuardrail(ask.turnId, "japan-approval"),
+  );
+  const profileEvent = history.entries.find(
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "profile" &&
+      entry.change.field === "guardrails" &&
+      entry.change.ids.includes("japan-approval"),
   );
 
   const pending = yield* restate.client(Agent, agentId).approvals();
@@ -781,6 +774,18 @@ function* guardrailApproval({
       : "";
 
   return [
+    assertion(
+      "the profile update is discoverable through history",
+      profileEvent !== undefined &&
+        profileEvent.sequence < approvalRequestEvent.sequence,
+    ),
+    assertion(
+      "the approval request is a structured history event",
+      approvalRequestEvent.entry.role === "event" &&
+        approvalRequestEvent.entry.type === "approval_request" &&
+        approvalRequestEvent.entry.approvalId === approval?.approvalId &&
+        approvalRequestEvent.entry.question.length > 0,
+    ),
     assertion(
       "exactly one approval is pending",
       pending.length === 1,

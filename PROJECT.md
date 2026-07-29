@@ -16,13 +16,14 @@ The application is split into a few concrete parts:
   handler observes it; pending state controls execution without reordering the
   transcript. Alongside the conversation handlers, `profile` exposes durable
   prompt context, while `approvals` and `resolveApproval` expose the
-  human-in-the-loop boundary. Semantic progress, concise model-authored
-  activity, and structured tool lifecycle are appended to the same sequenced
-  transcript, which clients consume through the cursor-based `history`
-  handler. `ask` starts work when idle and queues when busy; clients explicitly
-  select `steer` or `interrupt` when they want to affect the active turn.
-  Interruption can atomically preserve a replacement user message for a new
-  Turn after the old Turn finishes graceful finalization.
+  human-in-the-loop boundary. Profile-change metadata, approval requests and
+  cancellations, semantic progress, concise model-authored activity, and
+  structured tool lifecycle are appended to the same sequenced transcript,
+  which clients consume through the cursor-based `history` handler. `ask`
+  starts work when idle and queues when busy; clients explicitly select
+  `steer` or `interrupt` when they want to affect the active turn. Interruption
+  can atomically preserve a replacement user message for a new Turn after the
+  old Turn finishes graceful finalization.
 - **`Turn`** has no service state, but one durable invocation owns the
   transient agent-turn state machine: live messages, budgets, steering, and
   pending operations. It repeatedly spawns one bounded agent step, applies its
@@ -87,6 +88,8 @@ Restate provides the application-level guarantees that an agent needs:
 - durable conversation state and serialized controller decisions;
 - one cursor-consumable sequence for messages, lifecycle events, progress, and
   structured execution activity;
+- history-based invalidation for profile snapshots and complete pending
+  approval lifecycle notifications;
 - lazy, chunked transcript storage and asynchronous summary checkpoints;
 - one-way invocation of long-running turns;
 - durable signals for steering, interruption, and human approval;

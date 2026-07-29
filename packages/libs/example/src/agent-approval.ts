@@ -34,45 +34,57 @@ export const approvals = {
   /** Returns every approval currently waiting for a human decision. */
   list: listApprovals,
 
-  /** Registers a request idempotently. */
-  *register(request: ApprovalRequest): restate.Operation<boolean> {
+  /** Registers a request idempotently and reports whether it was newly added. */
+  *register(
+    request: ApprovalRequest,
+  ): restate.Operation<"added" | "existing" | "rejected"> {
     const pending = yield* listApprovals();
     const existing = pending.find(
       (candidate) => candidate.approvalId === request.approvalId,
     );
     if (existing) {
-      return (
-        existing.turnId === request.turnId &&
+      return existing.turnId === request.turnId &&
         existing.question === request.question &&
         existing.guardrailId === request.guardrailId
-      );
+        ? "existing"
+        : "rejected";
     }
     pending.push(request);
     restate.state().set(APPROVALS, pending);
-    return true;
+    return "added";
   },
 
   /** Removes one matching request. Safe to repeat during cleanup. */
-  *cancel({approvalId, turnId}: ApprovalCancellation): restate.Operation<void> {
+  *cancel({
+    approvalId,
+    turnId,
+  }: ApprovalCancellation): restate.Operation<ApprovalRequest | undefined> {
     const pending = yield* listApprovals();
+    const cancelled = pending.find(
+      (request) =>
+        request.approvalId === approvalId && request.turnId === turnId,
+    );
+    if (!cancelled) {
+      return undefined;
+    }
     const remaining = pending.filter(
       (request) =>
         request.approvalId !== approvalId || request.turnId !== turnId,
     );
-    if (remaining.length === pending.length) {
-      return;
-    }
     storeApprovals(remaining);
+    return cancelled;
   },
 
   /** Removes every approval belonging to a completed Turn invocation. */
-  *clearTurn(turnId: string): restate.Operation<void> {
+  *clearTurn(turnId: string): restate.Operation<ApprovalRequest[]> {
     const pending = yield* listApprovals();
-    const remaining = pending.filter((request) => request.turnId !== turnId);
-    if (remaining.length === pending.length) {
-      return;
+    const cancelled = pending.filter((request) => request.turnId === turnId);
+    if (cancelled.length === 0) {
+      return [];
     }
+    const remaining = pending.filter((request) => request.turnId !== turnId);
     storeApprovals(remaining);
+    return cancelled;
   },
 
   /**

@@ -99,8 +99,8 @@ function userMessage(
 }
 
 // Projects one transcript entry into zero or one model messages. Activity,
-// tool lifecycle, progress, memory, and sandbox events are derived status,
-// never model context.
+// tool lifecycle, progress, profile changes, pending approval lifecycle,
+// memory, and sandbox events are derived status, never model context.
 function entryMessage(entry: ConversationEntry): ModelMessage | undefined {
   if (entry.role === "user") {
     return {role: "user", content: userMessage(entry)};
@@ -119,6 +119,9 @@ function entryMessage(entry: ConversationEntry): ModelMessage | undefined {
       return dispatchBoundary(entry);
     case "approval":
       return approvalBoundary(entry);
+    case "approval_request":
+    case "approval_cancelled":
+    case "profile":
     case "activity":
     case "tools":
     case "progress":

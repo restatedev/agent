@@ -123,9 +123,10 @@ the source of truth.
 7. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
 8. Five isolated guardrail cases cover:
-   - Approval verifies exactly one pending request, approves it, and checks
-     that the decision is recorded before completion. A follow-up Turn must
-     read that decision from history without reopening the approval.
+   - Approval verifies that the guardrail profile update and pending request
+     are discoverable as structured history events, approves exactly one
+     request, and checks that the decision is recorded before completion. A
+     follow-up Turn must read that decision without reopening the approval.
    - Scope approves a Japan request, then verifies that U.S. clarification and
      New York weather remain outside the Japan-only policy.
    - Denial checks that a deny policy neither opens an approval nor starts the
