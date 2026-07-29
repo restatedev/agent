@@ -30,7 +30,7 @@ unimportant.
 | Turn-local context reduction | Large settled model/tool prefixes accumulated during one active Turn are reduced between steps. Initial conversation context and the newest working messages remain exact, while canonical history is untouched. |
 | Semantic progress | `thinking`, `tools`, `waiting`, and `finalizing` milestones are part of the ordered transcript; raw provider reasoning and low-level tool traffic stay in Restate observability. |
 | Model admission control | Agent and policy calls go through a scoped gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
-| Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes a sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. The demo provider uses `/tmp/restate-agent-sandboxes/<agentId>/<turnId>`. |
+| Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes a sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. The demo provider uses `/tmp/restate-agent-sandboxes/<agentId>`. |
 | Explicit command lifetime | Sandbox commands are one-shot foreground calls returning an exit code, stdout, and stderr. Asynchronous work is an explicit shell concern rather than a hidden pending-tool protocol. |
 | Restate-native evals | Durable eval invocations drive fresh Agents through the same public protocol, synchronize on history awakeables, inject control events, and return structured assertions plus the observed transcript. |
 
@@ -212,12 +212,13 @@ and a failed reduction leaves the exact working context in place.
 
 ## Sandbox lifecycle and tools
 
-`Sandbox` is a Virtual Object keyed by the same `agentId` as its `Agent`.
-Sandbox tools call `borrow(turnId)` before connecting to the provider. The
-first borrow provisions the resource; a later borrow resumes it if idle
-suspension has already occurred. Repeated borrows from parallel tools in the
-same Turn are idempotent, while a different Turn cannot take an active lease.
-When `Turn.run` reaches any terminal outcome, it calls `release(turnId)`.
+`Sandbox` is a Virtual Object keyed by the same `agentId` as its `Agent`, and
+the resource belongs to that Agent across conversation Turns. The first
+sandbox tool in a Turn lazily calls `borrow(turnId)`; parallel tools share that
+in-flight call and later steps reuse its result. The first-ever borrow
+provisions the resource, while a later Turn resumes it if idle suspension has
+already occurred. A different Turn cannot take an active lease. When
+`Turn.run` reaches any terminal outcome, it calls `release(turnId)`.
 Release schedules a durable delayed `suspend` invocation and records its
 invocation ID. A subsequent borrow cancels that exact timer, and stale delayed
 invocations cannot suspend a resource that has been borrowed again.
@@ -236,14 +237,15 @@ wants asynchronous work, it must launch and track a background shell script;
 the agent runtime does not turn a sandbox process into an implicit pending
 operation.
 
-The included provider stores each Turn under
-`/tmp/restate-agent-sandboxes/<agentId>/<turnId>`. It uses Node filesystem APIs
-for files and executes commands as one bounded child process. Relative file
-paths and command working directories are constrained to that Turn directory.
-This is only a convenient demo workspace, not a security boundary: shell
-commands still run with the service process's host permissions. Replacing
-`sandboxProvider` with a real implementation preserves the lifecycle and
-model-visible tools without changing Turn control flow.
+The included provider stores each Agent under
+`/tmp/restate-agent-sandboxes/<agentId>`, so later Turns see files created by
+earlier Turns. It uses Node filesystem APIs for files and executes commands as
+one bounded child process. Relative file paths and command working directories
+are constrained to that Agent directory. This is only a convenient demo
+workspace, not a security boundary: shell commands still run with the service
+process's host permissions. Replacing `sandboxProvider` with a real
+implementation preserves the lifecycle and model-visible tools without
+changing Turn control flow.
 
 ## Instructions, memories, and guardrails
 

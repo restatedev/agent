@@ -12,7 +12,11 @@ import {z} from "zod";
 import {Agent} from "./agent.js";
 import type {ToolCall, ToolManifest} from "./model.js";
 import {Sandbox} from "./sandbox.js";
-import {type SandboxClient, sandboxProvider} from "./sandbox-provider.js";
+import {
+  type SandboxClient,
+  type SandboxRef,
+  sandboxProvider,
+} from "./sandbox-provider.js";
 import {
   type ApprovalDecision,
   approvalSignalName,
@@ -39,6 +43,9 @@ export type PendingEvent = {
 export type AgentToolContext = {
   agentId: string;
   turnId: string;
+  sandbox: {
+    client(): restate.Operation<SandboxClient>;
+  };
 };
 
 type ToolCallContext = AgentToolContext & {
@@ -79,10 +86,7 @@ function* runSandboxTool(
   operation: (client: SandboxClient, signal: AbortSignal) => Promise<string>,
 ): restate.Operation<ToolExecution> {
   try {
-    const ref = yield* restate
-      .client(Sandbox, context.agentId)
-      .borrow({turnId: context.turnId});
-    const client = sandboxProvider.connect(ref, {turnId: context.turnId});
+    const client = yield* context.sandbox.client();
     const result = yield* restate.run(({signal}) => operation(client, signal), {
       name,
     });
@@ -96,6 +100,28 @@ function* runSandboxTool(
     }
     return {status: "failed", error: `${name} failed: ${errorMessage(error)}`};
   }
+}
+
+// The Agent owns one sandbox; this context owns one lazy Turn lease over it.
+// Parallel tools share the same in-flight borrow future and later steps reuse
+// the resolved ref without another Sandbox RPC.
+export function createAgentToolContext(
+  agentId: string,
+  turnId: string,
+): AgentToolContext {
+  let borrow: restate.Future<SandboxRef> | undefined;
+  let ref: SandboxRef | undefined;
+  return {
+    agentId,
+    turnId,
+    sandbox: {
+      *client(): restate.Operation<SandboxClient> {
+        borrow ??= restate.client(Sandbox, agentId).borrow({turnId});
+        ref ??= yield* borrow;
+        return sandboxProvider.connect(ref);
+      },
+    },
+  };
 }
 
 // The schema type parameter exists only to type `run`/`complete` inputs from
@@ -373,7 +399,7 @@ const manageMemoryTool = defineAgentTool({
 const listFilesTool = defineAgentTool({
   name: "listFiles",
   description:
-    "List files at one path in the current Turn's sandbox. Use '.' for the working directory.",
+    "List files at one path in the agent's persistent sandbox. Use '.' for the working directory.",
   inputSchema: z.object({
     path: z.string().min(1).describe("Directory path to list."),
   }),
@@ -389,7 +415,7 @@ const listFilesTool = defineAgentTool({
 
 const readFileTool = defineAgentTool({
   name: "readFile",
-  description: "Read one UTF-8 text file from the current Turn's sandbox.",
+  description: "Read one UTF-8 text file from the agent's persistent sandbox.",
   inputSchema: z.object({
     path: z.string().min(1).describe("Path of the text file to read."),
   }),
@@ -405,7 +431,7 @@ const readFileTool = defineAgentTool({
 const writeFileTool = defineAgentTool({
   name: "writeFile",
   description:
-    "Write one complete UTF-8 text file in the current Turn's sandbox, replacing its previous contents.",
+    "Write one complete UTF-8 text file in the agent's persistent sandbox, replacing its previous contents.",
   inputSchema: z.object({
     path: z.string().min(1).describe("Path of the text file to write."),
     content: z.string().describe("Complete new contents of the file."),
@@ -425,7 +451,7 @@ const writeFileTool = defineAgentTool({
 const executeCommandTool = defineAgentTool({
   name: "executeCommand",
   description:
-    "Execute one shell command in the current Turn's sandbox and wait for its final exit result. This tool never becomes a pending agent operation. To intentionally leave work running, launch and track a background shell script from the command itself.",
+    "Execute one shell command in the agent's persistent sandbox and wait for its final exit result. This tool never becomes a pending agent operation. To intentionally leave work running, launch and track a background shell script from the command itself.",
   inputSchema: z.object({
     command: z.string().min(1).describe("Shell command to execute."),
     cwd: z

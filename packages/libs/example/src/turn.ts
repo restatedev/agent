@@ -10,6 +10,7 @@ import {Agent} from "./agent.js";
 import {
   type AgentToolContext,
   agentTools,
+  createAgentToolContext,
   type ToolOutcome,
 } from "./agent-tools.js";
 import {
@@ -68,7 +69,7 @@ const MAX_TURN_CONTEXT_CHARS = 32_000;
 function createTurnState(req: TurnRequest, turnId: string): TurnState {
   const messages = buildModelContext(req.history, req.summary, req.memories);
   return {
-    context: {agentId: req.agentId, turnId},
+    context: createAgentToolContext(req.agentId, turnId),
     instructions: req.instructions,
     guardrails: req.guardrails,
     approvedGuardrails: new Set(),

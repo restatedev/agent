@@ -18,10 +18,6 @@ type SandboxProvisionOptions = SandboxOperationOptions & {
   agentId: string;
 };
 
-type SandboxConnectOptions = {
-  turnId: string;
-};
-
 export type SandboxCommand = {
   command: string;
   cwd?: string;
@@ -56,7 +52,7 @@ export interface SandboxProvider {
 
   // Connecting is process-local and performs no external operation. Each
   // client method is invoked separately inside restate.run with its signal.
-  connect(ref: SandboxRef, options: SandboxConnectOptions): SandboxClient;
+  connect(ref: SandboxRef): SandboxClient;
 }
 
 const SANDBOX_ROOT = "/tmp/restate-agent-sandboxes";
@@ -175,8 +171,7 @@ export const sandboxProvider: SandboxProvider = {
     });
   },
 
-  connect(ref, {turnId}) {
-    const agentRoot = containedPath(SANDBOX_ROOT, ref.id);
-    return localClient(join(agentRoot, pathSegment(turnId)));
+  connect(ref) {
+    return localClient(containedPath(SANDBOX_ROOT, ref.id));
   },
 };
