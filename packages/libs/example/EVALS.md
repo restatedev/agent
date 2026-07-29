@@ -114,9 +114,10 @@ the source of truth.
    message, and that a new Turn answers it.
 5. `execution-limit` asks for more weather lookups than the 24-tool-call budget
    allows, in small batches. It checks that the budget stops the Turn through
-   the guarded finalization path — an `interrupted` outcome carrying completed
-   work — rather than publishing an internal budget error as a failed answer,
-   and that every completed city result survives into that answer.
+   the guarded finalization path — a `stopped` outcome with a `tool_limit`
+   boundary carrying completed work — rather than publishing an internal budget
+   error as a failed answer, and that every completed city result survives into
+   that answer.
 6. `context-reduction` makes one small call to the cheap Turn-context model
    with synthetic completed, failed, and unresolved tool records. It verifies
    that all three survive reduction without paying for enough full agent turns

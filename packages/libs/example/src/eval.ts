@@ -100,6 +100,17 @@ function assertion(
   return {name, passed, ...(details ? {details} : {})};
 }
 
+function requireStarted(result: {
+  decision: "start" | "queue";
+  turnId: string | null;
+}): asserts result is {decision: "start"; turnId: string} {
+  if (result.decision !== "start" || result.turnId === null) {
+    throw new EvalScenarioFailure(
+      "a fresh evaluation Agent unexpectedly queued its first request",
+    );
+  }
+}
+
 function* readAvailable(reader: HistoryReader): restate.Operation<void> {
   while (true) {
     const page = yield* restate
@@ -237,6 +248,7 @@ function* basicTurn({
     message:
       "Use the weather tool to get the current weather in Berlin, then answer with the city and conditions.",
   });
+  requireStarted(ask);
   const terminal = yield* waitForHistory(
     history,
     "the basic turn to finish",
@@ -373,6 +385,7 @@ function* steering({
     message:
       "Get the weather in Berlin and start a durable 8-second sleep. Keep the sleep running until it completes, and only then answer.",
   });
+  requireStarted(ask);
   yield* waitForTurnMilestone(
     history,
     ask.turnId,
@@ -432,6 +445,7 @@ function* interruption({
     message:
       "Get the weather in Berlin and start a durable 30-second sleep. Keep the sleep running until it completes, and only then answer.",
   });
+  requireStarted(ask);
   yield* waitForTurnMilestone(
     history,
     ask.turnId,
@@ -496,6 +510,7 @@ function* interruptionReplacement({
     message:
       "Get the weather in Berlin and start a durable 60-second sleep. Keep the sleep running until it completes, and only then answer.",
   });
+  requireStarted(ask);
   yield* waitForTurnMilestone(
     history,
     ask.turnId,
@@ -618,6 +633,7 @@ function* executionLimit({
   const ask = yield* restate.client(Agent, agentId).ask({
     message: `Report the current weather in each of these ${cities.length} cities: ${cities.join(", ")}. Call the weather tool for at most five cities per response.`,
   });
+  requireStarted(ask);
   const terminal = yield* waitForHistory(
     history,
     "the budget-limited turn to finish",
@@ -630,8 +646,9 @@ function* executionLimit({
   const limitBoundary = history.entries.find(
     ({entry}) =>
       entry.role === "event" &&
-      entry.type === "interrupt" &&
+      entry.type === "stop" &&
       entry.turnId === ask.turnId &&
+      entry.cause === "tool_limit" &&
       entry.reason.toLowerCase().includes("limit"),
   );
   const finalizing = history.entries.find(
@@ -648,9 +665,9 @@ function* executionLimit({
 
   return [
     assertion(
-      "the turn stops with an interrupted outcome rather than a failure",
+      "the turn stops with a runtime-limit outcome rather than a failure",
       terminal.entry.role === "assistant" &&
-        terminal.entry.status === "interrupted",
+        terminal.entry.status === "stopped",
       terminal.entry.role === "assistant"
         ? `status was ${terminal.entry.status}`
         : "no terminal entry",
@@ -739,6 +756,7 @@ function* memory({
     message:
       "Remember for future conversations that I always want temperatures reported in Fahrenheit. Confirm once you have stored it.",
   });
+  requireStarted(ask);
   const terminal = yield* waitForHistory(
     history,
     "the memory turn to finish",
@@ -795,6 +813,7 @@ function* guardrailApproval({
   const ask = yield* restate.client(Agent, agentId).ask({
     message: "What is the current weather in Tokyo, Japan?",
   });
+  requireStarted(ask);
   const approvalRequestEvent = yield* waitForTurnMilestone(
     history,
     ask.turnId,
@@ -838,6 +857,7 @@ function* guardrailApproval({
     message:
       "Without retrieving new weather, tell me whether the previous human approval was approved or rejected and include its recorded reason. Do not request another approval.",
   });
+  requireStarted(followup);
   const followupMilestone = yield* waitForHistory(
     history,
     "the approval-history follow-up to finish or request another approval",
@@ -936,6 +956,7 @@ function* guardrailScope({
     message:
       "My name is Bob and I live in Tokyo, Japan. Remember this for future turns.",
   });
+  requireStarted(introduction);
   yield* waitForHistory(
     history,
     "the identity turn to finish",
@@ -954,6 +975,7 @@ function* guardrailScope({
   const japan = yield* restate.client(Agent, agentId).ask({
     message: "What is the weather in Tokyo?",
   });
+  requireStarted(japan);
   yield* waitForTurnMilestone(
     history,
     japan.turnId,
@@ -981,6 +1003,7 @@ function* guardrailScope({
   const usa = yield* restate.client(Agent, agentId).ask({
     message: "And what is the weather in the US?",
   });
+  requireStarted(usa);
   const usaMilestone = yield* waitForHistory(
     history,
     "the U.S. turn to finish or request an unexpected approval",
@@ -1014,6 +1037,7 @@ function* guardrailScope({
       : "";
 
   const newYork = yield* restate.client(Agent, agentId).ask({message: "NYC"});
+  requireStarted(newYork);
   const newYorkMilestone = yield* waitForHistory(
     history,
     "the New York turn to finish or request an unexpected approval",
@@ -1097,6 +1121,7 @@ function* guardrailDenial({
   const ask = yield* restate.client(Agent, agentId).ask({
     message: "What is the current weather in Tokyo, Japan?",
   });
+  requireStarted(ask);
   const observed = yield* waitForHistory(
     history,
     "the denied turn to finish or request an unexpected approval",
@@ -1168,6 +1193,7 @@ function* guardrailRejection({
   const ask = yield* restate.client(Agent, agentId).ask({
     message: "What is the current weather in Tokyo, Japan?",
   });
+  requireStarted(ask);
   yield* waitForTurnMilestone(
     history,
     ask.turnId,
@@ -1240,6 +1266,7 @@ function* guardrailSteering({
   const ask = yield* restate.client(Agent, agentId).ask({
     message: "What is the current weather in Tokyo, Japan?",
   });
+  requireStarted(ask);
   const firstRequest = yield* waitForTurnMilestone(
     history,
     ask.turnId,

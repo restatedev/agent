@@ -289,6 +289,13 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     role: z.literal("event"),
+    type: z.literal("stop"),
+    turnId: z.string(),
+    cause: z.enum(["step_limit", "tool_limit"]),
+    reason: z.string(),
+  }),
+  z.object({
+    role: z.literal("event"),
     type: z.literal("dispatch"),
     queuedMessages: z.number().int().positive(),
   }),
@@ -358,11 +365,57 @@ const ConversationEntrySchema = z.discriminatedUnion("role", [
     role: z.literal("assistant"),
     text: z.string(),
     turnId: z.string(),
-    status: z.enum(["completed", "interrupted", "failed"]),
+    status: z.enum(["completed", "interrupted", "stopped", "failed"]),
   }),
   ConversationEventSchema,
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
+
+type DerivedConversationEvent = Extract<
+  ConversationEntry,
+  {
+    role: "event";
+    type:
+      | "profile"
+      | "approval_request"
+      | "approval_cancelled"
+      | "progress"
+      | "sandbox"
+      | "activity"
+      | "tools"
+      | "memory"
+      | "schedule";
+  }
+>;
+
+// Derived status is useful to transcript consumers, but it is neither semantic
+// model context nor material for summary compaction. Keep that policy
+// exhaustive here so adding an event cannot silently diverge across readers.
+export function isDerivedConversationEvent(
+  entry: ConversationEntry,
+): entry is DerivedConversationEvent {
+  if (entry.role !== "event") {
+    return false;
+  }
+  switch (entry.type) {
+    case "profile":
+    case "approval_request":
+    case "approval_cancelled":
+    case "progress":
+    case "sandbox":
+    case "activity":
+    case "tools":
+    case "memory":
+    case "schedule":
+      return true;
+    case "interrupt":
+    case "stop":
+    case "dispatch":
+    case "steer":
+    case "approval":
+      return false;
+  }
+}
 
 const SequencedConversationEntrySchema = z.object({
   sequence: z.number().int().positive(),
@@ -405,6 +458,12 @@ export const TurnOutcomeSchema = z.discriminatedUnion("status", [
     // Graceful interruption produces a final response. Hard invocation
     // cancellation can still retire the Turn without one.
     response: z.string().optional(),
+  }),
+  TurnOutcomeBaseSchema.extend({
+    status: z.literal("stopped"),
+    cause: z.enum(["step_limit", "tool_limit"]),
+    reason: z.string(),
+    response: z.string(),
   }),
   TurnOutcomeBaseSchema.extend({
     status: z.literal("failed"),

@@ -8,7 +8,11 @@
 
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
-import type {ConversationEntry, HistoryPage} from "./types.js";
+import {
+  type ConversationEntry,
+  type HistoryPage,
+  isDerivedConversationEvent,
+} from "./types.js";
 
 type StoredEntry = {
   sequence: number;
@@ -210,18 +214,7 @@ export const history = {
       meta,
       (summary?.through ?? 0) + 1,
     ).collect()).flatMap(({entry}): ConversationEntry[] =>
-      entry.role === "event" &&
-      (entry.type === "progress" ||
-        entry.type === "activity" ||
-        entry.type === "tools" ||
-        entry.type === "profile" ||
-        entry.type === "approval_request" ||
-        entry.type === "approval_cancelled" ||
-        entry.type === "memory" ||
-        entry.type === "sandbox" ||
-        entry.type === "schedule")
-        ? []
-        : [entry],
+      isDerivedConversationEvent(entry) ? [] : [entry],
     );
     return {summary: summary?.text, entries};
   },

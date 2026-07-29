@@ -13,6 +13,7 @@ import {
   createAgentToolContext,
   type ToolOutcome,
 } from "./agent-tools.js";
+import type {GuardrailApproval} from "./model.js";
 import {
   callContextReducer,
   callGuardrailModel,
@@ -22,7 +23,6 @@ import {Sandbox} from "./sandbox.js";
 import {
   buildModelContext,
   finalizationInstruction,
-  guardrailContext,
   steeringMessage,
 } from "./turn-context.js";
 import {createPendingOperations} from "./turn-pending.js";
@@ -48,10 +48,12 @@ type TurnState = {
   context: AgentToolContext;
   instructions?: string;
   guardrails: Guardrail[];
-  approvedGuardrails: Set<string>;
+  approvedActions: GuardrailApproval[];
   rejectedGuardrails: Set<string>;
   blockedGuardrails: Set<string>;
   messages: ModelMessage[];
+  guardrailInput?: ModelMessage;
+  guardrailEvidenceFrom: number;
   initialMessageCount: number;
   modelSeenThrough: number;
   contextReductionEnabled: boolean;
@@ -68,17 +70,23 @@ const MAX_TOOL_CALLS = 24;
 const MAX_TURN_CONTEXT_CHARS = 32_000;
 
 function createTurnState(req: TurnRequest, turnId: string): TurnState {
-  const messages = buildModelContext(req.history, req.summary, req.memories);
+  const modelContext = buildModelContext(
+    req.history,
+    req.summary,
+    req.memories,
+  );
   return {
     context: createAgentToolContext(req.agentId, turnId),
     instructions: req.instructions,
     guardrails: req.guardrails,
-    approvedGuardrails: new Set(),
+    approvedActions: [],
     rejectedGuardrails: new Set(),
     blockedGuardrails: new Set(),
-    messages,
-    initialMessageCount: messages.length,
-    modelSeenThrough: messages.length,
+    messages: modelContext.messages,
+    guardrailInput: modelContext.guardrailInput,
+    guardrailEvidenceFrom: modelContext.guardrailEvidenceFrom,
+    initialMessageCount: modelContext.messages.length,
+    modelSeenThrough: modelContext.messages.length,
     contextReductionEnabled: true,
     interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
     steeringInbox: createSteeringInbox(),
@@ -129,6 +137,22 @@ function reducedContextMessage(summary: string): ModelMessage {
   };
 }
 
+function adjustGuardrailEvidence(
+  state: TurnState,
+  {start, end}: ContextReductionPlan,
+): void {
+  if (
+    state.guardrailEvidenceFrom > start &&
+    state.guardrailEvidenceFrom <= end
+  ) {
+    // Keep the exact structurally identified user input, but do not pass a
+    // summary that also contains older Turn context off as evidence after it.
+    state.guardrailEvidenceFrom = start + 1;
+  } else if (state.guardrailEvidenceFrom > end) {
+    state.guardrailEvidenceFrom += 1 - (end - start);
+  }
+}
+
 // Reduction is transient Turn maintenance. It never rewrites Agent history,
 // never touches pending operations, and a reducer failure leaves the exact
 // context in place. Interruption still stops the scoped model call promptly.
@@ -164,6 +188,7 @@ function* reduceCurrentContext(
       plan.end - plan.start,
       reducedContextMessage(summary),
     );
+    adjustGuardrailEvidence(state, plan);
     // The reducer output and everything after it must be seen by the agent
     // model before either becomes eligible for another reduction.
     state.modelSeenThrough = state.initialMessageCount;
@@ -237,31 +262,32 @@ function* reportToolsFinished(
   ]);
 }
 
-function guardrailApprovalMessage(guardrailId: string): ModelMessage {
+function guardrailApprovalMessage({
+  guardrailId,
+  question,
+}: GuardrailApproval): ModelMessage {
   return {
     role: "user",
     content: [
       "[Runtime guardrail]",
-      `Human approval was granted for guardrail ${JSON.stringify(guardrailId)} for the current request.`,
-      "The runtime will evaluate this policy again if steering changes the request.",
+      `Human approval was granted for this proposal under guardrail ${JSON.stringify(guardrailId)}.`,
+      `Approved scope: ${JSON.stringify(question)}`,
+      "The runtime will evaluate later actions and reuse this approval only when they remain materially within that scope.",
     ].join("\n"),
   };
 }
 
-// Guardrail decisions observed by a settled step become cross-step state: an
-// approval covers its policy for the rest of the current request, and a human
-// rejection prevents reopening approval for it.
+// Guardrail decisions observed by a settled step become cross-step state.
+// Approval records retain the authorized proposal for coverage checks on later
+// actions; a human rejection prevents reopening the same policy in this request.
 function commitGuardrailDecisions(
   state: TurnState,
   decisions: GuardrailDecisions,
 ): void {
-  const newlyApproved = decisions.approvedGuardrails.filter(
-    (guardrailId) => !state.approvedGuardrails.has(guardrailId),
+  state.approvedActions.push(...decisions.approvedActions);
+  state.messages.push(
+    ...decisions.approvedActions.map(guardrailApprovalMessage),
   );
-  for (const guardrailId of newlyApproved) {
-    state.approvedGuardrails.add(guardrailId);
-  }
-  state.messages.push(...newlyApproved.map(guardrailApprovalMessage));
   for (const guardrailId of decisions.rejectedGuardrails) {
     state.rejectedGuardrails.add(guardrailId);
   }
@@ -270,12 +296,12 @@ function commitGuardrailDecisions(
 function resetGuardrailsForSteering(state: TurnState): void {
   state.blockedGuardrails.clear();
   if (
-    state.approvedGuardrails.size === 0 &&
+    state.approvedActions.length === 0 &&
     state.rejectedGuardrails.size === 0
   ) {
     return;
   }
-  state.approvedGuardrails.clear();
+  state.approvedActions = [];
   state.rejectedGuardrails.clear();
   state.messages.push({
     role: "user",
@@ -296,9 +322,40 @@ function guardrailFeedback(guardrailId: string, reason: string): ModelMessage {
   };
 }
 
-function* finalizeStoppedTurn(
+function currentGuardrailContext(state: TurnState): ModelMessage[] {
+  if (!state.guardrailInput) {
+    return [];
+  }
+  return [
+    state.guardrailInput,
+    ...state.messages.slice(state.guardrailEvidenceFrom),
+  ];
+}
+
+function applySteeringMessages(
   state: TurnState,
-  reason: string,
+  steering: SteeringSignal[],
+): void {
+  const messages = steering.map(steeringMessage);
+  state.messages.push(...messages);
+  const latest = messages.at(-1);
+  if (latest) {
+    state.guardrailInput = latest;
+    state.guardrailEvidenceFrom = state.messages.length;
+  }
+}
+
+type EarlyExit =
+  | {status: "interrupted"; reason: string}
+  | {
+      status: "stopped";
+      cause: "step_limit" | "tool_limit";
+      reason: string;
+    };
+
+function* finalizeEarlyExit(
+  state: TurnState,
+  exit: EarlyExit,
 ): restate.Operation<TurnOutcome> {
   yield* reportProgress(
     state.context,
@@ -306,10 +363,10 @@ function* finalizeStoppedTurn(
     "Stopping unfinished work before finalization",
   );
   const stopped = yield* state.pending.stop(
-    new restate.InterruptedError(reason),
+    new restate.InterruptedError(exit.reason),
   );
   state.messages.push(...stopped.map(agentTools.toRuntimeMessage));
-  state.messages.push(finalizationInstruction(reason));
+  state.messages.push(finalizationInstruction(exit.reason));
   yield* reportProgress(
     state.context,
     "finalizing",
@@ -325,18 +382,16 @@ function* finalizeStoppedTurn(
       tools: [],
     });
     if (final.type === "text" && final.content.trim()) {
-      const remaining = state.guardrails.filter(
-        ({id}) => !state.approvedGuardrails.has(id),
-      );
-      if (remaining.length === 0) {
+      if (state.guardrails.length === 0) {
         response = final.content;
       } else {
         const decision = yield* callGuardrailModel({
           agentId: state.context.agentId,
           instructions: state.instructions,
-          guardrails: remaining,
+          guardrails: state.guardrails,
+          approvedActions: state.approvedActions,
           rejectedGuardrailIds: [...state.rejectedGuardrails],
-          messages: guardrailContext(state.messages),
+          messages: currentGuardrailContext(state),
           action: {type: "text", content: final.content},
         });
         response =
@@ -349,7 +404,7 @@ function* finalizeStoppedTurn(
         final.type === "error"
           ? final.message
           : "the finalizer unexpectedly requested a tool";
-      response = `The turn stopped (${reason}), but its final response could not be generated: ${detail}.`;
+      response = `The turn stopped (${exit.reason}), but its final response could not be generated: ${detail}.`;
     }
   } catch (error) {
     if (
@@ -358,12 +413,11 @@ function* finalizeStoppedTurn(
     ) {
       throw error;
     }
-    response = `The turn stopped (${reason}), but its final response could not be generated: ${errorMessage(error)}.`;
+    response = `The turn stopped (${exit.reason}), but its final response could not be generated: ${errorMessage(error)}.`;
   }
   return {
     turnId: state.context.turnId,
-    status: "interrupted",
-    reason,
+    ...exit,
     response,
     consumedSteering: state.consumedSteering,
   };
@@ -410,7 +464,7 @@ function* applyText(
   if (next.type === "steering") {
     const steering = drainSteering(state);
     resetGuardrailsForSteering(state);
-    state.messages.push(...steering.map(steeringMessage));
+    applySteeringMessages(state, steering);
     return undefined;
   }
   if (next.type === "completion") {
@@ -419,7 +473,10 @@ function* applyText(
   }
 
   state.messages.push({role: "assistant", content: text});
-  return yield* finalizeStoppedTurn(state, next.reason);
+  return yield* finalizeEarlyExit(state, {
+    status: "interrupted",
+    reason: next.reason,
+  });
 }
 
 function* applyTools(
@@ -432,8 +489,8 @@ function* applyTools(
     step.action.message,
     agentTools.toModelMessage(applied.outcomes),
     ...applied.events.map(agentTools.toRuntimeMessage),
-    ...steering.map(steeringMessage),
   );
+  applySteeringMessages(state, steering);
   yield* reportToolsFinished(state, step, applied.outcomes);
 }
 
@@ -465,7 +522,10 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
   while (state.steps < MAX_STEPS) {
     const interruptedWhileReducing = yield* reduceCurrentContext(state);
     if (interruptedWhileReducing) {
-      return yield* finalizeStoppedTurn(state, interruptedWhileReducing);
+      return yield* finalizeEarlyExit(state, {
+        status: "interrupted",
+        reason: interruptedWhileReducing,
+      });
     }
 
     yield* reportProgress(
@@ -482,8 +542,9 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
         context: state.context,
         instructions: state.instructions,
         messages: [...state.messages],
+        guardrailMessages: currentGuardrailContext(state),
         guardrails: state.guardrails,
-        approvedGuardrails: [...state.approvedGuardrails],
+        approvedActions: [...state.approvedActions],
         rejectedGuardrails: [...state.rejectedGuardrails],
         stepNumber: state.steps + 1,
         remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
@@ -496,9 +557,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
         // Approvals the interrupted step obtained still cover the guardrail
         // check on the finalization text; no approval message is pushed
         // during shutdown.
-        for (const guardrailId of step.tools.approvedGuardrails) {
-          state.approvedGuardrails.add(guardrailId);
-        }
+        state.approvedActions.push(...step.tools.approvedActions);
         retainInterruptedTools(state, step.tools, step.reason);
         yield* reportToolsFinished(
           state,
@@ -507,7 +566,10 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
           true,
         );
       }
-      return yield* finalizeStoppedTurn(state, step.reason);
+      return yield* finalizeEarlyExit(state, {
+        status: "interrupted",
+        reason: step.reason,
+      });
     }
 
     state.modelSeenThrough = modelMessageCount;
@@ -527,7 +589,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
         step.type === "guardrail_blocked") &&
       steering.length > 0
     ) {
-      state.messages.push(...steering.map(steeringMessage));
+      applySteeringMessages(state, steering);
       continue;
     }
 
@@ -562,10 +624,11 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
         continue;
 
       case "tool_budget_exceeded":
-        return yield* finalizeStoppedTurn(
-          state,
-          `The agent reached its ${MAX_TOOL_CALLS}-tool-call limit.`,
-        );
+        return yield* finalizeEarlyExit(state, {
+          status: "stopped",
+          cause: "tool_limit",
+          reason: `The agent reached its ${MAX_TOOL_CALLS}-tool-call limit.`,
+        });
 
       case "tools":
         state.toolCalls += step.action.calls.length;
@@ -574,10 +637,11 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
     }
   }
 
-  return yield* finalizeStoppedTurn(
-    state,
-    `The agent reached its ${MAX_STEPS}-step limit.`,
-  );
+  return yield* finalizeEarlyExit(state, {
+    status: "stopped",
+    cause: "step_limit",
+    reason: `The agent reached its ${MAX_STEPS}-step limit.`,
+  });
 }
 
 export const Turn = restate.service({

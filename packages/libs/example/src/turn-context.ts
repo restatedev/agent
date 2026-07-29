@@ -2,7 +2,12 @@
 // context used by one Turn invocation.
 
 import type {ModelMessage} from "ai";
-import type {ConversationEntry, MemoryEntry, SteeringSignal} from "./types.js";
+import {
+  type ConversationEntry,
+  isDerivedConversationEvent,
+  type MemoryEntry,
+  type SteeringSignal,
+} from "./types.js";
 
 function interruptionBoundary(
   entry: Extract<ConversationEntry, {role: "event"; type: "interrupt"}>,
@@ -16,6 +21,22 @@ function interruptionBoundary(
       "The prior turn was asked to stop or was externally cancelled.",
       "Treat requests before this boundary as conversation context, not unfinished work to resume automatically.",
       "Do not assume tools from that turn completed. Act on earlier requests only when the new turn messages explicitly refer to them.",
+    ].join("\n"),
+  };
+}
+
+function stopBoundary(
+  entry: Extract<ConversationEntry, {role: "event"; type: "stop"}>,
+): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Turn runtime stop boundary]",
+      `Turn: ${entry.turnId}`,
+      `Cause: ${entry.cause}`,
+      `Reason: ${JSON.stringify(entry.reason)}`,
+      "The prior turn reached a configured execution limit.",
+      "Treat requests before this boundary as conversation context, not unfinished work to resume automatically.",
     ].join("\n"),
   };
 }
@@ -110,25 +131,20 @@ function entryMessage(entry: ConversationEntry): ModelMessage | undefined {
       ? failureBoundary(entry)
       : {role: "assistant", content: entry.text};
   }
+  if (isDerivedConversationEvent(entry)) {
+    return undefined;
+  }
   switch (entry.type) {
     case "interrupt":
       return interruptionBoundary(entry);
+    case "stop":
+      return stopBoundary(entry);
     case "steer":
       return steeringBoundary(entry);
     case "dispatch":
       return dispatchBoundary(entry);
     case "approval":
       return approvalBoundary(entry);
-    case "approval_request":
-    case "approval_cancelled":
-    case "profile":
-    case "activity":
-    case "tools":
-    case "progress":
-    case "memory":
-    case "sandbox":
-    case "schedule":
-      return undefined;
   }
 }
 
@@ -162,8 +178,14 @@ export function buildModelContext(
   history: ConversationEntry[],
   summary?: string,
   memories: MemoryEntry[] = [],
-): ModelMessage[] {
+): {
+  messages: ModelMessage[];
+  guardrailInput?: ModelMessage;
+  guardrailEvidenceFrom: number;
+} {
   const messages: ModelMessage[] = [];
+  let guardrailInput: ModelMessage | undefined;
+  let guardrailEvidenceFrom = 0;
   if (memories.length > 0) {
     messages.push(memoriesMessage(memories));
   }
@@ -174,40 +196,17 @@ export function buildModelContext(
     const message = entryMessage(entry);
     if (message) {
       messages.push(message);
+      if (entry.role === "user") {
+        guardrailInput = message;
+        guardrailEvidenceFrom = messages.length;
+      }
     }
   }
-  return messages;
-}
-
-function isGuardrailInput(message: ModelMessage): boolean {
-  const content = message.content;
-  if (message.role !== "user" || typeof content !== "string") {
-    return false;
-  }
-  return ![
-    "[Earlier conversation summary]",
-    "[Earlier work in this turn]",
-    "[Persistent agent memory]",
-    "[Previous turn failed]",
-    "[Queued messages activated]",
-    "[Resolved human approval]",
-    "[Runtime guardrail]",
-    "[Turn finalization]",
-    "[Turn interruption boundary]",
-    "[Turn steering boundary]",
-  ].some((prefix) => content.startsWith(prefix));
-}
-
-// Policy evaluation starts at the latest real user input and retains any
-// tool/runtime evidence produced after it. Older turns and resolved approvals
-// remain agent context, but cannot accidentally expand a policy's scope.
-export function guardrailContext(messages: ModelMessage[]): ModelMessage[] {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (isGuardrailInput(messages[index])) {
-      return messages.slice(index);
-    }
-  }
-  return [];
+  return {
+    messages,
+    ...(guardrailInput ? {guardrailInput} : {}),
+    guardrailEvidenceFrom,
+  };
 }
 
 export function steeringMessage({

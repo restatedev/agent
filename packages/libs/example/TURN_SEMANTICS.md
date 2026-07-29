@@ -67,8 +67,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   Durable interruption and cancellation errors are rethrown; other failures
   become a structured failed Turn outcome.
 - Reaching either execution budget stops pending work and performs one
-  tool-free final model call. The outcome is `interrupted`, preserving completed
-  work instead of publishing an internal budget error as the assistant answer.
+  tool-free final model call. The outcome is `stopped` with a `step_limit` or
+  `tool_limit` cause, preserving completed work without representing a runtime
+  limit as user interruption.
 - The Agent-provided context remains exact for the lifetime of the Turn. When
   settled model/tool context accumulated inside the Turn exceeds a bounded
   character budget, a cheap scoped model reduces the prefix already observed
@@ -93,6 +94,8 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   including any tool and runtime evidence produced after it. Older turns and
   historical approval prose cannot expand a conditional policy into an
   allowlist; current-Turn approval and rejection state is supplied separately.
+  Turn tracks that input structurally rather than recognizing internal prompt
+  text by string prefix.
 - The policy decision is `allow`, `deny`, or `require_approval`. Model failure
   fails closed under the gateway's Restate retry policy.
 - `deny` returns a runtime policy message to the next agent step. The blocked
@@ -103,9 +106,11 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   Turn-scoped signal. Approval resumes the exact proposal; rejection blocks it
   and prevents another approval request for that policy in the current
   request.
-- An approval covers its policy for later steps in the same request. Several
-  applicable approval policies are resolved one at a time before the proposal
-  runs.
+- An approval records its policy ID, human question, and exact approved
+  proposal. Later actions still pass through the evaluator, which reuses the
+  decision only when the proposed action is materially within that scope.
+  Several applicable approval policies are resolved one at a time before the
+  proposal runs.
 - Steering changes the request. Turn clears approvals, rejections, and prior
   block retries before the next step so the updated work is evaluated again.
 - The evaluator is model-based and therefore probabilistic. Once returned,
@@ -180,7 +185,8 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - The interrupt signal asks Turn to end, while steering asks it to continue
   with new instructions.
 - Execution limits also stop the Turn through this path, but originate from the
-  runtime rather than an Agent interruption request.
+  runtime rather than an Agent interruption request. Their terminal outcome and
+  transcript boundary are `stopped`, with a structured limit cause.
 - The Agent keeps the interruption reason separate from an optional replacement
   user message. The reason guides finalization of the old Turn; the message is
   appended to the immutable transcript and queued for a new Turn.
@@ -225,7 +231,7 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   authoritative current-state snapshots.
 - Raw reasoning, tool arguments, and tool results remain outside the canonical
   user-facing transcript.
-- Every completed, interrupted, or failed outcome includes
+- Every completed, interrupted, stopped, or failed outcome includes
   `consumedSteering`.
 
 ## Refactoring constraints

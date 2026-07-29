@@ -30,9 +30,10 @@ The application is split into a few concrete parts:
   transient agent-turn state machine: live messages, budgets, steering, and
   pending operations. It repeatedly spawns one bounded agent step, applies its
   returned data, and retains completed work for a tool-free interruption
-  response. Each invocation receives the canonical transcript, where steering
-  metadata, queue dispatch, and interruption reasons become explicit
-  model-context boundaries.
+  response. Runtime execution limits use a distinct `stopped` outcome rather
+  than masquerading as interruption. Each invocation receives the canonical
+  transcript, where steering metadata, queue dispatch, and interruption reasons
+  become explicit model-context boundaries.
 - **`agentStep`** is the functional model → foreground-tools seam. It receives
   a message snapshot and remaining tool budget, asks a cheap policy model to
   gate the agent model's proposed text or complete tool batch, runs an allowed
@@ -42,7 +43,9 @@ The application is split into a few concrete parts:
   long-lived sleeps and approvals across steps. The model can selectively stop
   those tasks through `cancelOperation`; progress and execution activity remain
   visible in the canonical transcript but are omitted from future model context
-  and compaction input.
+  and compaction input. Model-relevance for derived transcript events is
+  classified once in the shared conversation contract instead of being
+  duplicated by each projection.
 - **`ModelGateway`** performs full agent inference, cheap guardrail evaluation,
   and active-Turn context reduction behind Restate's scoped concurrency
   controls, model-specific limit keys, retry policy, and cancellation

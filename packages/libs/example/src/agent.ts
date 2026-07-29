@@ -90,13 +90,23 @@ const InterruptRequestSchema = z
     "Interrupt the active Turn, optionally preserving a replacement request for the next Turn.",
   );
 
-const AskResultSchema = z.object({
-  decision: z.enum(["start", "queue"]),
-  turnId: z.string(),
-  stats: z.object({
-    pendingMessages: z.number().int().nonnegative(),
-  }),
+const AskStatsSchema = z.object({
+  pendingMessages: z.number().int().nonnegative(),
 });
+
+const AskResultSchema = z.discriminatedUnion("decision", [
+  z.object({
+    decision: z.literal("start"),
+    turnId: z.string(),
+    stats: AskStatsSchema,
+  }),
+  z.object({
+    decision: z.literal("queue"),
+    turnId: z.null(),
+    activeTurnId: z.string(),
+    stats: AskStatsSchema,
+  }),
+]);
 type AskResult = z.infer<typeof AskResultSchema>;
 
 const HistoryQuerySchema = z.object({
@@ -178,7 +188,8 @@ export const Agent = restate.object({
           });
           return {
             decision: "queue",
-            turnId: current.id,
+            turnId: null,
+            activeTurnId: current.id,
             stats: {pendingMessages},
           };
         }
@@ -642,7 +653,8 @@ export const Agent = restate.object({
     // belongs to the active turn, append its user-facing result, retire the
     // turn, and dispatch anything still queued. An explicit interrupt event is
     // already in history; external cancellation gets one here. A graceful
-    // interruption can additionally produce an assistant finalization.
+    // interruption can additionally produce an assistant finalization. Runtime
+    // execution limits use their own stop event and terminal status.
     // Detailed execution activity is reported separately while the Turn runs;
     // this path records only its terminal result.
     onTurnEnd: restate.schemas(
@@ -674,6 +686,22 @@ export const Agent = restate.object({
               status: "interrupted",
             });
           }
+        } else if (outcome.status === "stopped") {
+          yield* history.append(
+            {
+              role: "event",
+              type: "stop",
+              turnId: outcome.turnId,
+              cause: outcome.cause,
+              reason: outcome.reason,
+            },
+            {
+              role: "assistant",
+              text: outcome.response,
+              turnId: outcome.turnId,
+              status: "stopped",
+            },
+          );
         } else {
           yield* history.append({
             role: "assistant",

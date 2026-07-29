@@ -23,9 +23,13 @@ import {
   agentTools,
   type ToolOutcome,
 } from "./agent-tools.js";
-import type {GuardrailDecision, ModelResult, ProposedAction} from "./model.js";
+import type {
+  GuardrailApproval,
+  GuardrailDecision,
+  ModelResult,
+  ProposedAction,
+} from "./model.js";
 import {callGuardrailModel, callModel} from "./model-gateway.js";
-import {guardrailContext} from "./turn-context.js";
 import {
   type ApprovalDecision,
   approvalSignalName,
@@ -35,11 +39,11 @@ import {
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
 
-// Guardrail decisions observed while producing one step. Every settled step
-// carries both lists (possibly empty), so Turn commits them into cross-step
-// state without inspecting the step type.
+// Guardrail decisions observed while producing one step. Approved records keep
+// the human question and exact proposal so later actions can be checked for
+// coverage instead of bypassing a policy by ID.
 export type GuardrailDecisions = {
-  approvedGuardrails: string[];
+  approvedActions: GuardrailApproval[];
   rejectedGuardrails: string[];
 };
 
@@ -143,7 +147,7 @@ function* enforceGuardrails({
   messages,
   action,
   guardrails,
-  approvedGuardrails,
+  approvedActions,
   rejectedGuardrails,
   stepNumber,
 }: {
@@ -152,7 +156,7 @@ function* enforceGuardrails({
   messages: ModelMessage[];
   action: ProposedAction;
   guardrails: Guardrail[];
-  approvedGuardrails: string[];
+  approvedActions: GuardrailApproval[];
   rejectedGuardrails: string[];
   stepNumber: number;
 }): Operation<
@@ -163,15 +167,16 @@ function* enforceGuardrails({
       reason: string;
     } & GuardrailDecisions)
 > {
-  const approved = [...approvedGuardrails];
+  const approvedForAction = new Set<string>();
+  const newlyApproved: GuardrailApproval[] = [];
   let approvalNumber = 1;
 
   while (true) {
-    const remaining = guardrails.filter(({id}) => !approved.includes(id));
+    const remaining = guardrails.filter(({id}) => !approvedForAction.has(id));
     if (remaining.length === 0) {
       return {
         decision: "allow",
-        approvedGuardrails: approved,
+        approvedActions: newlyApproved,
         rejectedGuardrails: [],
       };
     }
@@ -180,14 +185,15 @@ function* enforceGuardrails({
       agentId: context.agentId,
       instructions,
       guardrails: remaining,
+      approvedActions: [...approvedActions, ...newlyApproved],
       rejectedGuardrailIds: rejectedGuardrails,
-      messages: guardrailContext(messages),
+      messages,
       action,
     });
     if (decision.decision === "allow") {
       return {
         decision: "allow",
-        approvedGuardrails: approved,
+        approvedActions: newlyApproved,
         rejectedGuardrails: [],
       };
     }
@@ -196,7 +202,7 @@ function* enforceGuardrails({
         decision: "blocked",
         guardrailId: decision.guardrailId,
         reason: decision.reason,
-        approvedGuardrails: approved,
+        approvedActions: newlyApproved,
         rejectedGuardrails: [],
       };
     }
@@ -212,7 +218,7 @@ function* enforceGuardrails({
         decision: "blocked",
         guardrailId: decision.guardrailId,
         reason: "human approval could not be registered",
-        approvedGuardrails: approved,
+        approvedActions: newlyApproved,
         rejectedGuardrails: [],
       };
     }
@@ -224,12 +230,17 @@ function* enforceGuardrails({
         decision: "blocked",
         guardrailId: decision.guardrailId,
         reason,
-        approvedGuardrails: approved,
+        approvedActions: newlyApproved,
         rejectedGuardrails: [decision.guardrailId],
       };
     }
 
-    approved.push(decision.guardrailId);
+    newlyApproved.push({
+      guardrailId: decision.guardrailId,
+      question: decision.question,
+      action,
+    });
+    approvedForAction.add(decision.guardrailId);
     approvalNumber += 1;
   }
 }
@@ -238,8 +249,9 @@ export function* agentStep({
   context,
   instructions,
   messages,
+  guardrailMessages,
   guardrails,
-  approvedGuardrails,
+  approvedActions,
   rejectedGuardrails,
   stepNumber,
   remainingToolCalls,
@@ -247,8 +259,9 @@ export function* agentStep({
   context: AgentToolContext;
   instructions?: string;
   messages: ModelMessage[];
+  guardrailMessages: ModelMessage[];
   guardrails: Guardrail[];
-  approvedGuardrails: string[];
+  approvedActions: GuardrailApproval[];
   rejectedGuardrails: string[];
   stepNumber: number;
   remainingToolCalls: number;
@@ -269,7 +282,7 @@ export function* agentStep({
       tools: agentTools.manifests,
     });
     if (action.type === "error") {
-      return {...action, approvedGuardrails: [], rejectedGuardrails: []};
+      return {...action, approvedActions: [], rejectedGuardrails: []};
     }
     if (
       action.type === "tool_calls" &&
@@ -277,7 +290,7 @@ export function* agentStep({
     ) {
       return {
         type: "tool_budget_exceeded",
-        approvedGuardrails: [],
+        approvedActions: [],
         rejectedGuardrails: [],
       };
     }
@@ -285,15 +298,15 @@ export function* agentStep({
     const guarded = yield* enforceGuardrails({
       context,
       instructions,
-      messages,
+      messages: guardrailMessages,
       action: proposedAction(action),
       guardrails,
-      approvedGuardrails,
+      approvedActions,
       rejectedGuardrails,
       stepNumber,
     });
     const decisions = {
-      approvedGuardrails: guarded.approvedGuardrails,
+      approvedActions: guarded.approvedActions,
       rejectedGuardrails: guarded.rejectedGuardrails,
     };
     if (guarded.decision === "blocked") {

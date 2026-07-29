@@ -23,7 +23,7 @@ unimportant.
 | Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
 | Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
 | Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. Request, resolution, and cancellation events make the complete lifecycle discoverable through history; resolved decisions also become model-visible context. |
-| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, dispatch, concise activity, structured tool lifecycle, profile changes, approval lifecycle, progress, sandbox lifecycle, and terminal outcomes retain their natural observation order. |
+| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, runtime stops, dispatch, concise activity, structured tool lifecycle, profile changes, approval lifecycle, progress, sandbox lifecycle, and terminal outcomes retain their natural observation order. |
 | Push-style history updates | Any client long-polls the shared `watchHistory` handler, which parks inside the Agent until the cursor becomes readable or its wait window elapses. Registration closes the empty-read race; the transcript itself remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
 | Agent-owned schedules | The model or an external client can create, replace, list, and cancel durable one-shot or fixed-interval messages. Delayed self-sends wake the Agent, which starts, queues, steers, or interrupts according to the schedule's busy policy. |
@@ -117,7 +117,7 @@ flowchart LR
   state machine for an agent turn: model messages, budgets, steering, pending
   operations, and graceful finalization. It repeatedly spawns one bounded
   `agentStep`, applies the returned data, and reports one structured
-  `completed | interrupted | failed` result.
+  `completed | interrupted | stopped | failed` result.
 - `turn-step.ts` owns the functional execution seam and the small supervisor
   that settles each spawned step against interruption. A step receives a
   message snapshot and remaining tool budget, performs one agent-model call,
@@ -158,8 +158,9 @@ explicit lifecycle boundaries, semantic progress, short user-facing activity,
 and structured tool names and statuses. Raw provider reasoning, tool arguments,
 tool results, and intermediate model messages stay in Restate's invocation
 journal and observability tools. A turn reports exactly one structured outcome:
-`completed`, `interrupted`, or `failed`. A graceful interruption can include a
-final assistant response based on completed tool results.
+`completed`, `interrupted`, `stopped`, or `failed`. A graceful interruption can
+include a final assistant response based on completed tool results; execution
+limits use `stopped` with a structured cause.
 
 Every handler on `Agent`, `Turn`, `ModelGateway`, `Sandbox`, and `Evals` is
 ingress-public in this reference implementation. This keeps the complete
@@ -324,16 +325,20 @@ Guardrails are not included in the main agent model's system prompt. This keeps
 policy enforcement in one place: the agent proposes the actual work, and the
 runtime independently gates it. The explicit `humanApproval` tool remains
 available for approvals the agent decides it needs for reasons unrelated to a
-runtime guardrail. The evaluator receives the exact proposed action plus context
-starting at the latest real user input, including execution evidence produced
-after it. Historical approval prose remains available to the agent but cannot
-turn a conditional policy into an allowlist; current-Turn decisions are
+runtime guardrail. The evaluator receives the exact proposed action plus
+structurally tracked context starting at the latest real user input, including
+execution evidence produced after it. It never infers message provenance from
+prompt prefixes. Historical approval prose remains available to the agent but
+cannot turn a conditional policy into an allowlist; current-Turn decisions are
 supplied to the evaluator separately.
 
-Approval applies to the current request and matching policy; later steps do not
-ask again. Rejection blocks the proposal and prevents another approval loop for
-that request. Steering changes the request, so Turn invalidates both decisions
-and evaluates the updated work again. Graceful interruption cannot open a new
+An approval record retains its policy ID, human question, and exact approved
+proposal. Every later proposal is still evaluated: the policy model may reuse
+the approval only when the new action is materially within that recorded scope.
+A changed action can therefore require fresh approval even without steering.
+Rejection blocks the proposal and prevents another approval loop for that
+request. Steering changes the request, so Turn invalidates both decisions and
+evaluates the updated work again. Graceful interruption cannot open a new
 approval while ending the Turn: its final text is checked and withheld if the
 policy model does not allow it. The evaluator is deliberately model-based and
 therefore probabilistic; the runtime deterministically enforces the decision it
@@ -352,7 +357,7 @@ approval into blanket authorization for materially changed work.
 
 | Handler | Input | Behavior |
 | --- | --- | --- |
-| `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. Returns the `start` or `queue` decision, affected turn invocation ID, and pending-message count. |
+| `ask` | `{ message: string }` | Starts a turn when idle or queues the message when busy. `start` returns its new `turnId`; `queue` returns `turnId: null`, the currently active `activeTurnId`, and the pending-message count because the queued message has not yet been assigned to a Turn. |
 | `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced transcript entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
 | `watchHistory` | `{ fromSequence, timeoutSeconds? }` | Shared long-poll: returns `true` as soon as the cursor is readable, or `false` when the wait window (default 60s, max 120s) elapses. Callers loop and re-read `history`. |
 | `registerHistoryWatcher` | `{ fromSequence, awakeableId }` | Internal exclusive registration path used by `watchHistory`; re-checks the cursor so no append is lost. |
@@ -407,6 +412,12 @@ tool-free model call that answers as far as those results allow. That response
 is appended as an assistant entry with status `interrupted`. A later turn sees
 both the boundary and final response. External invocation cancellation still
 creates a boundary without attempting graceful finalization.
+
+Execution limits use a separate
+`{ role: "event", type: "stop", turnId, cause, reason }` boundary followed by
+an assistant entry with status `stopped`. They share the guarded, tool-free
+finalization machinery without pretending that a user or operator interrupted
+the Turn.
 
 `ask` deliberately makes no model decision: it starts work when idle and
 queues when busy. Clients choose `steer` or `interrupt` explicitly when a
@@ -626,6 +637,17 @@ An idle agent returns a response shaped like:
   "decision": "start",
   "turnId": "inv_...",
   "stats": {"pendingMessages": 0}
+}
+```
+
+A busy agent does not yet know which Turn will consume the queued message:
+
+```json
+{
+  "decision": "queue",
+  "turnId": null,
+  "activeTurnId": "inv_...",
+  "stats": {"pendingMessages": 1}
 }
 ```
 
