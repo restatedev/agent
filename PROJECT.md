@@ -39,9 +39,10 @@ The application is split into a few concrete parts:
   those tasks through `cancelOperation`; progress remains visible in the
   canonical transcript but is omitted from future model context and
   compaction input.
-- **`ModelGateway`** performs full agent inference and cheap guardrail
-  evaluation behind Restate's scoped concurrency controls, model-specific
-  limit keys, retry policy, and cancellation propagation.
+- **`ModelGateway`** performs full agent inference, cheap guardrail evaluation,
+  and active-Turn context reduction behind Restate's scoped concurrency
+  controls, model-specific limit keys, retry policy, and cancellation
+  propagation.
 - **`Agent.compact`** is a shared handler that asynchronously summarizes older
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the
@@ -99,8 +100,8 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
-- `packages/libs/example/src/model.ts` — agent and guardrail AI SDK integration
-- `packages/libs/example/src/model-gateway.ts` — scoped agent and guardrail model gateway
+- `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context AI SDK integration
+- `packages/libs/example/src/model-gateway.ts` — scoped model gateway
 - `packages/libs/example/src/eval.ts` — durable black-box protocol evaluations
 - `packages/libs/example/src/types.ts` — shared wire contracts and schemas
 - `packages/libs/example/src/app.ts` — Agent, Turn, gateway, and eval endpoint

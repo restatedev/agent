@@ -546,6 +546,9 @@ function* executionLimit({
       entry.phase === "finalizing",
   );
   const weatherCalls = toolStartCount(history, ask.turnId, "getWeather");
+  const reportedCities = cities.filter((city) =>
+    response.includes(city.toLowerCase()),
+  ).length;
 
   return [
     assertion(
@@ -570,8 +573,9 @@ function* executionLimit({
       `${weatherCalls} getWeather calls started`,
     ),
     assertion(
-      "completed tool work survives into the final answer",
-      cities.some((city) => response.includes(city.toLowerCase())),
+      "every completed weather result survives into the final answer",
+      reportedCities >= weatherCalls,
+      `${reportedCities} cities reported for ${weatherCalls} completed calls`,
     ),
   ];
 }

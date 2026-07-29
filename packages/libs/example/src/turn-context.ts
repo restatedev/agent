@@ -178,6 +178,7 @@ function isGuardrailInput(message: ModelMessage): boolean {
   }
   return ![
     "[Earlier conversation summary]",
+    "[Earlier work in this turn]",
     "[Persistent agent memory]",
     "[Previous turn failed]",
     "[Queued messages activated]",

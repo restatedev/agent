@@ -64,6 +64,14 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - Reaching either execution budget stops pending work and performs one
   tool-free final model call. The outcome is `interrupted`, preserving completed
   work instead of publishing an internal budget error as the assistant answer.
+- The Agent-provided context remains exact for the lifetime of the Turn. When
+  settled model/tool context accumulated inside the Turn exceeds a bounded
+  character budget, a cheap scoped model reduces an older prefix between
+  steps. The four newest messages remain exact.
+- Turn context reduction never runs while an operation is pending, never
+  rewrites the Agent transcript, and remains interruptible. If reduction
+  exhausts its retries, the Turn keeps its exact context and disables further
+  reduction attempts for that invocation.
 
 ## Guardrails
 

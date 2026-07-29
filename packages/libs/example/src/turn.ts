@@ -12,7 +12,11 @@ import {
   agentTools,
   type ToolOutcome,
 } from "./agent-tools.js";
-import {callGuardrailModel, callModel} from "./model-gateway.js";
+import {
+  callContextReducer,
+  callGuardrailModel,
+  callModel,
+} from "./model-gateway.js";
 import {
   buildModelContext,
   finalizationInstruction,
@@ -45,6 +49,8 @@ type TurnState = {
   rejectedGuardrails: Set<string>;
   blockedGuardrails: Set<string>;
   messages: ModelMessage[];
+  initialMessageCount: number;
+  contextReductionEnabled: boolean;
   interrupt: restate.Future<string>;
   steeringInbox: ReturnType<typeof createSteeringInbox>;
   consumedSteering: number;
@@ -55,8 +61,11 @@ type TurnState = {
 
 const MAX_STEPS = 8;
 const MAX_TOOL_CALLS = 24;
+const MAX_TURN_CONTEXT_CHARS = 32_000;
+const RETAINED_TURN_MESSAGES = 4;
 
 function createTurnState(req: TurnRequest, turnId: string): TurnState {
+  const messages = buildModelContext(req.history, req.summary, req.memories);
   return {
     context: {agentId: req.agentId, turnId},
     instructions: req.instructions,
@@ -64,7 +73,9 @@ function createTurnState(req: TurnRequest, turnId: string): TurnState {
     approvedGuardrails: new Set(),
     rejectedGuardrails: new Set(),
     blockedGuardrails: new Set(),
-    messages: buildModelContext(req.history, req.summary, req.memories),
+    messages,
+    initialMessageCount: messages.length,
+    contextReductionEnabled: true,
     interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
     steeringInbox: createSteeringInbox(),
     consumedSteering: 0,
@@ -72,6 +83,102 @@ function createTurnState(req: TurnRequest, turnId: string): TurnState {
     toolCalls: 0,
     pending: createPendingOperations(),
   };
+}
+
+type ContextReductionPlan = {
+  start: number;
+  end: number;
+  messages: ModelMessage[];
+};
+
+function contextReductionPlan(
+  state: TurnState,
+): ContextReductionPlan | undefined {
+  if (!state.contextReductionEnabled || state.pending.size > 0) {
+    return undefined;
+  }
+  const current = state.messages.slice(state.initialMessageCount);
+  if (
+    current.length <= RETAINED_TURN_MESSAGES ||
+    JSON.stringify(current).length <= MAX_TURN_CONTEXT_CHARS
+  ) {
+    return undefined;
+  }
+
+  let end = state.messages.length - RETAINED_TURN_MESSAGES;
+  // Never separate an assistant tool-call message from its tool result.
+  if (state.messages[end]?.role === "tool") {
+    end -= 1;
+  }
+  if (end - state.initialMessageCount < 2) {
+    return undefined;
+  }
+  return {
+    start: state.initialMessageCount,
+    end,
+    messages: state.messages.slice(state.initialMessageCount, end),
+  };
+}
+
+function reducedContextMessage(summary: string): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Earlier work in this turn]",
+      "This is a compacted record of settled model and tool activity from the current turn.",
+      "Use it as context, not as a new request.",
+      summary,
+    ].join("\n"),
+  };
+}
+
+// Reduction is transient Turn maintenance. It never rewrites Agent history,
+// never touches pending operations, and a reducer failure leaves the exact
+// context in place. Interruption still stops the scoped model call promptly.
+function* reduceCurrentContext(
+  state: TurnState,
+): restate.Operation<string | undefined> {
+  const plan = contextReductionPlan(state);
+  if (!plan) {
+    return undefined;
+  }
+
+  const task = restate.spawn(
+    callContextReducer({
+      agentId: state.context.agentId,
+      messages: plan.messages,
+    }),
+  );
+  try {
+    const selected = yield* restate.select({
+      interrupt: state.interrupt,
+      reduction: task,
+    });
+    if (selected.tag === "interrupt") {
+      const reason = yield* selected.future;
+      task.interrupt(new restate.InterruptedError(reason));
+      yield* restate.allSettled([task]);
+      return reason;
+    }
+
+    const {summary} = yield* selected.future;
+    state.messages.splice(
+      plan.start,
+      plan.end - plan.start,
+      reducedContextMessage(summary),
+    );
+  } catch (error) {
+    task.interrupt(error);
+    yield* restate.allSettled([task]);
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
+      throw error;
+    }
+    state.contextReductionEnabled = false;
+  }
+  return undefined;
 }
 
 function errorMessage(error: unknown): string {
@@ -329,6 +436,11 @@ function retainInterruptedTools(
 // propagate to the caller.
 function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
   while (state.steps < MAX_STEPS) {
+    const interruptedWhileReducing = yield* reduceCurrentContext(state);
+    if (interruptedWhileReducing) {
+      return yield* finalizeStoppedTurn(state, interruptedWhileReducing);
+    }
+
     yield* reportProgress(
       state.context,
       "thinking",

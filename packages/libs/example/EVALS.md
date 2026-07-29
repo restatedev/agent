@@ -114,7 +114,8 @@ the source of truth.
 5. `execution-limit` asks for more weather lookups than the 24-tool-call budget
    allows, in small batches. It checks that the budget stops the Turn through
    the guarded finalization path — an `interrupted` outcome carrying completed
-   work — rather than publishing an internal budget error as a failed answer.
+   work — rather than publishing an internal budget error as a failed answer,
+   and that every completed city result survives into that answer.
 6. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
 7. Five isolated guardrail cases cover:

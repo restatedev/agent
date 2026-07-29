@@ -27,6 +27,7 @@ unimportant.
 | Push-style history updates | Restate callers register their own awakeable at a history cursor. Registration closes the empty-read race, while the actual transcript remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
 | Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
+| Turn-local context reduction | Large settled model/tool prefixes accumulated during one active Turn are reduced between steps. Initial conversation context and the newest working messages remain exact, while canonical history is untouched. |
 | Semantic progress | `thinking`, `tools`, `waiting`, and `finalizing` milestones are part of the ordered transcript; raw provider reasoning and low-level tool traffic stay in Restate observability. |
 | Model admission control | Agent and policy calls go through a scoped gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Restate-native evals | Durable eval invocations drive fresh Agents through the same public protocol, synchronize on history awakeables, inject control events, and return structured assertions plus the observed transcript. |
@@ -80,6 +81,7 @@ flowchart LR
   Step -->|"allowed batch: spawn + durable run"| Tools["local tools in parallel"]
   Step -->|"policy approval request"| Agent
   Tools -->|"approval / memory updates"| Agent
+  Turn -->|"large settled context"| Gateway
   Turn -->|"one-way onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
   Agent -.->|"history awakeables"| Eval
@@ -121,9 +123,9 @@ flowchart LR
   transcript remains on the Agent and messages after the checkpoint remain
   verbatim.
 - `model-gateway.ts` is the Restate boundary for full agent inference and cheap
-  guardrail evaluation. It owns scoped admission, model-specific limit keys,
-  retries, and cancellation propagation before delegating provider calls to
-  `model.ts`.
+  guardrail evaluation and Turn-local context reduction. It owns scoped
+  admission, model-specific limit keys, retries, and cancellation propagation
+  before delegating provider calls to `model.ts`.
 - `eval.ts` contains durable black-box protocol evaluations. One suite
   invocation concurrently drives fresh Agents through public handlers and
   waits for transcript milestones through caller-owned awakeables instead of
@@ -180,8 +182,16 @@ but are filtered before the request is serialized. The Turn projects steering
 metadata and interruption, queued-message dispatch, or failure entries as
 explicit model-visible boundaries. Only the reserved handoff prefix is
 summarized: profile state, live model messages, tool calls, tool results,
-pending operations, and later steering inside the active Turn are never
-summarized.
+pending operations, and later steering inside the active Turn are not part of
+that checkpoint.
+
+The active Turn separately bounds its private working context. Its initial
+Agent-provided messages stay exact. Between steps, once later settled
+model/tool messages exceed the Turn's character budget and no operation is
+pending, the Turn asks the scoped gateway to reduce an older prefix while
+retaining the four newest messages exactly. The result exists only inside that
+Turn invocation. It does not rewrite canonical history or affect future Turns,
+and a failed reduction leaves the exact working context in place.
 
 ## Instructions, memories, and guardrails
 
@@ -269,8 +279,9 @@ The remaining services expose these public handlers:
   agent steps, and one-way reports a structured outcome to `Agent/onTurnEnd`.
 - `ModelGateway/complete` accepts instructions, model messages, and serializable
   tool manifests. `ModelGateway/evaluateGuardrails` separately accepts the
-  policy snapshot and exact proposed action. `agentStep` invokes both through
-  the `openai` scope so model-specific concurrency limits apply.
+  policy snapshot and exact proposed action. `ModelGateway/reduceContext`
+  reduces a settled prefix of one active Turn. All three use the `openai` scope
+  so model-specific concurrency limits apply.
 - `Evals/all` accepts optional isolation settings and an optional case subset,
   concurrently drives each selected scenario against a fresh Agent, and returns
   one aggregate of structured assertions and complete observed transcripts.
@@ -407,10 +418,10 @@ schedule a reconciliation handler with a deadline.
 
 ## Model flow control
 
-Agent inference and guardrail evaluation use the scoped gateway. `ask` performs
-no inference; steering and interruption are explicit controller operations.
-Background compaction owns its cheap model call in a shared Agent handler and
-cannot consume an agent inference slot.
+Agent inference, guardrail evaluation, and active-Turn context reduction use
+the scoped gateway. `ask` performs no inference; steering and interruption are
+explicit controller operations. Background conversation compaction owns its
+cheap model call in a shared Agent handler and cannot consume a gateway slot.
 
 `ModelGateway` calls use scope `openai` and a two-level limit key:
 `<model>/<agent-hash>`. Each invocation therefore draws from three budgets at
@@ -598,7 +609,7 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
-- `packages/libs/example/src/model.ts` — agent and guardrail model protocols and provider calls
+- `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context model protocols and provider calls
 - `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries
 - `packages/libs/example/src/eval.ts` — durable black-box Agent protocol evals
 - `packages/libs/example/src/types.ts` — wire schemas and domain types
