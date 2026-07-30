@@ -120,9 +120,8 @@ flowchart LR
 - `Turn` has no service state, but one durable invocation owns the transient
   state machine for an agent turn: model messages, budgets, steering, pending
   operations, and graceful finalization. `Turn.run` supervises that state
-  machine as a task alongside a small AbortSignal-backed cancellation probe.
-  The state machine repeatedly spawns one bounded `agentStep`, applies the
-  returned data, and reports one structured
+  machine as a spawned task. The state machine repeatedly spawns one bounded
+  `agentStep`, applies the returned data, and reports one structured
   `completed | interrupted | stopped | failed` result.
 - `turn-step.ts` owns the functional execution seam and the small supervisor
   that settles each spawned step against interruption. A step receives a
@@ -595,11 +594,10 @@ making pub/sub the source of truth.
 - A foreground tool whose durable retry policy is exhausted returns a failed
   tool result to the model. It does not fail the whole Turn unless cancellation
   or orchestration itself is failing.
-- Invocation cancellation wakes the Turn supervisor through an
-  AbortSignal-backed probe, interrupts and joins the state machine and pending
-  tasks, and eagerly creates one-way sandbox-release and Agent-outcome sends.
-  The controller is retired without finalization before cancellation is
-  rethrown to Restate.
+- Invocation cancellation rejects the yielded state-machine task. The Turn
+  supervisor catches it, stops independently pending tools, then waits for
+  sandbox release and Agent outcome reconciliation. The controller is retired
+  without finalization before cancellation is rethrown to Restate.
 - The complete transcript remains durable. The model sees the rolling summary
   plus each exact model-relevant entry since its checkpoint, with steering
   metadata and interruption/failure boundaries preserved.

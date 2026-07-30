@@ -213,20 +213,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function* waitForInvocationCancellation(): restate.Operation<void> {
-  yield* restate.run(
-    ({signal}) =>
-      new Promise<void>((resolve) => {
-        if (signal.aborted) {
-          resolve();
-          return;
-        }
-        signal.addEventListener("abort", () => resolve(), {once: true});
-      }),
-    {name: "await-turn-cancellation"},
-  );
-}
-
 function* reportProgress(
   context: AgentToolContext,
   phase: ProgressReport["phase"],
@@ -536,6 +522,8 @@ function retainInterruptedTools(
 // exhausts a budget. Every exit path returns exactly one outcome; failures
 // propagate to the caller.
 function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
+  state.discoveredTools = yield* discoverAgentTools(agentTools.names);
+
   while (state.steps < MAX_STEPS) {
     const interruptedWhileReducing = yield* reduceCurrentContext(state);
     if (interruptedWhileReducing) {
@@ -667,48 +655,21 @@ export const Turn = restate.service({
      * agent-scoped sandbox lease. It releases the sandbox and reports exactly
      * one terminal outcome to the owning Agent on every handled exit.
      *
-     * The handler supervises the state machine beside an AbortSignal-backed
-     * cancellation probe. External cancellation interrupts and joins the task,
-     * reports an interrupted outcome, and is then rethrown to preserve Restate
-     * cancellation semantics.
+     * The handler supervises the state machine as a spawned task. External
+     * cancellation rejects that task, after which the handler stops pending
+     * tools, reports an interrupted outcome, and rethrows cancellation to
+     * preserve Restate semantics.
      */
     run: restate.schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): restate.Operation<void> {
         const state = createTurnState(req, restate.handlerRequest().id);
+        const execution = restate.spawn(executeTurn(state));
         let outcome: TurnOutcome;
         let cancellation: CancelledError | undefined;
-        let execution: restate.Task<TurnOutcome> | undefined;
-        let cancellationProbe: restate.Task<void> | undefined;
         try {
-          state.discoveredTools = yield* discoverAgentTools(agentTools.names);
-          execution = restate.spawn(executeTurn(state));
-          cancellationProbe = restate.spawn(waitForInvocationCancellation());
-          const selected = yield* restate.select({
-            execution,
-            cancellation: cancellationProbe,
-          });
-          if (selected.tag === "cancellation") {
-            yield* selected.future;
-            throw new CancelledError();
-          }
-          outcome = yield* selected.future;
-          cancellationProbe.interrupt(
-            new restate.InterruptedError("Turn execution finished"),
-          );
-          yield* restate.allSettled([cancellationProbe]);
+          outcome = yield* execution;
         } catch (error) {
-          for (const task of [execution, cancellationProbe]) {
-            task?.interrupt(error);
-          }
-          const tasks: restate.Future<unknown>[] = [];
-          if (execution) {
-            tasks.push(execution);
-          }
-          if (cancellationProbe) {
-            tasks.push(cancellationProbe);
-          }
-          yield* restate.allSettled(tasks);
           yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
             outcome = {
@@ -729,19 +690,11 @@ export const Turn = restate.service({
         }
 
         const release = {turnId: state.context.turnId};
+        yield* restate.client(Sandbox, req.agentId).release(release);
+        yield* restate.client(Agent, req.agentId).onTurnEnd(outcome);
         if (cancellation) {
-          const releaseSandbox = restate
-            .sendClient(Sandbox, req.agentId)
-            .release(release);
-          const reportOutcome = restate
-            .sendClient(Agent, req.agentId)
-            .onTurnEnd(outcome);
-          yield* restate.allSettled([releaseSandbox, reportOutcome]);
           throw cancellation;
         }
-
-        yield* restate.client(Sandbox, req.agentId).release(release);
-        yield* restate.sendClient(Agent, req.agentId).onTurnEnd(outcome);
       },
     ),
   },
