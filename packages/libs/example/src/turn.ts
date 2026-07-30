@@ -645,8 +645,17 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
 export const Turn = restate.service({
   name: "Turn",
   handlers: {
-    // One handler invocation owns the complete transient state machine and
-    // reports exactly one high-level outcome to the Agent.
+    /**
+     * Executes one complete durable conversation Turn.
+     *
+     * The invocation owns transient model context, tool and step budgets,
+     * steering consumption, interruption, pending operations, and the
+     * agent-scoped sandbox lease. It releases the sandbox and reports exactly
+     * one terminal outcome to the owning Agent on every handled exit.
+     *
+     * External cancellation is reported as an interrupted outcome before the
+     * cancellation is rethrown to preserve Restate cancellation semantics.
+     */
     run: restate.schemas(
       {input: TurnRequestSchema, output: z.void()},
       function* (req: TurnRequest): restate.Operation<void> {
