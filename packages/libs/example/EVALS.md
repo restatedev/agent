@@ -107,28 +107,31 @@ the source of truth.
    not restart the existing timer.
 3. `interruption` waits until sleep is pending, interrupts it, and checks
    graceful finalization and the interrupted terminal response.
-4. `interruption-replacement` interrupts a pending turn while carrying a
+4. `external-cancellation` waits until sleep is pending, cancels the Turn
+   invocation directly, and checks that cleanup records a cancellation
+   boundary without graceful finalization before the Agent accepts new work.
+5. `interruption-replacement` interrupts a pending turn while carrying a
    replacement request, then checks that the replacement is recorded as a
    queued user message *before* the interruption boundary, that the old Turn
    finalizes before dispatch, that the dispatch boundary activates exactly one
    message, and that a new Turn answers it.
-5. `execution-limit` asks for more weather lookups than the 24-tool-call budget
+6. `execution-limit` asks for more weather lookups than the 24-tool-call budget
    allows, in small batches. It checks that the budget stops the Turn through
    the guarded finalization path — a `stopped` outcome with a `tool_limit`
    boundary carrying completed work — rather than publishing an internal budget
    error as a failed answer, and that every completed city result survives into
    that answer.
-6. `context-reduction` makes one small call to the cheap Turn-context model
+7. `context-reduction` makes one small call to the cheap Turn-context model
    with synthetic completed, failed, and unresolved tool records. It verifies
    that all three survive reduction without paying for enough full agent turns
    to manufacture a 32 KB working context.
-7. `memory` asks the agent to remember a preference and checks the metadata-only
+8. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
-8. `scheduling` creates, lists, and cancels one delayed message without model
+9. `scheduling` creates, lists, and cancels one delayed message without model
    inference, then lets a one-shot schedule wake an idle Agent. It checks the
    firing route, adjacent user entry, terminal response, and one-shot state
    cleanup with one small agent turn.
-9. Six isolated guardrail cases cover:
+10. Six isolated guardrail cases cover:
    - Approval verifies that the guardrail profile update and pending request
      are discoverable as structured history events, approves exactly one
      request, and checks that the decision is recorded before completion. A

@@ -119,8 +119,10 @@ flowchart LR
   use Restate's current handler context and hold no process-local state.
 - `Turn` has no service state, but one durable invocation owns the transient
   state machine for an agent turn: model messages, budgets, steering, pending
-  operations, and graceful finalization. It repeatedly spawns one bounded
-  `agentStep`, applies the returned data, and reports one structured
+  operations, and graceful finalization. `Turn.run` supervises that state
+  machine as a task alongside a small AbortSignal-backed cancellation probe.
+  The state machine repeatedly spawns one bounded `agentStep`, applies the
+  returned data, and reports one structured
   `completed | interrupted | stopped | failed` result.
 - `turn-step.ts` owns the functional execution seam and the small supervisor
   that settles each spawned step against interruption. A step receives a
@@ -593,9 +595,11 @@ making pub/sub the source of truth.
 - A foreground tool whose durable retry policy is exhausted returns a failed
   tool result to the model. It does not fail the whole Turn unless cancellation
   or orchestration itself is failing.
-- Invocation cancellation aborts model I/O, joins the active step and pending
-  tasks, retires the controller's active turn without finalization, and is
-  rethrown so Restate records cancellation.
+- Invocation cancellation wakes the Turn supervisor through an
+  AbortSignal-backed probe, interrupts and joins the state machine and pending
+  tasks, and eagerly creates one-way sandbox-release and Agent-outcome sends.
+  The controller is retired without finalization before cancellation is
+  rethrown to Restate.
 - The complete transcript remains durable. The model sees the rolling summary
   plus each exact model-relevant entry since its checkpoint, with steering
   metadata and interruption/failure boundaries preserved.
@@ -793,13 +797,13 @@ curl localhost:8080/Evals/all \
   --json '{"timeoutSeconds":180}'
 ```
 
-The handler spawns all fourteen isolated cases concurrently: a basic turn,
-steering, interruption, interruption carrying a replacement request,
-execution-budget finalization, a low-cost context-reduction contract,
-model-managed memory, scheduled delivery, guardrail approval, guardrail scope
-isolation, denial before protected tools start, rejection without approval
-loops, guardrail removal between Turns, and approval invalidation after
-steering.
+The handler spawns all fifteen isolated cases concurrently: a basic turn,
+steering, graceful interruption, external Turn cancellation, interruption
+carrying a replacement request, execution-budget finalization, a low-cost
+context-reduction contract, model-managed memory, scheduled delivery,
+guardrail approval, guardrail scope isolation, denial before protected tools
+start, rejection without approval loops, guardrail removal between Turns, and
+approval invalidation after steering.
 
 Pass `cases` to re-run a subset without paying for the rest, which matters
 because every case depends on probabilistic model behavior:

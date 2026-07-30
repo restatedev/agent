@@ -36,8 +36,14 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 ## Execution shape
 
-- `Turn.run` loops until it completes, is interrupted, or exhausts a budget.
-  Interruption and budget exhaustion share one guarded, tool-free finalization
+- `Turn.run` spawns the state-machine loop and supervises it alongside a small
+  `restate.run` probe whose AbortSignal resolves on invocation cancellation.
+  The loop runs until it completes, is interrupted, or exhausts a budget.
+- External cancellation interrupts and joins the state-machine task, stops
+  pending operations, and creates the sandbox-release and Agent-outcome sends
+  before yielding again. The Agent records a cancellation boundary without
+  graceful finalization, and Turn rethrows cancellation to Restate.
+- Interruption and budget exhaustion share one guarded, tool-free finalization
   path over completed work.
 - Each iteration spawns exactly one agent step. Turn supervises that task
   against interruption, then joins it before applying its result.

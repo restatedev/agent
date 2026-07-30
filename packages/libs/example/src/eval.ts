@@ -14,6 +14,7 @@ const EvalCaseIdSchema = z.enum([
   "basic-turn",
   "steering",
   "interruption",
+  "external-cancellation",
   "interruption-replacement",
   "execution-limit",
   "context-reduction",
@@ -496,6 +497,72 @@ function* interruption({
       "completed Berlin work remains available to finalization",
       terminal.entry.role === "assistant" &&
         terminal.entry.text.toLowerCase().includes("berlin"),
+    ),
+  ];
+}
+
+function* externalCancellation({
+  agentId,
+  history,
+}: EvalContext): restate.Operation<EvalAssertion[]> {
+  const ask = yield* restate.client(Agent, agentId).ask({
+    message:
+      "Start a durable 3-minute sleep. Keep it running until it completes, and only then answer.",
+  });
+  requireStarted(ask);
+  yield* waitForTurnMilestone(
+    history,
+    ask.turnId,
+    "the sleep operation to become pending",
+    isWaitingForPendingOperation(ask.turnId),
+  );
+
+  restate.invocation(ask.turnId).cancel();
+  const boundary = yield* waitForHistory(
+    history,
+    "the external cancellation boundary",
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "interrupt" &&
+      entry.turnId === ask.turnId,
+  );
+
+  const recovery = yield* restate.client(Agent, agentId).ask({
+    message: "Reply briefly that the Agent accepted work after cancellation.",
+  });
+  requireStarted(recovery);
+  const recoveryTerminal = yield* waitForHistory(
+    history,
+    "the post-cancellation turn to finish",
+    isTerminalFor(recovery.turnId),
+  );
+  const cancelledAssistant = history.entries.find(
+    ({entry}) => entry.role === "assistant" && entry.turnId === ask.turnId,
+  );
+
+  return [
+    assertion(
+      "the cancelled Turn had one pending sleep",
+      toolStartCount(history, ask.turnId, "sleep") === 1,
+    ),
+    assertion(
+      "external cancellation records an interruption boundary",
+      boundary.entry.role === "event" &&
+        boundary.entry.type === "interrupt" &&
+        boundary.entry.reason === "Turn cancelled",
+    ),
+    assertion(
+      "external cancellation skips graceful assistant finalization",
+      cancelledAssistant === undefined,
+    ),
+    assertion(
+      "the Agent accepts a new Turn after cancellation cleanup",
+      recovery.decision === "start" && recovery.turnId !== ask.turnId,
+    ),
+    assertion(
+      "the post-cancellation Turn completes",
+      recoveryTerminal.entry.role === "assistant" &&
+        recoveryTerminal.entry.status === "completed",
     ),
   ];
 }
@@ -1506,6 +1573,7 @@ const EVAL_CASES: ReadonlyArray<{
   {caseId: "basic-turn", scenario: basicTurn},
   {caseId: "steering", scenario: steering},
   {caseId: "interruption", scenario: interruption},
+  {caseId: "external-cancellation", scenario: externalCancellation},
   {caseId: "interruption-replacement", scenario: interruptionReplacement},
   {caseId: "execution-limit", scenario: executionLimit},
   {caseId: "context-reduction", scenario: contextReduction},
