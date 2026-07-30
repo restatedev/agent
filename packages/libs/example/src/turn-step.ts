@@ -23,6 +23,7 @@ import {
   agentTools,
   type ToolOutcome,
 } from "./agent-tools.js";
+import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import type {
   GuardrailApproval,
   GuardrailDecision,
@@ -255,6 +256,7 @@ export function* agentStep({
   rejectedGuardrails,
   stepNumber,
   remainingToolCalls,
+  discoveredTools,
 }: {
   context: AgentToolContext;
   instructions?: string;
@@ -265,6 +267,7 @@ export function* agentStep({
   rejectedGuardrails: string[];
   stepNumber: number;
   remainingToolCalls: number;
+  discoveredTools: DiscoveredAgentTool[];
 }): Operation<AgentStepResult> {
   let activeTools:
     | {
@@ -279,7 +282,7 @@ export function* agentStep({
       agentId: context.agentId,
       instructions,
       messages,
-      tools: agentTools.manifests,
+      tools: agentTools.manifests(discoveredTools),
     });
     if (action.type === "error") {
       return {...action, approvedActions: [], rejectedGuardrails: []};
@@ -327,7 +330,9 @@ export function* agentStep({
       executionStarted(context, stepNumber, action),
     );
     tasks.push(
-      ...action.calls.map((call) => spawn(agentTools.execute(call, context))),
+      ...action.calls.map((call) =>
+        spawn(agentTools.execute(call, context, discoveredTools)),
+      ),
     );
     return {
       type: "tools",

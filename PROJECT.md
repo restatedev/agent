@@ -46,6 +46,12 @@ The application is split into a few concrete parts:
   and compaction input. Model-relevance for derived transcript events is
   classified once in the shared conversation contract instead of being
   duplicated by each projection.
+- **Dynamic Restate tools** are snapshotted once when a Turn starts. Handlers
+  opt in with `restate.dev/agent: <tool-name>` metadata; a replica-local,
+  coalescing cache refreshes infrequently from the Admin API. The journaled
+  snapshot supplies JSON schemas and exact invocation targets to both the
+  model and executor without a globally hot Restate key. Selected tools run as
+  durable generic Restate calls in the ordinary foreground batch.
 - **`ModelGateway`** performs full agent inference, cheap guardrail evaluation,
   and active-Turn context reduction behind Restate's scoped concurrency
   controls, model-specific limit keys, retry policy, and cancellation
@@ -105,6 +111,8 @@ Restate provides the application-level guarantees that an agent needs:
 - turn-scoped pending timers and signal-backed human approval;
 - a fail-closed policy gate before publishing text or starting tool batches;
 - deterministic concurrent execution of independent tools;
+- annotation-driven discovery and durable invocation of third-party Restate
+  handlers;
 - durable ownership and idle lifecycle for an agent-scoped sandbox;
 - concurrency limits around model traffic;
 - an observable invocation tree for the complete turn.
@@ -124,6 +132,7 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
 - `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
+- `packages/libs/example/src/dynamic-tools.ts` — annotated Restate handler tools
 - `packages/libs/example/src/sandbox.ts` — agent-scoped sandbox lifecycle
 - `packages/libs/example/src/sandbox-provider.ts` — provider and one-shot client contracts
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation

@@ -19,6 +19,7 @@ unimportant.
 | Mid-turn steering | Steering is a durable FIFO signal protocol. It never cancels the current model/tool step: completed work is committed first, pending operations continue, and the update enters the next model round. |
 | Graceful interruption | Interruption stops and joins unfinished work, preserves completed results, and makes one tool-free final model call that explains what was achieved relative to the original request. |
 | Parallel tool batches | Independent tool calls from one model response are spawned together and joined as a batch. Restate journals the concurrency while preserving deterministic recovery. |
+| Restate-native dynamic tools | Any JSON handler in the cluster can opt in with `restate.dev/agent: <tool-name>` metadata. Each Turn journals one catalog snapshot from a replica-local read-through cache and invokes selected handlers as ordinary durable Restate RPCs. |
 | Long-running operations | Tools such as `sleep` and `humanApproval` can return a pending acknowledgement and continue across later agent steps. The Turn owns their stable IDs and lifecycle. |
 | Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
 | Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
@@ -88,6 +89,10 @@ flowchart LR
   Step -->|"scoped agent + policy calls"| Gateway["ModelGateway service"]
   Gateway -->|"durable model runs"| Model["agent + guardrail models"]
   Step -->|"allowed batch: spawn + durable run"| Tools["local tools in parallel"]
+  Turn -->|"journaled lookup"| Cache["endpoint-local tool cache"]
+  Cache -->|"infrequent refresh"| Admin["Restate Admin API"]
+  Admin -->|"annotated handlers + JSON Schema"| Dynamic["dynamic Restate tools"]
+  Step -->|"allowed generic RPC"| Dynamic
   Step -->|"policy approval request"| Agent
   Tools -->|"approval / memory updates"| Agent
   Tools -->|"lazy borrow + one-shot I/O"| Sandbox["Sandbox Virtual Object\nkeyed by agentId"]
@@ -130,6 +135,11 @@ flowchart LR
   projection together. It exposes each step a single concrete tool collection.
   Sandbox tools borrow the agent-scoped resource lazily; each file or command
   operation remains an ordinary foreground tool call.
+- `dynamic-tools.ts` discovers opted-in cluster handlers once per Turn. The
+  journaled catalog is passed unchanged to model inference and execution;
+  built-in names take precedence, duplicate annotations resolve
+  deterministically, and generic calls remain ordinary Restate child
+  invocations.
 - `sandbox.ts` owns durable lifecycle state for one agent's sandbox. It cancels
   a pending idle suspension when a Turn borrows the resource, resumes it when
   needed, and schedules suspension after the Turn releases it.
@@ -287,6 +297,64 @@ workspace, not a security boundary: shell commands still run with the service
 process's host permissions. Replacing `sandboxProvider` with a real
 implementation preserves the lifecycle and model-visible tools without
 changing Turn control flow.
+
+## Dynamic Restate handler tools
+
+A third-party JSON handler can become a model tool without being linked into
+this application. Add handler metadata whose key is the exported
+`AGENT_TOOL_ANNOTATION` constant (`restate.dev/agent`) and whose value is a
+valid model tool name:
+
+```ts
+const Grafana = restate.service({
+  name: "Grafana",
+  handlers: {
+    query: restate.schemas(
+      {input: QuerySchema, output: QueryResultSchema},
+      function* (request) {
+        // ...
+      },
+    ),
+  },
+  options: {
+    handlers: {
+      query: {
+        metadata: {
+          "restate.dev/agent": "query_grafana",
+        },
+      },
+    },
+  },
+});
+```
+
+At the beginning of every Turn, `dynamic-tools.ts` reads an endpoint-local
+catalog cache inside a journaled `restate.run`. A cache miss or five-minute
+expiry refreshes it from the Restate Admin API's `GET /services` endpoint.
+Concurrent refreshes within one service process are coalesced; other Turns use
+the last known-good snapshot instead of accumulating behind the Admin request.
+Each endpoint replica owns its cache, so Turn traffic does not converge on a
+single Restate key or process. The discovered catalog selects annotated
+handlers and reads their advertised input JSON schemas. The model sees a
+wrapper object with `input` for the handler payload;
+Virtual Object and Workflow tools additionally require `key`. A selected tool
+is invoked through `restate.call`, so it appears as a durable child invocation
+and participates in the same parallel batch and guardrail check as built-in
+tools. Third-party tools are foreground calls in this first version; they do
+not participate in the pending-operation protocol. The Admin API also exposes
+the output schema, but the model tool protocol needs only the input contract;
+the actual handler response is returned as the ordinary tool result.
+
+The shared Admin request has a five-second timeout. A failed refresh keeps the
+last known-good catalog and waits 30 seconds before retrying. A cold cache
+still uses the bounded Restate retry policy and falls back to built-in tools if
+discovery remains unavailable. The Admin API defaults to
+`http://localhost:9070`. Set `RESTATE_ADMIN_URL` when the service reaches it at
+another address, and optionally `RESTATE_ADMIN_TOKEN` for a bearer token.
+Annotated handlers must use JSON-compatible input/output serialization. Treat
+the annotation as a trusted cluster capability-registration boundary: handler
+descriptions enter the model prompt and the agent may invoke the handler with
+its service identity.
 
 ## Instructions, memories, and guardrails
 
@@ -597,6 +665,9 @@ pnpm install
 OPENAI_API_KEY=... pnpm dev
 ```
 
+For dynamic tools, also set `RESTATE_ADMIN_URL` if the service cannot reach
+the local Admin API at `http://localhost:9070`.
+
 With the service endpoint running, register it with Restate:
 
 ```sh
@@ -773,6 +844,8 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
 - `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
+- `packages/libs/example/src/dynamic-tools.ts` — annotated handler discovery
+  and dynamic Restate tool manifests
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context model protocols and provider calls
 - `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries

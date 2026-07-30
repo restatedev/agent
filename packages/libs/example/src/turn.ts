@@ -13,6 +13,7 @@ import {
   createAgentToolContext,
   type ToolOutcome,
 } from "./agent-tools.js";
+import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
 import type {GuardrailApproval} from "./model.js";
 import {
   callContextReducer,
@@ -63,6 +64,7 @@ type TurnState = {
   steps: number;
   toolCalls: number;
   pending: ReturnType<typeof createPendingOperations>;
+  discoveredTools: DiscoveredAgentTool[];
 };
 
 const MAX_STEPS = 8;
@@ -94,6 +96,7 @@ function createTurnState(req: TurnRequest, turnId: string): TurnState {
     steps: 0,
     toolCalls: 0,
     pending: createPendingOperations(),
+    discoveredTools: [],
   };
 }
 
@@ -548,6 +551,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
         rejectedGuardrails: [...state.rejectedGuardrails],
         stepNumber: state.steps + 1,
         remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
+        discoveredTools: state.discoveredTools,
       }),
     );
     const step = yield* settleStep(task, state.interrupt);
@@ -656,6 +660,7 @@ export const Turn = restate.service({
         let outcome: TurnOutcome;
         let cancellation: CancelledError | undefined;
         try {
+          state.discoveredTools = yield* discoverAgentTools(agentTools.names);
           outcome = yield* executeTurn(state);
         } catch (error) {
           yield* state.pending.stop(error);

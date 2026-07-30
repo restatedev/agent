@@ -19,6 +19,7 @@ const ToolManifestSchema = z.object({
   name: z.string(),
   description: z.string(),
   inputSchema: z.record(z.string(), z.unknown()),
+  strict: z.boolean().optional(),
 });
 export type ToolManifest = z.infer<typeof ToolManifestSchema>;
 
@@ -230,7 +231,7 @@ function modelTools(tools: ToolManifest[]): ToolSet {
         inputSchema: jsonSchema(
           tool.inputSchema as Parameters<typeof jsonSchema>[0],
         ),
-        strict: true,
+        strict: tool.strict ?? true,
       },
     ]),
   );

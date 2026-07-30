@@ -10,6 +10,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
+import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import type {ToolCall, ToolManifest} from "./model.js";
 import {Sandbox} from "./sandbox.js";
 import {
@@ -583,7 +584,88 @@ function toManifest(tool: AgentTool): ToolManifest {
     name: tool.name,
     description: tool.description,
     inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
+    strict: true,
   };
+}
+
+function dynamicManifest(tool: DiscoveredAgentTool): ToolManifest {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+    // Third-party JSON Schema is not guaranteed to satisfy OpenAI's stricter
+    // requirement that every object property appear in `required`.
+    strict: false,
+  };
+}
+
+function dynamicToolInput(
+  tool: DiscoveredAgentTool,
+  input: unknown,
+): {ok: true; key?: string; parameter: unknown} | {ok: false; error: string} {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return {ok: false, error: "dynamic tool input must be an object"};
+  }
+  const fields = input as Record<string, unknown>;
+  let key: string | undefined;
+  if (tool.target.keyed) {
+    if (typeof fields.key !== "string" || fields.key.length === 0) {
+      return {
+        ok: false,
+        error: "dynamic Virtual Object and Workflow tools require a key",
+      };
+    }
+    key = fields.key;
+  }
+  if (tool.target.acceptsInput && !("input" in fields)) {
+    return {ok: false, error: "dynamic tool input is missing input"};
+  }
+  return {
+    ok: true,
+    ...(key === undefined ? {} : {key}),
+    parameter: tool.target.acceptsInput ? fields.input : undefined,
+  };
+}
+
+function* executeDynamicTool(
+  tool: DiscoveredAgentTool,
+  call: ToolCall,
+): restate.Operation<ToolOutcome> {
+  const parsed = dynamicToolInput(tool, call.input);
+  if (!parsed.ok) {
+    return {call, status: "failed", error: parsed.error};
+  }
+  try {
+    const result = yield* restate.call<unknown, unknown>({
+      service: tool.target.service,
+      method: tool.target.handler,
+      ...(parsed.key === undefined ? {} : {key: parsed.key}),
+      parameter: parsed.parameter,
+      inputSerde: restate.serde.json,
+      outputSerde: restate.serde.json,
+      name: `dynamic-tool-${tool.name}`,
+    });
+    return {
+      call,
+      status: "succeeded",
+      result:
+        typeof result === "string"
+          ? result
+          : (JSON.stringify(result) ?? "Handler completed without a result"),
+    };
+  } catch (error) {
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
+      throw error;
+    }
+    return {
+      call,
+      status: "failed",
+      error: `${tool.name} failed: ${errorMessage(error)}`,
+    };
+  }
 }
 
 // The JSON payload the model sees for one tool result.
@@ -629,14 +711,23 @@ function toRuntimeMessage({call, outcome}: PendingEvent): ModelMessage {
 }
 
 export const agentTools = {
-  manifests: definitions.map(toManifest),
+  names: definitions.map(({name}) => name),
+
+  manifests(discovered: DiscoveredAgentTool[]): ToolManifest[] {
+    return [...definitions.map(toManifest), ...discovered.map(dynamicManifest)];
+  },
 
   *execute(
     call: ToolCall,
     context: AgentToolContext,
+    discovered: DiscoveredAgentTool[],
   ): restate.Operation<ToolOutcome> {
     const tool = findTool(call.toolName);
     if (!tool) {
+      const dynamic = discovered.find(({name}) => name === call.toolName);
+      if (dynamic) {
+        return yield* executeDynamicTool(dynamic, call);
+      }
       return {
         call,
         status: "failed",
