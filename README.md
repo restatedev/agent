@@ -24,7 +24,7 @@ unimportant.
 | Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
 | Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
 | Durable human approval | Policy gates and the explicit approval tool register requests on the Agent and resume through Turn-scoped signals. Request, resolution, and cancellation events make the complete lifecycle discoverable through history; resolved decisions also become model-visible context. |
-| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, runtime stops, dispatch, concise activity, structured tool lifecycle, profile changes, approval lifecycle, progress, sandbox lifecycle, and terminal outcomes retain their natural observation order. |
+| Immutable transcript | Conversation history is an append-only, sequenced event log. User messages, steering, interruption, runtime stops, dispatch, concise activity, structured tool lifecycle, profile changes, approval lifecycle, progress, and terminal outcomes retain their natural observation order. |
 | Push-style history updates | Any client long-polls the shared `watchHistory` handler, which parks inside the Agent until the cursor becomes readable or its wait window elapses. Registration closes the empty-read race; the transcript itself remains available through the cursor API. |
 | Persistent agent profile | User instructions, model-managed keyed memories, and user-defined guardrails are durable per Agent and snapshotted at Turn start. |
 | Agent-owned schedules | The model or an external client can create, replace, list, and cancel durable one-shot or fixed-interval messages. Delayed self-sends wake the Agent, which starts, queues, steers, or interrupts according to the schedule's busy policy. |
@@ -98,7 +98,6 @@ flowchart LR
   Tools -->|"lazy borrow + one-shot I/O"| Sandbox["Sandbox Virtual Object\nkeyed by agentId"]
   Turn -->|"release at Turn end"| Sandbox
   Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(local /tmp demo)"]
-  Sandbox -.->|"provisioned / suspended events"| Agent
   Turn -->|"large settled context"| Gateway
   Turn -->|"one-way onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
@@ -217,10 +216,10 @@ summary untouched.
 Each `TurnRequest` carries a stable snapshot of the Agent's instructions,
 memories, guardrails, rolling summary, and exact model-relevant entries since
 the checkpoint. Progress, activity, tool lifecycle, profile-change metadata,
-pending approval lifecycle, memory, sandbox, and schedule events remain in the
-canonical transcript but are filtered before the request is serialized. The
-due scheduled user message remains model-visible. Resolved approval decisions
-remain model-visible. The Turn projects steering metadata and
+pending approval lifecycle, memory, and schedule events remain in the canonical
+transcript but are filtered before the request is serialized. The due scheduled
+user message remains model-visible. Resolved approval decisions remain
+model-visible. The Turn projects steering metadata and
 interruption, queued-message dispatch, or failure entries as explicit
 model-visible boundaries. Only the reserved handoff prefix is summarized:
 profile state, live model messages, tool calls, tool results, pending
@@ -273,11 +272,8 @@ already occurred. A different Turn cannot take an active lease. When
 Release schedules a durable delayed `suspend` invocation and records its
 invocation ID. A subsequent borrow cancels that exact timer, and stale delayed
 invocations cannot suspend a resource that has been borrowed again.
-Successful `provisioned` and `suspended` transitions are appended to the
-Agent's transcript as structured sandbox events. Borrow, release, resume, and
-destroy remain infrastructure details visible through Restate observability.
-Sandbox events are intended for clients and are omitted from model context and
-conversation compaction.
+Provision, borrow, release, resume, suspend, and destroy remain infrastructure
+details visible through Restate observability rather than conversation events.
 
 The provider interface separates connection from effects. `connect(ref)` is a
 synchronous, process-local operation. `listFiles`, `readFile`, `writeFile`, and
@@ -443,7 +439,6 @@ approval into blanket authorization for materially changed work.
 | `resolveApproval` | `{ approvalId, decision, reason? }` | Resolves and removes a pending approval only while its Turn is still eligible to receive the decision, then records the delivered decision in history. Returns whether the signal was delivered. |
 | `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
 | `reportExecution` | structured activity/tool reports | One-way path used by the active Turn; atomically appends concise model-authored activity and tool-batch lifecycle events for the current invocation. |
-| `reportSandbox` | `{ turnId, status: "provisioned" \| "suspended" }` | One-way lifecycle path used by the Sandbox VO; appends successful provisioning and suspension transitions. |
 | `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting, then appends a structured request event. |
 | `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request and records the cancellation when one existed. |
 | `updateMemory` | `{ turnId, changes }` | Coordination path used by `manageMemory`; atomically applies a bounded memory batch only for the active Turn. |

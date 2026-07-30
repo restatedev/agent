@@ -216,13 +216,10 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - Every allowed tool batch reports a structured `started` and `finished` event
   containing call IDs, tool names, and final statuses. The model may also emit
   one brief user-facing activity sentence before the batch starts.
-- Sandbox reports only successful `provisioned` and `suspended` lifecycle
-  transitions. Borrow, release, resume, and destroy remain runtime
-  observability details.
 - Progress and execution reports are one-way and cannot block model or tool
   execution on the Agent handler.
-- Progress, activity, tool lifecycle, and sandbox events are transcript-visible
-  for clients but omitted from model context and conversation compaction.
+- Progress, activity, and tool lifecycle events are transcript-visible for
+  clients but omitted from model context and conversation compaction.
 - Instruction and guardrail setters append metadata-only `profile` events.
   Approval registration and abandonment append `approval_request` and
   `approval_cancelled`; a delivered decision remains the model-visible

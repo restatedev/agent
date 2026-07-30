@@ -4,7 +4,6 @@
 import {rpc, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
-import {Agent} from "./agent.js";
 import {type SandboxRef, sandboxProvider} from "./sandbox-provider.js";
 
 const SandboxRefSchema = z.object({id: z.string()});
@@ -13,8 +12,8 @@ const ReleaseSchema = BorrowSchema;
 
 type SandboxState =
   | {status: "borrowed"; ref: SandboxRef; turnId: string}
-  | {status: "idle"; ref: SandboxRef; turnId: string; timerId: string}
-  | {status: "suspended"; ref: SandboxRef; turnId: string};
+  | {status: "idle"; ref: SandboxRef; timerId: string}
+  | {status: "suspended"; ref: SandboxRef};
 
 const STATE = "sandbox";
 const IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
@@ -72,12 +71,6 @@ export const Sandbox = restate.object({
           status: "borrowed",
           turnId,
         } satisfies SandboxState);
-        if (!current) {
-          yield* restate.sendClient(Agent, agentId).reportSandbox({
-            turnId,
-            status: "provisioned",
-          });
-        }
         return ref;
       },
     ),
@@ -96,7 +89,6 @@ export const Sandbox = restate.object({
         restate.state().set(STATE, {
           ref: current.ref,
           status: "idle",
-          turnId,
           timerId: timer.id,
         } satisfies SandboxState);
       },
@@ -120,11 +112,7 @@ export const Sandbox = restate.object({
         restate.state().set(STATE, {
           ref: current.ref,
           status: "suspended",
-          turnId: current.turnId,
         } satisfies SandboxState);
-        yield* restate
-          .sendClient(Agent, sandboxKey())
-          .reportSandbox({turnId: current.turnId, status: "suspended"});
       },
     ),
 

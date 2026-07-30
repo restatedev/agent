@@ -121,7 +121,7 @@ function userMessage(
 
 // Projects one transcript entry into zero or one model messages. Activity,
 // tool lifecycle, progress, profile changes, pending approval lifecycle,
-// memory, and sandbox events are derived status, never model context.
+// memory, and schedule events are derived status, never model context.
 function entryMessage(entry: ConversationEntry): ModelMessage | undefined {
   if (entry.role === "user") {
     return {role: "user", content: userMessage(entry)};

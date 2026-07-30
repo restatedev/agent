@@ -131,12 +131,6 @@ export const ProgressReportSchema = z.object({
 });
 export type ProgressReport = z.infer<typeof ProgressReportSchema>;
 
-export const SandboxEventSchema = z.object({
-  turnId: z.string(),
-  status: z.enum(["provisioned", "suspended"]),
-});
-export type SandboxEvent = z.infer<typeof SandboxEventSchema>;
-
 const ToolExecutionStatusSchema = z.enum([
   "succeeded",
   "failed",
@@ -343,10 +337,6 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
     role: z.literal("event"),
     type: z.literal("progress"),
   }),
-  SandboxEventSchema.extend({
-    role: z.literal("event"),
-    type: z.literal("sandbox"),
-  }),
   ActivityReportSchema.extend({
     role: z.literal("event"),
   }),
@@ -380,7 +370,6 @@ type DerivedConversationEvent = Extract<
       | "approval_request"
       | "approval_cancelled"
       | "progress"
-      | "sandbox"
       | "activity"
       | "tools"
       | "memory"
@@ -402,7 +391,6 @@ export function isDerivedConversationEvent(
     case "approval_request":
     case "approval_cancelled":
     case "progress":
-    case "sandbox":
     case "activity":
     case "tools":
     case "memory":

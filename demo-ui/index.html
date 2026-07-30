@@ -814,15 +814,14 @@ function renderInline(text) {
 
 // ---- turn cards: execution detail grouped per turn ----
 //
-// High-volume execution events (narration, tool batches, progress, sandbox
-// lifecycle, steering delivery) collapse into one card per turn, expanded
+// High-volume execution events (narration, tool batches, progress, steering
+// delivery) collapse into one card per turn, expanded
 // while the turn runs and folded to a summary line once its answer arrives.
 // Conversation-level entries stay in the top-level flow.
 const TURN_DETAIL_TYPES = new Set([
   "progress",
   "activity",
   "tools",
-  "sandbox",
   "steer",
   "approval_cancelled",
 ]);
@@ -929,8 +928,6 @@ function turnDetailLine(entry) {
       });
       return line;
     }
-    case "sandbox":
-      return el("div", "event", `📦 sandbox ${entry.status}`);
     case "steer":
       return el("div", "event",
         `↪ steering delivered` +
