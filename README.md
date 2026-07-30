@@ -798,12 +798,13 @@ curl localhost:8080/Evals/all \
   --json '{"timeoutSeconds":180}'
 ```
 
-The handler spawns all thirteen isolated cases concurrently: a basic turn,
+The handler spawns all fourteen isolated cases concurrently: a basic turn,
 steering, interruption, interruption carrying a replacement request,
 execution-budget finalization, a low-cost context-reduction contract,
 model-managed memory, scheduled delivery, guardrail approval, guardrail scope
 isolation, denial before protected tools start, rejection without approval
-loops, and approval invalidation after steering.
+loops, guardrail removal between Turns, and approval invalidation after
+steering.
 
 Pass `cases` to re-run a subset without paying for the rest, which matters
 because every case depends on probabilistic model behavior:

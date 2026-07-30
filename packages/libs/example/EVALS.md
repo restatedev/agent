@@ -128,7 +128,7 @@ the source of truth.
    inference, then lets a one-shot schedule wake an idle Agent. It checks the
    firing route, adjacent user entry, terminal response, and one-shot state
    cleanup with one small agent turn.
-9. Five isolated guardrail cases cover:
+9. Six isolated guardrail cases cover:
    - Approval verifies that the guardrail profile update and pending request
      are discoverable as structured history events, approves exactly one
      request, and checks that the decision is recorded before completion. A
@@ -139,6 +139,9 @@ the source of truth.
      protected weather tool.
    - Rejection checks that a rejected request produces a compliant explanation
      without requesting approval again.
+   - Removal rejects protected work, clears the guardrail between Turns, and
+     verifies that the same work runs without another approval under the new
+     authoritative profile snapshot.
    - Steering approves one request, adds protected work, and checks that the
      old approval is invalidated and requested again for the updated work.
 
