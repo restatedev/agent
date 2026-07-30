@@ -604,7 +604,7 @@ making pub/sub the source of truth.
 - The complete transcript remains durable. The model sees the rolling summary
   plus each exact model-relevant entry since its checkpoint, with steering
   metadata and interruption/failure boundaries preserved.
-- Turn stops after eight agent-model steps or 24 tool calls instead of running
+- Turn stops after 50 agent-model steps or 24 tool calls instead of running
   indefinitely. It cancels unfinished work and makes one guarded, tool-free
   finalization call so completed results are not replaced by a budget error.
 

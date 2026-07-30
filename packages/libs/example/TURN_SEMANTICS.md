@@ -53,7 +53,7 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 
 ## Model steps
 
-- A Turn performs at most eight model steps and 24 total tool calls.
+- A Turn performs at most 50 model steps and 24 total tool calls.
 - Each step receives a copy of the complete live model context accumulated by
   the Turn.
 - Every agent-model call receives the same user-instruction snapshot.
@@ -247,7 +247,7 @@ Any rewrite must preserve:
 7. Immediate start and selective cancellation of pending work.
 8. Honest completion-versus-cancellation races.
 9. Tool-free interruption finalization using only retained work.
-10. The eight-step and 24-tool-call budgets.
+10. The 50-step and 24-tool-call budgets.
 11. Stable instructions, memories, and guardrails for the lifetime of a Turn.
 12. Guardrail evaluation before publishing text or spawning any proposed tool.
 13. Durable approval before a protected proposal and reevaluation after steering.

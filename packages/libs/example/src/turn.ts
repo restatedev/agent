@@ -67,7 +67,7 @@ type TurnState = {
   discoveredTools: DiscoveredAgentTool[];
 };
 
-const MAX_STEPS = 8;
+const MAX_STEPS = 50;
 const MAX_TOOL_CALLS = 24;
 const MAX_TURN_CONTEXT_CHARS = 32_000;
 
@@ -531,13 +531,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
       });
     }
 
-    yield* reportProgress(
-      state.context,
-      "thinking",
-      state.steps === 0
-        ? "Planning the turn"
-        : `Planning agent step ${state.steps + 1}`,
-    );
+    yield* reportProgress(state.context, "thinking", "Thinking...");
 
     const modelMessageCount = state.messages.length;
     const task = restate.spawn(
