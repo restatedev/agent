@@ -7,17 +7,16 @@ the runtime, and why the boundaries are arranged this way.
 
 Using the established
 [workflow/agent distinction](https://www.anthropic.com/engineering/building-effective-agents),
-this is a **single-agent agentic system**: the model dynamically chooses tools,
-acts on their observations, and decides when the task is complete. It is not a
-fixed LLM workflow, because predefined code does not choose the task-level
-action sequence. It is not a multi-agent system, because supporting policy and
-compaction model calls do not own goals or autonomous tool-use loops.
+each `agentId` identifies one **model-directed agent**: the model dynamically
+chooses tools, acts on their observations, and decides when the task is
+complete. Supporting policy and compaction inference provide bounded runtime
+services around that agent.
 
 The whole repository is a **durable agent harness/runtime**. In evaluation
 terminology, a harness or scaffold supplies the loop, tools, and context that
 enable a model to act as an agent. The operational agent is the model plus that
-harness. The Restate service named `Agent` is only the deterministic durable
-session controller; it should not be confused with the complete AI agent.
+harness. The Restate service named `Agent` is the deterministic durable session
+controller for one agent instance.
 
 ## Design principles
 
@@ -41,9 +40,8 @@ The project follows five principles:
 ### Agent Virtual Object
 
 `Agent`, keyed by `agentId`, is the deterministic session controller and
-durable conversation owner for one agent instance. It is not an LLM agent or a
-manager agent. Its exclusive handlers serialize decisions that would otherwise
-require locks or transactions:
+durable conversation owner for one agent instance. Its exclusive handlers
+serialize decisions that would otherwise require locks or transactions:
 
 - whether a Turn is active;
 - whether a message starts, queues, steers, or interrupts;

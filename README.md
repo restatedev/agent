@@ -28,10 +28,10 @@ files that should change for each kind of task.
 
 ## What kind of AI system is this?
 
-This is a **single-agent agentic system**, not a fixed LLM workflow and not a
-multi-agent system. The model controls task-level execution by selecting tools,
-reacting to observations, revising its approach, and deciding when to answer.
-Deterministic Restate code controls the execution semantics around that policy.
+Each `agentId` identifies one **model-directed agent**. The model controls
+task-level execution by selecting tools, reacting to observations, revising its
+approach, and deciding when to answer. Deterministic Restate code supplies the
+durable execution semantics around those decisions.
 
 In established evaluation terminology, the code that enables a model to act
 is an **agent harness** or **scaffold**. This project is more specifically a
@@ -43,7 +43,7 @@ The similarly named parts are distinct:
 | Term | Meaning in this repository |
 | --- | --- |
 | Agent | The model and harness operating together for one `agentId` |
-| `Agent` Virtual Object | The deterministic durable session controller; it is not itself an LLM agent |
+| `Agent` Virtual Object | The deterministic durable session controller for one agent instance |
 | Agent run | One `Turn.run` invocation handling activated user input |
 | Agent loop | The repeated model-action-observation cycle inside that run |
 | Loop iteration | One `agentStep`: model proposal, policy evaluation, and optional tool batch |
@@ -51,9 +51,9 @@ The similarly named parts are distinct:
 | Evaluation harness | The separate `Evals` service that runs and grades evaluation tasks |
 
 The public Agent history is a **conversation event log**. Its wire types retain
-the name `transcript`, but it is not a complete agent trajectory: raw tool I/O,
-model reasoning, retries, and child invocation details remain in the Turn
-context and Restate execution trace.
+the name `transcript`. It records the user-visible conversation and lifecycle;
+raw tool I/O, model reasoning, retries, and child invocation details remain in
+the Turn context and Restate execution trace.
 
 This vocabulary follows current industry distinctions between
 [workflows and agents](https://www.anthropic.com/engineering/building-effective-agents),

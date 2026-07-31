@@ -16,8 +16,8 @@ The comprehensive maintainer documentation starts at
 The application is split into a few concrete parts:
 
 - **`Agent`** is the deterministic session-controller Virtual Object keyed by
-  `agentId`; it is not itself the LLM agent. It owns the durable
-  conversation history, tracks the active turn, routes queued messages, and
+  `agentId`. It owns the durable conversation history, tracks the active turn,
+  routes queued messages, and
   owns the persistent instructions, memories, guardrails, and pending human
   approvals. It also owns durable one-shot and fixed-interval messages:
   delayed self-sends return through the same exclusive routing decision as
