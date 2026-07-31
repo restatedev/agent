@@ -1,0 +1,23 @@
+# BuildKit picks this up automatically for docker/Dockerfile (it takes
+# precedence over any root .dockerignore). Keep the context down to the
+# workspace manifests, tsconfigs, and sources the Dockerfile actually copies.
+
+.git
+.github
+.pnpm-store
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# local state, docs, and tooling that must never reach the image
+demo-ui
+docs
+docker
+*.md
+biome.json
+restate-data
+.restate
+
+# local launcher with credentials, and env files
+modal.sh
+.env*
