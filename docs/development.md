@@ -69,7 +69,7 @@ curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
 ```
 
-Read its transcript:
+Read its conversation event log (`history`/`transcript` in the wire contract):
 
 ```sh
 curl localhost:8080/Agent/demo/history \
@@ -123,8 +123,8 @@ Do not stage unrelated files in a dirty worktree.
 
 ## Durable evals
 
-The `Evals/all` handler drives fresh Agents through the public protocol and
-runs selected cases concurrently:
+`Evals/all` is the evaluation harness. It runs selected evaluation tasks
+concurrently, with each trial isolated under a fresh `agentId`:
 
 ```sh
 curl localhost:8080/Evals/all \
@@ -146,17 +146,18 @@ curl localhost:8080/Evals/all \
   --json '{"cases":["context-reduction"]}'
 ```
 
-Evals use probabilistic live models. A failed language-quality assertion may
-need careful transcript inspection or a repeat. Protocol ordering, correlation
+Evals use probabilistic live models. A failed language-quality grader may need
+careful event-log inspection or a repeated trial. Protocol ordering, correlation
 IDs, state, and handler decisions should remain deterministic.
 
 See [evals.md](evals.md) for case contracts and known gaps.
 
 ## Debugging map
 
-Use the Agent transcript and Restate journal for different questions.
+Use the Agent conversation event log and Restate execution trace for different
+questions.
 
-### Agent history answers
+### The conversation event log answers
 
 - What did the user and assistant observe?
 - In what order did Agent handlers observe queueing, steering, interruption,
@@ -164,7 +165,7 @@ Use the Agent transcript and Restate journal for different questions.
 - Which tool names started and how did the batch settle?
 - Did a profile, approval, schedule, or lifecycle event occur?
 
-### Restate observability answers
+### The Restate execution trace answers
 
 - What exact model request and response ran?
 - What raw tool input and result were used?
@@ -172,8 +173,9 @@ Use the Agent transcript and Restate journal for different questions.
 - Was an operation replayed, retried, interrupted, or cancelled?
 - Which `restate.run` or handler is currently parked?
 
-The transcript intentionally omits raw reasoning, tool arguments, and tool
-results.
+The public event log intentionally omits raw reasoning, tool arguments, and
+tool results. Those details belong to the agent trajectory/working context and
+runtime trace.
 
 ### Useful correlations
 
@@ -292,21 +294,21 @@ When changing a request or schema:
 5. preserve cancellation propagation;
 6. consider model and per-Agent flow-control keys.
 
-## Adding an eval
+## Adding an evaluation task
 
-Add the case ID to `EvalCaseIdSchema`, implement a generator scenario in
+Add the task's case ID to `EvalCaseIdSchema`, implement its trial driver in
 `eval.ts`, and register it in the internal case table used by `all`.
 
-Prefer assertions over:
+Prefer code-based graders that assert:
 
 - handler decisions;
-- transcript event types and ordering;
+- conversation-event types and ordering;
 - stable IDs and correlations;
 - durable profile or schedule state;
 - terminal status.
 
 Avoid exact prose assertions. Use a focused cheap-model contract when the
-behavior can be tested without manufacturing many full Turns.
+behavior can be tested without manufacturing many full agent runs.
 
 ## Where to make a change
 

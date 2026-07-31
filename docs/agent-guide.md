@@ -75,6 +75,10 @@ Preserve these unless the requested change explicitly replaces them:
     lease and always releases it at its terminal boundary.
 16. A discovered Restate handler is a foreground dynamic tool. The catalog
     snapshot used for model inference is the same snapshot used for execution.
+17. Keep the AI-system layers distinct in prose and code comments: `Agent` is
+    the deterministic session controller, `Turn.run` is one agent run,
+    `agentStep` is one loop iteration, and the model plus harness/runtime is the
+    operational agent.
 
 The detailed Turn-only list lives in
 [turn-runtime.md#refactoring-constraints](turn-runtime.md#refactoring-constraints).
@@ -106,6 +110,14 @@ The detailed Turn-only list lives in
 - Dynamic handler annotations are a trusted cluster capability boundary:
   documentation enters the model prompt and the handler can be invoked with
   the agent service's authority.
+- Agent history is the public conversation event log, not the complete agent
+  trajectory or Restate execution trace. The `transcript` wire name is retained
+  for compatibility.
+- `activity` and `progress` are status communication, not chain-of-thought or
+  model reasoning.
+- The per-Agent `memories` collection is persistent semantic/profile memory.
+  Turn messages are working context, and conversation history is a separate
+  canonical log.
 
 ## Where a change belongs
 

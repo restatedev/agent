@@ -3,17 +3,34 @@
 This guide explains where state and behavior live, how a message moves through
 the runtime, and why the boundaries are arranged this way.
 
+## System classification
+
+Using the established
+[workflow/agent distinction](https://www.anthropic.com/engineering/building-effective-agents),
+this is a **single-agent agentic system**: the model dynamically chooses tools,
+acts on their observations, and decides when the task is complete. It is not a
+fixed LLM workflow, because predefined code does not choose the task-level
+action sequence. It is not a multi-agent system, because supporting policy and
+compaction model calls do not own goals or autonomous tool-use loops.
+
+The whole repository is a **durable agent harness/runtime**. In evaluation
+terminology, a harness or scaffold supplies the loop, tools, and context that
+enable a model to act as an agent. The operational agent is the model plus that
+harness. The Restate service named `Agent` is only the deterministic durable
+session controller; it should not be confused with the complete AI agent.
+
 ## Design principles
 
 The project follows five principles:
 
-1. **Durable ownership is explicit.** The Agent owns conversation state; the
-   Sandbox owns external workspace state; one Turn invocation owns transient
-   execution state.
-2. **The transcript is authoritative.** It is an immutable ordered record of
-   what the Agent observed. Summaries and model messages are derived views.
-3. **Control is separate from execution.** Agent handlers route messages and
-   send signals. Turn executes model steps and tools.
+1. **Durable ownership is explicit.** The `Agent` controller owns conversation
+   state; the Sandbox owns external workspace state; one Turn invocation owns
+   transient execution state.
+2. **The conversation event log is authoritative.** The wire protocol calls it
+   history/transcript. It is an immutable ordered record of what the controller
+   observed; summaries and model messages are derived views.
+3. **Control is separate from execution.** `Agent` handlers route messages and
+   send signals. Turn executes agent-loop iterations and tools.
 4. **Concurrency stays structured.** Spawned work is owned and joined by a
    step, the pending registry, or the Turn supervisor.
 5. **Contracts live beside behavior.** Handler schemas, tool schemas, model
@@ -23,9 +40,10 @@ The project follows five principles:
 
 ### Agent Virtual Object
 
-`Agent`, keyed by `agentId`, is the controller and durable conversation owner.
-Its exclusive handlers serialize decisions that would otherwise require locks
-or transactions:
+`Agent`, keyed by `agentId`, is the deterministic session controller and
+durable conversation owner for one agent instance. It is not an LLM agent or a
+manager agent. Its exclusive handlers serialize decisions that would otherwise
+require locks or transactions:
 
 - whether a Turn is active;
 - whether a message starts, queues, steers, or interrupts;
@@ -55,8 +73,10 @@ the current Restate handler context and hold no local state.
 
 ### Turn service
 
-Each `Turn.run` invocation is one durable agent Turn. Its Restate invocation ID
-is the `turnId`, signal target, tool correlation root, and terminal-outcome ID.
+Each `Turn.run` invocation is one durable **agent run** serving a conversation
+turn. Its Restate invocation ID is the `turnId`, signal target, tool
+correlation root, and terminal-outcome ID. One run may contain many LLM
+inference steps and tool calls.
 
 Turn has no service state. Its generator-local state is made durable by the
 invocation journal:
@@ -71,9 +91,9 @@ invocation journal:
 - sandbox lease context; and
 - transient context-reduction bookkeeping.
 
-Turn repeatedly spawns one `agentStep`, settles it against interruption,
-commits the result into working context, and decides whether to iterate, wait,
-or finish.
+Turn repeatedly spawns one `agentStep` loop iteration, settles it against
+interruption, commits the resulting action and observations into working
+context, and decides whether to iterate, wait, or finish.
 
 ### ModelGateway service
 
@@ -109,10 +129,11 @@ Provider and file/command operations are external effects. They run inside
 
 ### Evals service
 
-`Evals/all` is a black-box protocol driver. It spawns selected scenarios
-concurrently, assigns each a fresh Agent key, calls the same public Agent
-handlers as a real client, follows history through cursor notifications, and
-returns structured assertions with the observed transcript.
+`Evals/all` is the **evaluation harness** and suite runner. It spawns selected
+evaluation tasks concurrently, assigns each trial a fresh agent instance,
+calls the same public Agent handlers as a real client, follows history through
+cursor notifications, and applies code-based graders expressed as structured
+assertions over the observed conversation event log and state.
 
 ## State ownership matrix
 
@@ -126,7 +147,7 @@ returns structured assertions with the observed transcript.
 | Instructions, memories, guardrails | Agent | VO state | Shared profile read; snapshotted at Turn start |
 | Pending approvals | Agent | VO state | Shared list; exclusive mutation |
 | Scheduled messages and timer IDs | Agent | VO state | Shared list; exclusive mutation |
-| Working model messages | Turn invocation | Journaled generator locals | Current Turn only |
+| Working context/trajectory messages | Turn invocation | Journaled generator locals | Current Turn only |
 | Pending tool tasks | Turn invocation | Restate Tasks | Current Turn only |
 | Steering FIFO | Turn invocation | Durable signal source + transient queue | Current Turn only |
 | Dynamic tool catalog used by a Turn | Turn invocation | Journaled `restate.run` result | Model and executor in that Turn |
@@ -203,8 +224,8 @@ sequenceDiagram
 
 ## Steering sequence
 
-Steering means: finish the current step, keep its durable effects, and let the
-next model step see new user direction.
+Steering means: finish the current loop iteration, keep its durable effects,
+and let the next inference step see new user direction.
 
 1. Agent drains all currently queued messages.
 2. Agent resolves the active Turn's `steering` signal with
@@ -272,9 +293,9 @@ Operator or API cancellation rejects the spawned Turn state-machine task with
 Agent appends an interrupt boundary when no explicit Agent interrupt had
 already done so. It does not fabricate a graceful assistant finalization.
 
-## One agent step
+## One agent-loop iteration
 
-`agentStep` is not a service. It is a bounded generator operation spawned by
+`agentStep` is not a service. It is one bounded agent-loop iteration spawned by
 Turn:
 
 ```mermaid
@@ -294,6 +315,12 @@ flowchart TD
 
 The step owns foreground tool tasks only until it returns. Pending completion
 tasks are created later by Turn's pending registry.
+
+This model-action-observation loop is related to the
+[ReAct](https://arxiv.org/abs/2210.03629) research lineage, but it does not
+require or expose the original ReAct reasoning-trace format. Private model
+reasoning remains private; `activity` is status communication, not
+chain-of-thought.
 
 ## Foreground and pending tools
 
@@ -319,7 +346,8 @@ remain observable rather than being overwritten.
 
 ## Transcript architecture
 
-The Agent transcript is a sequence of:
+The Agent conversation event log (named history/transcript in the wire
+contract) is a sequence of:
 
 - user messages with immutable delivery metadata;
 - assistant terminal outcomes;
@@ -330,6 +358,10 @@ The Agent transcript is a sequence of:
 `agent-history.ts` stores entries in chunks of 32 with stable positive sequence
 numbers. `history({fromSequence, limit})` uses an inclusive cursor and loads
 only the chunks needed for the page.
+
+This log is not the complete agent trajectory or execution trace. Exact tool
+arguments/results and private model reasoning stay out of it; Restate's journal
+and invocation tree retain operational trace data.
 
 Not every entry is model context. `isDerivedConversationEvent` centrally
 classifies profile updates, approval request/cancellation, progress, activity,
@@ -353,11 +385,12 @@ notification carries no data; history remains the source of truth.
 
 ## Profile and guardrails
 
-Instructions, memories, and guardrails are per Agent:
+Instructions, memories, and guardrails are per agent instance:
 
 - instructions are user-managed and appended to model instructions;
-- memories are a model-managed, keyed collection of at most 32 entries and are
-  injected as context, explicitly not as instructions;
+- memories are a model-managed persistent semantic/profile memory: a keyed
+  collection of at most 32 facts or preferences injected as context,
+  explicitly not as instructions;
 - guardrails are user-managed natural-language policies with stable IDs.
 
 Each Turn receives one snapshot. Profile changes append metadata-only history
@@ -370,6 +403,10 @@ Turn-scoped signal. The exact proposal and question are retained for scoped
 reuse; steering invalidates current-request decisions.
 
 ## Conversation compaction
+
+Conversation compaction and active-run context reduction are the runtime's two
+**context-engineering** mechanisms: they curate the finite model context without
+mutating the canonical conversation event log.
 
 Compaction is non-destructive:
 

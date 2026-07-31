@@ -4,19 +4,25 @@ This is the behavioral reference for
 `packages/libs/example/src/turn.ts` and
 `packages/libs/example/src/turn-step.ts`.
 
+One `Turn.run` invocation is an **agent run** for one conversation turn.
+`agentStep` is one **agent-loop iteration**, not a conversation turn. See
+the system classification in [architecture.md](architecture.md).
+
 ## Ownership
 
-- `Agent` owns the canonical transcript, queued user messages, active Turn
-  state, persistent profile, human approval state, and steering reconciliation.
-- The per-Agent profile contains user-set instructions, model-managed memories,
-  and natural-language guardrails. Each Turn receives one stable snapshot.
-- The transcript is an append-only event log. User entries retain their
+- The deterministic `Agent` controller owns the canonical conversation event
+  log, queued user messages, active Turn state, persistent profile, human
+  approval state, and steering reconciliation.
+- The per-Agent profile contains user-set instructions, model-managed
+  persistent semantic memory, and natural-language guardrails. Each Turn
+  receives one stable snapshot.
+- The conversation event log is append-only. User entries retain their
   original acceptance route; steering and later activation are separate
   lifecycle events rather than entry rewrites.
-- One `Turn.run` invocation owns the transient agent-turn state machine:
-  working model messages, budgets, the steering cursor, pending tool tasks, and
-  graceful interruption. This state is generator-local and replayed as part of
-  the durable handler invocation; it is not Virtual Object state.
+- One `Turn.run` invocation owns the transient agent-run state machine: working
+  model context, budgets, the steering cursor, pending tool tasks, and graceful
+  interruption. This state is generator-local and replayed as part of the
+  durable handler invocation; it is not Virtual Object state.
 - `turn-step.ts` owns the bounded functional seam and its task supervision. A
   step receives a message snapshot and remaining tool budget, performs one
   agent-model call, gates the proposed action, executes an allowed foreground
@@ -51,7 +57,7 @@ This is the behavioral reference for
   graceful finalization, and Turn rethrows cancellation to Restate.
 - Interruption and budget exhaustion share one guarded, tool-free finalization
   path over completed work.
-- Each iteration spawns exactly one agent step. Turn supervises that task
+- Each iteration spawns exactly one `agentStep`. Turn supervises that task
   against interruption, then joins it before applying its result.
 - The steering inbox receives signals concurrently with the step. Turn drains
   the inbox only after the step settles.
@@ -63,16 +69,16 @@ This is the behavioral reference for
 - Pending completion tasks are deliberately outside the step. They remain
   owned by Turn across later iterations.
 
-## Model steps
+## Agent-loop iterations
 
-- A Turn performs at most 50 model steps and 24 total tool calls.
+- An agent run performs at most 50 loop iterations and 24 total tool calls.
 - Each step receives a copy of the complete live model context accumulated by
   the Turn.
 - Every agent-model call receives the same user-instruction snapshot.
   Persistent memories are injected once into the Turn's initial context as
-  data, before the transcript.
-- A normal step returns text, tool outcomes, a recoverable model error, or a
-  tool-budget stop.
+  data, before the conversation context.
+- A normal iteration returns text, tool outcomes, a recoverable model error, or
+  a tool-budget stop.
 - Invalid or empty model output becomes a corrective user message and another
   step, within the same budget.
 - Provider or orchestration failures stop every foreground and pending task.
@@ -110,8 +116,8 @@ This is the behavioral reference for
   text by string prefix.
 - The policy decision is `allow`, `deny`, or `require_approval`. Model failure
   fails closed under the gateway's Restate retry policy.
-- `deny` returns a runtime policy message to the next agent step. The blocked
-  text is not published and no tool in a blocked batch runs. If that model step
+- `deny` returns a runtime policy observation to the next loop iteration. The
+  blocked text is not published and no tool in a blocked batch runs. If that proposal
   is blocked by the same policy again, Turn completes with a deterministic,
   tool-free refusal instead of exhausting the step budget.
 - `require_approval` durably registers a request on the Agent and waits on a
@@ -171,7 +177,7 @@ This is the behavioral reference for
   intentional background work must be launched and tracked explicitly by the
   shell command.
 - Parallel sandbox tools share one in-flight borrow and later steps reuse the
-  same lease. Dependent operations must be proposed in separate model steps,
+  same lease. Dependent operations must be proposed in separate loop iterations,
   just like any other dependent tool calls.
 - Exhausting a foreground tool's durable retry policy becomes a failed tool
   outcome for the model. Cancellation and Turn interruption still propagate.
@@ -184,8 +190,8 @@ This is the behavioral reference for
   before that step. Newly pending operations from the same result become
   addressable only after those cancellations resolve.
 - Pending operations are keyed by stable tool-call ID.
-- A completed pending task becomes a model-visible runtime event and leaves the
-  registry.
+- A completed pending task becomes a model-visible observation represented as
+  a runtime event and leaves the registry.
 - `cancelOperation` interrupts and joins only the selected pending task. A
   completion that wins the race remains a completion, and unrelated operations
   continue.
@@ -222,7 +228,7 @@ This is the behavioral reference for
 - If final response generation fails, Turn still returns an interrupted result
   with an explanatory fallback response.
 
-## Execution events and transcript boundaries
+## Execution events and conversation boundaries
 
 - Turn reports semantic progress as `thinking`, `waiting`, and `finalizing`.
 - Every allowed tool batch reports a structured `started` and `finished` event
@@ -230,7 +236,7 @@ This is the behavioral reference for
   one brief user-facing activity sentence before the batch starts.
 - Progress and execution reports are one-way and cannot block model or tool
   execution on the Agent handler.
-- Progress, activity, and tool lifecycle events are transcript-visible for
+- Progress, activity, and tool lifecycle events are event-log-visible for
   clients but omitted from model context and conversation compaction.
 - Instruction and guardrail setters append metadata-only `profile` events.
   Approval registration and abandonment append `approval_request` and
@@ -239,7 +245,7 @@ This is the behavioral reference for
 - History is the ordered change feed, while `profile` and `approvals` are the
   authoritative current-state snapshots.
 - Raw reasoning, tool arguments, and tool results remain outside the canonical
-  user-facing transcript.
+  user-facing conversation event log.
 - Every completed, interrupted, stopped, or failed outcome includes
   `consumedSteering`.
 
@@ -248,7 +254,7 @@ This is the behavioral reference for
 Any rewrite must preserve:
 
 1. Turn ownership of transient cross-step state.
-2. One bounded spawned task per agent step.
+2. One bounded spawned task per `agentStep` loop iteration.
 3. FIFO steering and exact reconciliation counts.
 4. No cancellation caused by steering.
 5. Protocol-complete assistant tool-call and tool-result pairs.

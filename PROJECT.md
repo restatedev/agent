@@ -1,9 +1,11 @@
 # Project overview
 
-This repository is a small reference implementation of a durable AI agent on
-[Restate](https://restate.dev/). Its purpose is to show the essential pieces of
-an agentic application—conversation state, turn execution, steering,
-interruption, model calls, and tools—without introducing an agent framework.
+This repository is a small reference implementation of a durable, single-agent
+harness and runtime on [Restate](https://restate.dev/). The model and harness
+together form the operational agent. Its purpose is to show the essential
+pieces of an agentic application—conversation state, agent runs, steering,
+interruption, model inference, and tool use—without introducing an agent
+framework.
 
 The comprehensive maintainer documentation starts at
 [`docs/README.md`](./docs/README.md). Coding agents should read
@@ -13,7 +15,8 @@ The comprehensive maintainer documentation starts at
 
 The application is split into a few concrete parts:
 
-- **`Agent`** is a Virtual Object keyed by `agentId`. It owns the durable
+- **`Agent`** is the deterministic session-controller Virtual Object keyed by
+  `agentId`; it is not itself the LLM agent. It owns the durable
   conversation history, tracks the active turn, routes queued messages, and
   owns the persistent instructions, memories, guardrails, and pending human
   approvals. It also owns durable one-shot and fixed-interval messages:
@@ -30,16 +33,17 @@ The application is split into a few concrete parts:
   `steer` or `interrupt` when they want to affect the active turn. Interruption
   can atomically preserve a replacement user message for a new Turn after the
   old Turn finishes graceful finalization.
-- **`Turn`** has no service state, but one durable invocation owns the
-  transient agent-turn state machine: live messages, budgets, steering, and
-  pending operations. It repeatedly spawns one bounded agent step, applies its
+- **`Turn`** has no service state, but one durable invocation is an agent run
+  and owns its transient state machine: working context, budgets, steering, and
+  pending operations. It repeatedly spawns one bounded loop iteration, applies its
   returned data, and retains completed work for a tool-free interruption
   response. Runtime execution limits use a distinct `stopped` outcome rather
   than masquerading as interruption. Each invocation receives the canonical
   transcript, where steering metadata, queue dispatch, and interruption reasons
   become explicit model-context boundaries.
-- **`agentStep`** is the functional model → foreground-tools seam. It receives
-  a message snapshot and remaining tool budget, asks a cheap policy model to
+- **`agentStep`** is one agent-loop iteration at the functional model →
+  foreground-tools seam. It receives a message snapshot and remaining tool budget,
+  asks a cheap policy model to
   gate the agent model's proposed text or complete tool batch, runs an allowed
   batch in parallel, and owns no work after returning. A policy may allow,
   deny, or durably wait for human approval. `turn-steering.ts` drains durable
@@ -73,9 +77,9 @@ The application is split into a few concrete parts:
   finished turns without blocking conversation updates. The model operation
   lives in `conversation-compactor.ts`; the summary is derived context and the
   chunked Agent transcript remains complete and authoritative.
-- **`Evals`** exposes one `all` handler that concurrently drives isolated Agents
-  through the public protocol and returns structured assertions with their
-  observed transcripts.
+- **`Evals`** is the evaluation harness. Its `all` handler concurrently drives
+  isolated trials through the public Agent protocol and returns code-based
+  grader assertions with their observed conversation event logs.
 
 All handlers on `Agent`, `Turn`, `ModelGateway`, `Sandbox`, and `Evals` are
 ingress-public so the complete protocol is easy to inspect. Normal clients

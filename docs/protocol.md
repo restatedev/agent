@@ -1,11 +1,16 @@
-# Agent protocol and transcript contract
+# Agent protocol and conversation event-log contract
 
 This document describes the HTTP/Restate-facing contract. The Zod schemas in
 `agent.ts` and `types.ts` are authoritative.
 
+The API and code retain the names `history`, `ConversationEntry`, and
+`transcript`. In stricter agent terminology this is the public **conversation
+event log**, not the complete agent trajectory or Restate execution trace.
+
 ## Addressing and serialization
 
-An Agent is a Virtual Object keyed by `agentId`:
+The deterministic `Agent` session controller is a Virtual Object keyed by
+`agentId`:
 
 ```text
 POST <ingress>/Agent/<agentId>/<handler>
@@ -303,7 +308,7 @@ be used to bypass the public routing contract.
 
 ### Turn
 
-`Turn/run` accepts:
+`Turn/run` starts one durable agent run and accepts:
 
 ```ts
 type TurnRequest = {
@@ -370,9 +375,9 @@ clients do not call them; sandbox tools acquire and release through Turn.
 `Evals/all` accepts optional `runId`, `attempt`, `timeoutSeconds`, and a subset
 of case IDs. See [evals.md](evals.md).
 
-## Conversation entry contract
+## Conversation event-log entry contract
 
-Every transcript item has a stable `sequence` wrapper and one `entry`.
+Every public history item has a stable `sequence` wrapper and one `entry`.
 
 ### User entry
 
@@ -398,8 +403,8 @@ changes. Later `steer` or `dispatch` events describe activation.
 }
 ```
 
-Assistant entries are terminal Turn records. An externally cancelled Turn may
-have an interrupt event without an assistant entry.
+Assistant entries are terminal agent-run records. An externally cancelled Turn
+may have an interrupt event without an assistant entry.
 
 ### Control and semantic events
 

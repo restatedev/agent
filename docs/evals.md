@@ -1,12 +1,14 @@
-# Restate-native evaluations
+# Restate-native agent evaluations
 
-The first evaluation slice runs inside Restate and treats the Agent as a
-black-box public protocol.
+`Evals/all` is the project's **evaluation harness**. It treats the durable
+agent runtime as a black-box public protocol, runs an evaluation suite of named
+tasks, and applies deterministic code-based graders. It is distinct from the
+**agent harness** being evaluated.
 
 ## Execution
 
-The single `Evals/all` handler spawns every durable scenario concurrently
-against a fresh Agent virtual object.
+The single `Evals/all` handler spawns every selected evaluation task
+concurrently. Each execution is one trial against a fresh agent instance.
 
 ```mermaid
 sequenceDiagram
@@ -33,8 +35,8 @@ sequenceDiagram
   E-->>Caller: aggregate EvalResult[]
 ```
 
-The service invocation provides durable execution, retries, cancellation, a
-stable invocation identity, and a stored aggregate result. Each spawned case
+The suite invocation provides durable execution, retries, cancellation, a
+stable invocation identity, and a stored aggregate result. Each spawned trial
 also has its own durable timeout.
 
 Each attempt uses a fresh Agent key containing the eval handler invocation ID:
@@ -44,7 +46,8 @@ const agentId = `eval-${isolation}-${caseId}-${attempt}`;
 ```
 
 An optional `runId` labels related suite work but never removes
-invocation-level isolation.
+invocation-level isolation. `attempt` labels one trial; it does not currently
+ask the harness to run repeated trials automatically.
 
 ## Contracts
 
@@ -74,9 +77,17 @@ type EvalSuiteResult = {
 };
 ```
 
-Every scenario is a separate generator operation spawned by `all`. Shared
-options and result assembly remain internal; there is no public case-ID
+Every evaluation task has a separate trial-driver generator spawned by `all`.
+Shared options and result assembly remain internal; there is no public case-ID
 dispatcher or generic scenario language.
+
+The wire contract retains the existing names `caseId` and `transcript`:
+
+- a case is an evaluation **task** or test case;
+- one case execution is a **trial**;
+- each assertion is a code-based grader check; and
+- `transcript` contains the public conversation event log, not the complete
+  model/tool trajectory or Restate execution trace.
 
 ## History notifications
 
@@ -91,12 +102,12 @@ Registration closes the empty-read race:
 - Otherwise, the Agent stores the watcher and `history.append` resolves it when
   the cursor becomes readable.
 - The wait parks in a shared handler, so no exclusive handler is held open and
-  transcript writers are never blocked. A timed-out window cleans up its own
+  event-log writers are never blocked. A timed-out window cleans up its own
   registration; the eval simply selects the call against its case deadline.
 
-After the notification, the eval reads the regular cursor again. The
-notification contains no transcript data and the append-only history remains
-the source of truth.
+After the notification, the trial reads the regular cursor again. The
+notification contains no event-log data and append-only history remains the
+source of truth.
 
 ## Current cases
 
@@ -123,14 +134,14 @@ the source of truth.
    that answer.
 7. `context-reduction` makes one small call to the cheap Turn-context model
    with synthetic completed, failed, and unresolved tool records. It verifies
-   that all three survive reduction without paying for enough full agent turns
+   that all three survive reduction without paying for enough full agent runs
    to manufacture a 32 KB working context.
 8. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
 9. `scheduling` creates, lists, and cancels one delayed message without model
    inference, then lets a one-shot schedule wake an idle Agent. It checks the
    firing route, adjacent user entry, terminal response, and one-shot state
-   cleanup with one small agent turn.
+   cleanup with one small agent run.
 10. Six isolated guardrail cases cover:
    - `guardrail-approval` verifies that the guardrail profile update and pending request
      are discoverable as structured history events, approves exactly one
@@ -149,8 +160,8 @@ the source of truth.
      that the old approval is invalidated and requested again for the updated
      work.
 
-The cases assert transcript structure, event ordering, correlations, and
-durable state rather than exact model prose.
+The code-based graders assert event-log structure, event ordering,
+correlations, and durable outcome state rather than exact model prose.
 
 Invoke the complete suite through Restate ingress:
 
@@ -178,12 +189,13 @@ curl localhost:8080/Evals/all \
   -d '{"cases":["context-reduction"]}'
 ```
 
-The user-facing transcript records tool call IDs, names, and lifecycle statuses,
-but intentionally omits tool inputs and results. Protocol assertions such as
-the steering timer-restart check and execution-budget check consume these
-structured events. Internal properties such as actual tool parallelism still
-require a later journal-observation layer or a scripted model/tool mode; the
-transcript proves intent and settlement order, not physical overlap.
+The user-facing conversation event log records tool call IDs, names, and
+lifecycle statuses, but intentionally omits tool inputs and results. Protocol
+graders such as the steering timer-restart check and execution-budget check
+consume these structured events. Internal properties such as actual tool
+parallelism still require a later journal/trace observation layer or a scripted
+model/tool mode; the event log proves intent and settlement order, not physical
+overlap.
 
 ## Later extensions
 
@@ -198,7 +210,7 @@ expose shared status and result handlers, cancel a run, and repeat
 probabilistic cases.
 
 Add semantic grading after the deterministic suite is useful. A dedicated
-judge model handler should evaluate fulfillment, steering incorporation,
-interruption summaries, memory use, and policy compliance against explicit
-rubrics. It should not replace protocol assertions or rely on exact-string
-snapshots.
+model-based grader (often called an LLM-as-a-judge) should evaluate fulfillment,
+steering incorporation, interruption summaries, memory use, and policy
+compliance against explicit rubrics. It should not replace code-based protocol
+graders or rely on exact-string snapshots.

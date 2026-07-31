@@ -8,9 +8,13 @@ This project has two ways to make a capability available to the model:
 Both become serializable `ToolManifest` values for model inference. Their
 execution boundaries are intentionally different.
 
+In standard agent terminology this is the **tool-use** or **function-calling**
+layer. A model proposes tool actions; validated tool results become
+observations in a later agent-loop iteration.
+
 ## The shared model contract
 
-The model receives only a tool manifest:
+The model receives only a tool manifest describing its available action space:
 
 ```ts
 type ToolManifest = {
@@ -41,7 +45,8 @@ That separation keeps these decisions explicit:
 - the guardrail model evaluates the complete proposed batch before execution;
 - the Turn starts every allowed foreground call in the batch together;
 - Restate journals every operation and its result;
-- results are projected back into model messages by `agent-tools.ts`.
+- results are projected back into model messages as observations by
+  `agent-tools.ts`.
 
 ## Built-in tools
 
@@ -120,7 +125,7 @@ Restate service merely to fit a generic abstraction.
 ### Pending tools
 
 A pending tool acknowledges immediately from `run`, then implements `complete`.
-The Turn starts completion as a task that may survive across model steps:
+The Turn starts completion as a task that may survive across loop iterations:
 
 ```ts
 const waitTool = defineAgentTool({
@@ -203,7 +208,8 @@ incorporate its result.
 
 ## Dynamically discovered Restate tools
 
-A deployed JSON Restate handler opts in through handler metadata:
+A deployed JSON Restate handler opts into the dynamic tool registry through
+handler metadata:
 
 ```text
 restate.dev/agent: query_grafana

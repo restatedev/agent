@@ -1,7 +1,9 @@
 # Sandbox lifecycle and provider contract
 
-The sandbox is an agent-scoped resource. Files created in one conversation
-Turn remain available to later Turns for the same `agentId`.
+The sandbox is the agent-scoped **tool execution environment** and persistent
+workspace. Files created in one agent run remain available to later runs for
+the same `agentId`. It is an external resource owned by the runtime, not agent
+memory or model context.
 
 `Sandbox` owns durable lifecycle. `SandboxProvider` owns vendor operations.
 Tools consume only `SandboxClient`.
