@@ -5,6 +5,10 @@ This repository is a small reference implementation of a durable AI agent on
 an agentic application—conversation state, turn execution, steering,
 interruption, model calls, and tools—without introducing an agent framework.
 
+The comprehensive maintainer documentation starts at
+[`docs/README.md`](./docs/README.md). Coding agents should read
+[`docs/agent-guide.md`](./docs/agent-guide.md) before modifying the project.
+
 ## How it works
 
 The application is split into a few concrete parts:
@@ -145,5 +149,6 @@ Restate provides the application-level guarantees that an agent needs:
 - `packages/libs/example/src/types.ts` — shared wire contracts and schemas
 - `packages/libs/example/src/app.ts` — Agent, Turn, Sandbox, gateway, and eval endpoint
 
-See [`README.md`](./README.md) for setup instructions, example invocations, and
-the detailed durability and flow-control behavior.
+See [`README.md`](./README.md) for the runnable demo and
+[`docs/README.md`](./docs/README.md) for the architecture, contracts, and
+extension guides.

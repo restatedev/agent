@@ -1,4 +1,4 @@
-# Restate-native evals
+# Restate-native evaluations
 
 The first evaluation slice runs inside Restate and treats the Agent as a
 black-box public protocol.
@@ -100,7 +100,7 @@ the source of truth.
 
 ## Current cases
 
-1. `basicTurn` checks idle dispatch, successful completion, one terminal
+1. `basic-turn` checks idle dispatch, successful completion, one terminal
    entry, and a minimally relevant answer.
 2. `steering` waits until sleep is pending, steers more work into the same
    Turn, and checks event order, retained/new results, and that the model did
@@ -132,21 +132,22 @@ the source of truth.
    firing route, adjacent user entry, terminal response, and one-shot state
    cleanup with one small agent turn.
 10. Six isolated guardrail cases cover:
-   - Approval verifies that the guardrail profile update and pending request
+   - `guardrail-approval` verifies that the guardrail profile update and pending request
      are discoverable as structured history events, approves exactly one
      request, and checks that the decision is recorded before completion. A
      follow-up Turn must read that decision without reopening the approval.
-   - Scope approves a Japan request, then verifies that U.S. clarification and
-     New York weather remain outside the Japan-only policy.
-   - Denial checks that a deny policy neither opens an approval nor starts the
-     protected weather tool.
-   - Rejection checks that a rejected request produces a compliant explanation
-     without requesting approval again.
-   - Removal rejects protected work, clears the guardrail between Turns, and
-     verifies that the same work runs without another approval under the new
-     authoritative profile snapshot.
-   - Steering approves one request, adds protected work, and checks that the
-     old approval is invalidated and requested again for the updated work.
+   - `guardrail-scope` approves a Japan request, then verifies that U.S.
+     clarification and New York weather remain outside the Japan-only policy.
+   - `guardrail-denial` checks that a deny policy neither opens an approval nor
+     starts the protected weather tool.
+   - `guardrail-rejection` checks that a rejected request produces a compliant
+     explanation without requesting approval again.
+   - `guardrail-removal` rejects protected work, clears the guardrail between
+     Turns, and verifies that the same work runs without another approval under
+     the new authoritative profile snapshot.
+   - `guardrail-steering` approves one request, adds protected work, and checks
+     that the old approval is invalidated and requested again for the updated
+     work.
 
 The cases assert transcript structure, event ordering, correlations, and
 durable state rather than exact model prose.

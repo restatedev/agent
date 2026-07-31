@@ -10,6 +10,18 @@ and back. It demonstrates production-oriented execution semantics around a
 simple weather agent, while keeping the model and tool domain deliberately
 unimportant.
 
+## Documentation
+
+Start with [`docs/README.md`](docs/README.md) for the complete maintainer guide.
+It links the architecture and data flow, supported Agent protocol, Turn
+semantics, built-in and dynamically discovered tool contracts, sandbox
+providers, local development, and durable evals.
+
+For Codex, Claude Code, or another coding agent, point it first to
+[`docs/agent-guide.md`](docs/agent-guide.md). That guide records the
+source-of-truth order, ownership boundaries, invariants, common traps, and the
+files that should change for each kind of task.
+
 ## State-of-the-art capabilities
 
 | Capability | What this implementation does |
@@ -99,7 +111,7 @@ flowchart LR
   Turn -->|"release at Turn end"| Sandbox
   Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(local /tmp or Modal + Volume)"]
   Turn -->|"large settled context"| Gateway
-  Turn -->|"one-way onTurnEnd"| Agent
+  Turn -->|"await onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
   Agent -.->|"watchHistory long-poll"| Eval
   Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
@@ -487,7 +499,7 @@ The remaining services expose these public handlers:
 
 - `Turn/run` accepts the Agent's profile snapshot, rolling summary, and exact
   uncompacted transcript, runs one transient state machine made of bounded
-  agent steps, and one-way reports a structured outcome to `Agent/onTurnEnd`.
+  agent steps, and awaits one structured outcome call to `Agent/onTurnEnd`.
 - `Sandbox/borrow` lazily provisions or resumes the agent-scoped resource,
   `release` schedules idle suspension, `suspend` applies that lifecycle
   transition, and `destroy` removes an idle resource.
@@ -579,7 +591,8 @@ making pub/sub the source of truth.
 
 ## Durability and failure behavior
 
-- Starting a turn and reporting its outcome are one-way Restate sends.
+- Starting a turn is a one-way Restate send. Turn awaits `onTurnEnd` so Agent
+  ownership is reconciled before external cancellation is rethrown.
 - Progress and execution reports use one-way sends and never block model or
   tool execution on the Agent handler completing.
 - Each agent step makes one scoped full-model invocation and, when guardrails
@@ -861,8 +874,7 @@ curl localhost:8080/Evals/all \
   --json '{"cases":["context-reduction"]}'
 ```
 
-See [`packages/libs/example/EVALS.md`](packages/libs/example/EVALS.md) for the
-protocol and planned extensions.
+See [`docs/evals.md`](docs/evals.md) for the protocol and planned extensions.
 
 The Restate UI at `http://localhost:9070` shows the invocation tree, durable
 model/tool steps, retries, and signals. See Restate's
@@ -886,6 +898,10 @@ request-response, one-way send, attach, and cancellation variants.
 - `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
 - `packages/libs/example/src/dynamic-tools.ts` — annotated handler discovery
   and dynamic Restate tool manifests
+- `packages/libs/example/src/sandbox.ts` — Agent-scoped sandbox lifecycle
+- `packages/libs/example/src/sandbox-provider.ts` — provider and client contracts
+- `packages/libs/example/src/modal-sandbox-provider.ts` — Modal compute and
+  persistent Volume adapter
 - `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
 - `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context model protocols and provider calls
 - `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries
@@ -894,3 +910,4 @@ request-response, one-way send, attach, and cancellation variants.
   public handler, the cursor + `watchHistory` follow loop, and the transcript
   projection that folds pending approvals and change signals
 - `packages/libs/example/src/types.ts` — wire schemas and domain types
+- `packages/libs/example/src/app.ts` — endpoint registration for all five services

@@ -1,6 +1,8 @@
-# Turn state-machine semantics
+# Turn runtime semantics
 
-This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
+This is the behavioral reference for
+`packages/libs/example/src/turn.ts` and
+`packages/libs/example/src/turn-step.ts`.
 
 ## Ownership
 
@@ -31,10 +33,12 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
   reporting its terminal outcome. Providers return the current opaque reference
   from suspend and resume because disposable remote compute may receive a new
   identity while the Agent's persistent files remain unchanged.
-- Tool calls execute locally inside the Turn handler. They are not RPCs.
-  `manageMemory` and `humanApproval` call Agent handlers only for durable state
-  that the Agent virtual object must own. Sandbox tools call the Sandbox object
-  only for its serialized lease and lifecycle.
+- Built-in tool mechanics execute inside the Turn handler; they are not
+  services of their own. `manageMemory` and `humanApproval` call Agent handlers
+  only for durable state that the Agent virtual object must own. Sandbox tools
+  call the Sandbox object only for its serialized lease and lifecycle.
+  Dynamically discovered tools are the deliberate exception: they invoke their
+  independently deployed Restate handler as a durable foreground RPC.
 
 ## Execution shape
 
