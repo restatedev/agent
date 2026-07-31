@@ -28,7 +28,9 @@ This is the behavioral reference for `src/turn.ts` and `src/turn-step.ts`.
 - `Sandbox`, keyed by `agentId`, owns the external sandbox lifecycle. Sandbox
   state belongs to the Agent across conversation Turns. The first sandbox tool
   lazily acquires one shared Turn lease, while `Turn.run` releases it before
-  reporting its terminal outcome.
+  reporting its terminal outcome. Providers return the current opaque reference
+  from suspend and resume because disposable remote compute may receive a new
+  identity while the Agent's persistent files remain unchanged.
 - Tool calls execute locally inside the Turn handler. They are not RPCs.
   `manageMemory` and `humanApproval` call Agent handlers only for durable state
   that the Agent virtual object must own. Sandbox tools call the Sandbox object

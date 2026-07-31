@@ -21,6 +21,7 @@
     "@restatedev/restate-sdk": "^1.16.2",
     "@restatedev/restate-sdk-gen": "^1.16.2",
     "ai": "^7.0.26",
+    "modal": "^0.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

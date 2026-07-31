@@ -7,4 +7,6 @@ onlyBuiltDependencies:
   - esbuild
 
 allowBuilds:
+  cbor-extract: false
   esbuild: true
+  protobufjs: false

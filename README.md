@@ -32,7 +32,7 @@ unimportant.
 | Turn-local context reduction | Large settled model/tool prefixes accumulated during one active Turn are reduced between steps. Initial conversation context and the newest working messages remain exact, while canonical history is untouched. |
 | Semantic execution events | Short model-authored activity plus structured tool-batch start/finish events make multi-step turns readable. `thinking`, `waiting`, and `finalizing` remain semantic milestones; raw reasoning, tool arguments, and tool results stay private. |
 | Model admission control | Agent and policy calls go through a scoped gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
-| Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes a sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. The demo provider uses `/tmp/restate-agent-sandboxes/<agentId>`. |
+| Agent-scoped sandboxes | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes a sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. Choose the zero-config local workspace or secure Modal compute backed by one persistent Volume per Agent. |
 | Explicit command lifetime | Sandbox commands are one-shot foreground calls returning an exit code, stdout, and stderr. Asynchronous work is an explicit shell concern rather than a hidden pending-tool protocol. |
 | Restate-native evals | Durable eval invocations drive fresh Agents through the same public protocol, synchronize on `watchHistory` wait windows, inject control events, and return structured assertions plus the observed transcript. |
 
@@ -61,9 +61,9 @@ one long-running operation.
 ## Deliberate scope
 
 This is a reference runtime, not a complete agent product. The weather tool is
-synthetic so execution semantics stay visible. The sandbox lifecycle and tool
-boundary use a tiny local `/tmp` provider; choosing and configuring a real,
-isolated sandbox vendor remains deliberately outside the example.
+synthetic so execution semantics stay visible. The local sandbox provider is a
+convenient `/tmp` workspace rather than a security boundary; the optional Modal
+provider supplies isolated remote compute and persistent Agent files.
 Token-by-token output streaming, pub/sub fan-out, authentication, and
 multi-tenant policy administration are not implemented. History watch windows
 provide durable point-to-point change notification, not a replacement for a
@@ -97,7 +97,7 @@ flowchart LR
   Tools -->|"approval / memory updates"| Agent
   Tools -->|"lazy borrow + one-shot I/O"| Sandbox["Sandbox Virtual Object\nkeyed by agentId"]
   Turn -->|"release at Turn end"| Sandbox
-  Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(local /tmp demo)"]
+  Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(local /tmp or Modal + Volume)"]
   Turn -->|"large settled context"| Gateway
   Turn -->|"one-way onTurnEnd"| Agent
   Eval["Evals service"] -->|"public Agent protocol"| Agent
@@ -145,7 +145,8 @@ flowchart LR
   needed, and schedules suspension after the Turn releases it.
   `sandbox-provider.ts` is the vendor-neutral boundary. Its synchronous
   `connect` only constructs a client; every provider and client operation runs
-  separately inside `restate.run` with cancellation propagation.
+  separately inside `restate.run`. The local adapter lives beside that boundary;
+  `modal-sandbox-provider.ts` owns Modal-specific compute and storage behavior.
 - `model.ts` owns provider-specific inference and the shared model contracts. It
   reconstructs AI SDK tool definitions from serializable manifests while
   deliberately receiving no executors.
@@ -285,15 +286,45 @@ wants asynchronous work, it must launch and track a background shell script;
 the agent runtime does not turn a sandbox process into an implicit pending
 operation.
 
-The included provider stores each Agent under
+The default `local` provider stores each Agent under
 `/tmp/restate-agent-sandboxes/<agentId>`, so later Turns see files created by
 earlier Turns. It uses Node filesystem APIs for files and executes commands as
 one bounded child process. Relative file paths and command working directories
 are constrained to that Agent directory. This is only a convenient demo
 workspace, not a security boundary: shell commands still run with the service
-process's host permissions. Replacing `sandboxProvider` with a real
-implementation preserves the lifecycle and model-visible tools without
-changing Turn control flow.
+process's host permissions.
+
+Set `SANDBOX_PROVIDER=modal` to use the Modal adapter. It derives a stable,
+non-identifying resource name from the `agentId`, creates one named Modal Volume
+for that Agent, and mounts it at `/workspace` in a named Sandbox. Provision and
+resume recover that deterministic name after an ambiguous retry, rather than
+creating duplicate compute. Idle suspension terminates the Sandbox after Modal
+has committed the Volume; resume creates fresh compute over the same files.
+Destroy terminates any live Sandbox and deletes its Volume. The base image,
+Modal App, and maximum Sandbox lifetime are configurable:
+
+```sh
+SANDBOX_PROVIDER=modal
+MODAL_TOKEN_ID=...
+MODAL_TOKEN_SECRET=...
+
+# Optional defaults:
+MODAL_APP_NAME=restate-agent-sandboxes
+MODAL_SANDBOX_NAMESPACE=restate-agent-sandboxes
+MODAL_SANDBOX_IMAGE=debian:bookworm-slim
+MODAL_SANDBOX_TIMEOUT_MS=86400000
+```
+
+The namespace participates in the hashed Volume and Sandbox name; set it
+explicitly when several Restate deployments share one Modal environment.
+The official Modal SDK also supports credentials from `~/.modal.toml`, but
+environment credentials are the usual choice for a deployed Restate endpoint.
+Modal's JavaScript API does not currently expose termination of one individual
+`Sandbox.exec` process. The adapter therefore checks Restate's abort signal at
+operation boundaries and still awaits an in-flight command, bounded by the
+tool's timeout, instead of pretending it was cancelled while it continues in
+the background. Suspending or destroying the Agent sandbox terminates the
+whole remote Sandbox.
 
 ## Dynamic Restate handler tools
 
@@ -643,8 +674,9 @@ such as tenant or account to avoid concentrating scheduling on one partition.
 ## Run locally
 
 Requirements: Node.js 22 or newer, pnpm, a local Restate Server and CLI, and an
-OpenAI API key. Restate's [quickstart](https://docs.restate.dev/quickstart)
-covers installing the server and CLI.
+OpenAI API key. The optional Modal provider additionally needs a Modal token ID
+and secret. Restate's [quickstart](https://docs.restate.dev/quickstart) covers
+installing the server and CLI.
 
 Restate's [scope-based flow control](https://docs.restate.dev/services/flow-control)
 is currently opt-in and must be enabled on a fresh cluster:
@@ -660,6 +692,16 @@ In another shell, start the service endpoint:
 ```sh
 pnpm install
 OPENAI_API_KEY=... pnpm dev
+```
+
+To run the same endpoint with isolated Modal sandboxes:
+
+```sh
+OPENAI_API_KEY=... \
+SANDBOX_PROVIDER=modal \
+MODAL_TOKEN_ID=... \
+MODAL_TOKEN_SECRET=... \
+pnpm dev
 ```
 
 For dynamic tools, also set `RESTATE_ADMIN_URL` if the service cannot reach

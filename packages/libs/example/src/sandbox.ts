@@ -4,9 +4,12 @@
 import {rpc, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
-import {type SandboxRef, sandboxProvider} from "./sandbox-provider.js";
+import {
+  type SandboxRef,
+  SandboxRefSchema,
+  sandboxProvider,
+} from "./sandbox-provider.js";
 
-const SandboxRefSchema = z.object({id: z.string()});
 const BorrowSchema = z.object({turnId: z.string().min(1)});
 const ReleaseSchema = BorrowSchema;
 
@@ -59,7 +62,7 @@ export const Sandbox = restate.object({
         } else {
           ref = current.ref;
           if (current.status === "suspended") {
-            yield* restate.run(
+            ref = yield* restate.run(
               ({signal}) => sandboxProvider.resume(ref, {signal}),
               {name: "resumeSandbox"},
             );
@@ -105,12 +108,12 @@ export const Sandbox = restate.object({
           return;
         }
 
-        yield* restate.run(
+        const ref = yield* restate.run(
           ({signal}) => sandboxProvider.suspend(current.ref, {signal}),
           {name: "suspendSandbox"},
         );
         restate.state().set(STATE, {
-          ref: current.ref,
+          ref,
           status: "suspended",
         } satisfies SandboxState);
       },

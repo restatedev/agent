@@ -1,14 +1,27 @@
-// Provider-neutral sandbox contracts plus the tiny local implementation used
-// by this demo. Restate owns lifecycle orchestration in sandbox.ts.
+// Provider-neutral sandbox contracts, provider selection, and the tiny local
+// implementation used for zero-configuration development. Restate owns
+// lifecycle orchestration in sandbox.ts.
 
 import {exec} from "node:child_process";
 import {mkdir, readdir, readFile, rm, writeFile} from "node:fs/promises";
 import {dirname, join, resolve, sep} from "node:path";
 import {TerminalError} from "@restatedev/restate-sdk";
+import {z} from "zod";
+import {modalSandboxProvider} from "./modal-sandbox-provider.js";
 
-export type SandboxRef = {
-  id: string;
-};
+export const SandboxRefSchema = z.discriminatedUnion("provider", [
+  z.object({
+    provider: z.literal("local"),
+    root: z.string(),
+  }),
+  z.object({
+    provider: z.literal("modal"),
+    sandboxId: z.string().nullable(),
+    volumeName: z.string(),
+  }),
+]);
+
+export type SandboxRef = z.infer<typeof SandboxRefSchema>;
 
 export type SandboxOperationOptions = {
   signal: AbortSignal;
@@ -46,8 +59,14 @@ export interface SandboxClient {
 
 export interface SandboxProvider {
   provision(options: SandboxProvisionOptions): Promise<SandboxRef>;
-  suspend(ref: SandboxRef, options: SandboxOperationOptions): Promise<void>;
-  resume(ref: SandboxRef, options: SandboxOperationOptions): Promise<void>;
+  suspend(
+    ref: SandboxRef,
+    options: SandboxOperationOptions,
+  ): Promise<SandboxRef>;
+  resume(
+    ref: SandboxRef,
+    options: SandboxOperationOptions,
+  ): Promise<SandboxRef>;
   destroy(ref: SandboxRef, options: SandboxOperationOptions): Promise<void>;
 
   // Connecting is process-local and performs no external operation. Each
@@ -56,6 +75,13 @@ export interface SandboxProvider {
 }
 
 const SANDBOX_ROOT = "/tmp/restate-agent-sandboxes";
+
+function localRef(ref: SandboxRef): Extract<SandboxRef, {provider: "local"}> {
+  if (ref.provider !== "local") {
+    throw new TerminalError(`expected a local sandbox, got ${ref.provider}`);
+  }
+  return ref;
+}
 
 function pathSegment(id: string): string {
   return encodeURIComponent(id).replaceAll(".", "%2E");
@@ -146,32 +172,77 @@ function localClient(root: string): SandboxClient {
 
 // This adapter is intentionally only a convenient local demo. Commands run as
 // the service process, so the directory boundary is not a security sandbox.
-export const sandboxProvider: SandboxProvider = {
+const localSandboxProvider: SandboxProvider = {
   async provision({agentId, signal}) {
     signal.throwIfAborted();
     const root = join(SANDBOX_ROOT, pathSegment(agentId));
     await mkdir(root, {recursive: true});
-    return {id: root};
+    return {provider: "local", root};
   },
 
-  async suspend(_ref, {signal}) {
+  async suspend(ref, {signal}) {
     signal.throwIfAborted();
+    return localRef(ref);
   },
 
   async resume(ref, {signal}) {
     signal.throwIfAborted();
-    await mkdir(containedPath(SANDBOX_ROOT, ref.id), {recursive: true});
+    const local = localRef(ref);
+    await mkdir(containedPath(SANDBOX_ROOT, local.root), {recursive: true});
+    return local;
   },
 
   async destroy(ref, {signal}) {
     signal.throwIfAborted();
-    await rm(containedPath(SANDBOX_ROOT, ref.id), {
+    await rm(containedPath(SANDBOX_ROOT, localRef(ref).root), {
       recursive: true,
       force: true,
     });
   },
 
   connect(ref) {
-    return localClient(containedPath(SANDBOX_ROOT, ref.id));
+    return localClient(containedPath(SANDBOX_ROOT, localRef(ref).root));
+  },
+};
+
+function configuredProvider(): SandboxProvider {
+  const name = process.env.SANDBOX_PROVIDER?.trim().toLowerCase() || "local";
+  switch (name) {
+    case "local":
+      return localSandboxProvider;
+    case "modal":
+      return modalSandboxProvider;
+    default:
+      throw new TerminalError(
+        `unknown SANDBOX_PROVIDER ${JSON.stringify(name)}; expected local or modal`,
+      );
+  }
+}
+
+function providerFor(ref: SandboxRef): SandboxProvider {
+  return ref.provider === "modal" ? modalSandboxProvider : localSandboxProvider;
+}
+
+// New sandboxes use the configured provider. Existing references continue to
+// use the provider that created them, even if process configuration changes.
+export const sandboxProvider: SandboxProvider = {
+  provision(options) {
+    return configuredProvider().provision(options);
+  },
+
+  suspend(ref, options) {
+    return providerFor(ref).suspend(ref, options);
+  },
+
+  resume(ref, options) {
+    return providerFor(ref).resume(ref, options);
+  },
+
+  destroy(ref, options) {
+    return providerFor(ref).destroy(ref, options);
+  },
+
+  connect(ref) {
+    return providerFor(ref).connect(ref);
   },
 };
