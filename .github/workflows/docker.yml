@@ -45,7 +45,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image tags and labels
+      - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -54,6 +54,12 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
+      # Labels are hand-written instead of taken from metadata-action: its
+      # default set includes org.opencontainers.image.source, which makes GHCR
+      # connect the package to this repository and mirror the entire README on
+      # the package page. Without that label the page shows only the one-line
+      # description. GHCR reads the description for a multi-arch image from
+      # the OCI index annotation, hence the duplicated index: entry.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -62,6 +68,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            org.opencontainers.image.title=restate-agent
+            org.opencontainers.image.description=Reference implementation of a durable LLM agent on Restate.
+            org.opencontainers.image.revision=${{ github.sha }}
+          annotations: |
+            index:org.opencontainers.image.description=Reference implementation of a durable LLM agent on Restate.
           cache-from: type=gha
           cache-to: type=gha,mode=max
