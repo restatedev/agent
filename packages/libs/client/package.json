@@ -16,7 +16,8 @@
     "build": "tsc --noEmitOnError"
   },
   "dependencies": {
-    "@restate-agents/types": "workspace:*"
+    "@restate-agents/types": "workspace:*",
+    "@restatedev/restate-sdk-clients": "^1.16.2"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

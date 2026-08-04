@@ -805,6 +805,26 @@ curl localhost:8080/Agent/demo/interrupt \
   --json '{"reason":"The user changed tasks","message":"What is the weather in Japan?"}'
 ```
 
+### Demonstration UI
+
+The `@restate-agents/ui` package is a small browser interface for exercising
+the public Agent protocol: conversations, steering, interruption, approvals,
+schedules, profile state, and evaluations. It is provided strictly for
+demonstration and manual testing; it is not intended as a production UI,
+application template, or component library.
+
+With the Restate ingress and service endpoint running, start it in another
+shell:
+
+```sh
+pnpm dev:ui
+```
+
+Then open `http://127.0.0.1:3000`. The UI uses
+`@restate-agents/client`, which in turn uses the official
+`@restatedev/restate-sdk-clients` ingress client. The ingress URL and Agent key
+can be changed in the page or supplied as `?ingress=http://localhost:8080&agent=demo`.
+
 An idle agent returns a response shaped like:
 
 ```json
@@ -940,6 +960,8 @@ request-response, one-way send, attach, and cancellation variants.
   shared by the runtime and external consumers
 - `packages/libs/client/src/index.ts` — browser-compatible ingress client: one
   method per public handler plus cursor-based transcript following
+- `packages/libs/ui/index.html` — demonstration-only browser UI built on the
+  public client package
 - `packages/libs/core/src/agent.ts` — durable conversation controller
 - `packages/libs/core/src/agent-session.ts` — transcript owner and durable
   agent-turn state machine

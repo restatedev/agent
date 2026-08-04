@@ -4,10 +4,8 @@
 // method per public handler plus the consumption patterns a client needs —
 // the cursor + notification long-poll loop used to follow transcript updates.
 //
-// It imports types only, so it compiles to dependency-free JS that runs
-// anywhere `fetch` and `crypto.randomUUID` exist (Node 18+, browsers), while
-// staying build-checked against the public wire contracts: a
-// protocol change breaks this file at compile time, not a client at runtime.
+// It wraps Restate's official ingress client with agent-specific operations
+// and the cursor + notification protocol used to follow a conversation.
 //
 // @example
 //   const agent = createAgentClient({
@@ -31,6 +29,14 @@ import type {
   ScheduledMessage,
   ScheduleMutationResult,
 } from "@restate-agents/types";
+import {
+  connect,
+  HttpCallError,
+  type RetryPolicy,
+  rpc,
+  serde,
+  type VirtualObjectDefinition,
+} from "@restatedev/restate-sdk-clients";
 
 export type SequencedEntry = HistoryPage["entries"][number];
 export type ScheduleWhenBusy = ScheduledMessage["whenBusy"];
@@ -58,9 +64,64 @@ export type AgentClientOptions = {
   ingressUrl: string;
   /** The Agent virtual-object key. */
   agentId: string;
-  /** Override for test doubles; defaults to the global fetch. */
-  fetch?: typeof fetch;
+  /** Headers attached to every Restate ingress request. */
+  headers?: Record<string, string>;
+  /** Retry policy for idempotent ingress calls. Enabled by default. */
+  retry?: boolean | RetryPolicy;
 };
+
+type AgentHandlers = {
+  ask(context: unknown, input: {message?: string}): Promise<AskResult>;
+  steer(context: unknown, message: string): Promise<boolean>;
+  interrupt(
+    context: unknown,
+    input: {reason: string; message?: string},
+  ): Promise<boolean>;
+  notifications(context: unknown): Promise<AgentNotificationSnapshot>;
+  watchNotifications(
+    context: unknown,
+    input: {afterRevision: number; timeoutSeconds: number},
+  ): Promise<AgentNotificationSnapshot>;
+  profile(context: unknown): Promise<AgentProfile>;
+  setInstructions(
+    context: unknown,
+    input: {instructions: string | null},
+  ): Promise<void>;
+  setGuardrails(
+    context: unknown,
+    input: {guardrails: Guardrail[]},
+  ): Promise<void>;
+  approvals(context: unknown): Promise<ApprovalRequest[]>;
+  resolveApproval(
+    context: unknown,
+    input: ApprovalResolution,
+  ): Promise<boolean>;
+  schedules(context: unknown): Promise<ScheduledMessage[]>;
+  scheduleMessage(
+    context: unknown,
+    input: {turnId: null; schedule: ScheduleSpecInput},
+  ): Promise<ScheduleMutationResult>;
+  cancelSchedule(
+    context: unknown,
+    input: {turnId: null; scheduleId: string},
+  ): Promise<ScheduleCancellationResult>;
+};
+
+type AgentSessionHandlers = {
+  history(
+    context: unknown,
+    input: {fromSequence: number; limit: number},
+  ): Promise<HistoryPage>;
+};
+
+const AgentDefinition: VirtualObjectDefinition<"Agent", AgentHandlers> = {
+  name: "Agent",
+};
+
+const AgentSessionDefinition: VirtualObjectDefinition<
+  "AgentSession",
+  AgentSessionHandlers
+> = {name: "AgentSession"};
 
 /** Failed ingress calls carry the HTTP status and the ingress error text. */
 export class AgentClientError extends Error {
@@ -76,51 +137,38 @@ export class AgentClientError extends Error {
 export function createAgentClient({
   ingressUrl,
   agentId,
-  fetch: fetchImpl = fetch,
+  headers,
+  retry = true,
 }: AgentClientOptions) {
-  const ingress = ingressUrl.replace(/\/+$/, "");
-  const key = encodeURIComponent(agentId);
-  const agentBase = `${ingress}/Agent/${key}`;
-  const sessionBase = `${ingress}/AgentSession/${key}`;
+  const ingress = connect({
+    url: ingressUrl.replace(/\/+$/, ""),
+    headers,
+    retry,
+  });
+  const agent = ingress.objectClient(AgentDefinition, agentId);
+  const session = ingress.objectClient(AgentSessionDefinition, agentId);
 
-  // One POST per handler. An `undefined` body means a void-input handler:
-  // the ingress requires those requests to carry no body and no content-type.
-  // An idempotency key makes retries of the same logical request attach to
-  // the already-running invocation instead of spawning a new one.
-  async function invoke<T>(
-    base: string,
-    handler: string,
-    body?: unknown,
-    options?: {idempotencyKey?: string; signal?: AbortSignal},
-  ): Promise<T> {
-    const headers: Record<string, string> = {};
-    const init: RequestInit = {method: "POST", headers};
-    if (body !== undefined) {
-      headers["content-type"] = "application/json";
-      init.body = JSON.stringify(body);
-    }
-    if (options?.idempotencyKey) {
-      headers["idempotency-key"] = options.idempotencyKey;
-    }
-    if (options?.signal) {
-      init.signal = options.signal;
-    }
-    const response = await fetchImpl(`${base}/${handler}`, init);
-    const text = await response.text();
-    if (!response.ok) {
-      let message = text || response.statusText;
-      try {
-        message = (JSON.parse(text) as {message?: string}).message ?? message;
-      } catch {
-        // not JSON; keep the raw body
+  async function invoke<T>(operation: PromiseLike<T>): Promise<T> {
+    try {
+      return await operation;
+    } catch (error) {
+      if (!(error instanceof HttpCallError)) {
+        throw error;
       }
-      throw new AgentClientError(response.status, message);
+      let message = error.responseText || error.message;
+      try {
+        message =
+          (JSON.parse(error.responseText) as {message?: string}).message ??
+          message;
+      } catch {
+        // Keep the Restate response text when it is not JSON.
+      }
+      throw new AgentClientError(error.status, message);
     }
-    return (text ? JSON.parse(text) : undefined) as T;
   }
 
   async function history(fromSequence = 1, limit = 100): Promise<HistoryPage> {
-    return invoke(sessionBase, "history", {fromSequence, limit});
+    return invoke(session.history({fromSequence, limit}));
   }
 
   async function watchNotifications(
@@ -129,10 +177,10 @@ export function createAgentClient({
     options?: {idempotencyKey?: string; signal?: AbortSignal},
   ): Promise<AgentNotificationSnapshot> {
     return invoke(
-      agentBase,
-      "watchNotifications",
-      {afterRevision, timeoutSeconds},
-      options,
+      agent.watchNotifications(
+        {afterRevision, timeoutSeconds},
+        rpc.opts(options ?? {}),
+      ),
     );
   }
 
@@ -141,7 +189,7 @@ export function createAgentClient({
 
     /** Starts a turn when the Agent is idle, queues for the next turn otherwise. */
     async ask(message?: string): Promise<AskResult> {
-      return invoke(agentBase, "ask", message === undefined ? {} : {message});
+      return invoke(agent.ask(message === undefined ? {} : {message}));
     },
 
     /**
@@ -150,7 +198,7 @@ export function createAgentClient({
      * @returns false when no turn is listening (idle or already interrupting).
      */
     async steer(message: string): Promise<boolean> {
-      return invoke(agentBase, "steer", message);
+      return invoke(agent.steer(message));
     },
 
     /**
@@ -158,10 +206,7 @@ export function createAgentClient({
      * queued and enters the transcript when the successor turn starts.
      */
     async interrupt(reason: string, message?: string): Promise<boolean> {
-      return invoke(agentBase, "interrupt", {
-        reason,
-        ...(message ? {message} : {}),
-      });
+      return invoke(agent.interrupt({reason, ...(message ? {message} : {})}));
     },
 
     history,
@@ -169,7 +214,11 @@ export function createAgentClient({
 
     /** Returns the Agent's current notification watermarks. */
     async notifications(): Promise<AgentNotificationSnapshot> {
-      return invoke(agentBase, "notifications");
+      return invoke(
+        agent.notifications(
+          rpc.opts<void, AgentNotificationSnapshot>({input: serde.empty}),
+        ),
+      );
     },
 
     /**
@@ -217,23 +266,29 @@ export function createAgentClient({
     // ---- profile ----
 
     async profile(): Promise<AgentProfile> {
-      return invoke(agentBase, "profile");
+      return invoke(
+        agent.profile(rpc.opts<void, AgentProfile>({input: serde.empty})),
+      );
     },
 
     /** Replaces the persistent instructions; null clears them. */
     async setInstructions(instructions: string | null): Promise<void> {
-      return invoke(agentBase, "setInstructions", {instructions});
+      return invoke(agent.setInstructions({instructions}));
     },
 
     /** Replaces the complete guardrail list; an empty list clears it. */
     async setGuardrails(guardrails: Guardrail[]): Promise<void> {
-      return invoke(agentBase, "setGuardrails", {guardrails});
+      return invoke(agent.setGuardrails({guardrails}));
     },
 
     // ---- human approvals ----
 
     async approvals(): Promise<ApprovalRequest[]> {
-      return invoke(agentBase, "approvals");
+      return invoke(
+        agent.approvals(
+          rpc.opts<void, ApprovalRequest[]>({input: serde.empty}),
+        ),
+      );
     },
 
     /**
@@ -243,26 +298,30 @@ export function createAgentClient({
      * eligible to receive the decision.
      */
     async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
-      return invoke(agentBase, "resolveApproval", resolution);
+      return invoke(agent.resolveApproval(resolution));
     },
 
     // ---- scheduled messages ----
 
     async schedules(): Promise<ScheduledMessage[]> {
-      return invoke(agentBase, "schedules");
+      return invoke(
+        agent.schedules(
+          rpc.opts<void, ScheduledMessage[]>({input: serde.empty}),
+        ),
+      );
     },
 
     /** Creates or replaces one schedule through the administrative path. */
     async scheduleMessage(
       schedule: ScheduleSpecInput,
     ): Promise<ScheduleMutationResult> {
-      return invoke(agentBase, "scheduleMessage", {turnId: null, schedule});
+      return invoke(agent.scheduleMessage({turnId: null, schedule}));
     },
 
     async cancelSchedule(
       scheduleId: string,
     ): Promise<ScheduleCancellationResult> {
-      return invoke(agentBase, "cancelSchedule", {turnId: null, scheduleId});
+      return invoke(agent.cancelSchedule({turnId: null, scheduleId}));
     },
   };
 }

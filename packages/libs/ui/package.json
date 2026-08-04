@@ -1,0 +1,17 @@
+{
+  "name": "@restate-agents/ui",
+  "version": "0.0.1",
+  "description": "Demonstration-only browser UI for the Restate agent reference implementation.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ./scripts/build.js",
+    "dev": "node ./scripts/build.js --serve"
+  },
+  "dependencies": {
+    "@restate-agents/client": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.4"
+  }
+}

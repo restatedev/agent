@@ -129,6 +129,8 @@ Restate provides the application-level guarantees that an agent needs:
 
 - `packages/libs/types/src/index.ts` — public wire contracts and schemas
 - `packages/libs/client/src/index.ts` — browser-compatible ingress client
+- `packages/libs/ui/index.html` — demonstration-only browser UI built on the
+  public client package
 - `packages/libs/core/src/agent.ts` — conversation controller
 - `packages/libs/core/src/agent-session.ts` — transcript and turn execution
 - `packages/libs/core/src/agent-history.ts` — durable user-facing transcript

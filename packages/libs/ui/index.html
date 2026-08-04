@@ -1,11 +1,11 @@
 <!doctype html>
 <!--
-  Restate durable agent — demo client.
+  Restate durable agent — demonstration UI.
 
-  A dependency-free, single-file browser client for the Agent protocol in
-  packages/libs/client. It talks to the Restate ingress directly:
+  This UI exists only to demonstrate the Agent protocol and the
+  @restate-agents/client package. It is not a production frontend.
 
-    open demo-ui/index.html            (file:// works, ingress allows CORS)
+    pnpm --filter @restate-agents/ui dev
     ?ingress=http://localhost:8080     override the ingress URL
     &agent=demo                        override the agent id
 
@@ -14,8 +14,8 @@
   approvals + resolveApproval, schedules (scheduleMessage, cancelSchedule,
   schedules), and the Evals/all suite runner.
 
-  The client stays in one committed file so it can be opened directly without
-  a frontend build or dependency installation.
+  The application stays in one source file to keep the demonstration easy to
+  inspect. The UI package bundles it for the browser.
 -->
 <html lang="en">
 <head>
@@ -553,8 +553,10 @@
 
 <div id="toasts"></div>
 
-<script>
+<script type="module">
 "use strict";
+
+import {createAgentClient} from "@restate-agents/client";
 
 /* ---------------- configuration ---------------- */
 
@@ -592,28 +594,23 @@ const state = {
   mode: "ask",
 };
 
+let agentClient = createAgentClient({
+  ingressUrl: state.ingress,
+  agentId: state.agent,
+});
+
 const $ = (id) => document.getElementById(id);
 
-/* ---------------- ingress client ---------------- */
+/* ---------------- eval service ---------------- */
 
-// One POST per handler. `body === undefined` means a void-input handler:
-// the ingress requires those requests to carry no body and no content-type.
-// An idempotencyKey makes retries of the same logical request attach to the
-// already-running invocation instead of spawning a new one.
-async function rpc(handler, body, {service = "Agent", key = state.agent, idempotencyKey} = {}) {
-  const path = [service, key, handler]
-    .filter((part) => part !== null)
-    .map(encodeURIComponent)
-    .join("/");
-  const options = {method: "POST", headers: {}};
-  if (body !== undefined) {
-    options.headers["content-type"] = "application/json";
-    options.body = JSON.stringify(body);
-  }
-  if (idempotencyKey) {
-    options.headers["idempotency-key"] = idempotencyKey;
-  }
-  const response = await fetch(`${state.ingress}/${path}`, options);
+// Evals is deliberately not part of the Agent client. The demo UI invokes
+// this separate service directly for its optional evaluation panel.
+async function runEvalSuite(input) {
+  const response = await fetch(`${state.ingress}/Evals/all`, {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify(input),
+  });
   const text = await response.text();
   let data;
   try { data = text ? JSON.parse(text) : undefined; } catch { data = text; }
@@ -1146,17 +1143,13 @@ async function pollTranscript(generation) {
   while (generation === state.pollGeneration) {
     try {
       if (!state.notificationsInitialized) {
-        state.notification = await rpc("notifications");
+        state.notification = await agentClient.notifications();
         if (generation !== state.pollGeneration) return;
         state.notificationsInitialized = true;
       }
 
       while (true) {
-        const page = await rpc(
-          "history",
-          {fromSequence: state.nextSequence, limit: 100},
-          {service: "AgentSession"},
-        );
+        const page = await agentClient.history(state.nextSequence, 100);
         // A newer chain (action or agent switch) owns the state now; this
         // response may even belong to a previous agent. Drop it.
         if (generation !== state.pollGeneration) return;
@@ -1181,10 +1174,10 @@ async function pollTranscript(generation) {
 
       // Agent owns both the durable subscription and this waiting invocation.
       // History remains an authoritative read from AgentSession.
-      const notification = await rpc(
-        "watchNotifications",
-        {afterRevision: state.notification.revision, timeoutSeconds: 25},
-        {service: "Agent", idempotencyKey: watchKey},
+      const notification = await agentClient.watchNotifications(
+        state.notification.revision,
+        25,
+        {idempotencyKey: watchKey},
       );
       if (generation !== state.pollGeneration) return;
       applyNotification(notification);
@@ -1224,20 +1217,20 @@ async function send() {
   $("sendBtn").disabled = true;
   try {
     if (state.mode === "ask") {
-      const result = await rpc("ask", {message});
+      const result = await agentClient.ask(message);
       toast(result.decision === "start"
         ? `Turn started: ${shortTurn(result.turnId)}`
         : `Queued (${result.stats.pendingMessages} pending) behind ${shortTurn(result.activeTurnId)}`);
     } else if (state.mode === "steer") {
-      const accepted = await rpc("steer", message);
+      const accepted = await agentClient.steer(message);
       toast(accepted ? "Steering delivered to the active turn"
                      : "No turn is listening (idle or already interrupting)", !accepted);
     } else {
       const replacement = $("replacementBox").value.trim();
-      const accepted = await rpc("interrupt", {
-        reason: message,
-        ...(replacement ? {message: replacement} : {}),
-      });
+      const accepted = await agentClient.interrupt(
+        message,
+        replacement || undefined,
+      );
       toast(accepted ? "Interruption requested" : "Nothing to interrupt", !accepted);
       if (accepted) $("replacementBox").value = "";
     }
@@ -1254,7 +1247,7 @@ async function send() {
 /* ---------------- approvals ---------------- */
 
 async function refreshApprovals() {
-  const pending = await rpc("approvals");
+  const pending = await agentClient.approvals();
   state.pendingApprovals = new Map(
     pending.map((request) => [request.approvalId, request]),
   );
@@ -1290,7 +1283,7 @@ function renderApprovals() {
       btn.onclick = async () => {
         btn.disabled = true;
         try {
-          const delivered = await rpc("resolveApproval", {
+          const delivered = await agentClient.resolveApproval({
             approvalId: request.approvalId,
             decision,
             ...(reason.value.trim() ? {reason: reason.value.trim()} : {}),
@@ -1334,7 +1327,7 @@ function nextRunLabel(epochMs) {
 }
 
 async function refreshSchedules() {
-  const schedules = await rpc("schedules");
+  const schedules = await agentClient.schedules();
   const list = $("scheduleList");
   list.replaceChildren();
   if (schedules.length === 0) {
@@ -1357,10 +1350,7 @@ async function refreshSchedules() {
     cancel.onclick = async () => {
       cancel.disabled = true;
       try {
-        const result = await rpc("cancelSchedule", {
-          turnId: null,
-          scheduleId: schedule.scheduleId,
-        });
+        const result = await agentClient.cancelSchedule(schedule.scheduleId);
         toast(result.accepted && result.cancelled
           ? `Cancelled ${schedule.scheduleId}`
           : result.accepted
@@ -1387,15 +1377,12 @@ async function createSchedule() {
     return toast("schedule id, message, and a positive delay are required", true);
   }
   try {
-    const result = await rpc("scheduleMessage", {
-      turnId: null,
-      schedule: {
-        scheduleId,
-        message,
-        delaySeconds,
-        repeatEverySeconds: repeatRaw ? Number.parseInt(repeatRaw, 10) : null,
-        whenBusy: $("schedWhenBusy").value,
-      },
+    const result = await agentClient.scheduleMessage({
+      scheduleId,
+      message,
+      delaySeconds,
+      repeatEverySeconds: repeatRaw ? Number.parseInt(repeatRaw, 10) : null,
+      whenBusy: $("schedWhenBusy").value,
     });
     if (!result.accepted) {
       return toast(result.error, true);
@@ -1436,7 +1423,7 @@ function editingProfileNow() {
 }
 
 async function refreshProfile({keepEdits = false} = {}) {
-  const profile = await rpc("profile");
+  const profile = await agentClient.profile();
 
   // Never clobber in-progress edits: the poll skips the editable fields while
   // they are dirty or focused. Save or Revert re-enables syncing.
@@ -1466,7 +1453,7 @@ async function refreshProfile({keepEdits = false} = {}) {
 async function saveInstructions() {
   const value = $("instructionsBox").value.trim();
   try {
-    await rpc("setInstructions", {instructions: value || null});
+    await agentClient.setInstructions(value || null);
     profileEditing = false;
     toast(value ? "Instructions saved (next turn onward)" : "Instructions cleared");
   } catch (error) {
@@ -1480,7 +1467,7 @@ async function saveGuardrails() {
     rule: row.querySelectorAll("input")[1].value.trim(),
   })).filter((g) => g.id || g.rule);
   try {
-    await rpc("setGuardrails", {guardrails});
+    await agentClient.setGuardrails(guardrails);
     profileEditing = false;
     toast(guardrails.length
       ? `${guardrails.length} guardrail(s) saved (next turn onward)`
@@ -1522,11 +1509,11 @@ async function runEvals() {
   const results = $("evalResults");
   results.replaceChildren(el("div", "empty", "Running — each case drives a real agent…"));
   try {
-    const suite = await rpc("all", {
+    const suite = await runEvalSuite({
       runId: "demo-ui",
       timeoutSeconds: Number($("evalTimeout").value) || 300,
       ...(cases.length === EVAL_CASES.length ? {} : {cases}),
-    }, {service: "Evals", key: null});
+    });
 
     results.replaceChildren();
     results.appendChild(el("div", suite.status === "passed" ? "pass" : "fail",
@@ -1563,6 +1550,10 @@ function connect() {
   state.agent = $("agentInput").value.trim() || "demo";
   store.set("ingress", state.ingress);
   store.set("agent", state.agent);
+  agentClient = createAgentClient({
+    ingressUrl: state.ingress,
+    agentId: state.agent,
+  });
 
   // reset conversation state
   state.nextSequence = 1;

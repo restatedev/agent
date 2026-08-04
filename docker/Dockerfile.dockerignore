@@ -10,7 +10,6 @@
 **/*.tsbuildinfo
 
 # local state, docs, and tooling that must never reach the image
-demo-ui
 docs
 docker
 *.md

@@ -9,7 +9,8 @@
     "format": "biome check --write .",
     "bundle": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core bundle",
     "start": "pnpm --filter @restate-agents/core... build && pnpm --filter @restate-agents/core start",
-    "dev": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core dev"
+    "dev": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core dev",
+    "dev:ui": "pnpm --filter @restate-agents/client... build && pnpm --filter @restate-agents/ui dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16"
