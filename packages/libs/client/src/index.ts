@@ -30,12 +30,18 @@ import type {
   ScheduleMutationResult,
 } from "@restate-agents/types";
 import {
+  AgentIngressDefinition,
+  type AgentIngressHandlers,
+  AgentSessionIngressDefinition,
+  type AgentSessionIngressHandlers,
+  DEFAULT_ASK,
+} from "@restate-agents/types/targets";
+import {
   connect,
   HttpCallError,
   type RetryPolicy,
   rpc,
   serde,
-  type VirtualObjectDefinition,
 } from "@restatedev/restate-sdk-clients";
 
 export type SequencedEntry = HistoryPage["entries"][number];
@@ -70,59 +76,6 @@ export type AgentClientOptions = {
   retry?: boolean | RetryPolicy;
 };
 
-type AgentHandlers = {
-  ask(context: unknown, input: {message?: string}): Promise<AskResult>;
-  steer(context: unknown, message: string): Promise<boolean>;
-  interrupt(
-    context: unknown,
-    input: {reason: string; message?: string},
-  ): Promise<boolean>;
-  notifications(context: unknown): Promise<AgentNotificationSnapshot>;
-  watchNotifications(
-    context: unknown,
-    input: {afterRevision: number; timeoutSeconds: number},
-  ): Promise<AgentNotificationSnapshot>;
-  profile(context: unknown): Promise<AgentProfile>;
-  setInstructions(
-    context: unknown,
-    input: {instructions: string | null},
-  ): Promise<void>;
-  setGuardrails(
-    context: unknown,
-    input: {guardrails: Guardrail[]},
-  ): Promise<void>;
-  approvals(context: unknown): Promise<ApprovalRequest[]>;
-  resolveApproval(
-    context: unknown,
-    input: ApprovalResolution,
-  ): Promise<boolean>;
-  schedules(context: unknown): Promise<ScheduledMessage[]>;
-  scheduleMessage(
-    context: unknown,
-    input: {turnId: null; schedule: ScheduleSpecInput},
-  ): Promise<ScheduleMutationResult>;
-  cancelSchedule(
-    context: unknown,
-    input: {turnId: null; scheduleId: string},
-  ): Promise<ScheduleCancellationResult>;
-};
-
-type AgentSessionHandlers = {
-  history(
-    context: unknown,
-    input: {fromSequence: number; limit: number},
-  ): Promise<HistoryPage>;
-};
-
-const AgentDefinition: VirtualObjectDefinition<"Agent", AgentHandlers> = {
-  name: "Agent",
-};
-
-const AgentSessionDefinition: VirtualObjectDefinition<
-  "AgentSession",
-  AgentSessionHandlers
-> = {name: "AgentSession"};
-
 /** Failed ingress calls carry the HTTP status and the ingress error text. */
 export class AgentClientError extends Error {
   constructor(
@@ -145,8 +98,14 @@ export function createAgentClient({
     headers,
     retry,
   });
-  const agent = ingress.objectClient(AgentDefinition, agentId);
-  const session = ingress.objectClient(AgentSessionDefinition, agentId);
+  const agent = ingress.objectClient<AgentIngressHandlers>(
+    AgentIngressDefinition,
+    agentId,
+  );
+  const session = ingress.objectClient<AgentSessionIngressHandlers>(
+    AgentSessionIngressDefinition,
+    agentId,
+  );
 
   async function invoke<T>(operation: PromiseLike<T>): Promise<T> {
     try {
@@ -189,7 +148,7 @@ export function createAgentClient({
 
     /** Starts a turn when the Agent is idle, queues for the next turn otherwise. */
     async ask(message?: string): Promise<AskResult> {
-      return invoke(agent.ask(message === undefined ? {} : {message}));
+      return invoke(agent.ask({message: message ?? DEFAULT_ASK}));
     },
 
     /**

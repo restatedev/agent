@@ -329,6 +329,7 @@ behavior can be tested without manufacturing many full agent runs.
 | Change sandbox lifecycle | `src/sandbox.ts` |
 | Add a sandbox provider | `src/sandbox-provider.ts` and an adapter module |
 | Change public wire/domain schemas | `packages/libs/types/src/index.ts` |
+| Change Agent handler contracts | `packages/libs/types/src/services.ts` |
 | Change the external client | `packages/libs/client/src/index.ts` |
 | Add protocol coverage | `src/eval.ts` |
 

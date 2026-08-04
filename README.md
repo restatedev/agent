@@ -958,6 +958,8 @@ request-response, one-way send, attach, and cancellation variants.
 
 - `packages/libs/types/src/index.ts` — public wire schemas and domain types
   shared by the runtime and external consumers
+- `packages/libs/types/src/services.ts` — shared Restate service descriptors
+  implemented by core and used to derive ingress clients
 - `packages/libs/client/src/index.ts` — browser-compatible ingress client: one
   method per public handler plus cursor-based transcript following
 - `packages/libs/ui/index.html` — demonstration-only browser UI built on the

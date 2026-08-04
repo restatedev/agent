@@ -10,12 +10,21 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./services": {
+      "types": "./dist/services.d.ts",
+      "default": "./dist/services.js"
+    },
+    "./targets": {
+      "types": "./dist/targets.d.ts",
+      "default": "./dist/targets.js"
     }
   },
   "scripts": {
     "build": "tsc --noEmitOnError"
   },
   "dependencies": {
+    "@restatedev/restate-sdk-gen": "^1.16.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {

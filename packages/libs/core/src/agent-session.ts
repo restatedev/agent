@@ -3,23 +3,19 @@
 // control-signal consumption, budgets, and pending tools. Each iteration
 // spawns one bounded agent step and applies its returned data.
 
-import {
-  type ConversationEntry,
-  type Guardrail,
-  type HistoryPage,
-  HistoryPageSchema,
-  HistoryRequestSchema,
+import type {
+  ConversationEntry,
+  Guardrail,
+  HistoryPage,
 } from "@restate-agents/types";
+import {AgentSessionDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
-import {z} from "zod";
 import {Agent} from "./agent.js";
 import {
   type ConversationCompactionPlan,
-  ConversationCompactionPlanSchema,
   type ConversationCompactionResult,
-  ConversationCompactionResultSchema,
   history,
   type TurnHistory,
 } from "./agent-history.js";
@@ -36,7 +32,6 @@ import {
   AGENT_SESSION_SIGNALS,
   type AgentSessionOutcome,
   type AgentSessionRequest,
-  AgentSessionRequestSchema,
   type AgentSessionSteering,
 } from "./internal-types.js";
 import type {GuardrailApproval} from "./model.js";
@@ -828,41 +823,31 @@ function outcomeEntries(outcome: AgentSessionOutcome): ConversationEntry[] {
   }
 }
 
-export const AgentSession = restate.object({
-  name: "AgentSession",
+export const AgentSession = restate.implement(AgentSessionDefinition, {
   handlers: {
     /** Returns one page from this AgentSession's authoritative transcript. */
-    history: restate.schemas(
-      {input: HistoryRequestSchema, output: HistoryPageSchema},
-      function* ({fromSequence, limit}): restate.Operation<HistoryPage> {
-        return yield* history.page(fromSequence, limit);
-      },
-    ),
+    *history({fromSequence, limit}): restate.Operation<HistoryPage> {
+      return yield* history.page(fromSequence, limit);
+    },
 
     /** Summarizes one reserved transcript prefix without blocking writers. */
-    compact: restate.schemas(
-      {input: ConversationCompactionPlanSchema, output: z.void()},
-      function* (plan: ConversationCompactionPlan): restate.Operation<void> {
-        const input = yield* history.readCompaction(plan);
-        if (!input) {
-          return;
-        }
-        const result = yield* compactConversation(input);
-        yield* restate
-          .sendClient(AgentSession, sessionKey())
-          .applyCompaction(result);
-      },
-    ),
+    *compact(plan: ConversationCompactionPlan): restate.Operation<void> {
+      const input = yield* history.readCompaction(plan);
+      if (!input) {
+        return;
+      }
+      const result = yield* compactConversation(input);
+      yield* restate
+        .sendClient(AgentSession, sessionKey())
+        .applyCompaction(result);
+    },
 
     /** Applies a summary only when it matches the reserved transcript range. */
-    applyCompaction: restate.schemas(
-      {input: ConversationCompactionResultSchema, output: z.void()},
-      function* (
-        result: ConversationCompactionResult,
-      ): restate.Operation<void> {
-        yield* history.finishCompaction(result);
-      },
-    ),
+    *applyCompaction(
+      result: ConversationCompactionResult,
+    ): restate.Operation<void> {
+      yield* history.finishCompaction(result);
+    },
 
     /**
      * Executes one complete durable conversation Turn.
@@ -876,84 +861,79 @@ export const AgentSession = restate.object({
      * tools are stopped, an interrupted outcome is reported, and cancellation
      * is rethrown to preserve Restate semantics.
      */
-    doTurn: restate.schemas(
-      {input: AgentSessionRequestSchema, output: z.void()},
-      function* (req: AgentSessionRequest): restate.Operation<void> {
-        const agentId = sessionKey();
-        const turnId = restate.handlerRequest().id;
-        let state: AgentSessionState | undefined;
-        let transcript: TurnHistory | undefined;
-        let outcome: AgentSessionOutcome;
-        try {
-          transcript = yield* history.openTurn();
-          yield* transcript.append(...req.entries);
-          state = createSessionState(req, agentId, turnId, transcript);
-          outcome = yield* executeTurn(state);
-        } catch (error) {
-          if (error instanceof CancelledError) {
-            outcome = {
-              turnId,
-              status: "interrupted",
-              reason: "Turn cancelled",
-              consumedSteering: state?.consumedSteering ?? 0,
-            };
-
-            // Cancellation may reject every later parked operation. Record all
-            // local state synchronously before each best-effort send, and never
-            // wait for already-cancelled child tasks.
-            const stopped = state?.pending.cancelAll(error) ?? [];
-            if (transcript) {
-              try {
-                yield* transcript.append(
-                  ...(state ? toolTranscriptEntries(state, stopped) : []),
-                  ...outcomeEntries(outcome),
-                );
-              } catch {
-                // State writes precede the notification wait; reconciliation
-                // below remains the authoritative controller cleanup.
-              }
-            }
-            try {
-              yield* restate.sendClient(Sandbox, agentId).release({turnId});
-            } catch {
-              // The durable one-way call is emitted before its acknowledgement.
-            }
-            try {
-              yield* restate.sendClient(Agent, agentId).onTurnEnd(outcome);
-            } catch {
-              // The Agent invocation remains durable even if cancellation wins
-              // the local acknowledgement race.
-            }
-            throw error;
-          }
-
-          if (state) {
-            const stopped = yield* state.pending.stop(error);
-            yield* appendToolTranscript(state, stopped);
-          }
+    *doTurn(req: AgentSessionRequest): restate.Operation<void> {
+      const agentId = sessionKey();
+      const turnId = restate.handlerRequest().id;
+      let state: AgentSessionState | undefined;
+      let transcript: TurnHistory | undefined;
+      let outcome: AgentSessionOutcome;
+      try {
+        transcript = yield* history.openTurn();
+        yield* transcript.append(...req.entries);
+        state = createSessionState(req, agentId, turnId, transcript);
+        outcome = yield* executeTurn(state);
+      } catch (error) {
+        if (error instanceof CancelledError) {
           outcome = {
             turnId,
-            status: "failed",
-            error: errorMessage(error),
+            status: "interrupted",
+            reason: "Turn cancelled",
             consumedSteering: state?.consumedSteering ?? 0,
           };
+
+          // Cancellation may reject every later parked operation. Record all
+          // local state synchronously before each best-effort send, and never
+          // wait for already-cancelled child tasks.
+          const stopped = state?.pending.cancelAll(error) ?? [];
+          if (transcript) {
+            try {
+              yield* transcript.append(
+                ...(state ? toolTranscriptEntries(state, stopped) : []),
+                ...outcomeEntries(outcome),
+              );
+            } catch {
+              // State writes precede the notification wait; reconciliation
+              // below remains the authoritative controller cleanup.
+            }
+          }
+          try {
+            yield* restate.sendClient(Sandbox, agentId).release({turnId});
+          } catch {
+            // The durable one-way call is emitted before its acknowledgement.
+          }
+          try {
+            yield* restate.sendClient(Agent, agentId).onTurnEnd(outcome);
+          } catch {
+            // The Agent invocation remains durable even if cancellation wins
+            // the local acknowledgement race.
+          }
+          throw error;
         }
 
-        yield* restate.client(Sandbox, agentId).release({turnId});
-        const reconciled = yield* restate
-          .client(Agent, agentId)
-          .onTurnEnd(outcome);
-        if (reconciled && transcript) {
-          yield* transcript.append(...outcomeEntries(reconciled));
-          const compaction = yield* transcript.beginCompaction();
-          if (compaction) {
-            yield* restate
-              .sendClient(AgentSession, agentId)
-              .compact(compaction);
-          }
+        if (state) {
+          const stopped = yield* state.pending.stop(error);
+          yield* appendToolTranscript(state, stopped);
         }
-      },
-    ),
+        outcome = {
+          turnId,
+          status: "failed",
+          error: errorMessage(error),
+          consumedSteering: state?.consumedSteering ?? 0,
+        };
+      }
+
+      yield* restate.client(Sandbox, agentId).release({turnId});
+      const reconciled = yield* restate
+        .client(Agent, agentId)
+        .onTurnEnd(outcome);
+      if (reconciled && transcript) {
+        yield* transcript.append(...outcomeEntries(reconciled));
+        const compaction = yield* transcript.beginCompaction();
+        if (compaction) {
+          yield* restate.sendClient(AgentSession, agentId).compact(compaction);
+        }
+      }
+    },
   },
   options: {
     handlers: {

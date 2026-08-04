@@ -2,6 +2,32 @@
 // source of truth shared by the service implementation and external clients.
 
 import {z} from "zod";
+import {DEFAULT_ASK} from "./targets.js";
+
+export {DEFAULT_ASK} from "./targets.js";
+
+export const MessageSchema = z.string().trim().min(1);
+
+export const AskRequestSchema = z.object({
+  message: MessageSchema.default(DEFAULT_ASK),
+});
+
+export const InterruptRequestSchema = z
+  .object({
+    reason: MessageSchema.describe(
+      "Why the active Turn should stop and what its tool-free finalization should explain.",
+    ),
+    message: MessageSchema.describe(
+      "An optional replacement user request to queue for a new Turn after interruption finalization.",
+    ).optional(),
+  })
+  .describe(
+    "Interrupt the active Turn, optionally preserving a replacement request for the next Turn.",
+  );
+
+export const SetInstructionsSchema = z.object({
+  instructions: z.string().nullable(),
+});
 
 const AskStatsSchema = z.object({
   pendingMessages: z.number().int().nonnegative(),
@@ -66,6 +92,8 @@ export const ScheduleSpecSchema = z.object({
     ),
   whenBusy: ScheduleWhenBusySchema,
 });
+
+export const ScheduleFireSchema = ScheduleSpecSchema.pick({scheduleId: true});
 
 export const ScheduledMessageSchema = ScheduleSpecSchema.omit({
   delaySeconds: true,
@@ -187,6 +215,24 @@ export const MemoryChangeSchema = z.discriminatedUnion("operation", [
 ]);
 export type MemoryChange = z.infer<typeof MemoryChangeSchema>;
 
+export const MemoryUpdateSchema = z.object({
+  turnId: z.string().min(1),
+  changes: z.array(MemoryChangeSchema).min(1),
+});
+export type MemoryUpdate = z.infer<typeof MemoryUpdateSchema>;
+
+export const MemoryUpdateResultSchema = z.discriminatedUnion("applied", [
+  z.object({
+    applied: z.literal(true),
+    memoryCount: z.number().int().nonnegative(),
+  }),
+  z.object({
+    applied: z.literal(false),
+    error: z.string(),
+  }),
+]);
+export type MemoryUpdateResult = z.infer<typeof MemoryUpdateResultSchema>;
+
 export const GuardrailSchema = z
   .object({
     id: z
@@ -206,6 +252,19 @@ export const GuardrailSchema = z
   })
   .describe("A natural-language policy evaluated before an agent action runs.");
 export type Guardrail = z.infer<typeof GuardrailSchema>;
+
+export const SetGuardrailsSchema = z.object({
+  guardrails: z
+    .array(GuardrailSchema)
+    .refine(
+      (guardrails) =>
+        new Set(guardrails.map(({id}) => id)).size === guardrails.length,
+      "guardrail ids must be unique",
+    )
+    .describe(
+      "The complete replacement policy list for future Turns. Use an empty list to clear all guardrails.",
+    ),
+});
 
 export const AgentProfileSchema = z.object({
   instructions: z.string().optional(),
@@ -356,6 +415,29 @@ export const AgentNotificationWatchRequestSchema = z.object({
       "Maximum time to wait for a newer notification before returning the current snapshot.",
     ),
 });
+
+export const AgentNotificationTopicSchema = z.enum([
+  "history",
+  "profile",
+  "approvals",
+  "schedules",
+]);
+export type AgentNotificationTopic = z.infer<
+  typeof AgentNotificationTopicSchema
+>;
+
+export const AgentNotificationSubscriptionSchema = z.object({
+  afterRevision: z.number().int().nonnegative(),
+  awakeableId: z.string().min(1),
+});
+export type AgentNotificationSubscription = z.infer<
+  typeof AgentNotificationSubscriptionSchema
+>;
+
+export const AgentNotificationUnsubscribeSchema = z.object({
+  awakeableId: z.string().min(1),
+});
+
 export const HistoryPageSchema = z.object({
   entries: z.array(SequencedConversationEntrySchema),
   nextSequence: z.number().int().positive(),
@@ -382,3 +464,71 @@ export const ApprovalResolutionSchema = ApprovalDecisionSchema.extend({
   approvalId: z.string().min(1),
 });
 export type ApprovalResolution = z.infer<typeof ApprovalResolutionSchema>;
+
+export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
+  approvalId: true,
+  turnId: true,
+});
+export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;
+
+export const AgentSessionRequestSchema = AgentProfileSchema.extend({
+  entries: z.array(ConversationEntrySchema),
+});
+export type AgentSessionRequest = z.infer<typeof AgentSessionRequestSchema>;
+
+const AgentSessionOutcomeBaseSchema = z.object({
+  turnId: z.string(),
+  consumedSteering: z.number().int().nonnegative(),
+});
+
+export const AgentSessionOutcomeSchema = z.discriminatedUnion("status", [
+  AgentSessionOutcomeBaseSchema.extend({
+    status: z.literal("completed"),
+    response: z.string(),
+  }),
+  AgentSessionOutcomeBaseSchema.extend({
+    status: z.literal("interrupted"),
+    reason: z.string(),
+    response: z.string().optional(),
+  }),
+  AgentSessionOutcomeBaseSchema.extend({
+    status: z.literal("stopped"),
+    cause: z.enum(["step_limit", "tool_limit"]),
+    reason: z.string(),
+    response: z.string(),
+  }),
+  AgentSessionOutcomeBaseSchema.extend({
+    status: z.literal("failed"),
+    error: z.string(),
+  }),
+]);
+export type AgentSessionOutcome = z.infer<typeof AgentSessionOutcomeSchema>;
+
+const CompactionRangeShape = {
+  baseThrough: z.number().int().nonnegative(),
+  through: z.number().int().positive(),
+};
+
+export const ConversationCompactionPlanSchema = z.object(CompactionRangeShape);
+export type ConversationCompactionPlan = z.infer<
+  typeof ConversationCompactionPlanSchema
+>;
+
+export const ConversationCompactionResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({
+      ...CompactionRangeShape,
+      status: z.literal("completed"),
+      summary: z.string().trim().min(1),
+    }),
+    z.object({
+      ...CompactionRangeShape,
+      status: z.literal("failed"),
+      error: z.string().min(1),
+    }),
+  ],
+);
+export type ConversationCompactionResult = z.infer<
+  typeof ConversationCompactionResultSchema
+>;

@@ -128,6 +128,7 @@ Restate provides the application-level guarantees that an agent needs:
 ## Source map
 
 - `packages/libs/types/src/index.ts` — public wire contracts and schemas
+- `packages/libs/types/src/services.ts` — shared Restate service descriptors
 - `packages/libs/client/src/index.ts` — browser-compatible ingress client
 - `packages/libs/ui/index.html` — demonstration-only browser UI built on the
   public client package

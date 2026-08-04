@@ -26,8 +26,9 @@ guide are relative to `packages/libs/core`.
 
 Use executable contracts before prose:
 
-1. Public Zod schemas in `packages/libs/types/src/index.ts`, schemas adjacent
-   to Restate handlers, and `src/model.ts`;
+1. Public Zod schemas in `packages/libs/types/src/index.ts`, shared Restate
+   descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
+   internal handlers, and `src/model.ts`;
 2. handler code in `src/agent.ts`, `src/agent-session.ts`,
    `src/model-gateway.ts`, and `src/sandbox.ts`;
 3. focused ownership modules;

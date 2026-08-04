@@ -104,9 +104,11 @@ are the maintainer reference.
 Documentation explains the implementation; it does not replace the executable
 contracts. When prose and code differ, use this order:
 
-1. Zod handler and signal schemas in
-   [`@restate-agents/types`](../packages/libs/types/src/index.ts), the schemas adjacent to
-   handlers, and [`model.ts`](../packages/libs/core/src/model.ts);
+1. Zod wire schemas in
+   [`@restate-agents/types`](../packages/libs/types/src/index.ts), shared Restate
+   descriptors in [`services.ts`](../packages/libs/types/src/services.ts),
+   schemas adjacent to internal handlers, and
+   [`model.ts`](../packages/libs/core/src/model.ts);
 2. handler control flow in
    [`agent.ts`](../packages/libs/core/src/agent.ts),
    [`agent-session.ts`](../packages/libs/core/src/agent-session.ts), and

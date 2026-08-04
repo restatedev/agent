@@ -6,12 +6,23 @@
 // events. A rolling summary is a replaceable model-context checkpoint over an
 // older prefix of that log.
 
-import type {ConversationEntry, HistoryPage} from "@restate-agents/types";
+import type {
+  ConversationCompactionPlan,
+  ConversationCompactionResult,
+  ConversationEntry,
+  HistoryPage,
+} from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import {z} from "zod";
 import {Agent} from "./agent.js";
 import {isDerivedConversationEvent} from "./internal-types.js";
+
+export {
+  type ConversationCompactionPlan,
+  ConversationCompactionPlanSchema,
+  type ConversationCompactionResult,
+  ConversationCompactionResultSchema,
+} from "@restate-agents/types";
 
 type StoredEntry = {
   sequence: number;
@@ -22,16 +33,6 @@ type ConversationSummary = {
   through: number;
   text: string;
 };
-
-const CompactionRangeShape = {
-  baseThrough: z.number().int().nonnegative(),
-  through: z.number().int().positive(),
-};
-
-export const ConversationCompactionPlanSchema = z.object(CompactionRangeShape);
-export type ConversationCompactionPlan = z.infer<
-  typeof ConversationCompactionPlanSchema
->;
 
 type HistoryMeta = {
   nextSequence: number;
@@ -56,25 +57,6 @@ export type ConversationCompactionInput = ConversationCompactionPlan & {
   previousSummary?: string;
   entries: ConversationEntry[];
 };
-
-export const ConversationCompactionResultSchema = z.discriminatedUnion(
-  "status",
-  [
-    z.object({
-      ...CompactionRangeShape,
-      status: z.literal("completed"),
-      summary: z.string().trim().min(1),
-    }),
-    z.object({
-      ...CompactionRangeShape,
-      status: z.literal("failed"),
-      error: z.string().min(1),
-    }),
-  ],
-);
-export type ConversationCompactionResult = z.infer<
-  typeof ConversationCompactionResultSchema
->;
 
 const HISTORY_META = "history/meta";
 const HISTORY_SUMMARY = "history/summary";

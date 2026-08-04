@@ -64,6 +64,9 @@ importers:
 
   packages/libs/types:
     dependencies:
+      '@restatedev/restate-sdk-gen':
+        specifier: ^1.16.2
+        version: 1.16.2(@restatedev/restate-sdk@1.16.2)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
