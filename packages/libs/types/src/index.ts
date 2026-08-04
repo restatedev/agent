@@ -1,13 +1,27 @@
-// Wire contracts shared by Restate handlers and signals. Zod schemas are the
-// source of truth; only values needed by another module are exported.
+// Public wire contracts for the Restate agent runtime. Zod schemas are the
+// source of truth shared by the service implementation and external clients.
 
 import {z} from "zod";
 
-// Durable signal names shared by the Agent controller and AgentSession doTurn.
-export const AGENT_SESSION_SIGNALS = {
-  interrupt: "interrupt",
-  steering: "steering",
-} as const;
+const AskStatsSchema = z.object({
+  pendingMessages: z.number().int().nonnegative(),
+});
+
+/** The Agent controller's routing decision for a newly accepted message. */
+export const AskResultSchema = z.discriminatedUnion("decision", [
+  z.object({
+    decision: z.literal("start"),
+    turnId: z.string(),
+    stats: AskStatsSchema,
+  }),
+  z.object({
+    decision: z.literal("queue"),
+    turnId: z.null(),
+    activeTurnId: z.string(),
+    stats: AskStatsSchema,
+  }),
+]);
+export type AskResult = z.infer<typeof AskResultSchema>;
 
 // How the Agent originally accepted a user message. This never changes; later
 // steering and dispatch events record when queued work enters a Turn.
@@ -110,10 +124,6 @@ export type ScheduleCancellationResult = z.infer<
   typeof ScheduleCancellationResultSchema
 >;
 
-export const ScheduleFireSchema = z.object({
-  scheduleId: ScheduleIdSchema,
-});
-
 const ProgressPhaseSchema = z.enum(["thinking", "waiting", "finalizing"]);
 
 const ProgressEventSchema = z.object({
@@ -164,7 +174,7 @@ const MemoryEntrySchema = z.object({
 });
 export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
 
-const MemoryChangeSchema = z.discriminatedUnion("operation", [
+export const MemoryChangeSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("set"),
     key: z.string().trim().min(1),
@@ -204,27 +214,9 @@ export const AgentProfileSchema = z.object({
 });
 export type AgentProfile = z.infer<typeof AgentProfileSchema>;
 
-export const MemoryUpdateSchema = z.object({
-  turnId: z.string().min(1),
-  changes: z.array(MemoryChangeSchema).min(1),
-});
-export type MemoryUpdate = z.infer<typeof MemoryUpdateSchema>;
-
-export const MemoryUpdateResultSchema = z.discriminatedUnion("applied", [
-  z.object({
-    applied: z.literal(true),
-    memoryCount: z.number().int().nonnegative(),
-  }),
-  z.object({
-    applied: z.literal(false),
-    error: z.string(),
-  }),
-]);
-export type MemoryUpdateResult = z.infer<typeof MemoryUpdateResultSchema>;
-
 // The decision delivered to a waiting tool or policy gate over a signal and
 // retained in history after successful delivery.
-const ApprovalDecisionSchema = z.object({
+export const ApprovalDecisionSchema = z.object({
   decision: z.enum(["approved", "rejected"]),
   reason: z.string().optional(),
 });
@@ -311,7 +303,7 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
   ToolEventSchema,
 ]);
 
-const ConversationEntrySchema = z.discriminatedUnion("role", [
+export const ConversationEntrySchema = z.discriminatedUnion("role", [
   z.object({
     role: z.literal("user"),
     text: z.string(),
@@ -327,56 +319,6 @@ const ConversationEntrySchema = z.discriminatedUnion("role", [
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
-// One controller steering decision. Queued transcript entries retain their
-// original order and provenance; the explicit steering message remains
-// distinguishable inside the active run.
-export type AgentSessionSteering = {
-  queued: ConversationEntry[];
-  message: string;
-};
-
-type DerivedConversationEvent = Extract<
-  ConversationEntry,
-  {
-    role: "event";
-    type:
-      | "approval_request"
-      | "approval_cancelled"
-      | "progress"
-      | "activity"
-      | "tools"
-      | "memory"
-      | "schedule";
-  }
->;
-
-// Derived status is useful to transcript consumers, but it is neither semantic
-// model context nor material for summary compaction. Keep that policy
-// exhaustive here so adding an event cannot silently diverge across readers.
-export function isDerivedConversationEvent(
-  entry: ConversationEntry,
-): entry is DerivedConversationEvent {
-  if (entry.role !== "event") {
-    return false;
-  }
-  switch (entry.type) {
-    case "approval_request":
-    case "approval_cancelled":
-    case "progress":
-    case "activity":
-    case "tools":
-    case "memory":
-    case "schedule":
-      return true;
-    case "interrupt":
-    case "stop":
-    case "dispatch":
-    case "steer":
-    case "approval":
-      return false;
-  }
-}
-
 const SequencedConversationEntrySchema = z.object({
   sequence: z.number().int().positive(),
   entry: ConversationEntrySchema,
@@ -386,16 +328,6 @@ export const HistoryRequestSchema = z.object({
   fromSequence: z.number().int().positive().default(1),
   limit: z.number().int().min(1).max(100).default(50),
 });
-
-export const AgentNotificationTopicSchema = z.enum([
-  "history",
-  "profile",
-  "approvals",
-  "schedules",
-]);
-export type AgentNotificationTopic = z.infer<
-  typeof AgentNotificationTopicSchema
->;
 
 const AgentNotificationVersionsSchema = z.object({
   history: z.number().int().nonnegative(),
@@ -424,64 +356,11 @@ export const AgentNotificationWatchRequestSchema = z.object({
       "Maximum time to wait for a newer notification before returning the current snapshot.",
     ),
 });
-export const AgentNotificationSubscriptionSchema = z.object({
-  afterRevision: z.number().int().nonnegative(),
-  awakeableId: z.string().min(1),
-});
-export type AgentNotificationSubscription = z.infer<
-  typeof AgentNotificationSubscriptionSchema
->;
-
-export const AgentNotificationUnsubscribeSchema = z.object({
-  awakeableId: z.string().min(1),
-});
-
 export const HistoryPageSchema = z.object({
   entries: z.array(SequencedConversationEntrySchema),
   nextSequence: z.number().int().positive(),
 });
 export type HistoryPage = z.infer<typeof HistoryPageSchema>;
-
-// Input to one AgentSession doTurn. The object key supplies the agent id; Agent
-// supplies a stable profile snapshot and the entries that open this turn.
-export const AgentSessionRequestSchema = AgentProfileSchema.extend({
-  entries: z.array(ConversationEntrySchema),
-});
-export type AgentSessionRequest = z.infer<typeof AgentSessionRequestSchema>;
-
-const AgentSessionOutcomeBaseSchema = z.object({
-  turnId: z.string(),
-  // Number of steering signals this turn actually consumed, in FIFO order.
-  // The Agent uses it to recover every history message carried by unconsumed
-  // signal batches when completion races with steering.
-  consumedSteering: z.number().int().nonnegative(),
-});
-
-// The single structured outcome AgentSession.doTurn reports to its Agent.
-export const AgentSessionOutcomeSchema = z.discriminatedUnion("status", [
-  AgentSessionOutcomeBaseSchema.extend({
-    status: z.literal("completed"),
-    response: z.string(),
-  }),
-  AgentSessionOutcomeBaseSchema.extend({
-    status: z.literal("interrupted"),
-    reason: z.string(),
-    // Graceful interruption produces a final response. Hard invocation
-    // cancellation can still retire the Turn without one.
-    response: z.string().optional(),
-  }),
-  AgentSessionOutcomeBaseSchema.extend({
-    status: z.literal("stopped"),
-    cause: z.enum(["step_limit", "tool_limit"]),
-    reason: z.string(),
-    response: z.string(),
-  }),
-  AgentSessionOutcomeBaseSchema.extend({
-    status: z.literal("failed"),
-    error: z.string(),
-  }),
-]);
-export type AgentSessionOutcome = z.infer<typeof AgentSessionOutcomeSchema>;
 
 // A human approval requested by a tool or runtime policy gate inside a Turn.
 export const ApprovalRequestSchema = z.object({
@@ -498,21 +377,8 @@ export const ApprovalRequestSchema = z.object({
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
-// Approval producers and the Agent controller share this Turn-scoped signal
-// naming contract.
-export function approvalSignalName(approvalId: string): string {
-  return `approval-${approvalId}`;
-}
-
 // Public input used to resolve one pending approval on the Agent object.
 export const ApprovalResolutionSchema = ApprovalDecisionSchema.extend({
   approvalId: z.string().min(1),
 });
 export type ApprovalResolution = z.infer<typeof ApprovalResolutionSchema>;
-
-// Internal cleanup request used when a waiting approval is interrupted.
-export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
-  approvalId: true,
-  turnId: true,
-});
-export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;

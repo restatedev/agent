@@ -4,11 +4,7 @@
 // the standard MODAL_TOKEN_ID and MODAL_TOKEN_SECRET credentials.
 
 import {serve} from "@restatedev/restate-sdk";
-import {Agent} from "./agent.js";
-import {AgentSession} from "./agent-session.js";
-import {Evals} from "./eval.js";
-import {ModelGateway} from "./model-gateway.js";
-import {Sandbox} from "./sandbox.js";
+import {Agent, AgentSession, Evals, ModelGateway, Sandbox} from "./index.js";
 
 serve({
   services: [Agent, AgentSession, ModelGateway, Sandbox, Evals],

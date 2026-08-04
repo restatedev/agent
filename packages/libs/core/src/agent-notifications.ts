@@ -5,12 +5,12 @@
 // profile, approvals, and schedules. Consumers wake here and then pull the
 // authoritative state they care about.
 
+import type {AgentNotificationSnapshot} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {
-  AgentNotificationSnapshot,
   AgentNotificationSubscription,
   AgentNotificationTopic,
-} from "./types.js";
+} from "./internal-types.js";
 
 const SNAPSHOT = "notifications/snapshot";
 const SUBSCRIPTIONS = "notifications/subscriptions";

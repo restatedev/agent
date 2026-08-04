@@ -5,12 +5,20 @@
 // module owns tool mechanics.
 
 import {setTimeout} from "node:timers/promises";
+import {
+  type ApprovalDecision,
+  type ConversationEntry,
+  type MemoryChange,
+  ScheduleCancellationSchema,
+  ScheduleSpecSchema,
+} from "@restate-agents/types";
 import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
+import {approvalSignalName} from "./internal-types.js";
 import type {ToolCall, ToolManifest} from "./model.js";
 import {Sandbox} from "./sandbox.js";
 import {
@@ -18,14 +26,6 @@ import {
   type SandboxRef,
   sandboxProvider,
 } from "./sandbox-provider.js";
-import {
-  type ApprovalDecision,
-  approvalSignalName,
-  type ConversationEntry,
-  type MemoryChange,
-  ScheduleCancellationSchema,
-  ScheduleSpecSchema,
-} from "./types.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
 

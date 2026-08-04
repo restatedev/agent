@@ -3,8 +3,8 @@
 This file is the handoff contract for Codex, Claude Code, and other coding
 agents working in this repository.
 
-Unless a path starts at the repository root, source paths in this guide are
-relative to `packages/libs/example`.
+Unless a path starts at the repository root, runtime source paths in this
+guide are relative to `packages/libs/core`.
 
 ## Before changing anything
 
@@ -26,10 +26,10 @@ relative to `packages/libs/example`.
 
 Use executable contracts before prose:
 
-1. Zod schemas adjacent to Restate handlers and the shared schemas in
-   `src/types.ts` and `src/model.ts`;
-2. handler code in `src/agent.ts`, `src/turn.ts`, `src/model-gateway.ts`, and
-   `src/sandbox.ts`;
+1. Public Zod schemas in `packages/libs/types/src/index.ts`, schemas adjacent
+   to Restate handlers, and `src/model.ts`;
+2. handler code in `src/agent.ts`, `src/agent-session.ts`,
+   `src/model-gateway.ts`, and `src/sandbox.ts`;
 3. focused ownership modules;
 4. docs.
 

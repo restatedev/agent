@@ -1,0 +1,24 @@
+{
+  "name": "@restate-agents/client",
+  "version": "0.0.1",
+  "description": "Browser-compatible HTTP client for the Restate agent runtime.",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --noEmitOnError"
+  },
+  "dependencies": {
+    "@restate-agents/types": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

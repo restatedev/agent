@@ -1,13 +1,12 @@
 // Pure projection between the Agent's canonical transcript and the model
 // context used by one Turn invocation.
 
+import type {ConversationEntry, MemoryEntry} from "@restate-agents/types";
 import type {ModelMessage} from "ai";
 import {
   type AgentSessionSteering,
-  type ConversationEntry,
   isDerivedConversationEvent,
-  type MemoryEntry,
-} from "./types.js";
+} from "./internal-types.js";
 
 function interruptionBoundary(
   entry: Extract<ConversationEntry, {role: "event"; type: "interrupt"}>,

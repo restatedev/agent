@@ -8,6 +8,30 @@
 // invocation, scheduled self-sends re-enter the same routing decisions, and
 // `onTurnEnd` accepts that invocation's single high-level outcome.
 
+import {
+  type AgentNotificationSnapshot,
+  AgentNotificationSnapshotSchema,
+  AgentNotificationWatchRequestSchema,
+  type AgentProfile,
+  AgentProfileSchema,
+  type ApprovalRequest,
+  ApprovalRequestSchema,
+  ApprovalResolutionSchema,
+  type AskResult,
+  AskResultSchema,
+  type ConversationEntry,
+  GuardrailSchema,
+  type ScheduleCancellation,
+  type ScheduleCancellationResult,
+  ScheduleCancellationResultSchema,
+  ScheduleCancellationSchema,
+  type ScheduledMessage,
+  ScheduledMessageSchema,
+  type ScheduleMutation,
+  type ScheduleMutationResult,
+  ScheduleMutationResultSchema,
+  ScheduleMutationSchema,
+} from "@restate-agents/types";
 import {rpc, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
@@ -16,40 +40,20 @@ import {notifications} from "./agent-notifications.js";
 import {profile} from "./agent-profile.js";
 import {schedules} from "./agent-schedules.js";
 import {activeTurn} from "./agent-turn.js";
-import {raceBranches} from "./race.js";
 import {
-  type AgentNotificationSnapshot,
-  AgentNotificationSnapshotSchema,
   AgentNotificationSubscriptionSchema,
   AgentNotificationTopicSchema,
   AgentNotificationUnsubscribeSchema,
-  AgentNotificationWatchRequestSchema,
-  type AgentProfile,
-  AgentProfileSchema,
   type AgentSessionOutcome,
   AgentSessionOutcomeSchema,
   ApprovalCancellationSchema,
-  type ApprovalRequest,
-  ApprovalRequestSchema,
-  ApprovalResolutionSchema,
-  type ConversationEntry,
-  GuardrailSchema,
   type MemoryUpdate,
   type MemoryUpdateResult,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
-  type ScheduleCancellation,
-  type ScheduleCancellationResult,
-  ScheduleCancellationResultSchema,
-  ScheduleCancellationSchema,
-  type ScheduledMessage,
-  ScheduledMessageSchema,
   ScheduleFireSchema,
-  type ScheduleMutation,
-  type ScheduleMutationResult,
-  ScheduleMutationResultSchema,
-  ScheduleMutationSchema,
-} from "./types.js";
+} from "./internal-types.js";
+import {raceBranches} from "./race.js";
 
 // The agent id is this object's key. Object handlers always have one, but read
 // it through here so a missing key is a clear error, not a stray `!`.
@@ -82,25 +86,6 @@ const InterruptRequestSchema = z
   .describe(
     "Interrupt the active Turn, optionally preserving a replacement request for the next Turn.",
   );
-
-const AskStatsSchema = z.object({
-  pendingMessages: z.number().int().nonnegative(),
-});
-
-const AskResultSchema = z.discriminatedUnion("decision", [
-  z.object({
-    decision: z.literal("start"),
-    turnId: z.string(),
-    stats: AskStatsSchema,
-  }),
-  z.object({
-    decision: z.literal("queue"),
-    turnId: z.null(),
-    activeTurnId: z.string(),
-    stats: AskStatsSchema,
-  }),
-]);
-export type AskResult = z.infer<typeof AskResultSchema>;
 
 const SetInstructionsSchema = z.object({
   instructions: z.string().nullable(),

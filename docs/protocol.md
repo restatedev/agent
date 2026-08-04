@@ -20,7 +20,7 @@ All non-void requests use JSON. A void-input handler must receive an empty body
 without `content-type`; sending `{}` with `application/json` is not equivalent.
 
 Use an `idempotency-key` header when retrying one logical client operation.
-The typed reference client in `packages/libs/example/src/client.ts` implements
+The typed reference client in `packages/libs/client/src/index.ts` implements
 the supported conversation API and the correct history-follow loop.
 
 Every handler is ingress-visible in this reference project so the complete

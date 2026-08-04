@@ -3,6 +3,7 @@
 // their canonical transcripts through history awakeables, and returns
 // structured assertions rather than relying on exact model prose.
 
+import {type HistoryPage, HistoryPageSchema} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {z} from "zod";
@@ -10,7 +11,6 @@ import {Agent} from "./agent.js";
 import {AgentSession} from "./agent-session.js";
 import {callContextReducer} from "./model-gateway.js";
 import {raceBranches} from "./race.js";
-import {type HistoryPage, HistoryPageSchema} from "./types.js";
 
 const EvalCaseIdSchema = z.enum([
   "basic-turn",

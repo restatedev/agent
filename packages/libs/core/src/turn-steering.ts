@@ -9,7 +9,10 @@ import {
   signal,
   spawn,
 } from "@restatedev/restate-sdk-gen";
-import {AGENT_SESSION_SIGNALS, type AgentSessionSteering} from "./types.js";
+import {
+  AGENT_SESSION_SIGNALS,
+  type AgentSessionSteering,
+} from "./internal-types.js";
 
 export function createSteeringInbox() {
   const queue: AgentSessionSteering[] = [];

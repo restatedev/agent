@@ -1,8 +1,8 @@
 # Turn runtime semantics
 
 This is the behavioral reference for
-`packages/libs/example/src/turn.ts` and
-`packages/libs/example/src/turn-step.ts`.
+`packages/libs/core/src/agent-session.ts` and
+`packages/libs/core/src/turn-step.ts`.
 
 One `Turn.run` invocation is an **agent run** for one conversation turn.
 `agentStep` is one **agent-loop iteration**, not a conversation turn. See

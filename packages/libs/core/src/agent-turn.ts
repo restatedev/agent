@@ -2,6 +2,7 @@
 // `turn` and `pending` state keys plus the AgentSession invocation and signals.
 // It deliberately knows nothing about conversation history.
 
+import type {ConversationEntry} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {AgentSession} from "./agent-session.js";
 import {
@@ -9,8 +10,7 @@ import {
   type AgentSessionOutcome,
   type AgentSessionRequest,
   type AgentSessionSteering,
-  type ConversationEntry,
-} from "./types.js";
+} from "./internal-types.js";
 
 /** Durable state for the invocation currently owned by the Agent. */
 type ActiveTurnState = {

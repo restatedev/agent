@@ -50,7 +50,7 @@ That separation keeps these decisions explicit:
 
 ## Built-in tools
 
-Built-ins live in `packages/libs/example/src/agent-tools.ts`. A definition owns
+Built-ins live in `packages/libs/core/src/agent-tools.ts`. A definition owns
 its name, model-facing description, Zod input schema, validation, durable
 behavior, and optional pending completion:
 

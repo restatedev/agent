@@ -127,31 +127,31 @@ Restate provides the application-level guarantees that an agent needs:
 
 ## Source map
 
-- `packages/libs/example/src/agent.ts` — conversation controller
-- `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
-- `packages/libs/example/src/agent-profile.ts` — durable instructions, memories,
+- `packages/libs/types/src/index.ts` — public wire contracts and schemas
+- `packages/libs/client/src/index.ts` — browser-compatible ingress client
+- `packages/libs/core/src/agent.ts` — conversation controller
+- `packages/libs/core/src/agent-session.ts` — transcript and turn execution
+- `packages/libs/core/src/agent-history.ts` — durable user-facing transcript
+- `packages/libs/core/src/agent-profile.ts` — durable instructions, memories,
   and natural-language guardrails
-- `packages/libs/example/src/agent-schedules.ts` — Agent-owned scheduled messages
-- `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
-- `packages/libs/example/src/agent-approval.ts` — pending approval state and signals
-- `packages/libs/example/src/turn.ts` — transient turn state machine and signals
-- `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
-- `packages/libs/example/src/turn-step.ts` — bounded step execution, policy gating, and supervision
-- `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
-- `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
-- `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
-- `packages/libs/example/src/dynamic-tools.ts` — annotated Restate handler tools
-- `packages/libs/example/src/sandbox.ts` — agent-scoped sandbox lifecycle
-- `packages/libs/example/src/sandbox-provider.ts` — provider and one-shot client contracts
-- `packages/libs/example/src/modal-sandbox-provider.ts` — Modal Sandbox and Volume adapter
-- `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
-- `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context AI SDK integration
-- `packages/libs/example/src/model-gateway.ts` — scoped model gateway
-- `packages/libs/example/src/eval.ts` — durable black-box protocol evaluations
-- `packages/libs/example/src/client.ts` — typed HTTP mini-client and transcript
-  projection for external consumers
-- `packages/libs/example/src/types.ts` — shared wire contracts and schemas
-- `packages/libs/example/src/app.ts` — Agent, Turn, Sandbox, gateway, and eval endpoint
+- `packages/libs/core/src/agent-schedules.ts` — Agent-owned scheduled messages
+- `packages/libs/core/src/agent-turn.ts` — active-turn state and signal delivery
+- `packages/libs/core/src/agent-approval.ts` — pending approval state and signals
+- `packages/libs/core/src/turn-context.ts` — transcript-to-model projection
+- `packages/libs/core/src/turn-step.ts` — bounded step execution, policy gating, and supervision
+- `packages/libs/core/src/turn-steering.ts` — Turn-scoped steering inbox
+- `packages/libs/core/src/turn-pending.ts` — cross-step pending tool tasks
+- `packages/libs/core/src/agent-tools.ts` — concrete tools and result projection
+- `packages/libs/core/src/dynamic-tools.ts` — annotated Restate handler tools
+- `packages/libs/core/src/sandbox.ts` — agent-scoped sandbox lifecycle
+- `packages/libs/core/src/sandbox-provider.ts` — provider and one-shot client contracts
+- `packages/libs/core/src/modal-sandbox-provider.ts` — Modal Sandbox and Volume adapter
+- `packages/libs/core/src/conversation-compactor.ts` — compaction model operation
+- `packages/libs/core/src/model.ts` — agent, guardrail, and Turn-context AI SDK integration
+- `packages/libs/core/src/model-gateway.ts` — scoped model gateway
+- `packages/libs/core/src/eval.ts` — durable black-box protocol evaluations
+- `packages/libs/core/src/index.ts` — reusable services
+- `packages/libs/core/src/app.ts` — executable Restate endpoint
 
 See [`README.md`](./README.md) for the runnable demo and
 [`docs/README.md`](./docs/README.md) for the architecture, contracts, and

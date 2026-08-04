@@ -6,7 +6,7 @@
 //
 // It imports types only, so it compiles to dependency-free JS that runs
 // anywhere `fetch` and `crypto.randomUUID` exist (Node 18+, browsers), while
-// staying build-checked against the real wire schemas in types.ts: a
+// staying build-checked against the public wire contracts: a
 // protocol change breaks this file at compile time, not a client at runtime.
 //
 // @example
@@ -19,18 +19,18 @@
 //     if (entry.role === "assistant") console.log(entry.text);
 //   }
 
-import type {AskResult} from "./agent.js";
 import type {
   AgentNotificationSnapshot,
   AgentProfile,
   ApprovalRequest,
   ApprovalResolution,
+  AskResult,
   Guardrail,
   HistoryPage,
   ScheduleCancellationResult,
   ScheduledMessage,
   ScheduleMutationResult,
-} from "./types.js";
+} from "@restate-agents/types";
 
 export type SequencedEntry = HistoryPage["entries"][number];
 export type ScheduleWhenBusy = ScheduledMessage["whenBusy"];

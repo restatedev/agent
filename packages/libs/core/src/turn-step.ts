@@ -3,6 +3,11 @@
 // action, and runs an allowed foreground tool batch in parallel. It owns no
 // state that survives its return.
 
+import type {
+  ApprovalDecision,
+  ConversationEntry,
+  Guardrail,
+} from "@restate-agents/types";
 import {
   all,
   allSettled,
@@ -24,6 +29,7 @@ import {
   type ToolOutcome,
 } from "./agent-tools.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
+import {approvalSignalName} from "./internal-types.js";
 import type {
   GuardrailApproval,
   GuardrailDecision,
@@ -32,12 +38,6 @@ import type {
 } from "./model.js";
 import {callGuardrailModel, callModel} from "./model-gateway.js";
 import {raceBranches} from "./race.js";
-import {
-  type ApprovalDecision,
-  approvalSignalName,
-  type ConversationEntry,
-  type Guardrail,
-} from "./types.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
 

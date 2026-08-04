@@ -6,15 +6,12 @@
 // events. A rolling summary is a replaceable model-context checkpoint over an
 // older prefix of that log.
 
+import type {ConversationEntry, HistoryPage} from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent.js";
-import {
-  type ConversationEntry,
-  type HistoryPage,
-  isDerivedConversationEvent,
-} from "./types.js";
+import {isDerivedConversationEvent} from "./internal-types.js";
 
 type StoredEntry = {
   sequence: number;

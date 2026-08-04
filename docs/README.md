@@ -105,12 +105,12 @@ Documentation explains the implementation; it does not replace the executable
 contracts. When prose and code differ, use this order:
 
 1. Zod handler and signal schemas in
-   [`types.ts`](../packages/libs/example/src/types.ts), the schemas adjacent to
-   handlers, and [`model.ts`](../packages/libs/example/src/model.ts);
+   [`@restate-agents/types`](../packages/libs/types/src/index.ts), the schemas adjacent to
+   handlers, and [`model.ts`](../packages/libs/core/src/model.ts);
 2. handler control flow in
-   [`agent.ts`](../packages/libs/example/src/agent.ts),
-   [`turn.ts`](../packages/libs/example/src/turn.ts), and
-   [`sandbox.ts`](../packages/libs/example/src/sandbox.ts);
+   [`agent.ts`](../packages/libs/core/src/agent.ts),
+   [`agent-session.ts`](../packages/libs/core/src/agent-session.ts), and
+   [`sandbox.ts`](../packages/libs/core/src/sandbox.ts);
 3. focused component modules such as `agent-history.ts`, `agent-turn.ts`,
    `turn-step.ts`, `turn-pending.ts`, and `agent-tools.ts`;
 4. these documents.

@@ -2,8 +2,8 @@
 // only a handler-scoped state namespace; timing and conversation routing stay
 // in the Agent handlers so they share the Agent's exclusive ordering.
 
+import type {ScheduledMessage} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
-import type {ScheduledMessage} from "./types.js";
 
 type StoredSchedule = ScheduledMessage & {
   timerId: string;

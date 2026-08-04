@@ -1,13 +1,20 @@
 {
-  "name": "@restate-agents/example",
+  "name": "@restate-agents/core",
   "version": "0.0.1",
-  "description": "Reference implementation of a durable agent on Restate.",
+  "description": "Durable Restate services for the reference agent runtime.",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=22"
   },
-  "main": "dist/app.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc --noEmitOnError",
     "start": "node ./dist/app.js",
@@ -17,6 +24,7 @@
     "postbundle": "cd dist && zip -r index.zip app.js*"
   },
   "dependencies": {
+    "@restate-agents/types": "workspace:*",
     "@ai-sdk/openai": "^4.0.10",
     "@restatedev/restate-sdk": "^1.16.2",
     "@restatedev/restate-sdk-gen": "^1.16.2",

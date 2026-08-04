@@ -7,8 +7,8 @@ import type {
   ConversationCompactionInput,
   ConversationCompactionResult,
 } from "./agent-history.js";
+import {isDerivedConversationEvent} from "./internal-types.js";
 import {withOpenAI} from "./model.js";
-import {isDerivedConversationEvent} from "./types.js";
 
 const COMPACTOR_MODEL = "gpt-4o-mini";
 

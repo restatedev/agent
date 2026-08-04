@@ -1,14 +1,16 @@
 // Pending human approvals for one Agent virtual object. The Agent owns their
 // durable state; the waiting tool or policy gate remains inside the Turn.
 
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  ApprovalResolution,
+} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {
   type ApprovalCancellation,
-  type ApprovalDecision,
-  type ApprovalRequest,
-  type ApprovalResolution,
   approvalSignalName,
-} from "./types.js";
+} from "./internal-types.js";
 
 const APPROVALS = "approvals";
 

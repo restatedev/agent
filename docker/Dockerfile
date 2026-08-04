@@ -1,4 +1,4 @@
-# Production image for the Restate agent endpoint (@restate-agents/example).
+# Production image for the Restate agent endpoint (@restate-agents/core).
 #
 # Build from the repository root (the build context must be the repo root so
 # the workspace manifests and lockfile are visible):
@@ -37,20 +37,24 @@ FROM base AS build
 # Manifests first: the dependency layer only rebuilds when the lockfile or a
 # package.json changes, not on every source edit.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/libs/example/package.json packages/libs/example/
+COPY packages/libs/client/package.json packages/libs/client/
+COPY packages/libs/core/package.json packages/libs/core/
+COPY packages/libs/types/package.json packages/libs/types/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile
 
 COPY tsconfig.base.json ./
-COPY packages/libs/example/tsconfig.json packages/libs/example/
-COPY packages/libs/example/src packages/libs/example/src
-RUN pnpm --filter @restate-agents/example build
+COPY packages/libs/core/tsconfig.json packages/libs/core/
+COPY packages/libs/types/tsconfig.json packages/libs/types/
+COPY packages/libs/core/src packages/libs/core/src
+COPY packages/libs/types/src packages/libs/types/src
+RUN pnpm --filter @restate-agents/core... build
 
 # Assemble a self-contained production tree (dist + prod-only node_modules,
 # no workspace symlinks). --legacy is required because this workspace does not
 # use injected dependencies (pnpm v10+ default for `deploy`).
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm --filter @restate-agents/example deploy --prod --legacy /out
+    pnpm --filter @restate-agents/core deploy --prod --legacy /out
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # tini reaps orphaned children: the local sandbox provider spawns shell

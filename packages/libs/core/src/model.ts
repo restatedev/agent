@@ -1,6 +1,7 @@
 // Provider-specific model inference and its shared wire contracts.
 
 import {createOpenAI, type OpenAIProvider} from "@ai-sdk/openai";
+import {GuardrailSchema} from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
   APICallError,
@@ -13,7 +14,6 @@ import {
   type ToolSet,
 } from "ai";
 import {z} from "zod";
-import {GuardrailSchema} from "./types.js";
 
 const ToolManifestSchema = z.object({
   name: z.string(),

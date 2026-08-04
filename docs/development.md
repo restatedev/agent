@@ -320,7 +320,7 @@ behavior can be tested without manufacturing many full agent runs.
 | Change instructions/memories/guardrails | `src/agent-profile.ts` |
 | Change approvals | `src/agent-approval.ts` |
 | Change schedules | `src/agent-schedules.ts` |
-| Change the Turn state machine | `src/turn.ts` |
+| Change the Turn state machine | `src/agent-session.ts` |
 | Change one inference/tool step | `src/turn-step.ts` |
 | Add a built-in tool | `src/agent-tools.ts` |
 | Change dynamic discovery | `src/dynamic-tools.ts` |
@@ -328,7 +328,8 @@ behavior can be tested without manufacturing many full agent runs.
 | Change model admission/retries | `src/model-gateway.ts` |
 | Change sandbox lifecycle | `src/sandbox.ts` |
 | Add a sandbox provider | `src/sandbox-provider.ts` and an adapter module |
-| Change wire/domain schemas | `src/types.ts` |
+| Change public wire/domain schemas | `packages/libs/types/src/index.ts` |
+| Change the external client | `packages/libs/client/src/index.ts` |
 | Add protocol coverage | `src/eval.ts` |
 
-Paths above are relative to `packages/libs/example`.
+Paths without a package prefix are relative to `packages/libs/core`.

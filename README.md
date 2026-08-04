@@ -936,31 +936,33 @@ request-response, one-way send, attach, and cancellation variants.
 
 ## Project map
 
-- `packages/libs/example/src/agent.ts` — durable conversation controller
-- `packages/libs/example/src/agent-history.ts` — durable user-facing transcript
-- `packages/libs/example/src/agent-profile.ts` — instructions, memories, and
+- `packages/libs/types/src/index.ts` — public wire schemas and domain types
+  shared by the runtime and external consumers
+- `packages/libs/client/src/index.ts` — browser-compatible ingress client: one
+  method per public handler plus cursor-based transcript following
+- `packages/libs/core/src/agent.ts` — durable conversation controller
+- `packages/libs/core/src/agent-session.ts` — transcript owner and durable
+  agent-turn state machine
+- `packages/libs/core/src/agent-history.ts` — durable user-facing transcript
+- `packages/libs/core/src/agent-profile.ts` — instructions, memories, and
   natural-language guardrails
-- `packages/libs/example/src/agent-schedules.ts` — Agent-owned scheduled messages
-- `packages/libs/example/src/agent-turn.ts` — active-turn state and signal delivery
-- `packages/libs/example/src/agent-approval.ts` — pending human approvals and signal delivery
-- `packages/libs/example/src/turn.ts` — transient turn state machine and signal supervision
-- `packages/libs/example/src/turn-context.ts` — transcript-to-model projection
-- `packages/libs/example/src/turn-step.ts` — bounded step execution and supervision
-- `packages/libs/example/src/turn-steering.ts` — Turn-scoped steering inbox
-- `packages/libs/example/src/turn-pending.ts` — cross-step pending tool tasks
-- `packages/libs/example/src/agent-tools.ts` — concrete tools and result projection
-- `packages/libs/example/src/dynamic-tools.ts` — annotated handler discovery
+- `packages/libs/core/src/agent-schedules.ts` — Agent-owned scheduled messages
+- `packages/libs/core/src/agent-turn.ts` — active-turn state and signal delivery
+- `packages/libs/core/src/agent-approval.ts` — pending human approvals and signal delivery
+- `packages/libs/core/src/turn-context.ts` — transcript-to-model projection
+- `packages/libs/core/src/turn-step.ts` — bounded step execution and supervision
+- `packages/libs/core/src/turn-steering.ts` — Turn-scoped steering inbox
+- `packages/libs/core/src/turn-pending.ts` — cross-step pending tool tasks
+- `packages/libs/core/src/agent-tools.ts` — concrete tools and result projection
+- `packages/libs/core/src/dynamic-tools.ts` — annotated handler discovery
   and dynamic Restate tool manifests
-- `packages/libs/example/src/sandbox.ts` — Agent-scoped sandbox lifecycle
-- `packages/libs/example/src/sandbox-provider.ts` — provider and client contracts
-- `packages/libs/example/src/modal-sandbox-provider.ts` — Modal compute and
+- `packages/libs/core/src/sandbox.ts` — Agent-scoped sandbox lifecycle
+- `packages/libs/core/src/sandbox-provider.ts` — provider and client contracts
+- `packages/libs/core/src/modal-sandbox-provider.ts` — Modal compute and
   persistent Volume adapter
-- `packages/libs/example/src/conversation-compactor.ts` — compaction model operation
-- `packages/libs/example/src/model.ts` — agent, guardrail, and Turn-context model protocols and provider calls
-- `packages/libs/example/src/model-gateway.ts` — scoped model-call admission and retries
-- `packages/libs/example/src/eval.ts` — durable black-box Agent protocol evals
-- `packages/libs/example/src/client.ts` — typed HTTP mini-client: one method per
-  public handler, the cursor + `watchHistory` follow loop, and the transcript
-  projection that folds pending approvals and change signals
-- `packages/libs/example/src/types.ts` — wire schemas and domain types
-- `packages/libs/example/src/app.ts` — endpoint registration for all five services
+- `packages/libs/core/src/conversation-compactor.ts` — compaction model operation
+- `packages/libs/core/src/model.ts` — agent, guardrail, and Turn-context model protocols and provider calls
+- `packages/libs/core/src/model-gateway.ts` — scoped model-call admission and retries
+- `packages/libs/core/src/eval.ts` — durable black-box Agent protocol evals
+- `packages/libs/core/src/index.ts` — reusable service exports
+- `packages/libs/core/src/app.ts` — executable endpoint registration

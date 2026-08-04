@@ -2,14 +2,14 @@
 // guardrails are user-managed configuration; memories are a bounded keyed
 // collection managed by the model through an Agent handler.
 
-import * as restate from "@restatedev/restate-sdk-gen";
 import type {
   AgentProfile,
   Guardrail,
   MemoryChange,
   MemoryEntry,
-  MemoryUpdateResult,
-} from "./types.js";
+} from "@restate-agents/types";
+import * as restate from "@restatedev/restate-sdk-gen";
+import type {MemoryUpdateResult} from "./internal-types.js";
 
 const INSTRUCTIONS = "profile/instructions";
 const MEMORIES = "profile/memories";

@@ -3,6 +3,13 @@
 // control-signal consumption, budgets, and pending tools. Each iteration
 // spawns one bounded agent step and applies its returned data.
 
+import {
+  type ConversationEntry,
+  type Guardrail,
+  type HistoryPage,
+  HistoryPageSchema,
+  HistoryRequestSchema,
+} from "@restate-agents/types";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
@@ -25,6 +32,13 @@ import {
 } from "./agent-tools.js";
 import {compactConversation} from "./conversation-compactor.js";
 import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
+import {
+  AGENT_SESSION_SIGNALS,
+  type AgentSessionOutcome,
+  type AgentSessionRequest,
+  AgentSessionRequestSchema,
+  type AgentSessionSteering,
+} from "./internal-types.js";
 import type {GuardrailApproval} from "./model.js";
 import {
   callContextReducer,
@@ -46,18 +60,6 @@ import {
   settleStep,
   type ToolStep,
 } from "./turn-step.js";
-import {
-  AGENT_SESSION_SIGNALS,
-  type AgentSessionOutcome,
-  type AgentSessionRequest,
-  AgentSessionRequestSchema,
-  type AgentSessionSteering,
-  type ConversationEntry,
-  type Guardrail,
-  type HistoryPage,
-  HistoryPageSchema,
-  HistoryRequestSchema,
-} from "./types.js";
 
 type AgentSessionState = {
   context: AgentToolContext;
