@@ -1,161 +1,116 @@
 # Project overview
 
-This repository is a small reference implementation of a durable, single-agent
+This repository is a reference implementation of a durable, single-agent
 harness and runtime on [Restate](https://restate.dev/). The model and harness
-together form the operational agent. Its purpose is to show the essential
-pieces of an agentic application—conversation state, agent runs, steering,
-interruption, model inference, and tool use—without introducing an agent
-framework.
+together form the operational agent. The weather domain is intentionally
+simple so the example can focus on durable conversation control, model/tool
+execution, intervention, policy, resources, and evaluation.
 
-The comprehensive maintainer documentation starts at
+The maintainer documentation starts at
 [`docs/README.md`](./docs/README.md). Coding agents should read
 [`docs/agent-guide.md`](./docs/agent-guide.md) before modifying the project.
 
 ## How it works
 
-The application is split into a few concrete parts:
-
-- **`Agent`** is the deterministic session-controller Virtual Object keyed by
-  `agentId`. It owns the durable conversation history, tracks the active turn,
-  routes queued messages, and
-  owns the persistent instructions, memories, guardrails, and pending human
-  approvals. It also owns durable one-shot and fixed-interval messages:
-  delayed self-sends return through the same exclusive routing decision as
-  ordinary input. Every message and lifecycle event is recorded when its exclusive
-  handler observes it; pending state controls execution without reordering the
-  transcript. Alongside the conversation handlers, `profile` exposes durable
-  prompt context, while `approvals` and `resolveApproval` expose the
-  human-in-the-loop boundary. Profile-change metadata, approval requests and
-  cancellations, semantic progress, concise model-authored activity, and
-  structured tool lifecycle are appended to the same sequenced transcript,
-  which clients consume through the cursor-based `history` handler. `ask`
-  starts work when idle and queues when busy; clients explicitly select
-  `steer` or `interrupt` when they want to affect the active turn. Interruption
-  can atomically preserve a replacement user message for a new Turn after the
-  old Turn finishes graceful finalization.
-- **`Turn`** has no service state, but one durable invocation is an agent run
-  and owns its transient state machine: working context, budgets, steering, and
-  pending operations. It repeatedly spawns one bounded loop iteration, applies its
-  returned data, and retains completed work for a tool-free interruption
-  response. Runtime execution limits use a distinct `stopped` outcome rather
-  than masquerading as interruption. Each invocation receives the canonical
-  transcript, where steering metadata, queue dispatch, and interruption reasons
-  become explicit model-context boundaries.
-- **`agentStep`** is one agent-loop iteration at the functional model →
-  foreground-tools seam. It receives a message snapshot and remaining tool budget,
-  asks a cheap policy model to
-  gate the agent model's proposed text or complete tool batch, runs an allowed
-  batch in parallel, and owns no work after returning. A policy may allow,
-  deny, or durably wait for human approval. `turn-steering.ts` drains durable
-  steering signals into a Turn-scoped inbox, while `turn-pending.ts` owns
-  long-lived sleeps and approvals across steps. The model can selectively stop
-  those tasks through `cancelOperation`; progress and execution activity remain
-  visible in the canonical transcript but are omitted from future model context
-  and compaction input. Model-relevance for derived transcript events is
-  classified once in the shared conversation contract instead of being
-  duplicated by each projection.
-- **Dynamic Restate tools** are snapshotted once when a Turn starts. Handlers
-  opt in with `restate.dev/agent: <tool-name>` metadata; a replica-local,
-  coalescing cache refreshes infrequently from the Admin API. The journaled
-  snapshot supplies JSON schemas and exact invocation targets to both the
-  model and executor without a globally hot Restate key. Selected tools run as
-  durable generic Restate calls in the ordinary foreground batch.
-- **`ModelGateway`** performs full agent inference, cheap guardrail evaluation,
-  and active-Turn context reduction behind Restate's scoped concurrency
-  controls, model-specific limit keys, retry policy, and cancellation
-  propagation.
-- **`Sandbox`** is a Virtual Object keyed by `agentId`. Sandbox tools borrow it
-  lazily for their Turn; it provisions or resumes through a provider, and Turn
-  release schedules a cancellable idle suspension. The default provider uses
-  `/tmp/restate-agent-sandboxes/<agentId>` as a local demo workspace. The
-  optional Modal provider uses isolated remote compute with one persistent,
-  agent-scoped Volume; suspension terminates compute and resume mounts the same
-  files into a new Sandbox. File operations and commands are one-shot
-  foreground calls, with intentional asynchronous work left to explicit shell
-  scripts.
-- **`Agent.compact`** is a shared handler that asynchronously summarizes older
-  finished turns without blocking conversation updates. The model operation
-  lives in `conversation-compactor.ts`; the summary is derived context and the
-  chunked Agent transcript remains complete and authoritative.
-- **`Evals`** is the evaluation harness. Its `all` handler concurrently drives
-  isolated trials through the public Agent protocol and returns code-based
-  grader assertions with their observed conversation event logs.
-
-All handlers on `Agent`, `Turn`, `ModelGateway`, `Sandbox`, and `Evals` are
-ingress-public so the complete protocol is easy to inspect. Normal clients
-should still use only the conversation and approval handlers; the others are
-service coordination paths.
+- **`Agent`** is the deterministic controller Virtual Object keyed by
+  `agentId`. It owns the active `AgentSession.doTurn` invocation ID, queued
+  input, persistent instructions/memories/guardrails, pending approvals,
+  schedules, and notification subscriptions. `ask` starts work when idle and
+  queues while busy; clients use `steer` or `interrupt` to affect active work.
+- **`AgentSession`** is a second Virtual Object with the same key. It owns the
+  append-only conversation event log and compaction checkpoint. Its exclusive
+  `doTurn` handler is one durable agent run; that invocation ID is the
+  `turnId`. At turn start it loads conversation state once, appends the
+  activated input, and then writes new transcript entries directly while the
+  loop runs.
+- **Notifications** are an invalidation channel, not another state store.
+  `AgentSession` publishes `history` invalidations to `Agent`; Agent also
+  publishes profile, approval, and schedule revisions. Clients drain
+  `AgentSession.history`, long-poll `Agent.watchNotifications`, and re-read the
+  authoritative area whose version changed.
+- **`agentStep`** is one bounded model → guardrail → optional foreground-tool
+  transition. A step owns and joins its model, policy, approval-wait, and
+  foreground tool tasks. `turn-steering.ts` receives durable steering signals;
+  `turn-pending.ts` owns sleeps and explicit approvals that survive across
+  steps.
+- **Built-in tools** live with their schemas and execution mechanics in
+  `agent-tools.ts`. Independent Restate handlers can opt in as dynamic tools
+  with `restate.dev/agent: <tool-name>` metadata. Discovery uses an
+  endpoint-local read-through Admin API cache; each turn journals one stable
+  catalog snapshot for both inference and execution.
+- **`ModelGateway`** places agent inference, guardrail evaluation, and active
+  context reduction behind Restate scopes, model/agent limit keys, retry
+  policy, and cancellation propagation.
+- **`Sandbox`** is an Agent-scoped Virtual Object. A turn borrows it lazily,
+  releases it on every exit path, and leaves the persistent workspace for
+  later turns. The default provider is a local `/tmp` workspace; the optional
+  Modal provider supplies isolated compute with one persistent Volume per
+  Agent.
+- **Conversation compaction** runs on shared `AgentSession.compact`, installs
+  checkpoints through exclusive `applyCompaction`, and never rewrites or
+  deletes transcript chunks. Active-turn context reduction is separate and
+  only changes invocation-local model context.
+- **`Evals`** concurrently drives fresh agents through the same public protocol
+  and returns deterministic structural assertions over the observed transcript
+  and state.
 
 ```text
-user/UI → Agent → Turn → agentStep → ModelGateway
-            ↻ delayed schedules
-            ↑         ↕ allowed tools → Sandbox
-            └── outcome, progress, approvals, and signals
+client → Agent/{agentId}        controller + notifications
+       → AgentSession/{agentId} transcript + doTurn
+                    │
+                    ├─ agentStep → ModelGateway → model
+                    ├─ built-in tools → Agent / Sandbox
+                    └─ dynamic tools → Restate handlers
 ```
-
-The controller stores user messages, final answers, failures, lifecycle
-boundaries, semantic progress, short activity, and structured tool names and
-statuses in one ordered transcript. Raw reasoning, tool arguments and results,
-and intermediate model messages remain visible through Restate's invocation
-journal instead of becoming conversation entries. Compaction preserves failure
-and interruption boundaries while older turns are summarized for model context
-without being removed from the canonical transcript.
 
 ## Why Restate is useful here
 
-Restate provides the application-level guarantees that an agent needs:
+Restate supplies:
 
-- durable conversation state and serialized controller decisions;
-- one cursor-consumable sequence for messages, lifecycle events, progress, and
-  structured execution activity;
-- history-based invalidation for profile snapshots and complete pending
-  approval lifecycle notifications;
-- lazy, chunked transcript storage and asynchronous summary checkpoints;
-- one-way invocation of long-running turns;
-- durable signals for steering, interruption, and human approval;
-- durable sleeps, retries, and local tool operations;
-- durable Agent-owned scheduled messages with queue, steer, or interrupt
-  delivery;
-- turn-scoped pending timers and signal-backed human approval;
-- a fail-closed policy gate before publishing text or starting tool batches;
-- deterministic concurrent execution of independent tools;
-- annotation-driven discovery and durable invocation of third-party Restate
-  handlers;
-- durable ownership and idle lifecycle for an agent-scoped sandbox;
-- concurrency limits around model traffic;
-- an observable invocation tree for the complete turn.
+- serialized controller and resource ownership through Virtual Objects;
+- durable one-way turn dispatch and signal delivery;
+- recoverable model calls, timers, retries, and tool effects;
+- deterministic structured concurrency for model steps and tool batches;
+- cursor-based durable history plus awakeable-backed invalidation waits;
+- scoped model admission control;
+- an observable invocation tree for the complete agent run; and
+- a natural substrate for black-box, protocol-level evaluations.
 
-## Source map
+## Package map
 
-- `packages/libs/types/src/index.ts` — public wire contracts and schemas
-- `packages/libs/types/src/services.ts` — shared Restate service descriptors
-- `packages/libs/client/src/index.ts` — typed Restate ingress client
-- `packages/apps/web/` — demonstration-only Next.js UI and BFF built on the
-  public client package
-- `packages/libs/core/src/agent.ts` — conversation controller
-- `packages/libs/core/src/agent-session.ts` — transcript and turn execution
-- `packages/libs/core/src/agent-history.ts` — durable user-facing transcript
-- `packages/libs/core/src/agent-profile.ts` — durable instructions, memories,
-  and natural-language guardrails
-- `packages/libs/core/src/agent-schedules.ts` — Agent-owned scheduled messages
-- `packages/libs/core/src/agent-turn.ts` — active-turn state and signal delivery
-- `packages/libs/core/src/agent-approval.ts` — pending approval state and signals
-- `packages/libs/core/src/turn-context.ts` — transcript-to-model projection
-- `packages/libs/core/src/turn-step.ts` — bounded step execution, policy gating, and supervision
-- `packages/libs/core/src/turn-steering.ts` — Turn-scoped steering inbox
-- `packages/libs/core/src/turn-pending.ts` — cross-step pending tool tasks
-- `packages/libs/core/src/agent-tools.ts` — concrete tools and result projection
-- `packages/libs/core/src/dynamic-tools.ts` — annotated Restate handler tools
-- `packages/libs/core/src/sandbox.ts` — agent-scoped sandbox lifecycle
-- `packages/libs/core/src/sandbox-provider.ts` — provider and one-shot client contracts
-- `packages/libs/core/src/modal-sandbox-provider.ts` — Modal Sandbox and Volume adapter
-- `packages/libs/core/src/conversation-compactor.ts` — compaction model operation
-- `packages/libs/core/src/model.ts` — agent, guardrail, and Turn-context AI SDK integration
-- `packages/libs/core/src/model-gateway.ts` — scoped model gateway
-- `packages/libs/core/src/eval.ts` — durable black-box protocol evaluations
-- `packages/libs/core/src/index.ts` — reusable services
-- `packages/libs/core/src/app.ts` — executable Restate endpoint
+- `packages/libs/types/` — public wire schemas, service descriptors, and stable
+  target names shared by runtime and callers
+- `packages/libs/client/` — typed ingress client built on
+  `@restatedev/restate-sdk-clients`; it hides the Agent/AgentSession split
+- `packages/libs/core/` — Restate services, runtime loop, tools, providers, and
+  eval harness
+
+## Core source map
+
+- `src/agent.ts` — controller routing, profile/approval/schedule API, and
+  notification long-poll
+- `src/agent-session.ts` — transcript owner and durable turn state machine
+- `src/agent-history.ts` — chunked transcript and compaction checkpoint
+- `src/agent-turn.ts` — Agent-owned active invocation, pending queue, and
+  signal reconciliation
+- `src/agent-notifications.ts` — revisioned invalidation subscriptions
+- `src/agent-profile.ts` — instructions, memories, and guardrails
+- `src/agent-approval.ts` — pending approvals and decision signals
+- `src/agent-schedules.ts` — scheduled-message state and timer IDs
+- `src/turn-context.ts` — transcript-to-model projection
+- `src/turn-step.ts` — one bounded model/policy/tool iteration
+- `src/turn-steering.ts` — invocation-local steering inbox
+- `src/turn-pending.ts` — cross-step pending tasks and cancellation races
+- `src/agent-tools.ts` — built-in tools and result projection
+- `src/dynamic-tools.ts` — annotated Restate handler discovery
+- `src/sandbox.ts` — Agent-scoped sandbox lifecycle
+- `src/sandbox-provider.ts` — provider and one-shot client contracts
+- `src/modal-sandbox-provider.ts` — Modal Sandbox and Volume adapter
+- `src/conversation-compactor.ts` — conversation-summary model operation
+- `src/model.ts` — provider-specific AI SDK requests and model contracts
+- `src/model-gateway.ts` — scoped model admission and retry boundary
+- `src/eval.ts` — durable black-box protocol evaluations
+- `src/app.ts` — executable Restate endpoint
 
 See [`README.md`](./README.md) for the runnable demo and
-[`docs/README.md`](./docs/README.md) for the architecture, contracts, and
-extension guides.
+[`docs/README.md`](./docs/README.md) for detailed contracts.

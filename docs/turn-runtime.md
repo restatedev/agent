@@ -4,256 +4,207 @@ This is the behavioral reference for
 `packages/libs/core/src/agent-session.ts` and
 `packages/libs/core/src/turn-step.ts`.
 
-One `Turn.run` invocation is an **agent run** for one conversation turn.
-`agentStep` is one **agent-loop iteration**, not a conversation turn. See
-the system classification in [architecture.md](architecture.md).
+One `AgentSession.doTurn` invocation is an **agent run** for one conversation
+turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
+**agent-loop iteration**, not a conversation turn.
 
 ## Ownership
 
-- The deterministic `Agent` controller owns the canonical conversation event
-  log, queued user messages, active Turn state, persistent profile, human
-  approval state, and steering reconciliation.
-- The per-Agent profile contains user-set instructions, model-managed
-  persistent semantic memory, and natural-language guardrails. Each Turn
-  receives one stable snapshot.
-- The conversation event log is append-only. User entries retain their
-  original acceptance route; steering and later activation are separate
-  lifecycle events rather than entry rewrites.
-- One `Turn.run` invocation owns the transient agent-run state machine: working
-  model context, budgets, the steering cursor, pending tool tasks, and graceful
-  interruption. This state is generator-local and replayed as part of the
-  durable handler invocation; it is not Virtual Object state.
-- `turn-step.ts` owns the bounded functional seam and its task supervision. A
-  step receives a message snapshot and remaining tool budget, performs one
-  agent-model call, gates the proposed action, executes an allowed foreground
-  tool batch, and returns structured data. It owns no work after returning.
-- `turn-steering.ts` owns one background signal receiver and a transient FIFO
-  for steering accepted during the Turn.
-- `turn-pending.ts` owns tool tasks that survive across steps, including
-  completion races, selective cancellation, and cleanup.
+- `Agent` owns the active invocation ID, queued input, profile, approvals,
+  schedules, and notification subscriptions.
+- `AgentSession`, keyed by the same `agentId`, owns the append-only transcript
+  and compaction checkpoint. Its exclusive `doTurn` handler owns transient
+  cross-step execution state.
+- At startup, `doTurn` opens history once, appends its activated entries, and
+  builds model context from the session summary and uncompacted entries.
+- The Agent-supplied profile snapshot is stable for the run. Changes to
+  instructions, memories, or guardrails affect the next turn.
+- `turn-step.ts` owns one bounded transition: model call, guardrail gate,
+  optional approval wait, and allowed foreground tool batch. It owns no task
+  after returning.
+- `turn-steering.ts` owns the background durable-signal receiver and transient
+  FIFO. `turn-pending.ts` owns completion tasks that survive across steps.
 - `agent-tools.ts` owns concrete tool definitions, validation, execution,
-  completion, and conversion of outcomes into model messages.
-- `Sandbox`, keyed by `agentId`, owns the external sandbox lifecycle. Sandbox
-  state belongs to the Agent across conversation Turns. The first sandbox tool
-  lazily acquires one shared Turn lease, while `Turn.run` releases it before
-  reporting its terminal outcome. Providers return the current opaque reference
-  from suspend and resume because disposable remote compute may receive a new
-  identity while the Agent's persistent files remain unchanged.
-- Built-in tool mechanics execute inside the Turn handler; they are not
-  services of their own. `manageMemory` and `humanApproval` call Agent handlers
-  only for durable state that the Agent virtual object must own. Sandbox tools
-  call the Sandbox object only for its serialized lease and lifecycle.
-  Dynamically discovered tools are the deliberate exception: they invoke their
-  independently deployed Restate handler as a durable foreground RPC.
+  completion, and model/transcript projections.
+- `Sandbox`, keyed by `agentId`, owns external workspace state across turns.
+  One turn borrows lazily and releases on every handled exit.
+
+Built-in tool mechanics execute inside `doTurn`; they are not services merely
+for durability. Tools call Agent only for Agent-owned state, Sandbox only for
+serialized resource lifecycle, and independently deployed dynamic handlers as
+ordinary durable RPCs.
 
 ## Execution shape
 
-- `Turn.run` spawns the state-machine loop and yields its task. Invocation
-  cancellation rejects that task at the yield boundary. The loop otherwise
-  runs until it completes, is interrupted, or exhausts a budget.
-- External cancellation rejects the state-machine task. The handler stops
-  independently pending operations, then waits for sandbox release and Agent
-  outcome reconciliation. The Agent records a cancellation boundary without
-  graceful finalization, and Turn rethrows cancellation to Restate.
-- Interruption and budget exhaustion share one guarded, tool-free finalization
-  path over completed work.
-- Each iteration spawns exactly one `agentStep`. Turn supervises that task
-  against interruption, then joins it before applying its result.
-- The steering inbox receives signals concurrently with the step. Turn drains
-  the inbox only after the step settles.
-- The step owns one agent-model request, any guardrail evaluations and approval
-  wait for its proposal, and the foreground tool batch it may produce. All
-  allowed foreground calls are spawned before the step waits for the batch.
-- Turn applies the returned action to its transient state. Tool outcomes are
-  the declarative delta used to start or cancel pending operations.
-- Pending completion tasks are deliberately outside the step. They remain
-  owned by Turn across later iterations.
+- `doTurn` runs the state-machine loop directly. Each loop iteration spawns one
+  `agentStep` and settles it against the durable interrupt signal.
+- Invocation cancellation rejects a parked operation at the handler boundary.
+  The catch path records local cancellation state, one-way releases the
+  sandbox, one-way reconciles Agent, and rethrows `CancelledError`.
+- Graceful interruption and budget exhaustion share one guarded, tool-free
+  finalization path over completed work.
+- The steering receiver runs alongside a step. Steering is drained only at
+  defined boundaries after the step settles.
+- All allowed foreground calls in one model response are spawned before the
+  step joins the batch.
+- The step returns declarative tool outcomes. `doTurn` applies them to the
+  cross-step pending registry and appends transcript/model observations.
 
 ## Agent-loop iterations
 
-- An agent run performs at most 50 loop iterations and 24 total tool calls.
+- A run performs at most 50 loop iterations and 24 total tool calls.
 - Each step receives a copy of the complete live model context accumulated by
-  the Turn.
-- Every agent-model call receives the same user-instruction snapshot.
-  Persistent memories are injected once into the Turn's initial context as
-  data, before the conversation context.
-- A normal iteration returns text, tool outcomes, a recoverable model error, or
-  a tool-budget stop.
-- Invalid or empty model output becomes a corrective user message and another
-  step, within the same budget.
-- Provider or orchestration failures stop every foreground and pending task.
-  Durable interruption and cancellation errors are rethrown; other failures
-  become a structured failed Turn outcome.
-- Reaching either execution budget stops pending work and performs one
-  tool-free final model call. The outcome is `stopped` with a `step_limit` or
-  `tool_limit` cause, preserving completed work without representing a runtime
-  limit as user interruption.
-- The Agent-provided context remains exact for the lifetime of the Turn. When
-  settled model/tool context accumulated inside the Turn exceeds a bounded
-  character budget, a cheap scoped model reduces the prefix already observed
-  by the agent model. Newly appended tool results, steering, and runtime events
-  remain exact until the agent model has seen them.
-- Turn context reduction never runs while an operation is pending, never
-  rewrites the Agent transcript, and remains interruptible. If reduction
-  exhausts its retries, the Turn keeps its exact context and disables further
-  reduction attempts for that invocation.
+  the run.
+- Persistent memories are injected once as data before conversation context;
+  user instructions are supplied to every agent-model call.
+- A normal iteration returns text, tool outcomes, a recoverable model error, a
+  guardrail block, or a tool-budget stop.
+- Invalid or empty model output becomes corrective user feedback and another
+  step within the same budget.
+- Provider or orchestration failures stop foreground and pending tasks.
+  Interruption and cancellation errors propagate; other failures become a
+  structured `failed` outcome.
+- Reaching a budget stops pending work and makes one tool-free final call. The
+  outcome is `stopped` with `step_limit` or `tool_limit`, not a user
+  interruption.
+
+The run also bounds its private working context. When messages added during
+the current run exceed 32,000 serialized characters, no operation is pending,
+and a settled prefix has already been observed by the agent model, a cheap
+scoped model may replace that prefix with a compact record. New results and
+steering remain exact until observed. Reduction failure keeps exact context
+and disables further reduction for that invocation. It never changes
+AgentSession history or its conversation summary.
 
 ## Guardrails
 
-- A guardrail is a user-configured `{ id, rule }` policy. IDs are unique within
-  the Agent profile and the complete list is snapshotted when a Turn starts.
-- The main agent model does not receive that policy list. It proposes the
-  requested work without trying to reproduce the runtime's approval behavior;
-  only the policy evaluator receives guardrails.
-- After the agent model proposes text or a complete tool batch, a cheap policy
-  model evaluates that exact action before text is published or any tool in the
-  batch starts. No guardrails means no policy-model call.
-- The evaluator receives context starting at the latest real user input,
-  including any tool and runtime evidence produced after it. Older turns and
-  historical approval prose cannot expand a conditional policy into an
-  allowlist; current-Turn approval and rejection state is supplied separately.
-  Turn tracks that input structurally rather than recognizing internal prompt
-  text by string prefix.
-- The policy decision is `allow`, `deny`, or `require_approval`. Model failure
-  fails closed under the gateway's Restate retry policy.
-- `deny` returns a runtime policy observation to the next loop iteration. The
-  blocked text is not published and no tool in a blocked batch runs. If that proposal
-  is blocked by the same policy again, Turn completes with a deterministic,
-  tool-free refusal instead of exhausting the step budget.
-- `require_approval` durably registers a request on the Agent and waits on a
-  Turn-scoped signal. Approval resumes the exact proposal; rejection blocks it
-  and prevents another approval request for that policy in the current
-  request.
-- An approval records its policy ID, human question, and exact approved
-  proposal. Later actions still pass through the evaluator, which reuses the
-  decision only when the proposed action is materially within that scope.
-  Several applicable approval policies are resolved one at a time before the
-  proposal runs.
-- Steering changes the request. Turn clears approvals, rejections, and prior
-  block retries before the next step so the updated work is evaluated again.
-- The evaluator is model-based and therefore probabilistic. Once returned,
-  however, its decision is enforced by deterministic Turn control flow.
+- A guardrail is `{id, rule}` in the Agent profile; IDs are unique.
+- The main agent model does not receive the policy list. It proposes an action,
+  then a dedicated policy model evaluates the exact text or complete tool
+  batch before publication or execution. A second policy review confirms every
+  non-allow candidate before enforcement.
+- No guardrails means no policy-model call. With guardrails, decisions are
+  `allow`, `deny`, or `require_approval`; policy-model failure fails closed
+  under the gateway retry policy.
+- The evaluator receives the latest structurally identified user request,
+  current-turn evidence after it, approved action scopes, and rejected policy
+  IDs. Historical approval prose cannot become a blanket allowlist.
+- `deny` adds policy feedback for the next iteration. Repeating the same block
+  completes with a deterministic tool-free refusal instead of exhausting the
+  step budget.
+- `require_approval` registers durable Agent state and waits on a turn-scoped
+  signal. Approval resumes the exact proposal; rejection blocks it and
+  prevents a loop for that policy in the current request.
+- Later proposals are still evaluated. Prior approval is reusable only when
+  the evaluator finds the action materially within its recorded scope.
+- Steering changes the request and clears approvals, rejections, and repeated
+  block tracking before reevaluation.
+- Finalization text is also gated. Since shutdown cannot open a new approval,
+  `deny` or `require_approval` withholds that final summary.
+
+The evaluator is probabilistic model behavior; enforcement of the returned
+decision is deterministic runtime control flow.
 
 ## Steering
 
-- Repeated resolutions of the steering signal form a durable FIFO queue.
-- One steering signal contains `{ queued, message }`: queued messages promoted
-  into the active Turn remain distinct from the explicit steering instruction.
-- Turn increments `consumedSteering` once for every steering update committed
-  to its working context. Agent uses that count to recover instructions that
-  lost a completion race.
-- Agent appends a steering boundary for every signal it sends. If the Turn
-  finishes before consuming one, a later dispatch boundary activates those
-  unchanged user entries in the next Turn.
-- Steering never cancels a step. A background fiber drains the durable signal
-  queue into a transient FIFO while the model and foreground tools run.
-  The FIFO's resettable channel only announces empty-to-non-empty transitions;
-  it is not the durable source.
-  - Tool outcomes are committed first, followed by buffered steering.
-  - A text or model-error result has no side effects and is discarded as stale
-    when steering arrived during its step.
-- A policy approval wait is part of the step. Steering does not cancel it;
-  interruption does. Any steering buffered before the step settles invalidates
-  its approval decision before the next proposal.
-- While Turn is waiting for pending work, steering is committed immediately
-  and starts another step. Existing pending work continues.
+- Repeated resolutions of the named steering signal are a durable FIFO.
+- One signal contains `{queued, message}`. Promoted queued entries stay
+  distinct from the explicit steering instruction.
+- A background receiver drains durable signals into an invocation-local FIFO.
+  Its resettable channel announces non-empty state; it is not the durable
+  source.
+- Steering never cancels a step or existing pending operation.
+- If steering arrives during a tool step, tool outcomes are committed first,
+  then steering is appended and applied.
+- A side-effect-free text or model-error result is discarded as stale if
+  steering arrived during its step.
+- While waiting for pending work, steering is consumed immediately and starts
+  another iteration; pending work continues.
+- `consumedSteering` increments once per committed signal. Agent compares it
+  with recorded batches to recover any signal that lost a completion race.
+
+When consumed, AgentSession appends the batch's queued entries, the explicit
+message with `delivery: "steer"`, and one `steer` event. Agent itself does not
+write history.
 
 ## Foreground and pending tools
 
-- Tools validate their own inputs and run locally only after the complete
-  proposed batch passes the guardrail gate.
-- `manageMemory` atomically sets or deletes keyed entries on the Agent. Only the
-  active non-interrupting Turn can write, and the Agent stores at most 32
-  memories. A successful tool result is a durable side effect even if later
-  Turn work fails.
-- Schedule tools create, list, or cancel Agent-owned delayed messages as
-  foreground calls. The delayed invocation is not a Turn pending operation and
-  survives after the creating Turn completes.
-- Every foreground tool in one model response runs concurrently inside the
-  spawned step and is joined before the step returns.
-- Sandbox file operations and commands are foreground tools. Each client
-  operation is one-shot and runs inside its own `restate.run` with cancellation
-  propagation. `executeCommand` returns only after a terminal exit result;
-  intentional background work must be launched and tracked explicitly by the
-  shell command.
-- Parallel sandbox tools share one in-flight borrow and later steps reuse the
-  same lease. Dependent operations must be proposed in separate loop iterations,
-  just like any other dependent tool calls.
-- Exhausting a foreground tool's durable retry policy becomes a failed tool
-  outcome for the model. Cancellation and Turn interruption still propagate.
-- Turn commits the assistant tool-call message and one complete matching
-  tool-result message together.
-- A foreground result is succeeded, failed, pending, or
-  cancellation-requested.
-- Pending completions start immediately when Turn applies the step result.
-- Cancellation requests are resolved against operations that were pending
-  before that step. Newly pending operations from the same result become
-  addressable only after those cancellations resolve.
-- Pending operations are keyed by stable tool-call ID.
-- A completed pending task becomes a model-visible observation represented as
-  a runtime event and leaves the registry.
-- `cancelOperation` interrupts and joins only the selected pending task. A
-  completion that wins the race remains a completion, and unrelated operations
-  continue.
-- Text is only a candidate final answer while pending operations remain. Turn
-  waits for completion, steering, or interruption before running another step.
+- Tools validate inputs and run only after the entire proposed batch passes
+  guardrails.
+- Every foreground call in a batch runs concurrently and is joined by the
+  step. One tool failure is an observation and does not discard sibling
+  results.
+- Sandbox file and command calls are one-shot foreground operations, each
+  inside its own `restate.run` with cancellation propagation.
+- Parallel sandbox calls share one in-flight borrow; dependent operations must
+  be proposed in separate loop iterations.
+- `manageMemory` atomically mutates at most 32 Agent memory entries and is
+  accepted only for the active, non-interrupting `turnId`.
+- Schedule tools mutate Agent-owned delayed messages. A schedule survives the
+  turn that created it and is not a pending turn operation.
+- Assistant tool-call and matching tool-result messages are committed together
+  to working model context.
+- Foreground outcomes are `succeeded`, `failed`, `pending`, or
+  `cancel_requested`.
+- Pending completions start as soon as `doTurn` applies the step result and are
+  keyed by stable `toolCallId`.
+- Cancellation requests target operations that were pending before that step;
+  new pending results become addressable after application.
+- `cancelOperation` interrupts and joins only its selected task. A completion
+  that wins the race stays a completion; unrelated operations continue.
+- Text remains only a candidate answer while pending work exists. The run waits
+  for completion, steering, or interruption before another step.
 
-## Stopped-turn finalization
+## Interruption and stopping
 
-- The interrupt signal asks Turn to end, while steering asks it to continue
-  with new instructions.
-- Execution limits also stop the Turn through this path, but originate from the
-  runtime rather than an Agent interruption request. Their terminal outcome and
-  transcript boundary are `stopped`, with a structured limit cause.
-- The Agent keeps the interruption reason separate from an optional replacement
-  user message. The reason guides finalization of the old Turn; the message is
-  appended to the immutable transcript and queued for a new Turn.
-- A replacement message is still accepted if the old Turn is already
-  interrupting. A reason-only repeat is ignored.
-- During a step, Turn interrupts and joins the step task. The step joins every
-  foreground tool, retains fulfilled outcomes, and represents interrupted
-  calls as failures.
-- A pending outcome returned by an interrupted step is represented as
-  cancelled because Turn never starts its completion task.
-- Turn stops and joins older pending operations. Races that already completed
-  remain honest completion events.
-- Turn adds the interruption instruction and retained tool/runtime results to
-  its live context, then performs exactly one tool-free final model call.
-- The final text is checked against guardrails before publication. Finalization
-  cannot open a new approval while ending the Turn, so any `deny` or
-  `require_approval` decision produces a deterministic withheld-response
-  message instead.
-- If interruption arrives while waiting after candidate text, that text remains
-  in finalization context but is not published as the Turn answer by itself.
-- If final response generation fails, Turn still returns an interrupted result
-  with an explanatory fallback response.
+- The interrupt signal asks the active run to end; steering asks it to
+  continue with new direction.
+- Agent stores an optional replacement user message separately from the
+  interruption reason. The replacement belongs to a successor turn.
+- During a step, the supervisor interrupts and joins the step task. The step
+  joins every foreground tool, retains fulfilled outcomes, and represents
+  interrupted calls honestly.
+- A pending outcome returned by an interrupted foreground batch is recorded as
+  cancelled because its completion task is never started.
+- Older pending tasks are stopped and joined. Completion races that already
+  won remain completed.
+- The run adds retained results and the finalization instruction to working
+  context, then makes exactly one tool-free final model call.
+- Interruption while waiting after candidate text keeps that text as context
+  but does not publish it as the answer by itself.
+- If final generation fails, the interrupted outcome carries an explanatory
+  fallback.
 
-## Execution events and conversation boundaries
+Execution limits use the same cleanup/finalization mechanics but produce a
+`stopped` outcome and a `stop` transcript event. External cancellation skips
+model finalization and rethrows cancellation to Restate.
 
-- Turn reports semantic progress as `thinking`, `waiting`, and `finalizing`.
-- Every allowed tool batch reports a structured `started` and `finished` event
-  containing call IDs, tool names, and final statuses. The model may also emit
-  one brief user-facing activity sentence before the batch starts.
-- Progress and execution reports are one-way and cannot block model or tool
-  execution on the Agent handler.
-- Progress, activity, and tool lifecycle events are event-log-visible for
-  clients but omitted from model context and conversation compaction.
-- Instruction and guardrail setters append metadata-only `profile` events.
-  Approval registration and abandonment append `approval_request` and
-  `approval_cancelled`; a delivered decision remains the model-visible
-  `approval` event.
-- History is the ordered change feed, while `profile` and `approvals` are the
-  authoritative current-state snapshots.
-- Raw reasoning, tool arguments, and tool results remain outside the canonical
-  user-facing conversation event log.
-- Every completed, interrupted, stopped, or failed outcome includes
-  `consumedSteering`.
+## Transcript and current-state notifications
+
+`doTurn` appends semantic progress (`thinking`, `waiting`, `finalizing`), brief
+model-authored activity, and structured tool `started`/`finished` events
+directly through its invocation-local history writer. Tool events include IDs,
+names, summaries, and final statuses, but not raw arguments or results.
+
+Approval registration/cancellation and delivered decisions are also appended
+by the active session. A successful memory tool appends changed keys. Schedule
+delivery appends its routing event with the delivered input. These derived
+events are omitted from future model context and compaction where appropriate.
+
+Profile setters do not append transcript events; they publish Agent
+notification versions. Every transcript append one-way publishes the `history`
+topic. Consumers use history for ordered conversation data and Agent's
+`profile`, `approvals`, `schedules`, and notification snapshot for authoritative
+current state.
+
+Every `completed`, `interrupted`, `stopped`, or `failed` outcome includes
+`consumedSteering`.
 
 ## Refactoring constraints
 
 Any rewrite must preserve:
 
-1. Turn ownership of transient cross-step state.
+1. AgentSession ownership of transcript state and active-turn execution.
 2. One bounded spawned task per `agentStep` loop iteration.
 3. FIFO steering and exact reconciliation counts.
 4. No cancellation caused by steering.
@@ -262,7 +213,9 @@ Any rewrite must preserve:
 7. Immediate start and selective cancellation of pending work.
 8. Honest completion-versus-cancellation races.
 9. Tool-free interruption finalization using only retained work.
-10. The 50-step and 24-tool-call budgets.
-11. Stable instructions, memories, and guardrails for the lifetime of a Turn.
-12. Guardrail evaluation before publishing text or spawning any proposed tool.
-13. Durable approval before a protected proposal and reevaluation after steering.
+10. Distinct `completed`, `interrupted`, `stopped`, and `failed` outcomes.
+11. The 50-step and 24-tool-call budgets.
+12. Stable profile input for the lifetime of a turn.
+13. Guardrail evaluation before publishing text or spawning proposed tools.
+14. Durable approval before protected work and reevaluation after steering.
+15. One initial transcript read followed by direct append-only writes.

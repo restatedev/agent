@@ -1,44 +1,47 @@
 # Agent protocol and conversation event-log contract
 
-This document describes the HTTP/Restate-facing contract. The Zod schemas in
-`agent.ts` and `types.ts` are authoritative.
+This document describes the Restate ingress contract. Public Zod schemas in
+`packages/libs/types/src/index.ts` and service descriptors in
+`packages/libs/types/src/services.ts` are authoritative.
 
-The API and code retain the names `history`, `ConversationEntry`, and
-`transcript`. In stricter agent terminology this is the public **conversation
-event log**, not the complete agent trajectory or Restate execution trace.
+The API uses `history`, `ConversationEntry`, and `transcript` for the public
+**conversation event log**. It is not the complete model/tool trajectory or
+Restate execution trace.
 
 ## Addressing and serialization
 
-The deterministic `Agent` session controller is a Virtual Object keyed by
-`agentId`:
+One logical agent uses the same `agentId` as the key of two Virtual Objects:
 
 ```text
 POST <ingress>/Agent/<agentId>/<handler>
+POST <ingress>/AgentSession/<agentId>/<handler>
 ```
 
+`Agent` is the controller and current-state API. `AgentSession` owns history
+and executes turns. The typed client in
+`packages/libs/client/src/index.ts` wraps both, so normal callers do not need
+to manage this split.
+
 All non-void requests use JSON. A void-input handler must receive an empty body
-without `content-type`; sending `{}` with `application/json` is not equivalent.
+without `content-type`; `{}` with `application/json` is not equivalent. Use an
+`idempotency-key` header when retrying one logical request, especially a
+long-poll window.
 
-Use an `idempotency-key` header when retrying one logical client operation.
-The typed reference client in `packages/libs/client/src/index.ts` implements
-the supported conversation API and the correct history-follow loop.
+Every handler is ingress-visible for inspection, but only the supported API
+below is intended for application clients.
 
-Every handler is ingress-visible in this reference project so the complete
-protocol can be inspected. Only the handlers in the next section are intended
-as the normal client API.
+## Supported conversation API
 
-## Supported external Agent API
-
-### `ask`
+### `Agent.ask`
 
 Input:
 
 ```ts
-{ message?: string }
+{message?: string}
 ```
 
-An omitted message uses the demo default. While idle, Agent appends the message
-and starts a Turn:
+An omitted message uses the demo default. While idle, Agent snapshots the
+profile and one-way starts `AgentSession.doTurn`:
 
 ```json
 {
@@ -48,7 +51,7 @@ and starts a Turn:
 }
 ```
 
-While busy, Agent appends and queues it for a future Turn:
+While busy, Agent stores the user entry in its pending FIFO:
 
 ```json
 {
@@ -59,10 +62,10 @@ While busy, Agent appends and queues it for a future Turn:
 }
 ```
 
-`ask` never steers or interrupts active work. Clients select those operations
-explicitly.
+The queued entry is appended to AgentSession history when steering consumes it
+or a successor turn starts. `ask` never classifies, steers, or interrupts.
 
-### `steer`
+### `Agent.steer`
 
 Input is a JSON string:
 
@@ -70,21 +73,21 @@ Input is a JSON string:
 "Also include three cities in the United States."
 ```
 
-Output is `true` when the message was signalled to an active,
-non-interrupting Turn, otherwise `false`.
-
-Steer drains already queued messages into the same structured signal:
+Output is `true` when an active, non-interrupting turn accepted the signal,
+otherwise `false`. One signal contains:
 
 ```ts
-type SteeringSignal = {
-  queued: string[];
+type AgentSessionSteering = {
+  queued: ConversationEntry[];
   message: string;
 };
 ```
 
-The current model/tool step is not cancelled.
+Agent drains pending entries into `queued`. The current model/tool step is not
+cancelled. AgentSession appends those entries, the explicit steering message,
+and the steering boundary when the signal is consumed.
 
-### `interrupt`
+### `Agent.interrupt`
 
 Input:
 
@@ -95,15 +98,15 @@ Input:
 }
 ```
 
-`reason` tells the old Turn why it must stop and what its final summary should
-explain. `message`, when present, is a separate user request appended and
-queued for a new Turn.
+`reason` tells the active turn why it must stop and what finalization should
+explain. `message`, when present, is a separate request stored in Agent's FIFO
+for the successor turn.
 
-Output is `true` when the first interruption signal or a replacement message
-was accepted. It is `false` when no Turn exists or a reason-only repeat arrives
-after interruption already began.
+Output is `true` when the first interrupt signal or a replacement message was
+accepted. It is `false` when no turn exists or a reason-only repeat arrives
+after interruption began.
 
-### `history`
+### `AgentSession.history`
 
 Input:
 
@@ -118,10 +121,7 @@ Output:
 
 ```ts
 type HistoryPage = {
-  entries: Array<{
-    sequence: number;
-    entry: ConversationEntry;
-  }>;
+  entries: Array<{sequence: number; entry: ConversationEntry}>;
   nextSequence: number;
 };
 ```
@@ -129,27 +129,41 @@ type HistoryPage = {
 Use `nextSequence` as the next inclusive cursor. An empty page leaves the
 cursor unchanged.
 
-### `watchHistory`
+### Agent notifications
 
-Input:
+`Agent.notifications` is a void-input shared read returning:
+
+```ts
+type AgentNotificationSnapshot = {
+  revision: number;
+  versions: {
+    history: number;
+    profile: number;
+    approvals: number;
+    schedules: number;
+  };
+};
+```
+
+`Agent.watchNotifications` accepts:
 
 ```ts
 {
-  fromSequence: number;
+  afterRevision: number;
   timeoutSeconds?: number; // default/max 300
 }
 ```
 
-Output is:
+It returns a newer snapshot when any topic changes, or the current snapshot
+when the wait window expires. The response is an invalidation watermark, not
+the changed data. Compare topic versions and re-read the authoritative handler.
 
-- `true` when that sequence is ready to read; or
-- `false` when the wait window elapsed.
+The public client's `follow()` generator combines AgentSession history pages
+with this notification wait for history-only consumers.
 
-The client must always call `history` again after either result. The watch is a
-notification, not a data channel. A complete consumer loop is implemented by
-`createAgentClient(...).follow()`.
+## Profile API
 
-### `profile`
+### `Agent.profile`
 
 Void input. Output:
 
@@ -161,39 +175,32 @@ type AgentProfile = {
 };
 ```
 
-This is the authoritative current snapshot. Running Turns keep the snapshot
+This is the authoritative current snapshot. Active turns retain the snapshot
 with which they started.
 
-### `setInstructions`
+### `Agent.setInstructions`
+
+Input is `{instructions: string | null}`. A trimmed empty string or `null`
+clears the instructions. The handler publishes a `profile` notification and
+does not append instruction text to the transcript.
+
+### `Agent.setGuardrails`
 
 Input:
 
 ```ts
-{ instructions: string | null }
+{guardrails: Array<{id: string; rule: string}>}
 ```
 
-The string is trimmed and replaces persistent user instructions. `null` or an
-empty trimmed string clears them. Output is void.
+The list completely replaces policy for future turns. IDs must be unique and
+non-empty; an empty list clears guardrails. The handler publishes a `profile`
+notification.
 
-### `setGuardrails`
+## Human approvals
 
-Input:
+### `Agent.approvals`
 
-```ts
-{
-  guardrails: Array<{
-    id: string;
-    rule: string;
-  }>;
-}
-```
-
-The list completely replaces future-Turn policy. IDs must be unique and
-non-empty. An empty list clears guardrails. Output is void.
-
-### `approvals`
-
-Void input. Returns current pending requests:
+Void input. Returns the authoritative pending list:
 
 ```ts
 type ApprovalRequest = {
@@ -204,11 +211,10 @@ type ApprovalRequest = {
 };
 ```
 
-An omitted `guardrailId` means the model explicitly called the
-`humanApproval` tool. A present ID means the runtime guardrail gate opened the
-request.
+An omitted `guardrailId` identifies the model-selected `humanApproval` tool.
+A present ID identifies a runtime guardrail gate.
 
-### `resolveApproval`
+### `Agent.resolveApproval`
 
 Input:
 
@@ -220,164 +226,113 @@ Input:
 }
 ```
 
-Output is `true` only if the approval still belongs to the active,
-non-interrupting Turn and its signal was delivered. Resolution removes pending
-state and appends the complete decision to history.
+Output is `true` only while the request belongs to the active,
+non-interrupting turn and the signal is delivered. Agent removes pending state
+and publishes an `approvals` notification. AgentSession appends the complete
+decision when the waiting turn consumes the signal.
 
-### `scheduleMessage`
+## Scheduled messages
 
-Administrative input uses `turnId: null`:
+### `Agent.scheduleMessage`
+
+External administration uses `turnId: null`:
 
 ```ts
 {
   turnId: null;
   schedule: {
-    scheduleId: string;              // 1..64 chars
+    scheduleId: string; // 1..64 chars
     message: string;
-    delaySeconds: number;            // 1..31,536,000
+    delaySeconds: number; // 1..31,536,000
     repeatEverySeconds: number | null;
     whenBusy?: "queue" | "steer" | "interrupt";
   };
 }
 ```
 
-Omitted `whenBusy` defaults to `queue`. Reusing `scheduleId` replaces the
-existing timer.
+Omitted `whenBusy` defaults to `queue`; reusing `scheduleId` replaces the
+existing timer. Success returns `{accepted: true, replaced, schedule}` with
+`nextRunAt` as epoch milliseconds. Tool calls supply their active `turnId`, and
+Agent rejects stale or interrupting-turn mutations.
 
-Success:
+### `Agent.cancelSchedule`
 
-```ts
-{
-  accepted: true;
-  replaced: boolean;
-  schedule: {
-    scheduleId: string;
-    message: string;
-    repeatEverySeconds: number | null;
-    whenBusy: "queue" | "steer" | "interrupt";
-    nextRunAt: number; // epoch milliseconds
-  };
-}
-```
+External input is `{turnId: null, scheduleId}`. Success is idempotent and
+returns `{accepted: true, cancelled: boolean}`.
 
-The tool-facing path supplies the active `turnId`; Agent rejects a stale or
-interrupting Turn mutation.
+### `Agent.schedules`
 
-### `cancelSchedule`
+Void input. Returns the authoritative list of active schedules. Schedule
+mutation publishes a `schedules` notification. Only delivery appends a
+`schedule` event to the transcript.
+
+## Internal coordination handlers
+
+These are ingress-visible for inspection but are not normal client operations.
+
+### Agent
+
+| Handler | Caller | Purpose |
+| --- | --- | --- |
+| `fireSchedule` | delayed Agent self-send | Verify timer ID, advance recurrence, and route a due message |
+| `notify` | AgentSession | Publish one topic invalidation |
+| `subscribeNotifications` | `watchNotifications` | Re-check revision and register a caller awakeable |
+| `unsubscribeNotifications` | timed-out/cancelled watch | Remove an abandoned subscription |
+| `updateMemory` | `manageMemory` tool | Apply one active-turn memory batch |
+| `requestApproval` | tool or policy gate | Register a pending request for the active turn |
+| `cancelApproval` | interrupted waiter | Remove abandoned approval state |
+| `onTurnEnd` | AgentSession | Retire the matching turn, recover missed steering, and dispatch queued work |
+
+### AgentSession
+
+| Handler | Caller | Purpose |
+| --- | --- | --- |
+| `doTurn` | Agent one-way send | Execute one complete agent run and append its transcript |
+| `compact` | AgentSession self-send | Shared read and model summary of one reserved transcript prefix |
+| `applyCompaction` | compactor | Exclusively validate and install a matching checkpoint |
+
+Stale `turnId` values are rejected or ignored as appropriate.
+
+## `AgentSession.doTurn` contract
 
 Input:
 
 ```ts
-{ turnId: null; scheduleId: string }
-```
-
-Success is idempotent:
-
-```ts
-{ accepted: true; cancelled: boolean }
-```
-
-### `schedules`
-
-Void input. Returns the authoritative list of active scheduled messages using
-the visible schedule shape above.
-
-## Internal Agent coordination handlers
-
-These are ingress-visible for inspectability but are not normal client
-operations:
-
-| Handler | Caller | Purpose |
-| --- | --- | --- |
-| `fireSchedule` | delayed Agent self-send | Verify timer ID, advance recurrence, and route due message |
-| `registerHistoryWatcher` | `watchHistory` | Exclusive cursor re-check and awakeable registration |
-| `unregisterHistoryWatcher` | timed-out watch | Idempotent watcher cleanup |
-| `updateMemory` | `manageMemory` tool | Apply one active-Turn memory batch |
-| `reportProgress` | Turn | Append semantic progress for the current Turn |
-| `reportExecution` | Turn | Append activity and tool lifecycle reports |
-| `requestApproval` | tool or policy gate | Register a pending active-Turn request |
-| `cancelApproval` | interrupted waiter | Clean abandoned approval state |
-| `onTurnEnd` | Turn | Reconcile the single terminal outcome |
-| `compact` | Agent self-send | Shared history read and summary model call |
-| `applyCompaction` | compactor | Exclusive checkpoint validation/application |
-
-Stale Turn IDs are ignored or rejected as appropriate. These handlers must not
-be used to bypass the public routing contract.
-
-## Other service handlers
-
-### Turn
-
-`Turn/run` starts one durable agent run and accepts:
-
-```ts
-type TurnRequest = {
-  agentId: string;
+type AgentSessionRequest = {
   instructions?: string;
   memories: Array<{key: string; content: string}>;
   guardrails: Array<{id: string; rule: string}>;
-  summary?: string;
-  history: ConversationEntry[];
+  entries: ConversationEntry[];
 };
 ```
 
-It returns void to its one-way caller and reports exactly one `TurnOutcome` to
-Agent:
+The request does not carry prior history or a summary. The handler loads both
+from its own AgentSession state. It returns void to its one-way caller and
+reports one outcome to Agent:
 
 ```ts
-type TurnOutcome =
-  | {
-      status: "completed";
-      turnId: string;
-      response: string;
-      consumedSteering: number;
-    }
-  | {
-      status: "interrupted";
-      turnId: string;
-      reason: string;
-      response?: string;
-      consumedSteering: number;
-    }
-  | {
-      status: "stopped";
-      turnId: string;
-      cause: "step_limit" | "tool_limit";
-      reason: string;
-      response: string;
-      consumedSteering: number;
-    }
-  | {
-      status: "failed";
-      turnId: string;
-      error: string;
-      consumedSteering: number;
-    };
+type AgentSessionOutcome =
+  | {status: "completed"; turnId: string; response: string; consumedSteering: number}
+  | {status: "interrupted"; turnId: string; reason: string; response?: string; consumedSteering: number}
+  | {status: "stopped"; turnId: string; cause: "step_limit" | "tool_limit"; reason: string; response: string; consumedSteering: number}
+  | {status: "failed"; turnId: string; error: string; consumedSteering: number};
 ```
 
-The Turn handler has a one-hour inactivity timeout and fifteen-minute abort
-timeout.
+The handler has a one-hour inactivity timeout and fifteen-minute abort timeout.
 
-### ModelGateway
+## Other service handlers
 
-`complete`, `evaluateGuardrails`, and `reduceContext` are scoped coordination
-handlers. Their Zod contracts live in `model.ts`. Application code should call
-the `callModel`, `callGuardrailModel`, and `callContextReducer` companions so
-the `openai` scope and limit keys are applied.
+- `ModelGateway.complete`, `evaluateGuardrails`, and `reduceContext` are scoped
+  coordination handlers. Runtime code uses their companion functions so the
+  `openai` scope and limit keys are always applied.
+- `Sandbox.borrow`, `release`, `suspend`, and `destroy` are resource lifecycle
+  handlers used by built-in tools and turn cleanup.
+- `Evals.all` accepts optional isolation options and a subset of case IDs. See
+  [evals.md](evals.md).
 
-### Sandbox
+## Conversation event-log entries
 
-`borrow`, `release`, `suspend`, and `destroy` are lifecycle handlers. Normal
-clients do not call them; sandbox tools acquire and release through Turn.
-
-### Evals
-
-`Evals/all` accepts optional `runId`, `attempt`, `timeoutSeconds`, and a subset
-of case IDs. See [evals.md](evals.md).
-
-## Conversation event-log entry contract
-
-Every public history item has a stable `sequence` wrapper and one `entry`.
+Every history item has a stable positive `sequence` and one `entry`.
 
 ### User entry
 
@@ -389,8 +344,8 @@ Every public history item has a stable `sequence` wrapper and one `entry`.
 }
 ```
 
-`delivery` describes how Agent originally accepted the message. It never
-changes. Later `steer` or `dispatch` events describe activation.
+`delivery` records the route assigned when the entry was created. AgentSession
+does not later rewrite it. `dispatch` and `steer` events explain activation.
 
 ### Assistant entry
 
@@ -403,55 +358,58 @@ changes. Later `steer` or `dispatch` events describe activation.
 }
 ```
 
-Assistant entries are terminal agent-run records. An externally cancelled Turn
-may have an interrupt event without an assistant entry.
+Assistant entries are terminal run records. External cancellation creates an
+interrupt event without a model-authored assistant entry.
 
-### Control and semantic events
+### Model-relevant events
 
-| Type | Important fields | Model context? |
+| Type | Important fields | Meaning |
 | --- | --- | --- |
-| `interrupt` | `turnId`, `reason` | Yes, as a prior-Turn boundary |
-| `stop` | `turnId`, `cause`, `reason` | Yes, as a runtime-limit boundary |
-| `dispatch` | `queuedMessages` | Yes, activates queued requests |
-| `steer` | `turnId`, `queuedMessages` | Yes, records signal target |
-| `approval` | request fields + decision | Yes, completed human decision |
+| `interrupt` | `turnId`, `reason` | Prior-turn interruption boundary |
+| `stop` | `turnId`, `cause`, `reason` | Runtime execution-limit boundary |
+| `dispatch` | `queuedMessages` | Activates queued requests |
+| `steer` | `turnId`, `queuedMessages` | Records a consumed steering batch |
+| `approval` | request fields + decision | Delivered human decision |
 
 ### Derived status events
 
 | Type | Purpose |
 | --- | --- |
-| `profile` | Instructions/guardrails changed; re-read profile |
 | `memory` | Memory keys changed; re-read profile |
-| `approval_request` | Add one pending approval |
-| `approval_cancelled` | Remove abandoned approval |
-| `schedule` | Schedule state changed or fired; re-read schedules |
+| `approval_request` | A pending approval was registered |
+| `approval_cancelled` | An abandoned approval was removed |
+| `schedule` | A scheduled message fired and how it was routed |
 | `progress` | `thinking`, `waiting`, or `finalizing` milestone |
-| `activity` | Brief model-authored, user-facing step activity |
-| `tools` | Tool batch `started`/`finished`, IDs, names, statuses |
+| `activity` | Brief model-authored user-facing activity |
+| `tools` | Tool-batch start/finish, IDs, names, summaries, and statuses |
 
-Derived events are deliberately omitted from future model context and
-conversation compaction. `isDerivedConversationEvent` is the one exhaustive
-classification function used by both.
+Derived events remain visible to clients but are omitted from future model
+context and conversation compaction by the exhaustive
+`isDerivedConversationEvent` classifier.
 
-## Transcript ordering rules
+## Transcript ordering
 
-1. Entries are appended in the natural order Agent handlers observe them.
-2. Existing entries are never changed to reflect later routing.
-3. A queued message therefore appears when accepted, not when dispatched.
-4. An interrupt carrying a replacement appends the replacement before the
-   interrupt boundary.
-5. `onTurnEnd` appends the old terminal result before the dispatch boundary
-   that starts queued work.
-6. Batches passed to `history.append` stay adjacent.
-7. Tool arguments/results and raw model reasoning remain in invocation
-   observability, not the user-facing transcript.
+1. AgentSession appends; Agent never writes transcript state.
+2. Entries are append-only and sequence numbers never change.
+3. An idle turn appends its opening entries before model work.
+4. A busy `ask` remains in Agent pending state until steer or successor
+   dispatch activates it.
+5. Consumed steering appends queued entries, the explicit steer message, then
+   the `steer` boundary in one batch.
+6. The current turn appends terminal entries before the successor `doTurn` can
+   append queued entries and its `dispatch` boundary.
+7. Batches passed to the transcript writer remain adjacent.
+8. Raw tool arguments/results and private model reasoning are not transcript
+   entries.
 
-## Following history correctly
+## Following state correctly
 
-Pseudocode:
+For history alone, use `createAgentClient(...).follow()`. A complete client
+that also maintains profile, approvals, and schedules follows this pattern:
 
 ```ts
 let cursor = 1;
+let snapshot = await agent.notifications();
 
 while (!stopped) {
   const page = await agent.history(cursor, 100);
@@ -461,16 +419,17 @@ while (!stopped) {
     continue;
   }
 
-  await agent.watchHistory(cursor, 55, {
+  const next = await agent.watchNotifications(snapshot.revision, 55, {
     idempotencyKey: stableKeyForThisWaitWindow,
   });
+  if (next.versions.profile > snapshot.versions.profile) await refreshProfile();
+  if (next.versions.approvals > snapshot.versions.approvals) await refreshApprovals();
+  if (next.versions.schedules > snapshot.versions.schedules) await refreshSchedules();
+  snapshot = next;
 }
 ```
 
-Retry a transport-failed watch with the same idempotency key so the request
-attaches to its existing invocation instead of stacking another waiter. After
-a completed window, generate a new key.
-
-`createTranscriptProjection` demonstrates how one cursor stream can maintain
-pending approvals exactly and emit invalidation signals for profile and
-schedule snapshots.
+Always drain history again after waking; a history notification can arrive
+before or after the corresponding one-way `Agent.notify` is acknowledged.
+Retry a transport-failed watch with the same idempotency key so it attaches to
+the parked invocation. Generate a new key after a completed wait window.

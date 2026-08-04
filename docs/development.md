@@ -33,31 +33,18 @@ Start the endpoint in another shell:
 
 ```sh
 export OPENAI_API_KEY=...
-pnpm dev
+pnpm dev:service
 ```
 
-The endpoint listens on port 9080 by default and the demonstration Next.js UI
-and BFF listens on port 3000. Register the endpoint:
+The endpoint listens on port 9080. Register it with Restate:
 
 ```sh
 restate deployments register http://localhost:9080
 ```
 
-Restate ingress is normally `http://localhost:8080`, and the local Admin
-API/UI is `http://localhost:9070`.
-
-The web BFF uses that local ingress by default. For remote Restate, set
-`RESTATE_INGRESS_URL` and optionally `RESTATE_AUTH_TOKEN` on the web process.
-The bearer token is never sent to the browser:
-
-```sh
-RESTATE_INGRESS_URL=https://your-ingress.example.com \
-RESTATE_AUTH_TOKEN=your-token \
-pnpm dev:ui
-```
-
-See `packages/apps/web/env.example` and `docker/Dockerfile.web` for the complete
-web runtime configuration and container build.
+Restate ingress is normally `http://localhost:8080`, and the local Admin API/UI
+is `http://localhost:9070`. `pnpm start:service` builds and starts the core
+runtime in production mode.
 
 To use Modal:
 
@@ -65,7 +52,7 @@ To use Modal:
 export SANDBOX_PROVIDER=modal
 export MODAL_TOKEN_ID=...
 export MODAL_TOKEN_SECRET=...
-pnpm dev
+pnpm dev:service
 ```
 
 Shell variables must be exported so the Node process receives them. Never
@@ -86,7 +73,7 @@ curl localhost:8080/Agent/demo/ask \
 Read its conversation event log (`history`/`transcript` in the wire contract):
 
 ```sh
-curl localhost:8080/Agent/demo/history \
+curl localhost:8080/AgentSession/demo/history \
   --json '{"fromSequence":1,"limit":100}'
 ```
 
@@ -121,7 +108,7 @@ pnpm build
 pnpm bundle
 ```
 
-- `lint` runs Biome across source and Markdown.
+- `lint` runs Biome across workspace source and configuration files.
 - `build` type-checks the workspace.
 - `bundle` creates the deployable ESM bundle and catches packaging/import
   problems that type-checking alone may miss.
@@ -153,7 +140,7 @@ curl localhost:8080/Evals/all \
 ```
 
 The `context-reduction` case uses one cheap-model request and avoids a full
-agent Turn:
+agent run:
 
 ```sh
 curl localhost:8080/Evals/all \
@@ -174,10 +161,10 @@ questions.
 ### The conversation event log answers
 
 - What did the user and assistant observe?
-- In what order did Agent handlers observe queueing, steering, interruption,
-  approvals, and terminal outcomes?
+- In what order did AgentSession append activated input, steering,
+  interruption, approvals, and terminal outcomes?
 - Which tool names started and how did the batch settle?
-- Did a profile, approval, schedule, or lifecycle event occur?
+- Did an approval, schedule-delivery, or lifecycle event occur?
 
 ### The Restate execution trace answers
 
@@ -194,7 +181,7 @@ runtime trace.
 ### Useful correlations
 
 - `agentId` is the Agent and Sandbox Virtual Object key.
-- `turnId` is the `Turn/run` invocation ID.
+- `turnId` is the `AgentSession/doTurn` invocation ID.
 - `toolCallId` is the stable pending-operation ID.
 - `approvalId` is the tool call or guardrail approval signal identity.
 - history `sequence` is the inclusive cursor position.
@@ -235,15 +222,16 @@ Check:
 4. this endpoint can reach `RESTATE_ADMIN_URL`;
 5. no built-in has the same name;
 6. logs contain no discovery warning;
-7. you started a new Turn after the catalog refreshed.
+7. you started a new turn after the catalog refreshed.
 
-The cache refresh interval is five minutes. Existing Turns keep their
+The cache refresh interval is five minutes. Existing turns keep their
 journaled snapshot.
 
 ### An Agent remains busy
 
-Inspect Agent state and the referenced Turn invocation. This compact reference
-does not reconcile an operator-killed Turn if it died before `onTurnEnd`.
+Inspect Agent state and the referenced `AgentSession.doTurn` invocation. This
+compact reference
+does not reconcile an operator-killed turn if it died before `onTurnEnd`.
 External invocation cancellation through Restate follows the supervised
 cleanup path, but a hard operator kill is a documented production gap.
 
@@ -252,19 +240,19 @@ cleanup path, but a hard operator kill is a documented production gap.
 Inspect the canonical approval request/resolution/cancellation events, the
 current profile guardrails, and the exact proposed action. Approval is scoped
 to one proposal. New protected work after steering is supposed to be evaluated
-again; a later unrelated Turn should not inherit a blanket approval.
+again; a later unrelated turn should not inherit a blanket approval.
 
 ### Sandbox credentials appear missing
 
 Confirm that `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` are exported into the
-`pnpm dev` process. Existing sandbox refs keep their original provider even if
+service process. Existing sandbox refs keep their original provider even if
 `SANDBOX_PROVIDER` changes.
 
 ## Safe change checklists
 
 ### Conversation routing
 
-When changing `ask`, `steer`, `interrupt`, or Turn completion:
+When changing `ask`, `steer`, `interrupt`, or turn completion:
 
 1. preserve natural append order in the immutable transcript;
 2. preserve queued messages exactly once;
@@ -275,7 +263,7 @@ When changing `ask`, `steer`, `interrupt`, or Turn completion:
 
 ### Turn loop
 
-When changing `turn.ts` or `turn-step.ts`:
+When changing `agent-session.ts` or `turn-step.ts`:
 
 1. keep one step bounded;
 2. settle and join every spawned task;
@@ -293,9 +281,10 @@ When changing transcript storage or consumption:
 2. preserve monotonically increasing sequence numbers;
 3. keep `fromSequence` inclusive;
 4. retain lazy chunk reads and early exit;
-5. close the empty-read/watch registration race;
-6. keep shared watchers from blocking exclusive writers;
-7. treat compaction as derived context only.
+5. preserve the one-time `openTurn` read and invocation-local append cursor;
+6. publish history invalidation after appends without moving history to Agent;
+7. keep shared history reads and compaction from blocking the exclusive turn;
+8. treat compaction as derived context only.
 
 ### Model boundary
 
@@ -330,11 +319,12 @@ behavior can be tested without manufacturing many full agent runs.
 | --- | --- |
 | Change Agent API or controller routing | `src/agent.ts` |
 | Change active-turn bookkeeping/signals | `src/agent-turn.ts` |
-| Change transcript storage/watch | `src/agent-history.ts` |
+| Change transcript storage | `src/agent-history.ts` |
+| Change invalidation subscriptions | `src/agent-notifications.ts` |
 | Change instructions/memories/guardrails | `src/agent-profile.ts` |
 | Change approvals | `src/agent-approval.ts` |
 | Change schedules | `src/agent-schedules.ts` |
-| Change the Turn state machine | `src/agent-session.ts` |
+| Change the turn state machine | `src/agent-session.ts` |
 | Change one inference/tool step | `src/turn-step.ts` |
 | Add a built-in tool | `src/agent-tools.ts` |
 | Change dynamic discovery | `src/dynamic-tools.ts` |

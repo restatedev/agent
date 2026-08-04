@@ -2,7 +2,7 @@
 
 This project has two ways to make a capability available to the model:
 
-1. a built-in tool implemented inside the Turn handler; or
+1. a built-in tool implemented inside `AgentSession.doTurn`; or
 2. an annotated Restate handler discovered at runtime.
 
 Both become serializable `ToolManifest` values for model inference. Their
@@ -43,7 +43,7 @@ That separation keeps these decisions explicit:
 
 - the model chooses a tool from a serializable catalog;
 - the guardrail model evaluates the complete proposed batch before execution;
-- the Turn starts every allowed foreground call in the batch together;
+- the active `agentStep` starts every allowed foreground call in the batch together;
 - Restate journals every operation and its result;
 - results are projected back into model messages as observations by
   `agent-tools.ts`.
@@ -74,7 +74,7 @@ registration:
 - `agentTools.names` reserves the name from dynamic discovery;
 - `agentTools.manifests()` converts the Zod schema to JSON Schema;
 - `agentTools.execute()` validates input and dispatches the call;
-- the tool becomes available to every Turn.
+- the tool becomes available to every agent run.
 
 Use `.describe()` on fields whose meaning is not obvious. Descriptions are part
 of the model contract, not cosmetic documentation.
@@ -117,7 +117,7 @@ results.
 
 External side effects belong inside `restate.run` or a Restate RPC. Preserve
 `InterruptedError` and `CancelledError` instead of converting them into normal
-tool failures, so invocation cancellation can propagate through the Turn.
+tool failures, so invocation cancellation can propagate through `doTurn`.
 
 Built-in tools are deliberately local handler code. Do not turn one into a
 Restate service merely to fit a generic abstraction.
@@ -125,7 +125,7 @@ Restate service merely to fit a generic abstraction.
 ### Pending tools
 
 A pending tool acknowledges immediately from `run`, then implements `complete`.
-The Turn starts completion as a task that may survive across loop iterations:
+The turn runtime starts completion as a task that may survive across loop iterations:
 
 ```ts
 const waitTool = defineAgentTool({
@@ -147,7 +147,7 @@ const waitTool = defineAgentTool({
 ```
 
 The stable `toolCallId` is also the operation ID. Pending completion becomes a
-runtime message in a later model round. A Turn cannot finish while pending work
+runtime message in a later model round. A turn cannot finish while pending work
 exists unless the model cancels it, the user interrupts, or the invocation is
 externally cancelled.
 
@@ -156,10 +156,10 @@ while an operation waits. It is not a generic wrapper for a slow call.
 
 ### Selective cancellation
 
-`cancelOperation` returns `cancel_requested`; the Turn, not the tool registry,
+`cancelOperation` returns `cancel_requested`; the `doTurn` pending registry,
 owns the task and applies that request to a matching pending operation.
 Cancellation is represented as a runtime event for the next step. It does not
-cancel foreground work or the Turn itself.
+cancel foreground work or the agent run itself.
 
 Completion and cancellation may race. The settled state is authoritative:
 completed work stays completed.
@@ -181,9 +181,9 @@ type AgentToolContext = {
 The internal call context also contains `toolCallId`. Use:
 
 - `agentId` for Agent-owned state or resources;
-- `turnId` to prove that a mutation belongs to the current active Turn;
+- `turnId` to prove that a mutation belongs to the current active turn;
 - `toolCallId` for stable operation identity;
-- `sandbox.client()` for a lazy, shared Turn lease on the agent's sandbox.
+- `sandbox.client()` for a lazy, shared turn lease on the agent's sandbox.
 
 The context intentionally does not expose general orchestration hooks.
 
@@ -203,7 +203,7 @@ The context intentionally does not expose general orchestration hooks.
 9. Run `pnpm lint`, `pnpm build`, and `pnpm bundle`.
 
 Before making a tool pending, verify that the model can do useful work before
-completion and that the Turn has a meaningful way to report, cancel, and later
+completion and that the runtime has a meaningful way to report, cancel, and later
 incorporate its result.
 
 ## Dynamically discovered Restate tools
@@ -253,7 +253,7 @@ handler documentation, service type, and Admin API JSON input schema.
 
 ```mermaid
 sequenceDiagram
-  participant T as Turn
+  participant T as AgentSession.doTurn
   participant D as dynamic-tools
   participant C as process-local cache
   participant A as Restate Admin API
@@ -280,7 +280,7 @@ Virtual Object key. Each service process maintains a read-through cache:
 - discovery failure without a prior snapshot degrades to built-ins only.
 
 The selected catalog is returned through `restate.run`. Restate therefore
-journals one stable snapshot for the Turn. A deployment change cannot make the
+journals one stable snapshot for the turn. A deployment change cannot make the
 model infer against one schema and execute against a different target during
 replay.
 
@@ -329,7 +329,7 @@ Schema may not meet the model provider's stricter function-schema rules.
 - When two annotated handlers claim one name, the first sorted target wins and
   a warning is logged.
 - Invalid names are ignored with a warning.
-- The name and target are fixed in the Turn snapshot.
+- The name and target are fixed in the turn snapshot.
 
 ### Invocation contract
 
@@ -353,7 +353,7 @@ Consequences:
 - input and output must use JSON;
 - the complete call belongs to the current foreground batch;
 - interruption or external cancellation propagates to the child;
-- dynamic handlers cannot currently become Turn-owned pending operations.
+- dynamic handlers cannot currently become turn-owned pending operations.
 
 The called handler owns its own idempotency and side-effect semantics in the
 normal Restate way.
@@ -384,11 +384,11 @@ handlers from a cluster shared with untrusted service owners.
 5. For a keyed service, ensure the model can know the appropriate key.
 6. Wait for cache refresh, restart this endpoint, or temporarily lower the
    refresh interval while developing.
-7. Start a new Turn. Existing Turns retain their journaled catalog.
+7. Start a new turn. Existing turns retain their journaled catalog.
 8. Inspect logs for discovery warnings and the Restate invocation tree for the
    generic child call.
 
-Choose a built-in when execution needs access to Turn-owned pending tasks,
+Choose a built-in when execution needs access to turn-owned pending tasks,
 Agent profile mutations, or the shared sandbox context. Choose discovery when
 the capability is already a well-defined Restate handler and should be
 deployable independently.
@@ -396,14 +396,17 @@ deployable independently.
 ## Guardrails and tools
 
 The agent model proposes a complete batch. The guardrail model evaluates the
-proposal before any member starts and returns one decision per configured
-guardrail:
+proposal against the configured policy set before any member starts and
+returns one aggregate decision, referencing one policy when blocked:
 
 - `allow`;
 - `deny`; or
 - `require_approval`.
 
-An approval applies to the exact proposed batch at that point in the Turn.
+Every non-allow candidate is checked by a second policy review call. An
+unconfirmed denial or approval requirement becomes `allow`.
+
+An approval applies to the exact proposed batch at that point in the turn.
 After steering or a changed proposal, the runtime evaluates again. Guardrails
 do not invoke tools themselves; they allow, deny, or pause the agent model's
 proposal.
@@ -422,5 +425,5 @@ Use the Restate invocation tree and journal for:
 - child invocation IDs;
 - signal and cancellation propagation.
 
-Use Agent history for the stable user-facing conversation and semantic
+Use AgentSession history for the stable user-facing conversation and semantic
 execution events.

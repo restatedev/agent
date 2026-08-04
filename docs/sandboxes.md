@@ -20,13 +20,13 @@ type SandboxState =
   | {status: "suspended"; ref: SandboxRef};
 ```
 
-The resource belongs to the Agent, while one Turn at a time may borrow it.
-Agent serialization already guarantees one active Turn, and Sandbox validates
+The resource belongs to the Agent, while one turn at a time may borrow it.
+Agent serialization already guarantees one active turn, and Sandbox validates
 the borrower explicitly.
 
-The Turn does not provision eagerly. The first sandbox tool lazily calls
+The turn does not provision eagerly. The first sandbox tool lazily calls
 `Sandbox.borrow`. Parallel tools share one in-flight borrow future, and later
-steps reuse the resolved reference. The Turn releases the lease when it exits,
+steps reuse the resolved reference. `AgentSession.doTurn` releases the lease when it exits,
 including cancellation paths.
 
 ## Lifecycle
@@ -36,7 +36,7 @@ stateDiagram-v2
   [*] --> Borrowed: first sandbox tool / provision
   Suspended --> Borrowed: borrow / resume
   Idle --> Borrowed: borrow / cancel idle timer
-  Borrowed --> Idle: Turn release / schedule suspension
+  Borrowed --> Idle: turn release / schedule suspension
   Idle --> Suspended: idle timer fires / suspend
   Idle --> [*]: destroy
   Suspended --> [*]: destroy
@@ -46,8 +46,8 @@ The default idle delay is five minutes.
 
 ### `borrow({turnId})`
 
-- Repeated borrow by the same Turn is idempotent and returns the current ref.
-- A different Turn cannot borrow an already borrowed resource.
+- Repeated borrow by the same turn is idempotent and returns the current ref.
+- A different turn cannot borrow an already borrowed resource.
 - An idle suspension timer is cancelled before reuse.
 - Missing state provisions a new sandbox.
 - Suspended state resumes compute and persists the provider's updated ref.
@@ -159,7 +159,7 @@ Paths are relative to the sandbox workspace and must not escape it. Files are
 UTF-8 in this reference implementation.
 
 Commands are one-shot foreground operations. They return only after the
-process exits or times out. They are not Turn pending operations because an
+process exits or times out. They are not turn-pending operations because an
 external sandbox process is not automatically durable across provider failure
 or Restate recovery. If the user deliberately wants detached work, the model
 must create and manage a background shell script explicitly.

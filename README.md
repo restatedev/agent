@@ -2,7 +2,7 @@
 
 An end-to-end reference implementation of a **durable, single-agent harness and
 runtime** on Restate. It combines a model-directed tool-use loop with durable
-conversation state, context management, policy enforcement, human
+conversation state, context engineering, policy enforcement, human
 intervention, resource lifecycle, observability, and evaluation.
 
 The model and harness together form the operational agent: the model selects
@@ -10,741 +10,332 @@ tools, acts on observations, revises its approach, and decides when work is
 complete, while Restate makes the surrounding execution recoverable,
 steerable, interruptible, concurrent, and bounded.
 
-The project is intentionally compact enough to read from ingress to model call
-and back. Its simple weather domain keeps the focus on production-oriented
-agent execution semantics.
+The weather domain is intentionally simple so the production-oriented agent
+semantics remain easy to inspect from ingress to model call and back.
 
 ## Documentation
 
-Start with [`docs/README.md`](docs/README.md) for the complete maintainer guide.
-It links the architecture and data flow, supported Agent protocol, Turn
-semantics, built-in and dynamically discovered tool contracts, sandbox
-providers, local development, and the durable evaluation harness.
+Start with [`docs/README.md`](docs/README.md) for the maintainer guide. It links
+the architecture and state flow, Agent protocol, turn runtime, tool contracts,
+sandbox providers, development workflow, and evaluation harness.
 
 For Codex, Claude Code, or another coding agent, point it first to
 [`docs/agent-guide.md`](docs/agent-guide.md). That guide records the
-source-of-truth order, ownership boundaries, invariants, common traps, and the
-files that should change for each kind of task.
+source-of-truth order, ownership boundaries, invariants, and change-routing
+map.
 
-## What kind of AI system is this?
-
-Each `agentId` identifies one **model-directed agent**. The model controls
-task-level execution by selecting tools, reacting to observations, revising its
-approach, and deciding when to answer. Deterministic Restate code supplies the
-durable execution semantics around those decisions.
-
-In established evaluation terminology, the code that enables a model to act
-is an **agent harness** or **scaffold**. This project is more specifically a
-**durable agent runtime** because it also provides recovery, state ownership,
-signals, timers, retries, concurrency, and an execution environment.
-
-The similarly named parts are distinct:
+## System vocabulary
 
 | Term | Meaning in this repository |
 | --- | --- |
 | Agent | The model and harness operating together for one `agentId` |
-| `Agent` Virtual Object | The deterministic durable session controller for one agent instance |
-| Agent run | One `Turn.run` invocation handling activated user input |
+| `Agent` Virtual Object | The deterministic controller for active work, queued input, profile, approvals, schedules, and notifications |
+| `AgentSession` Virtual Object | The transcript owner and durable turn executor for the same `agentId` |
+| Agent run | One `AgentSession.doTurn` invocation; its invocation ID is the `turnId` |
 | Agent loop | The repeated model-action-observation cycle inside that run |
 | Loop iteration | One `agentStep`: model proposal, policy evaluation, and optional tool batch |
-| Agent harness/runtime | The whole system that supplies context, tools, control, durability, and resources |
-| Evaluation harness | The separate `Evals` service that runs and grades evaluation tasks |
+| Agent harness/runtime | The context, tools, control, durability, policies, and resources that enable the model to act |
+| Evaluation harness | The `Evals` service that runs and grades black-box tasks |
 
-The public Agent history is a **conversation event log**. Its wire types retain
-the name `transcript`. It records the user-visible conversation and lifecycle;
-raw tool I/O, model reasoning, retries, and child invocation details remain in
-the Turn context and Restate execution trace.
+The public history is a **conversation event log**, not the complete agent
+trajectory. Raw tool I/O, private model reasoning, retries, and child
+invocation details remain in working context and Restate observability.
 
-This vocabulary follows current industry distinctions between
+This vocabulary follows current distinctions between
 [workflows and agents](https://www.anthropic.com/engineering/building-effective-agents),
-between an [agent harness and an evaluation harness](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents),
-and between prompt construction and
+an [agent harness and an evaluation harness](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents),
+and prompt construction versus
 [context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
-The model-action-observation loop is related to the
-[ReAct](https://arxiv.org/abs/2210.03629) research pattern, but this runtime
-does not expose or persist private chain-of-thought.
+The loop is related to the
+[ReAct](https://arxiv.org/abs/2210.03629) pattern without persisting private
+chain-of-thought.
 
-## Durable agent runtime capabilities
+## Capabilities
 
 | Capability | What this implementation does |
 | --- | --- |
-| Durable agent runs | A `Turn.run` invocation is one agent run. Model inference, timers, signals, tool observations, and control decisions survive process crashes and replay deterministically. |
-| Per-agent serialization | Each `Agent` virtual object is keyed by `agentId`; exclusive handlers serialize conversation control without a separate lock or database transaction protocol. |
-| Mid-run steering | Steering is a durable FIFO signal protocol. It never cancels the current loop iteration: completed work is committed first, pending operations continue, and the update enters the next inference step. |
-| Graceful interruption | Interruption stops and joins unfinished work, preserves completed results, and makes one tool-free final model call that explains what was achieved relative to the original request. |
-| Parallel tool batches | Independent tool calls from one model response are spawned together and joined as a batch. Restate journals the concurrency while preserving deterministic recovery. |
-| Restate-native dynamic tools | Any JSON handler in the cluster can opt in with `restate.dev/agent: <tool-name>` metadata. Each Turn journals one catalog snapshot from a replica-local read-through cache and invokes selected handlers as ordinary durable Restate RPCs. |
-| Long-running operations | Tools such as `sleep` and `humanApproval` can return a pending acknowledgement and continue across later loop iterations. The Turn owns their stable IDs and lifecycle. |
-| Selective cancellation | The model can cancel one pending operation by ID without killing the Turn or unrelated operations. Completion-versus-cancellation races are represented honestly. |
-| Runtime guardrails | A separate, cheaper policy model gates the exact proposed text or complete tool batch before anything is published or executed. Decisions are `allow`, `deny`, or `require_approval`. |
-| Human-in-the-loop (HITL) approval | Policy gates and the explicit approval tool register durable intervention points on the Agent and resume through Turn-scoped signals. Request, resolution, and cancellation events expose the complete lifecycle; resolved decisions also become model-visible context. |
-| Immutable conversation event log | Agent history is append-only and sequenced. User messages, steering, interruption, runtime stops, dispatch, concise activity, structured tool lifecycle, profile changes, approval lifecycle, progress, and terminal outcomes retain their natural observation order. |
-| Push-style history updates | Any client long-polls the shared `watchHistory` handler, which parks inside the Agent until the cursor becomes readable or its wait window elapses. Registration closes the empty-read race; the transcript itself remains available through the cursor API. |
-| Persistent agent profile | User instructions, model-managed persistent semantic memory, and user-defined guardrails are durable per agent instance and snapshotted at run start. |
-| Agent-owned schedules | The model or an external client can create, replace, list, and cancel durable one-shot or fixed-interval messages. Delayed self-sends wake the Agent, which starts, queues, steers, or interrupts according to the schedule's busy policy. |
-| Non-destructive compaction | Older finished conversation prefixes are summarized asynchronously for model context, but the canonical transcript is never rewritten or replaced. Recent entries remain exact. |
-| Active-run context reduction | Large settled action-observation prefixes accumulated during one Turn are reduced between loop iterations. Initial context and the newest working messages remain exact, while canonical history is untouched. |
-| Semantic execution events | Short model-authored activity plus structured tool-batch start/finish events make multi-step turns readable. `thinking`, `waiting`, and `finalizing` remain semantic milestones; raw reasoning, tool arguments, and tool results stay private. |
-| Inference admission control | Agent and policy model calls go through a scoped inference gateway with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
-| Agent-scoped tool execution environment | A `Sandbox` virtual object keyed by `agentId` lazily provisions or resumes a sandbox, serializes its lifecycle, lends it to one Turn, and durably schedules idle suspension after release. Choose the zero-config local workspace or secure Modal compute backed by one persistent Volume per Agent. |
-| Explicit command lifetime | Sandbox commands are one-shot foreground calls returning an exit code, stdout, and stderr. Asynchronous work is an explicit shell concern rather than a hidden pending-tool protocol. |
-| Restate-native evaluation harness | Durable eval trials drive fresh agent instances through the public protocol, synchronize on `watchHistory`, inject control events, and return code-based grader assertions plus the observed conversation event log. |
-
-These features compose rather than live as isolated demos. For example, a Turn
-can run ten weather calls as one parallel batch, keep a durable timer alive
-across later rounds, accept steering without losing either, request fresh
-approval for newly protected work, and still produce one ordered,
-cursor-consumable transcript after recovery.
-
-## Control semantics at a glance
-
-| Action | When idle | While a Turn is active |
-| --- | --- | --- |
-| `ask(message)` | Appends the user message and starts a Turn. | Appends the message immediately and queues it for the next Turn. |
-| `steer(message)` | Returns `false`. | Moves queued messages plus the new instruction into the active Turn. Current tools are not cancelled. Returns `false` once interruption has begun. |
-| `interrupt(reason, message?)` | Returns `false`. | Cancels and joins unfinished work, finalizes the current Turn, and optionally queues a replacement message for a new Turn. |
-| `cancelOperation(id)` | Not a controller action. | A model tool selectively stops one pending operation while the Turn continues. |
-| Scheduled message | Starts a Turn. | Queues by default, or uses its configured `steer` or `interrupt` policy. A due message never disappears while a Turn is already interrupting; it falls back to the next-Turn queue. |
-| External invocation cancellation | Nothing to cancel. | Stops the invocation, cleans up owned work, records the boundary, and rethrows cancellation to Restate. |
-
-The distinction is deliberate: queueing changes *when* a request runs,
-steering changes *the active request without discarding work*, interruption
-ends the active request gracefully, and selective cancellation targets only
-one long-running operation. Here **steering** means mid-run user feedback, not
-activation steering, fine-tuning, or another method of changing model weights.
-
-## Deliberate scope
-
-This is a reference runtime, not a complete agent product. The weather tool is
-synthetic so execution semantics stay visible. The local sandbox provider is a
-convenient `/tmp` workspace rather than a security boundary; the optional Modal
-provider supplies isolated remote compute and persistent Agent files.
-Token-by-token output streaming, pub/sub fan-out, authentication, and
-multi-tenant policy administration are not implemented. History watch windows
-provide durable point-to-point change notification, not a replacement for a
-broadcast event bus. Scheduling intentionally supports relative one-shot and
-fixed-interval delivery rather than cron expressions, timezones, or catch-up
-calendars.
-
-Natural-language guardrail classification and answer quality remain
-probabilistic model behavior; the runtime deterministically enforces the
-decision it receives. The current evals exercise the live stack and protocol
-semantics but do not yet include a suite coordinator, repeated statistical
-runs, a scripted model, or an independent semantic judge.
+| Durable agent runs | Each `AgentSession.doTurn` invocation journals model calls, signals, timers, tool observations, and control decisions for recovery and replay. |
+| Responsive controller | `Agent/{agentId}` serializes routing and current-state mutations without blocking on the long-running turn. |
+| Session-owned conversation | `AgentSession/{agentId}` stores the append-only transcript and summary checkpoint beside the exclusive turn handler. |
+| Queue, steer, and interrupt | Busy `ask` queues; steering preserves current tool work and enters the next iteration; interruption stops unfinished work and makes one tool-free finalization call. |
+| Parallel tool batches | Independent calls from one model response are spawned together and joined as a batch. |
+| Cross-step pending operations | `sleep` and `humanApproval` can acknowledge pending work and complete in later iterations. |
+| Selective cancellation | The model can cancel one pending operation by stable ID without stopping unrelated work. |
+| Runtime guardrails | A separate policy pass gates the exact proposed text or complete tool batch before it runs. Non-allow decisions receive an independent confirmation pass. |
+| Human-in-the-loop approval | Policy gates and the explicit approval tool register durable Agent state and resume through turn-scoped signals. |
+| Persistent profile | User instructions, model-managed semantic memory, and user-defined guardrails are durable per Agent and snapshotted at turn start. |
+| General change notifications | Revisioned `history`, `profile`, `approvals`, and `schedules` watermarks wake clients, which then re-read authoritative state. |
+| Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
+| Active-run context reduction | Large settled model/tool prefixes inside one turn are reduced without changing canonical history. |
+| Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
+| Agent-owned schedules | Durable one-shot and fixed-interval messages route as `queue`, `steer`, or `interrupt` when busy. |
+| Inference admission control | Model calls use a Restate scope with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
+| Agent-scoped sandbox | A `Sandbox` Virtual Object lazily provisions/resumes a local or Modal workspace, lends it to one turn, and suspends it after idle release. |
+| Restate-native dynamic tools | A deployed JSON handler can opt in through `restate.dev/agent` metadata; one journaled catalog snapshot drives both inference and execution. |
+| Durable evaluation harness | Concurrent isolated trials drive the public protocol and return code-based assertions plus the observed transcript. |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Client -->|"conversation + profile + approval API"| Agent["Agent session controller VO\nkeyed by agentId"]
-  Agent -->|"one-way run"| Turn["Durable agent run\nTurn service"]
-  Agent -->|"durable delayed self-send"| Agent
-  Agent -.->|"control / approval signals"| Turn
-  Turn -->|"spawn each loop iteration"| Step["agentStep"]
-  Step -->|"scoped agent + policy calls"| Gateway["ModelGateway service"]
-  Gateway -->|"durable model runs"| Model["agent + guardrail models"]
-  Step -->|"allowed batch: spawn + durable run"| Tools["local tools in parallel"]
-  Turn -->|"journaled lookup"| Cache["endpoint-local tool cache"]
-  Cache -->|"infrequent refresh"| Admin["Restate Admin API"]
-  Admin -->|"annotated handlers + JSON Schema"| Dynamic["dynamic Restate tools"]
-  Step -->|"allowed generic RPC"| Dynamic
-  Step -->|"policy approval request"| Agent
-  Tools -->|"approval / memory updates"| Agent
-  Tools -->|"lazy borrow + one-shot I/O"| Sandbox["Sandbox Virtual Object\nkeyed by agentId"]
-  Turn -->|"release at Turn end"| Sandbox
-  Sandbox -->|"provision / resume / suspend"| Provider["SandboxProvider\n(local /tmp or Modal + Volume)"]
-  Turn -->|"large settled context"| Gateway
-  Turn -->|"await onTurnEnd"| Agent
-  Eval["Evals service"] -->|"public Agent protocol"| Agent
-  Agent -.->|"watchHistory long-poll"| Eval
-  Agent -->|"one-way cursor plan"| Compactor["Agent.compact\nshared handler"]
-  Compactor -->|"one-way applyCompaction"| Agent
+  C["Client"] -->|"ask / steer / interrupt / profile"| A["Agent VO\nkey = agentId"]
+  C -->|"history pages"| S["AgentSession VO\nkey = agentId"]
+  C -->|"notification long-poll"| A
+  A -->|"one-way doTurn"| S
+  A -.->|"control and approval signals"| S
+  S -->|"spawn one iteration"| Step["agentStep"]
+  Step -->|"scoped calls"| G["ModelGateway"]
+  G --> M["Agent and policy models"]
+  Step -->|"parallel built-ins"| T["Local tools"]
+  Step -->|"durable RPC"| D["Discovered Restate tools"]
+  T -->|"Agent state"| A
+  T -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
+  X --> P["Local or Modal provider"]
+  S -->|"history invalidation"| A
+  S -->|"terminal outcome"| A
+  E["Evals"] --> A
+  E --> S
 ```
 
-## Why this structure
+### `Agent`: control plane
 
-- `Agent` is the deterministic durable session controller, not the complete AI
-  agent. Its exclusive handlers serialize changes to the active run, pending
-  messages, and conversation history for one
-  `agentId`. It coordinates five independent components: `agent-turn.ts` owns
-  turn state and signal lifecycle, `agent-history.ts` owns the durable
-  transcript, `agent-profile.ts` owns instructions, memories, and guardrails,
-  `agent-approval.ts` owns pending human approvals, and `agent-schedules.ts`
-  owns scheduled-message state.
-  Each component exports a handler-scoped capability namespace: its operations
-  use Restate's current handler context and hold no process-local state.
-- `Turn` has no service state, but one durable invocation owns one agent run:
-  working model context, budgets, steering, pending operations, and graceful
-  finalization. `Turn.run` supervises that state
-  machine as a spawned task. The state machine repeatedly spawns one bounded
-  `agentStep`, applies the returned data, and reports one structured
-  `completed | interrupted | stopped | failed` result.
-- `turn-step.ts` owns one functional agent-loop iteration and the small
-  supervisor that settles each spawned step against interruption. A step receives a
-  message snapshot and remaining tool budget, performs one agent-model call,
-  gates that proposed response against the guardrail snapshot, runs an allowed
-  foreground tool batch in parallel, and owns no work after returning.
-  `turn-steering.ts` drains durable steering signals into a Turn-scoped inbox,
-  while `turn-pending.ts` owns tasks that survive across steps.
-- `agent-tools.ts` owns the concrete tools. Each definition keeps its model
-  description, input schema, validation, local durable behavior, and result
-  projection together. It exposes each step a single concrete tool collection.
-  Sandbox tools borrow the agent-scoped resource lazily; each file or command
-  operation remains an ordinary foreground tool call.
-- `dynamic-tools.ts` discovers opted-in cluster handlers once per Turn. The
-  journaled catalog is passed unchanged to model inference and execution;
-  built-in names take precedence, duplicate annotations resolve
-  deterministically, and generic calls remain ordinary Restate child
-  invocations.
-- `sandbox.ts` owns durable lifecycle state for one agent's sandbox. It cancels
-  a pending idle suspension when a Turn borrows the resource, resumes it when
-  needed, and schedules suspension after the Turn releases it.
-  `sandbox-provider.ts` is the vendor-neutral boundary. Its synchronous
-  `connect` only constructs a client; every provider and client operation runs
-  separately inside `restate.run`. The local adapter lives beside that boundary;
-  `modal-sandbox-provider.ts` owns Modal-specific compute and storage behavior.
-- `model.ts` owns provider-specific inference and the shared model contracts. It
-  reconstructs AI SDK tool definitions from serializable manifests while
-  deliberately receiving no executors.
-- The shared `Agent.compact` handler asynchronously maintains a rolling summary
-  of older finished turns without blocking exclusive conversation handlers.
-  The model operation stays in `conversation-compactor.ts`; the exact
-  transcript remains on the Agent and messages after the checkpoint remain
-  verbatim.
-- `model-gateway.ts` is the Restate boundary for full agent inference and cheap
-  guardrail evaluation and Turn-local context reduction. It owns scoped
-  admission, model-specific limit keys, retries, and cancellation propagation
-  before delegating provider calls to `model.ts`.
-- `eval.ts` contains the durable black-box evaluation harness. One suite
-  invocation concurrently runs tasks as isolated trials against fresh agent
-  instances, waits for event-log milestones through `watchHistory`, and applies
-  code-based grader assertions.
+Agent owns only the state that must remain responsive while a run is active:
 
-The controller stores the canonical conversation event log: user and assistant
-messages, explicit lifecycle boundaries, semantic progress, short user-facing
-activity, and structured tool names and statuses. The wire protocol calls this
-history/transcript. Raw provider reasoning, tool arguments, tool results, and
-intermediate model messages stay in Restate's invocation journal and
-observability tools. An agent run reports exactly one structured outcome:
-`completed`, `interrupted`, `stopped`, or `failed`. A graceful interruption can
-include a final assistant response based on completed tool results; execution
-limits use `stopped` with a structured cause.
+- active `doTurn` invocation ID and accepted interrupt reason;
+- pending user/event entries and steering reconciliation batches;
+- instructions, memories, and guardrails;
+- pending approvals;
+- schedules and delayed invocation IDs; and
+- notification revisions, topic watermarks, and subscriptions.
 
-Every handler on `Agent`, `Turn`, `ModelGateway`, `Sandbox`, and `Evals` is
-ingress-public in this reference implementation. This keeps the complete
-protocol inspectable and easy to invoke while experimenting. Public visibility
-does not make every handler a user API: normal clients should use `ask`,
-`history`, `steer`, `interrupt`, `profile`, `setInstructions`,
-`setGuardrails`, `scheduleMessage`, `cancelSchedule`, `schedules`, `approvals`,
-and `resolveApproval`; the remaining handlers are coordination paths used by
-the services themselves. Every handler has a runtime input/output schema,
-including AI SDK model messages at the gateway and compaction cursor ranges on
-the Agent.
+An idle `ask` snapshots the profile and one-way sends
+`AgentSession.doTurn({entries, ...profile})`. A busy `ask` stores a queued user
+entry in Agent state. `steer` drains that queue into one durable signal;
+`interrupt` signals the active invocation and optionally stores a replacement
+request for the next turn. `onTurnEnd` retires exactly the matching invocation,
+recovers missed steering, clears abandoned approvals, and dispatches queued
+work.
 
-## Conversation event log and compaction
+### `AgentSession`: conversation and execution plane
 
-The complete user-facing history is a canonical append-only conversation event
-log and is never replaced by a model summary. User entries record how they originally
-arrived; later steering and dispatch decisions are appended as lifecycle
-events instead of rewriting those entries. `agent-history.ts` stores the log in
-fixed-size state chunks with stable internal sequence numbers. Its lazy entry
-reader hides those chunks and stops loading state as soon as a consumer has
-enough entries. The public `history` handler exposes an inclusive cursor over
-the same sequence numbers. Any client — a Restate service or a plain HTTP
-caller — long-polls the shared `watchHistory` handler with that cursor. The
-handler checks shared state, registers an internal awakeable through a brief
-exclusive re-check that closes the empty-read race, and parks until the cursor
-becomes readable or its wait window elapses; callers simply loop. Waiting
-happens in a shared handler, so event-log writers are never blocked, and a
-timed-out window withdraws its registration so idle watchers do not
-accumulate. The request window defaults to its five-minute safety ceiling. Its
-handler-level `inactivityTimeout` is independently set to 1 second so Restate
-can suspend a parked endpoint session while preserving the longer durable wait.
+AgentSession is keyed by the same `agentId`. It owns transcript chunks,
+sequence allocation, compaction reservation, and the current summary.
+`history` and `compact` are shared handlers; `applyCompaction` and `doTurn` are
+exclusive.
 
-After an agent run finishes, the controller first activates queued work and
-starts the next Turn from the exact event log. It then counts conversation messages since
-the last checkpoint. At 32 messages it reserves the observed prefix—including
-the dispatch boundary for those queued messages—and self-sends its cursor range
-to the shared `compact` handler. That handler reads the relevant summary and
-history chunks directly from Agent state, including interruption and failure
-boundaries, merges them with a cheap model, and one-way self-sends the derived
-checkpoint to the exclusive `applyCompaction` handler. Newer appended entries
-do not invalidate the checkpoint, and a failed compaction leaves the prior
-summary untouched.
+At the start of `doTurn`, `history.openTurn()` loads the summary, uncompacted
+entries, sequence cursor, and tail chunk once. The handler appends its activated
+input, builds model context, and then writes new entries through an
+invocation-local transcript writer. It does not repeatedly read/modify/write
+the whole conversation.
 
-Each `TurnRequest` carries a stable snapshot of the Agent's instructions,
-memories, guardrails, rolling summary, and exact model-relevant entries since
-the checkpoint. Progress, activity, tool lifecycle, profile-change metadata,
-pending approval lifecycle, memory, and schedule events remain in the canonical
-event log but are filtered before the request is serialized. The due scheduled
-user message remains model-visible. Resolved approval decisions remain
-model-visible. The Turn projects steering metadata and
-interruption, queued-message dispatch, or failure entries as explicit
-model-visible boundaries. Only the reserved handoff prefix is summarized:
-profile state, live model messages, tool calls, tool results, pending
-operations, and later steering inside the active Turn are not part of that
-checkpoint.
+The running invocation owns working messages, step/tool budgets, guardrail
+decisions, the steering inbox, pending operations, discovered tool snapshot,
+sandbox lease context, and context-reduction bookkeeping. Each iteration
+spawns one bounded `agentStep`, applies its returned delta, and decides whether
+to iterate, wait, finalize, or finish.
 
-The active Turn separately bounds its private working context. Its initial
-Agent-provided messages stay exact. Between steps, once later settled
-model/tool messages exceed the Turn's character budget and no operation is
-pending, the Turn asks the scoped gateway to reduce the prefix already seen by
-the agent model. Newly appended tool results, steering, and runtime events stay
-exact until that model has observed them. The result exists only inside that
-Turn invocation. It does not rewrite canonical history or affect future Turns,
-and a failed reduction leaves the exact working context in place.
+## Control semantics
 
-## Scheduled messages
+| Action | When idle | While a turn is active |
+| --- | --- | --- |
+| `ask(message)` | Starts `doTurn` and returns its invocation ID. | Stores the message for the next turn and returns the active ID plus queue size. |
+| `steer(message)` | Returns `false`. | Moves pending entries plus the new instruction into the active turn after the current step settles. Running tools are not cancelled. |
+| `interrupt(reason, message?)` | Returns `false`. | Stops and joins unfinished work, finalizes completed work, and optionally queues a replacement request. |
+| `cancelOperation(id)` | Not a controller action. | A model tool stops one pending operation while the rest of the run continues. |
+| Scheduled message | Starts a turn. | Uses its `queue`, `steer`, or `interrupt` policy; an already-interrupting turn always falls back to queue. |
+| External cancellation | Nothing to cancel. | Records cancellation, releases owned resources, reconciles Agent, and rethrows to Restate without model finalization. |
 
-Schedules are durable Agent state rather than a separate service. The
-`scheduleMessage` tool or handler creates or replaces a stable `scheduleId`,
-then records the invocation ID of a delayed `Agent/fireSchedule` self-send.
-Cancellation stops that timer, and every fire checks that its invocation ID is
-still current. A cancelled or replaced delayed invocation therefore cannot act
-on newer schedule state.
+Queueing changes *when* input runs. Steering changes the active request without
+discarding work. Interruption ends the active request gracefully. Selective
+cancellation targets one pending operation.
 
-A schedule carries a message, a relative first delay, an optional fixed repeat
-delay, and a `whenBusy` policy. When the Agent is idle, the due message is
-appended and starts a Turn. While busy, `queue` appends it for the next Turn,
-`steer` promotes the existing queue plus the due message into the active Turn,
-and `interrupt` gracefully stops current work while preserving the due message
-for the next Turn. An already-interrupting Turn always falls back to `queue`.
-One-shot schedules are removed before delivery; repeating schedules install
-their next fixed-delay timer first.
+## Conversation history and notifications
 
-Creation, replacement, cancellation, and firing are immutable `schedule`
-events in history. The firing event records the routing decision and is
-immediately followed by the corresponding user message. Schedule metadata is
-omitted from model context and compaction; the user message itself remains
-ordinary conversation input. `schedules` is the authoritative current
-snapshot. The demo bounds each Agent to 32 active schedules.
+The canonical log is append-only and stored in fixed-size AgentSession state
+chunks with stable positive sequence numbers. User messages retain their
+delivery metadata; later `dispatch` and `steer` events explain activation.
 
-## Sandbox lifecycle and tools
+A busy `ask` is held in Agent state until activation. On normal completion,
+Agent can enqueue a successor `doTurn`, but the same-key exclusive handler
+cannot begin until the current `doTurn` appends its terminal entries and
+returns. This preserves the old turn's terminal boundary before the queued
+entries and successor dispatch.
 
-`Sandbox` is a Virtual Object keyed by the same `agentId` as its `Agent`, and
-the resource belongs to that Agent across conversation Turns. The first
-sandbox tool in a Turn lazily calls `borrow(turnId)`; parallel tools share that
-in-flight call and later steps reuse its result. The first-ever borrow
-provisions the resource, while a later Turn resumes it if idle suspension has
-already occurred. A different Turn cannot take an active lease. When
-`Turn.run` reaches any terminal outcome, it calls `release(turnId)`.
-Release schedules a durable delayed `suspend` invocation and records its
-invocation ID. A subsequent borrow cancels that exact timer, and stale delayed
-invocations cannot suspend a resource that has been borrowed again.
-Provision, borrow, release, resume, suspend, and destroy remain infrastructure
-details visible through Restate observability rather than conversation events.
-
-The provider interface separates connection from effects. `connect(ref)` is a
-synchronous, process-local operation. `listFiles`, `readFile`, `writeFile`, and
-`executeCommand` are one-shot client calls individually wrapped in
-`restate.run`, receiving its `AbortSignal`. `executeCommand` always waits for a
-terminal `{ exitCode, stdout, stderr }` result. If the model intentionally
-wants asynchronous work, it must launch and track a background shell script;
-the agent runtime does not turn a sandbox process into an implicit pending
-operation.
-
-The default `local` provider stores each Agent under
-`/tmp/restate-agent-sandboxes/<agentId>`, so later Turns see files created by
-earlier Turns. It uses Node filesystem APIs for files and executes commands as
-one bounded child process. Relative file paths and command working directories
-are constrained to that Agent directory. This is only a convenient demo
-workspace, not a security boundary: shell commands still run with the service
-process's host permissions.
-
-Set `SANDBOX_PROVIDER=modal` to use the Modal adapter. It derives a stable,
-non-identifying resource name from the `agentId`, creates one named Modal Volume
-for that Agent, and mounts it at `/workspace` in a named Sandbox. Provision and
-resume recover that deterministic name after an ambiguous retry, rather than
-creating duplicate compute. Idle suspension terminates the Sandbox after Modal
-has committed the Volume; resume creates fresh compute over the same files.
-Destroy terminates any live Sandbox and deletes its Volume. The base image,
-Modal App, and maximum Sandbox lifetime are configurable:
-
-```sh
-SANDBOX_PROVIDER=modal
-MODAL_TOKEN_ID=...
-MODAL_TOKEN_SECRET=...
-
-# Optional defaults:
-MODAL_APP_NAME=restate-agent-sandboxes
-MODAL_SANDBOX_NAMESPACE=restate-agent-sandboxes
-MODAL_SANDBOX_IMAGE=debian:bookworm-slim
-MODAL_SANDBOX_TIMEOUT_MS=86400000
-```
-
-The namespace participates in the hashed Volume and Sandbox name; set it
-explicitly when several Restate deployments share one Modal environment.
-The official Modal SDK also supports credentials from `~/.modal.toml`, but
-environment credentials are the usual choice for a deployed Restate endpoint.
-Modal's JavaScript API does not currently expose termination of one individual
-`Sandbox.exec` process. The adapter therefore checks Restate's abort signal at
-operation boundaries and still awaits an in-flight command, bounded by the
-tool's timeout, instead of pretending it was cancelled while it continues in
-the background. Suspending or destroying the Agent sandbox terminates the
-whole remote Sandbox.
-
-## Dynamic Restate handler tools
-
-A third-party JSON handler can become a model tool without being linked into
-this application. Add handler metadata whose key is the exported
-`AGENT_TOOL_ANNOTATION` constant (`restate.dev/agent`) and whose value is a
-valid model tool name:
+Clients read the log through `AgentSession.history` using an inclusive cursor.
+For changes, Agent exposes:
 
 ```ts
-const Grafana = restate.service({
-  name: "Grafana",
-  handlers: {
-    query: restate.schemas(
-      {input: QuerySchema, output: QueryResultSchema},
-      function* (request) {
-        // ...
-      },
-    ),
-  },
-  options: {
-    handlers: {
-      query: {
-        metadata: {
-          "restate.dev/agent": "query_grafana",
-        },
-      },
-    },
-  },
-});
+type AgentNotificationSnapshot = {
+  revision: number;
+  versions: {
+    history: number;
+    profile: number;
+    approvals: number;
+    schedules: number;
+  };
+};
 ```
 
-At the beginning of every Turn, `dynamic-tools.ts` reads an endpoint-local
-catalog cache inside a journaled `restate.run`. A cache miss or five-minute
-expiry refreshes it from the Restate Admin API's `GET /services` endpoint.
-Concurrent refreshes within one service process are coalesced; other Turns use
-the last known-good snapshot instead of accumulating behind the Admin request.
-Each endpoint replica owns its cache, so Turn traffic does not converge on a
-single Restate key or process. The discovered catalog selects annotated
-handlers and reads their advertised input JSON schemas. The model sees a
-wrapper object with `input` for the handler payload;
-Virtual Object and Workflow tools additionally require `key`. A selected tool
-is invoked through `restate.call`, so it appears as a durable child invocation
-and participates in the same parallel batch and guardrail check as built-in
-tools. Third-party tools are foreground calls in this first version; they do
-not participate in the pending-operation protocol. The Admin API also exposes
-the output schema, but the model tool protocol needs only the input contract;
-the actual handler response is returned as the ordinary tool result.
+`watchNotifications` parks on a caller-owned awakeable until any version
+changes or its bounded wait expires. The notification contains no domain data.
+Clients drain history and re-read profile, approvals, or schedules when their
+watermark advances. The internal registration re-check closes the read/watch
+race, and timeout/cancellation withdraws abandoned subscriptions.
 
-The shared Admin request has a five-second timeout. A failed refresh keeps the
-last known-good catalog and waits 30 seconds before retrying. A cold cache
-still uses the bounded Restate retry policy and falls back to built-in tools if
-discovery remains unavailable. The Admin API defaults to
-`http://localhost:9070`. Set `RESTATE_ADMIN_URL` when the service reaches it at
-another address, and optionally `RESTATE_ADMIN_TOKEN` for a bearer token.
-Annotated handlers must use JSON-compatible input/output serialization. Treat
-the annotation as a trusted cluster capability-registration boundary: handler
-descriptions enter the model prompt and the agent may invoke the handler with
-its service identity.
+History contains user/assistant messages, control boundaries, resolved
+approvals, progress, concise activity, tool lifecycle, memory metadata,
+approval lifecycle, and scheduled delivery. Raw provider reasoning, tool
+arguments, and tool results stay out of the public log.
 
-## Instructions, persistent memory, and guardrails
+## Compaction and context engineering
 
-Each agent instance owns one durable profile. User-set instructions are
-appended to the application's system instructions and apply to every model
-inference in a Turn, including graceful interruption finalization. Persistent
-semantic memory is a separate keyed collection of facts and preferences: it is
-injected before conversation history and explicitly marked as data rather than
-instructions. Current user messages and newer tool observations take
-precedence over stale memory.
+After a terminal outcome, AgentSession counts non-event messages since the
+current checkpoint. At 32 it reserves the visible prefix and one-way starts
+shared `AgentSession.compact`. The handler reads that exact range, calls a cheap
+model, and sends the result to exclusive `applyCompaction`. Only a matching
+reservation is installed; transcript chunks remain intact.
 
-The model manages this memory through one atomic `manageMemory` tool. A batch
-can set or delete keys, and the Agent accepts it only from its active,
-non-interrupting Turn. Memory is limited only by entry count: at most 32 entries
-per Agent. A successful update is durable even if later work in that Turn
-fails, and its keys are recorded as a metadata-only history event. Memory
-events are omitted from model context and compaction because the current
-profile snapshot is authoritative.
+A later turn receives the summary plus exact model-relevant entries after its
+checkpoint. Derived status events are filtered by the exhaustive
+`isDerivedConversationEvent` classifier.
 
-Changing instructions or guardrails likewise appends a metadata-only `profile`
-event. It identifies the changed section, whether instructions are configured,
-or the current guardrail IDs without duplicating instruction or policy text in
-the immutable log. A history consumer can therefore invalidate its cached
-profile and read the authoritative `profile` snapshot.
+Within one long turn, settled model/tool messages can grow much faster than
+conversation history. Once the current-turn portion exceeds 32,000 serialized
+characters, no operation is pending, and a prefix has already been observed by
+the model, a scoped reducer may replace that working prefix with a lossless
+record. The mutation is invocation-local and never affects later turns.
 
-Guardrails are user-configured natural-language policies with stable IDs. A
-cheap policy model evaluates every proposed assistant response or complete tool
-batch before text is published or any tool in that batch starts. It returns
-`allow`, `deny`, or `require_approval`. A denial is returned to the agent model
-as runtime feedback so it gets one chance to refuse or choose a compliant
-alternative. If the same policy blocks the next proposal, Turn completes with
-a deterministic tool-free refusal instead of spending its remaining step
-budget in a policy loop. An approval requirement creates a durable request on
-the Agent and waits for a human decision before executing the exact proposal.
+## Tools
 
-These guardrails are runtime policy checks and a defense-in-depth layer. They
-do not replace authentication, authorization, capability scoping, deterministic
-validation, or sandbox isolation.
+Built-in tools are self-contained definitions in `agent-tools.ts`. Each keeps
+its name, description, Zod schema, input validation, durable execution, pending
+completion, transcript summary, and model result projection together.
 
-Guardrails are not included in the main agent model's system prompt. This keeps
-policy enforcement in one place: the agent proposes the actual work, and the
-runtime independently gates it. The explicit `humanApproval` tool remains
-available for approvals the agent decides it needs for reasons unrelated to a
-runtime guardrail. The evaluator receives the exact proposed action plus
-structurally tracked context starting at the latest real user input, including
-execution evidence produced after it. It never infers message provenance from
-prompt prefixes. Historical approval prose remains available to the agent but
-cannot turn a conditional policy into an allowlist; current-Turn decisions are
-supplied to the evaluator separately.
+Current built-ins:
 
-An approval record retains its policy ID, human question, and exact approved
-proposal. Every later proposal is still evaluated: the policy model may reuse
-the approval only when the new action is materially within that recorded scope.
-A changed action can therefore require fresh approval even without steering.
-Rejection blocks the proposal and prevents another approval loop for that
-request. Steering changes the request, so Turn invalidates both decisions and
-evaluates the updated work again. Graceful interruption cannot open a new
-approval while ending the Turn: its final text is checked and withheld if the
-policy model does not allow it. The evaluator is deliberately model-based and
-therefore probabilistic; the runtime deterministically enforces the decision it
-returns. Instructions and guardrail changes affect the next Turn.
-
-Every newly registered request is appended as `approval_request` with its ID,
-question, Turn, and optional policy ID. Resolution appends the existing
-structured `approval` event with the decision and optional reason; abandoned
-requests append `approval_cancelled`. History is therefore sufficient to
-discover approval changes, while `approvals` remains the authoritative snapshot
-of what is pending now. Later Turns and conversation compaction retain resolved
-decisions so the agent does not treat them as unresolved, without turning one
-approval into blanket authorization for materially changed work.
-
-## Agent handlers
-
-| Handler | Input | Behavior |
+| Tool | Kind | Purpose |
 | --- | --- | --- |
-| `ask` | `{ message: string }` | Starts an agent run when idle or queues the message when busy. `start` returns its new `turnId`; `queue` returns `turnId: null`, the currently active `activeTurnId`, and the pending-message count because the queued message has not yet been assigned to a Turn. |
-| `history` | `{ fromSequence?: number, limit?: number }` | Returns up to `limit` sequenced conversation-event entries starting at the inclusive cursor, plus the cursor for the next read. Defaults to sequence 1 and 50 entries; the maximum page size is 100. |
-| `watchHistory` | `{ fromSequence, timeoutSeconds? }` | Shared long-poll: returns `true` as soon as the cursor is readable, or `false` when the wait window (default and maximum 300s) elapses. Callers loop and re-read `history`. |
-| `registerHistoryWatcher` | `{ fromSequence, awakeableId }` | Internal exclusive registration path used by `watchHistory`; re-checks the cursor so no append is lost. |
-| `unregisterHistoryWatcher` | `{ awakeableId }` | Internal cleanup path that withdraws a timed-out watch registration. |
-| `profile` | void | Returns this agent instance's instructions, persistent semantic memories, and natural-language guardrails. |
-| `setInstructions` | `{ instructions: string \| null }` | Replaces the persistent user instructions and appends a profile-change event; `null` clears them. Running Turns keep their snapshot. |
-| `setGuardrails` | `{ guardrails: [{ id, rule }] }` | Replaces the persistent policy list and appends its IDs as a profile-change event. IDs must be unique; running Turns keep their snapshot. |
-| `interrupt` | `{ reason, message? }` | Records an interruption event and signals the active Turn to cancel unfinished work and produce a final response. An optional replacement message is appended immediately and queued for the next Turn. |
-| `steer` | instruction string | Sends queued messages and the new instruction to the active turn, then appends a steering lifecycle event without rewriting their transcript entries. |
-| `scheduleMessage` | `{ turnId: string \| null, schedule: { scheduleId, message, delaySeconds, repeatEverySeconds, whenBusy? } }` | Creates or replaces a durable one-shot or fixed-interval message. A Turn supplies its ID; external administration uses `null`; omitted `whenBusy` defaults to `queue`. |
-| `cancelSchedule` | `{ turnId: string \| null, scheduleId }` | Idempotently removes a schedule and cancels its current delayed invocation. |
-| `schedules` | void | Shared read of the Agent's authoritative active schedules and next delivery times. |
-| `fireSchedule` | `{ scheduleId }` | Delayed self-send target. Rejects stale invocation IDs, advances recurrence, and routes the due message. |
-| `approvals` | void | Returns the human approvals currently waiting on this agent. |
-| `resolveApproval` | `{ approvalId, decision, reason? }` | Resolves and removes a pending approval only while its Turn is still eligible to receive the decision, then records the delivered decision in history. Returns whether the signal was delivered. |
-| `reportProgress` | `{ turnId, phase, message }` | One-way path used by the active Turn; appends an ordered transcript event only for the current invocation. |
-| `reportExecution` | structured activity/tool reports | One-way path used by the active Turn; atomically appends concise model-authored activity and tool-batch lifecycle events for the current invocation. |
-| `requestApproval` | `{ approvalId, turnId, question, guardrailId? }` | Registers a tool or policy approval request only while its Turn remains active and is not interrupting, then appends a structured request event. |
-| `cancelApproval` | `{ approvalId, turnId }` | Idempotently removes an abandoned approval request and records the cancellation when one existed. |
-| `updateMemory` | `{ turnId, changes }` | Coordination path used by `manageMemory`; atomically applies a bounded memory batch only for the active Turn. |
-| `onTurnEnd` | structured turn outcome | Accepts the active Turn's one terminal result, reconciles unconsumed steering, appends user-facing history, dispatches queued work, and then considers compaction. Stale or duplicate Turn IDs are ignored. |
-| `compact` | reserved history cursor range | Shared handler that reads and summarizes one finished transcript prefix, then sends the result to `applyCompaction`. |
-| `applyCompaction` | structured compaction result | Exclusively validates and installs the current summary checkpoint, or clears a failed reservation. |
+| `getWeather` | foreground | Synthetic lookup for parallel-call examples |
+| `sleep` | pending | Durable timer |
+| `humanApproval` | pending | Explicit signal-backed human decision |
+| `cancelOperation` | foreground control | Stop one pending task by operation ID |
+| `manageMemory` | foreground Agent RPC | Set or delete persistent memory entries |
+| `scheduleMessage` / `cancelSchedule` / `listSchedules` | foreground Agent RPC | Manage durable scheduled input |
+| `listFiles` / `readFile` / `writeFile` / `executeCommand` | foreground sandbox | Work in the Agent-scoped workspace |
 
-`history`, `watchHistory`, `profile`, `schedules`, `approvals`, and `compact`
-are shared handlers; the other Agent handlers are exclusive. Lazy state allows
-shared readers and the compactor to load only the state keys and history chunks
-they need.
+All allowed foreground calls in one model response are spawned together and
+joined. Pending tools acknowledge immediately and start completion tasks that
+survive across later iterations. `toolCallId` is their stable operation ID.
 
-The remaining services expose these public handlers:
+### Dynamic Restate tools
 
-- `Turn/run` accepts the Agent's profile snapshot, rolling summary, and exact
-  uncompacted conversation context, runs one transient agent-loop state machine
-  made of bounded iterations, and awaits one structured outcome call to
-  `Agent/onTurnEnd`.
-- `Sandbox/borrow` lazily provisions or resumes the agent-scoped resource,
-  `release` schedules idle suspension, `suspend` applies that lifecycle
-  transition, and `destroy` removes an idle resource.
-- `ModelGateway/complete` accepts instructions, model messages, and serializable
-  tool manifests. `ModelGateway/evaluateGuardrails` separately accepts the
-  policy snapshot and exact proposed action. `ModelGateway/reduceContext`
-  reduces a settled prefix of one active Turn. All three use the `openai` scope
-  so model-specific concurrency limits apply.
-- `Evals/all` accepts optional isolation settings and an optional case subset,
-  concurrently runs each selected evaluation task as a trial against a fresh
-  agent instance, and returns one aggregate of code-based grader assertions and
-  observed conversation event logs.
+A deployed JSON handler opts in with metadata:
 
-A successful interruption is visible immediately as
-`{ role: "event", type: "interrupt", turnId, reason }`. The active Turn then
-cancels and joins unfinished tools, retains completed results, and makes one
-tool-free model call that answers as far as those results allow. That response
-is appended as an assistant entry with status `interrupted`. A later turn sees
-both the boundary and final response. External invocation cancellation still
-creates a boundary without attempting graceful finalization.
-
-Execution limits use a separate
-`{ role: "event", type: "stop", turnId, cause, reason }` boundary followed by
-an assistant entry with status `stopped`. They share the guarded, tool-free
-finalization machinery without pretending that a user or operator interrupted
-the Turn.
-
-`ask` deliberately makes no model decision: it starts work when idle and
-queues when busy. Clients choose `steer` or `interrupt` explicitly when a
-message should affect the active turn. The interrupt reason is only a control
-instruction for finalizing the old Turn. A distinct optional `message` is
-recorded as a user request and queued for the next Turn.
-
-The controller flow is therefore:
-
-- An idle `ask` records its message and starts a Turn with the resulting
-  conversation event log as context.
-- An `ask` received while a Turn is active is recorded immediately at its
-  natural transcript position; the pending FIFO controls only when it runs.
-- `steer` drains that queue into one structured steering signal, then appends
-  the steering request and a lifecycle event recording its target Turn and
-  queued-message count.
-- `interrupt` leaves the queue intact. When it carries a replacement message,
-  the Agent appends and queues that user request before recording the
-  interruption event. The old Turn appends its graceful final response, then a
-  dispatch event activates all queued entries and starts one new Turn with the
-  complete conversation event log.
-
-Repeated resolutions of the `steering` signal form a durable queue. Each
-`steer` call resolves one structured `{ queued, message }` signal: messages
-waiting in the next-turn queue retain their FIFO order as `queued`, while the
-explicit instruction remains distinct as `message`. Turn converts that
-batch into one structured model update, while conversation history retains the
-individual user messages.
-
-The controller tracks each signal's message count, while Turn reports how many
-signals it consumed. If normal completion wins the race with a steer, the
-original entries remain unchanged and a later dispatch event activates the
-unconsumed requests in a new Turn. An explicit interrupt supersedes outstanding
-steering. External cancellation does not: steering accepted before cancellation
-is recovered into the next turn.
-
-## Execution activity
-
-Turn one-way sends semantic milestones to `Agent.reportProgress` and structured
-step detail to `Agent.reportExecution`. For each allowed tool batch, the latter
-records an optional short activity sentence followed by a `started` event with
-tool call IDs and names, then a `finished` event whose calls are `succeeded`,
-`failed`, `pending`, or `cancelled`. Tool arguments and results are never copied
-into history. Progress covers `thinking`, `waiting`, and `finalizing`; terminal
-state is already represented by the Turn's assistant outcome. Raw provider
-reasoning blocks are never exposed.
-
-These events retain their natural order relative to every other event the Agent
-observes. They are deliberately omitted from model context and conversation
-compaction because they are derived execution status, not user instructions.
-Clients consume all transcript activity through one cursor:
-
-```sh
-curl localhost:8080/Agent/demo/history \
-  -H 'content-type: application/json' \
-  -d '{"fromSequence":1,"limit":50}'
+```text
+restate.dev/agent: query_grafana
 ```
 
-The cursor is inclusive. The response contains
-`{ entries: [{ sequence, entry }], nextSequence }`; pass `nextSequence` as the
-next request's `fromSequence`. An empty page leaves the cursor unchanged. This
-durable transcript can later be mirrored to pub/sub for live fan-out without
-making pub/sub the source of truth.
+`dynamic-tools.ts` reads an endpoint-local, coalescing Admin API cache. A
+successful catalog refresh is reused for five minutes; failure with a prior
+snapshot uses last-known-good data and retries after 30 seconds. The selected
+catalog is returned through `restate.run`, so the turn journals one stable
+snapshot for inference and execution.
 
-## Durability and failure behavior
+The handler's documentation becomes the model description, and its JSON input
+schema is nested under `input`. Virtual Objects and Workflows also require a
+model-supplied `key`. Selected handlers run as foreground generic
+`restate.call` children. Built-in names win collisions. Treat the annotation as
+a trusted cluster capability boundary.
 
-- Starting an agent run is a one-way Restate send. Turn awaits `onTurnEnd` so Agent
-  ownership is reconciled before external cancellation is rethrown.
-- Progress and execution reports use one-way sends and never block model or
-  tool execution on the Agent handler completing.
-- Each agent-loop iteration makes one scoped full-model invocation and, when guardrails
-  exist, one or more scoped policy-model invocations. Each contains one durable
-  `run` step. Restate owns a bounded four-attempt retry policy; the AI SDK's
-  internal retries are disabled.
-- Turn carries AI SDK response messages into the next model call. This
-  preserves reasoning and tool-call state while OpenAI response storage is
-  disabled.
-- Before response text is returned or a tool batch starts, the policy model
-  checks the complete proposed action. A policy-model error fails closed and
-  follows Restate's retry policy.
-- If an allowed model proposal emits several independent tool calls, `agentStep` uses
-  Restate's [concurrent task primitives](https://docs.restate.dev/develop/ts/concurrent-tasks)
-  to spawn all local tool `run` steps before joining them. Restate journals
-  their concurrent execution and preserves deterministic replay.
-- A background Turn fiber drains steering signals into a transient FIFO while
-  the current model call and foreground tool batch finish. After the step
-  settles, Turn commits its results and drains the inbox, so the next loop
-  iteration receives every buffered instruction in FIFO order.
-- `sleep` and `humanApproval` return protocol-complete pending acknowledgements
-  to the model, while their run-scoped Restate tasks continue across later
-  iterations. A pending sleep therefore keeps its timer while steering starts
-  unrelated tools. A pending approval gates dependent actions without blocking
-  unrelated work; its eventual signal result is injected as a runtime update.
-- A guardrail approval is different: it pauses the proposed step before any
-  action in it runs. Approval resumes that exact proposal; rejection returns
-  policy feedback to the next loop iteration. Interruption cancels the wait and
-  cleans up its durable request.
-- `cancelOperation` lets the model selectively interrupt and join one pending
-  operation by its stable tool-call ID. Pending tasks are held in a turn-local
-  keyed registry; completion races are reported honestly, and unrelated
-  operations continue running.
-- `scheduleMessage`, `cancelSchedule`, and `listSchedules` are foreground tools
-  over Agent state. Creating a schedule journals a delayed self-send rather
-  than leaving a Turn task pending, so the timer survives after that Turn ends.
-- Graceful interruption cancels and joins foreground and pending tasks, records
-  their completed or cancelled results in the Turn context, and performs one
-  final model call with no tools. Abandoned approval requests are cleaned up
-  idempotently.
-- Deterministic configuration and OpenAI 4xx request errors fail immediately.
-  Transient transport, timeout, rate-limit, conflict, and 5xx errors retry.
-- A foreground tool whose durable retry policy is exhausted returns a failed
-  tool result to the model. It does not fail the whole Turn unless cancellation
-  or orchestration itself is failing.
-- Invocation cancellation rejects the yielded state-machine task. The Turn
-  supervisor catches it, stops independently pending tools, then waits for
-  sandbox release and Agent outcome reconciliation. The controller is retired
-  without finalization before cancellation is rethrown to Restate.
-- The complete conversation event log remains durable. The model sees the rolling summary
-  plus each exact model-relevant entry since its checkpoint, with steering
-  metadata and interruption/failure boundaries preserved.
-- Turn stops after 50 agent-loop iterations or 24 tool calls instead of running
-  indefinitely. It cancels unfinished work and makes one guarded, tool-free
-  finalization call so completed results are not replaced by a budget error.
+Configure discovery with:
 
-This compact reference does not reconcile operator-killed invocations. A hard
-kill before `Agent/onTurnEnd` can leave the Agent pointing at a vanished Turn, and a
-hard-killed `compact` invocation can leave its cursor reservation active.
-Production adaptations should retain the child invocation ID and attach or
-schedule a reconciliation handler with a deadline.
-
-## Model flow control
-
-Agent inference, guardrail evaluation, and active-Turn context reduction use
-the scoped gateway. `ask` performs no inference; steering and interruption are
-explicit controller operations. Background conversation compaction owns its
-cheap model call in a shared Agent handler and cannot consume a gateway slot.
-
-`ModelGateway` calls use scope `openai` and a two-level limit key:
-`<model>/<agent-hash>`. Each invocation therefore draws from three budgets at
-once:
-
-- `openai` — all gateway traffic to the provider
-- `gpt-5.6-terra` or `gpt-4o-mini` — traffic for that model
-- `<agent-hash>` — concurrent inference for one agent
-
-For example:
-
-```sh
-restate rules set "openai" --concurrency 100
-restate rules set "openai/gpt-5.6-terra" --concurrency 20
-restate rules set "openai/gpt-5.6-terra/*" --concurrency 2
-restate rules set "openai/gpt-4o-mini" --concurrency 50
-restate rules set "openai/gpt-4o-mini/*" --concurrency 4
+```text
+RESTATE_ADMIN_URL=http://localhost:9070
+RESTATE_ADMIN_TOKEN=<optional bearer token>
 ```
 
-The constant provider scope is intentionally simple and gives this example a
-single provider-wide budget. At very high scale, use a higher-cardinality scope
-such as tenant or account to avoid concentrating scheduling on one partition.
+See [`docs/tools.md`](docs/tools.md) for the definition and discovery contracts.
+
+## Guardrails and human approval
+
+Guardrails are user-managed `{id, rule}` policies in the Agent profile. The
+main agent model does not receive the list. After it proposes text or a complete
+tool batch, the policy model returns `allow`, `deny`, or `require_approval`.
+Every non-allow candidate is checked by a second independent policy review;
+unconfirmed candidates become `allow`.
+
+`deny` prevents publication/execution and returns policy feedback to the next
+model iteration. Repeating the same block produces a deterministic refusal.
+`require_approval` registers Agent state and waits on a signal before the exact
+proposal can proceed. Later proposals are evaluated again; approval is reusable
+only when materially within the recorded scope. Steering resets request-scoped
+decisions.
+
+The explicit `humanApproval` tool is separate: the agent model chooses it when
+the task itself needs a human decision. Both forms expose pending state through
+`Agent.approvals`, accept decisions through `resolveApproval`, and append the
+delivered decision to AgentSession history.
+
+Natural-language policies are probabilistic classification and do not replace
+authentication, authorization, capability scoping, deterministic validation,
+or sandbox isolation. Once the model returns a policy decision, the runtime
+enforces it deterministically.
+
+## Sandbox lifecycle
+
+`Sandbox/{agentId}` owns one persistent workspace across turns. The first
+sandbox tool lazily borrows it; parallel calls share one in-flight borrow and
+later steps reuse the lease. Release schedules a delayed suspension; a later
+borrow cancels that exact timer. The opaque reference records its provider, so
+changing `SANDBOX_PROVIDER` does not migrate existing state.
+
+The default local provider uses
+`/tmp/restate-agent-sandboxes/<encoded-agentId>`. It demonstrates lifecycle and
+path containment but is not a security boundary. The Modal provider uses
+disposable remote compute mounted over one persistent Volume per Agent.
+
+Sandbox commands are one-shot foreground calls returning exit code, stdout,
+and stderr. Hidden background processes are not treated as durable pending
+operations.
+
+See [`docs/sandboxes.md`](docs/sandboxes.md) for provider contracts and Modal
+configuration.
+
+## Durable evaluation harness
+
+`Evals/all` spawns all selected trials concurrently. Every trial gets a fresh
+`agentId`, drives Agent and AgentSession through their public handlers, waits on
+notification revisions, and returns code-based assertions over transcript
+structure, ordering, IDs, profile state, and terminal outcomes.
+
+The current suite covers basic completion, steering, interruption, external
+cancellation, interruption with replacement input, execution limits, active
+context reduction, memory, schedules, and six guardrail/approval flows.
+
+```sh
+curl localhost:8080/Evals/all \
+  --json '{"timeoutSeconds":180}'
+
+curl localhost:8080/Evals/all \
+  --json '{"cases":["steering","interruption"],"timeoutSeconds":180}'
+```
+
+The live model makes language behavior probabilistic; graders target durable
+protocol structure rather than exact prose. See [`docs/evals.md`](docs/evals.md).
 
 ## Run locally
 
-Requirements: Node.js 22 or newer, pnpm, a local Restate Server and CLI, and an
-OpenAI API key. The optional Modal provider additionally needs a Modal token ID
-and secret. Restate's [quickstart](https://docs.restate.dev/quickstart) covers
-installing the server and CLI.
+Requirements:
 
-Restate's [scope-based flow control](https://docs.restate.dev/services/flow-control)
-is currently opt-in and must be enabled on a fresh cluster:
+- Node.js 22 or newer;
+- pnpm;
+- Restate Server and CLI;
+- `OPENAI_API_KEY`; and
+- optionally Modal credentials.
+
+Scope-based model flow control currently needs the experimental Restate
+protocol features enabled on a fresh local server:
 
 ```sh
 RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true \
@@ -752,154 +343,64 @@ RESTATE_EXPERIMENTAL_ENABLE_VQUEUES=true \
 restate-server
 ```
 
-In another shell, start the service endpoint and demonstration UI:
+In another shell:
 
 ```sh
 pnpm install
-OPENAI_API_KEY=... pnpm dev
+OPENAI_API_KEY=... pnpm dev:service
+restate deployments register http://localhost:9080
 ```
 
-The endpoint listens on `9080` and the UI on `http://127.0.0.1:3000`. Use
-`pnpm dev:service` when you only want the endpoint.
+Restate ingress defaults to `http://localhost:8080`; the Admin API and Restate
+UI use `http://localhost:9070`.
 
-To run the same endpoint with isolated Modal sandboxes:
+To use Modal:
 
 ```sh
 OPENAI_API_KEY=... \
 SANDBOX_PROVIDER=modal \
 MODAL_TOKEN_ID=... \
 MODAL_TOKEN_SECRET=... \
-pnpm dev
+pnpm dev:service
 ```
 
-For dynamic tools, also set `RESTATE_ADMIN_URL` if the service cannot reach
-the local Admin API at `http://localhost:9070`.
+For a production build and core service process, use `pnpm start:service`.
 
-With the service endpoint running, register it with Restate:
-
-```sh
-restate deployments register http://localhost:9080
-```
-
-Then invoke the `Agent` Virtual Object under any `agentId`, such as `demo`:
-
-The `ask` schema defaults a missing `message` to: “What is the weather in the
-top 10 European capitals? Also sleep for 4 minutes.”
+## Try the protocol
 
 ```sh
 curl localhost:8080/Agent/demo/setInstructions \
   --json '{"instructions":"Prefer concise answers and metric units."}'
 
-curl localhost:8080/Agent/demo/setGuardrails \
-  --json '{"guardrails":[{"id":"japan-approval","rule":"Ask for human approval before answering questions about Japan."}]}'
-
 curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
 
-curl -X POST localhost:8080/Agent/demo/profile
+curl localhost:8080/AgentSession/demo/history \
+  --json '{"fromSequence":1,"limit":100}'
 
-curl localhost:8080/Agent/demo/history \
-  --json '{"fromSequence":1,"limit":50}'
-
-curl localhost:8080/Agent/demo/steer \
-  --json '"Steer toward a one-sentence answer"'
-
-curl localhost:8080/Agent/demo/interrupt \
-  --json '{"reason":"The user changed tasks","message":"What is the weather in Japan?"}'
+curl -X POST localhost:8080/Agent/demo/notifications
 ```
 
-### Demonstration UI
-
-The `@restate-agents/web` package is a small Next.js UI and backend-for-frontend
-for exercising the public Agent protocol: conversations, steering,
-interruption, approvals, schedules, profile state, and evaluations. It is
-provided strictly for demonstration and manual testing; it is not intended as
-a production UI, application template, or component library.
-
-`pnpm dev` starts the UI alongside the service endpoint. To run the UI by
-itself against an already-running endpoint, use:
-
-```sh
-pnpm dev:ui
-```
-
-Then open `http://127.0.0.1:3000`. The Agent key can be changed in the page or
-supplied as `?agent=demo`. The browser talks only to the same-origin Next.js
-BFF. The BFF uses `@restate-agents/client` and the official
-`@restatedev/restate-sdk-clients` ingress client, keeping the Restate endpoint
-and credentials out of browser state.
-
-The BFF uses local ingress by default. Configure a remote or authenticated
-Restate ingress through server-side environment variables:
-
-```sh
-RESTATE_INGRESS_URL=https://your-ingress.example.com \
-RESTATE_AUTH_TOKEN=your-token \
-pnpm dev:ui
-```
-
-`RESTATE_AUTH_TOKEN` is optional and should be omitted for localhost. When it is
-present, the BFF adds `Authorization: Bearer <token>` to Restate requests.
-
-Build the web container from the repository root with:
-
-```sh
-docker build -f docker/Dockerfile.web -t restate-agent-web .
-docker run --rm -p 3000:3000 \
-  -e RESTATE_INGRESS_URL=https://your-ingress.example.com \
-  -e RESTATE_AUTH_TOKEN=your-token \
-  restate-agent-web
-```
-
-The image runs the Next.js standalone server as an unprivileged user and
-provides `/api/health` for Kubernetes probes. Set `RESTATE_INGRESS_URL`, the
-optional `RESTATE_AUTH_TOKEN`, `PORT`, and `HOSTNAME` through the Pod or
-Deployment environment. Remember that `localhost` inside the web container is
-the container itself, so a Kubernetes deployment should use the Restate ingress
-Service URL.
-
-An idle agent returns a response shaped like:
-
-```json
-{
-  "decision": "start",
-  "turnId": "inv_...",
-  "stats": {"pendingMessages": 0}
-}
-```
-
-A busy agent does not yet know which Turn will consume the queued message:
-
-```json
-{
-  "decision": "queue",
-  "turnId": null,
-  "activeTurnId": "inv_...",
-  "stats": {"pendingMessages": 1}
-}
-```
-
-To keep a turn alive while trying steering, ask the agent to use its durable
-sleep tool and redirect it from another shell:
+Void-input handlers require an empty body with no JSON content type. `steer`
+accepts a JSON string, not an object:
 
 ```sh
 curl localhost:8080/Agent/demo/ask \
-  --json '{"message":"Sleep for 30 seconds, then tell me that you finished"}'
+  --json '{"message":"Sleep for 30 seconds, then tell me you finished."}'
 
 curl localhost:8080/Agent/demo/steer \
-  --json '"Do not wait any longer; answer immediately"'
+  --json '"Also include the weather in Paris."'
+
+curl localhost:8080/Agent/demo/interrupt \
+  --json '{"reason":"The user changed tasks","message":"What is the weather in Tokyo?"}'
 ```
 
-The sleep call returns a pending acknowledgement and its Restate timer remains
-active. A steering message starts another loop iteration after foreground tools
-finish. For the instruction above, the model can call `cancelOperation` with
-the timer's stable operation ID; that timer is interrupted while unrelated work
-continues. The agent run publishes its final answer only after its remaining
-pending operations finish.
-
-To try a runtime guardrail approval, ask a question covered by the policy:
+Configure and resolve a runtime approval:
 
 ```sh
+curl localhost:8080/Agent/demo/setGuardrails \
+  --json '{"guardrails":[{"id":"japan-approval","rule":"Require human approval before providing weather about Japan."}]}'
+
 curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Tokyo?"}'
 
@@ -909,117 +410,67 @@ curl localhost:8080/Agent/demo/resolveApproval \
   --json '{"approvalId":"<approvalId>","decision":"approved","reason":"Looks good"}'
 ```
 
-`approvals` returns the `approvalId`, originating Turn invocation ID, policy
-ID, and the evaluator's question. Approval wakes the gated step and lets its
-exact proposed action run. Rejection blocks it and gives the agent model a
-chance to refuse or choose a compliant alternative. The explicit
-`humanApproval` tool remains available for approvals the agent itself decides
-to request.
+## Model flow control
 
-To exercise model-managed persistent semantic memory, clear the guardrails,
-ask for a durable preference, and inspect the Agent profile:
+Agent, guardrail, policy-review, and active-context calls go through the
+`openai` scope. Limit keys have the form `<model>/<agent-hash>`, so each call
+draws from provider-wide, model-wide, and per-Agent budgets:
 
 ```sh
-curl localhost:8080/Agent/demo/setGuardrails \
-  --json '{"guardrails":[]}'
-
-curl localhost:8080/Agent/demo/ask \
-  --json '{"message":"Remember that I prefer temperatures in Celsius."}'
-
-curl -X POST localhost:8080/Agent/demo/profile
+restate rules set "openai" --concurrency 100
+restate rules set "openai/gpt-5.6-terra" --concurrency 20
+restate rules set "openai/gpt-5.6-terra/*" --concurrency 2
+restate rules set "openai/gpt-4o-mini" --concurrency 50
+restate rules set "openai/gpt-4o-mini/*" --concurrency 4
 ```
 
-The model can manage schedules through tools, or a client can administer the
-same Agent state directly:
+The AI SDK's provider retries are disabled. Restate owns a bounded four-attempt
+retry policy and cancellation of abandoned scoped child invocations.
 
-```sh
-curl localhost:8080/Agent/demo/scheduleMessage \
-  --json '{"turnId":null,"schedule":{"scheduleId":"weather-check","message":"Check the weather in Berlin","delaySeconds":60,"repeatEverySeconds":null,"whenBusy":"queue"}}'
+## Deliberate scope
 
-curl -X POST localhost:8080/Agent/demo/schedules
+This is a reference runtime rather than a complete agent product. The local
+sandbox is not secure isolation. Token-by-token output streaming, broadcast
+pub/sub, authentication, multi-tenant policy administration, scripted model
+testing, repeated statistical evals, and independent semantic judges are not
+implemented. Schedules support relative one-shot and fixed-delay recurrence,
+not cron expressions, timezones, or catch-up calendars.
 
-curl localhost:8080/Agent/demo/cancelSchedule \
-  --json '{"turnId":null,"scheduleId":"weather-check"}'
-```
+Operator-killing an invocation before `Agent.onTurnEnd` may leave Agent pointing
+at a vanished turn, and killing a compactor can leave its reservation active.
+Production systems should add deadline-based reconciliation.
 
-### Run the durable evaluation harness
+## Package map
 
-The single `Evals/all` suite handler runs every selected evaluation task
-concurrently as an isolated trial. Agent protocol tasks use fresh agent
-instances and `watchHistory` wait windows instead of polling; a focused
-context-reduction task calls the cheap reducer directly. The aggregate returns
-`passed | failed` plus each trial's code-based grader assertions, isolated
-`agentId`, and observed conversation event log.
-
-```sh
-curl localhost:8080/Evals/all \
-  --json '{"timeoutSeconds":180}'
-```
-
-The handler spawns all fifteen isolated tasks concurrently: a basic turn,
-steering, graceful interruption, external Turn cancellation, interruption
-carrying a replacement request, execution-budget finalization, a low-cost
-context-reduction contract, model-managed memory, scheduled delivery,
-guardrail approval, guardrail scope isolation, denial before protected tools
-start, rejection without approval loops, guardrail removal between Turns, and
-approval invalidation after steering.
-
-Pass `cases` to run a subset without paying for the rest, which matters because
-every model-backed trial is probabilistic:
-
-```sh
-curl localhost:8080/Evals/all \
-  --json '{"cases":["execution-limit"],"timeoutSeconds":300}'
-```
-
-The context-reduction case uses one small cheap-model call and no full agent
-inference:
-
-```sh
-curl localhost:8080/Evals/all \
-  --json '{"cases":["context-reduction"]}'
-```
-
-See [`docs/evals.md`](docs/evals.md) for the protocol and planned extensions.
-
-The Restate UI at `http://localhost:9070` shows the invocation tree, durable
-model/tool steps, retries, and signals. See Restate's
-[HTTP invocation guide](https://docs.restate.dev/services/invocation/http) for
-request-response, one-way send, attach, and cancellation variants.
-
-## Project map
-
-- `packages/libs/types/src/index.ts` — public wire schemas and domain types
-  shared by the runtime and external consumers
-- `packages/libs/types/src/services.ts` — shared Restate service descriptors
-  implemented by core and used to derive ingress clients
-- `packages/libs/client/src/index.ts` — typed Restate ingress client: one method
-  per public handler plus cursor-based transcript following
-- `packages/apps/web/` — demonstration-only Next.js UI and BFF, built on the
-  public client package and shadcn's headless message scroller
-- `packages/libs/core/src/agent.ts` — durable conversation controller
-- `packages/libs/core/src/agent-session.ts` — transcript owner and durable
-  agent-turn state machine
-- `packages/libs/core/src/agent-history.ts` — durable user-facing transcript
+- `packages/libs/types/` — public wire schemas, service descriptors, and
+  ingress target definitions
+- `packages/libs/client/` — typed Agent client built on
+  `@restatedev/restate-sdk-clients`
+- `packages/libs/core/src/agent.ts` — controller and notification API
+- `packages/libs/core/src/agent-session.ts` — transcript owner and turn state
+  machine
+- `packages/libs/core/src/agent-history.ts` — chunked transcript and compaction
+  checkpoint
+- `packages/libs/core/src/agent-turn.ts` — active invocation, pending input,
+  signals, and reconciliation
+- `packages/libs/core/src/agent-notifications.ts` — versioned invalidation
+  subscriptions
 - `packages/libs/core/src/agent-profile.ts` — instructions, memories, and
-  natural-language guardrails
-- `packages/libs/core/src/agent-schedules.ts` — Agent-owned scheduled messages
-- `packages/libs/core/src/agent-turn.ts` — active-turn state and signal delivery
-- `packages/libs/core/src/agent-approval.ts` — pending human approvals and signal delivery
-- `packages/libs/core/src/turn-context.ts` — transcript-to-model projection
-- `packages/libs/core/src/turn-step.ts` — bounded step execution and supervision
-- `packages/libs/core/src/turn-steering.ts` — Turn-scoped steering inbox
-- `packages/libs/core/src/turn-pending.ts` — cross-step pending tool tasks
-- `packages/libs/core/src/agent-tools.ts` — concrete tools and result projection
-- `packages/libs/core/src/dynamic-tools.ts` — annotated handler discovery
-  and dynamic Restate tool manifests
-- `packages/libs/core/src/sandbox.ts` — Agent-scoped sandbox lifecycle
-- `packages/libs/core/src/sandbox-provider.ts` — provider and client contracts
-- `packages/libs/core/src/modal-sandbox-provider.ts` — Modal compute and
-  persistent Volume adapter
-- `packages/libs/core/src/conversation-compactor.ts` — compaction model operation
-- `packages/libs/core/src/model.ts` — agent, guardrail, and Turn-context model protocols and provider calls
-- `packages/libs/core/src/model-gateway.ts` — scoped model-call admission and retries
-- `packages/libs/core/src/eval.ts` — durable black-box Agent protocol evals
-- `packages/libs/core/src/index.ts` — reusable service exports
-- `packages/libs/core/src/app.ts` — executable endpoint registration
+  guardrails
+- `packages/libs/core/src/agent-approval.ts` — pending approvals and signals
+- `packages/libs/core/src/agent-schedules.ts` — scheduled messages
+- `packages/libs/core/src/turn-step.ts` — one model/policy/tool iteration
+- `packages/libs/core/src/turn-steering.ts` — steering inbox
+- `packages/libs/core/src/turn-pending.ts` — pending tasks and cancellation
+- `packages/libs/core/src/agent-tools.ts` — built-in tool definitions
+- `packages/libs/core/src/dynamic-tools.ts` — dynamic Restate tool discovery
+- `packages/libs/core/src/model.ts` — AI SDK provider integration and model
+  contracts
+- `packages/libs/core/src/model-gateway.ts` — scoped inference admission
+- `packages/libs/core/src/sandbox.ts` — durable workspace lifecycle
+- `packages/libs/core/src/sandbox-provider.ts` — provider/client contracts
+- `packages/libs/core/src/modal-sandbox-provider.ts` — Modal adapter
+- `packages/libs/core/src/conversation-compactor.ts` — conversation summary
+  operation
+- `packages/libs/core/src/eval.ts` — black-box evaluation harness
+- `packages/libs/core/src/app.ts` — executable Restate endpoint
