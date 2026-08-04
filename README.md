@@ -810,11 +810,11 @@ curl localhost:8080/Agent/demo/interrupt \
 
 ### Demonstration UI
 
-The `@restate-agents/ui` package is a small browser interface for exercising
-the public Agent protocol: conversations, steering, interruption, approvals,
-schedules, profile state, and evaluations. It is provided strictly for
-demonstration and manual testing; it is not intended as a production UI,
-application template, or component library.
+The `@restate-agents/web` package is a small Next.js UI and backend-for-frontend
+for exercising the public Agent protocol: conversations, steering,
+interruption, approvals, schedules, profile state, and evaluations. It is
+provided strictly for demonstration and manual testing; it is not intended as
+a production UI, application template, or component library.
 
 `pnpm dev` starts the UI alongside the service endpoint. To run the UI by
 itself against an already-running endpoint, use:
@@ -823,10 +823,40 @@ itself against an already-running endpoint, use:
 pnpm dev:ui
 ```
 
-Then open `http://127.0.0.1:3000`. The UI uses
-`@restate-agents/client`, which in turn uses the official
-`@restatedev/restate-sdk-clients` ingress client. The ingress URL and Agent key
-can be changed in the page or supplied as `?ingress=http://localhost:8080&agent=demo`.
+Then open `http://127.0.0.1:3000`. The Agent key can be changed in the page or
+supplied as `?agent=demo`. The browser talks only to the same-origin Next.js
+BFF. The BFF uses `@restate-agents/client` and the official
+`@restatedev/restate-sdk-clients` ingress client, keeping the Restate endpoint
+and credentials out of browser state.
+
+The BFF uses local ingress by default. Configure a remote or authenticated
+Restate ingress through server-side environment variables:
+
+```sh
+RESTATE_INGRESS_URL=https://your-ingress.example.com \
+RESTATE_AUTH_TOKEN=your-token \
+pnpm dev:ui
+```
+
+`RESTATE_AUTH_TOKEN` is optional and should be omitted for localhost. When it is
+present, the BFF adds `Authorization: Bearer <token>` to Restate requests.
+
+Build the web container from the repository root with:
+
+```sh
+docker build -f docker/Dockerfile.web -t restate-agent-web .
+docker run --rm -p 3000:3000 \
+  -e RESTATE_INGRESS_URL=https://your-ingress.example.com \
+  -e RESTATE_AUTH_TOKEN=your-token \
+  restate-agent-web
+```
+
+The image runs the Next.js standalone server as an unprivileged user and
+provides `/api/health` for Kubernetes probes. Set `RESTATE_INGRESS_URL`, the
+optional `RESTATE_AUTH_TOKEN`, `PORT`, and `HOSTNAME` through the Pod or
+Deployment environment. Remember that `localhost` inside the web container is
+the container itself, so a Kubernetes deployment should use the Restate ingress
+Service URL.
 
 An idle agent returns a response shaped like:
 
@@ -963,10 +993,10 @@ request-response, one-way send, attach, and cancellation variants.
   shared by the runtime and external consumers
 - `packages/libs/types/src/services.ts` — shared Restate service descriptors
   implemented by core and used to derive ingress clients
-- `packages/libs/client/src/index.ts` — browser-compatible ingress client: one
-  method per public handler plus cursor-based transcript following
-- `packages/libs/ui/src/` — React demonstration UI built on the public client
-  package and shadcn's headless message scroller
+- `packages/libs/client/src/index.ts` — typed Restate ingress client: one method
+  per public handler plus cursor-based transcript following
+- `packages/apps/web/` — demonstration-only Next.js UI and BFF, built on the
+  public client package and shadcn's headless message scroller
 - `packages/libs/core/src/agent.ts` — durable conversation controller
 - `packages/libs/core/src/agent-session.ts` — transcript owner and durable
   agent-turn state machine

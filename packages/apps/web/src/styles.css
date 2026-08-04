@@ -203,10 +203,6 @@ svg {
   gap: 3px;
 }
 
-.connection-form label:nth-child(2) {
-  flex: 1;
-}
-
 .connection-form label > span {
   color: var(--text-faint);
   font-size: 10px;
@@ -1090,6 +1086,8 @@ svg {
 
 .mode-switcher {
   display: flex;
+  min-inline-size: 0;
+  margin: 0;
   gap: 3px;
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -1828,10 +1826,6 @@ svg {
 
   .connection-status {
     font-size: 0;
-  }
-
-  .connection-form label:first-child {
-    display: none;
   }
 
   .conversation-heading {

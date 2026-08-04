@@ -1,4 +1,3 @@
-import type {SequencedEntry} from "@restate-agents/client";
 import {
   Ban,
   Bot,
@@ -22,20 +21,16 @@ import {
   X,
 } from "lucide-react";
 import {useEffect, useMemo, useState} from "react";
-import {renderInline, renderMarkdown} from "./markdown.js";
-import {Bubble, BubbleContent} from "./components/ui/bubble.js";
+import type {SequencedEntry} from "./agent-client";
+import {Bubble, BubbleContent} from "./components/ui/bubble";
+import {Marker, MarkerContent, MarkerIcon} from "./components/ui/marker";
 import {
   Message,
   MessageAvatar,
   MessageContent,
   MessageFooter,
   MessageHeader,
-} from "./components/ui/message.js";
-import {
-  Marker,
-  MarkerContent,
-  MarkerIcon,
-} from "./components/ui/marker.js";
+} from "./components/ui/message";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -43,7 +38,8 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-} from "./components/ui/message-scroller.js";
+} from "./components/ui/message-scroller";
+import {renderInline, renderMarkdown} from "./markdown";
 
 type TranscriptEntry = SequencedEntry["entry"];
 type EventEntry = Extract<TranscriptEntry, {role: "event"}>;
@@ -152,7 +148,11 @@ function ToolLines({entry}: {entry: Extract<DetailEntry, {type: "tools"}>}) {
             <Hourglass />
           );
         return (
-          <div className="tool-line" data-status={call.status} key={`${entry.phase}-${call.id}`}>
+          <div
+            className="tool-line"
+            data-status={call.status}
+            key={`${entry.phase}-${call.id}`}
+          >
             <span className="tool-icon">{icon}</span>
             <span>{call.summary ?? call.name}</span>
           </div>
@@ -175,7 +175,11 @@ function TurnDetail({entry}: {entry: DetailEntry}) {
       return (
         <div className="turn-detail activity-detail">
           <span className="step-chip">Step {entry.step}</span>
-          <span dangerouslySetInnerHTML={{__html: renderInline(entry.message)}} />
+          <span
+            // The renderer escapes every source character before adding formatting tags.
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized model output
+            dangerouslySetInnerHTML={{__html: renderInline(entry.message)}}
+          />
         </div>
       );
     case "tools":
@@ -184,7 +188,8 @@ function TurnDetail({entry}: {entry: DetailEntry}) {
           <div className="tool-heading">
             <Wrench />
             <span>
-              Step {entry.step} · {entry.phase === "started" ? "Running" : "Finished"}
+              Step {entry.step} ·{" "}
+              {entry.phase === "started" ? "Running" : "Finished"}
             </span>
           </div>
           <ToolLines entry={entry} />
@@ -271,6 +276,9 @@ function TurnCard({row}: {row: TurnRow}) {
       </summary>
       <div className="turn-body">
         {row.entries.map((entry, index) => (
+          // Turn details form an append-only sequence, so their position is a
+          // stable identity for the lifetime of the turn.
+          // biome-ignore lint/suspicious/noArrayIndexKey: see above
           <TurnDetail entry={entry} key={`${entry.type}-${index}`} />
         ))}
       </div>
@@ -322,6 +330,8 @@ function AssistantMessage({item}: {item: SequencedEntry}) {
         <Bubble variant="outline">
           <BubbleContent
             className="markdown"
+            // The renderer escapes every source character before adding formatting tags.
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized model output
             dangerouslySetInnerHTML={{__html: renderMarkdown(entry.text)}}
           />
         </Bubble>
@@ -343,7 +353,9 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
     case "interrupt":
       return (
         <Marker variant="separator" className="marker-important">
-          <MarkerIcon><Ban /></MarkerIcon>
+          <MarkerIcon>
+            <Ban />
+          </MarkerIcon>
           <MarkerContent>
             Turn interrupted · <em>{entry.reason}</em>
           </MarkerContent>
@@ -352,7 +364,9 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
     case "dispatch":
       return (
         <Marker variant="separator">
-          <MarkerIcon><Play /></MarkerIcon>
+          <MarkerIcon>
+            <Play />
+          </MarkerIcon>
           <MarkerContent>
             {entry.queuedMessages} queued message(s) dispatched into a new turn
           </MarkerContent>
@@ -361,21 +375,31 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
     case "memory":
       return (
         <Marker>
-          <MarkerIcon><MemoryStick /></MarkerIcon>
+          <MarkerIcon>
+            <MemoryStick />
+          </MarkerIcon>
           <MarkerContent>
-            Memory updated · {entry.changes.map((change) => `${change.operation} ${change.key}`).join(", ")}
+            Memory updated ·{" "}
+            {entry.changes
+              .map((change) => `${change.operation} ${change.key}`)
+              .join(", ")}
           </MarkerContent>
         </Marker>
       );
     case "approval":
       return (
-        <Marker className={entry.decision === "approved" ? "marker-success" : "marker-danger"}>
+        <Marker
+          className={
+            entry.decision === "approved" ? "marker-success" : "marker-danger"
+          }
+        >
           <MarkerIcon>
             {entry.decision === "approved" ? <ShieldCheck /> : <ShieldX />}
           </MarkerIcon>
           <MarkerContent>
             {entry.decision === "approved" ? "Approved" : "Rejected"}
-            {entry.guardrailId ? ` [${entry.guardrailId}]` : ""} · {entry.question}
+            {entry.guardrailId ? ` [${entry.guardrailId}]` : ""} ·{" "}
+            {entry.question}
             {entry.reason ? ` (${entry.reason})` : ""}
           </MarkerContent>
         </Marker>
@@ -383,16 +407,22 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
     case "approval_request":
       return (
         <Marker className="marker-warning">
-          <MarkerIcon><ShieldQuestion /></MarkerIcon>
+          <MarkerIcon>
+            <ShieldQuestion />
+          </MarkerIcon>
           <MarkerContent>
-            Approval requested{entry.guardrailId ? ` [${entry.guardrailId}]` : ""} · {entry.question}
+            Approval requested
+            {entry.guardrailId ? ` [${entry.guardrailId}]` : ""} ·{" "}
+            {entry.question}
           </MarkerContent>
         </Marker>
       );
     case "schedule":
       return (
         <Marker>
-          <MarkerIcon><Clock3 /></MarkerIcon>
+          <MarkerIcon>
+            <Clock3 />
+          </MarkerIcon>
           <MarkerContent>
             Schedule “{entry.scheduleId}” fired · routed as {entry.routing}
           </MarkerContent>
@@ -401,7 +431,9 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
     default:
       return (
         <Marker>
-          <MarkerIcon><CircleDot /></MarkerIcon>
+          <MarkerIcon>
+            <CircleDot />
+          </MarkerIcon>
           <MarkerContent>{entry.type}</MarkerContent>
         </Marker>
       );
@@ -423,7 +455,13 @@ function isAnchor(row: TranscriptRow) {
   );
 }
 
-export function Transcript({entries, busy}: {entries: SequencedEntry[]; busy: boolean}) {
+export function Transcript({
+  entries,
+  busy,
+}: {
+  entries: SequencedEntry[];
+  busy: boolean;
+}) {
   const rows = useMemo(() => transcriptRows(entries), [entries]);
   return (
     <MessageScrollerProvider
@@ -436,22 +474,37 @@ export function Transcript({entries, busy}: {entries: SequencedEntry[]; busy: bo
           <MessageScrollerContent aria-busy={busy}>
             {rows.length === 0 && (
               <div className="empty-conversation">
-                <div className="empty-orbit"><Sparkles /></div>
+                <div className="empty-orbit">
+                  <Sparkles />
+                </div>
                 <p className="eyebrow">Durable conversation</p>
                 <h2>What should the agent work on?</h2>
                 <p>
-                  Start a turn, then steer it while tools run, interrupt it gracefully,
-                  or inspect every durable lifecycle event as it happens.
+                  Start a turn, then steer it while tools run, interrupt it
+                  gracefully, or inspect every durable lifecycle event as it
+                  happens.
                 </p>
               </div>
             )}
             {rows.map((row) => (
               <MessageScrollerItem
-                key={row.kind === "turn" ? `turn-${row.turnId}` : `entry-${row.item.sequence}`}
-                messageId={row.kind === "turn" ? `turn-${row.turnId}` : `entry-${row.item.sequence}`}
+                key={
+                  row.kind === "turn"
+                    ? `turn-${row.turnId}`
+                    : `entry-${row.item.sequence}`
+                }
+                messageId={
+                  row.kind === "turn"
+                    ? `turn-${row.turnId}`
+                    : `entry-${row.item.sequence}`
+                }
                 scrollAnchor={isAnchor(row)}
               >
-                {row.kind === "turn" ? <TurnCard row={row} /> : <Entry item={row.item} />}
+                {row.kind === "turn" ? (
+                  <TurnCard row={row} />
+                ) : (
+                  <Entry item={row.item} />
+                )}
               </MessageScrollerItem>
             ))}
           </MessageScrollerContent>

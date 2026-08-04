@@ -1,7 +1,12 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
   "files": {
-    "includes": ["packages/**/src/**/*.ts"]
+    "includes": [
+      "packages/**/src/**/*.ts",
+      "packages/**/src/**/*.tsx",
+      "packages/**/app/**/*.ts",
+      "packages/**/app/**/*.tsx"
+    ]
   },
   "formatter": {
     "enabled": true,

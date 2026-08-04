@@ -1,9 +1,9 @@
+import {useCallback, useEffect, useMemo, useState} from "react";
 import {
   type AgentClient,
   createAgentClient,
   type SequencedEntry,
-} from "@restate-agents/client";
-import {useCallback, useEffect, useMemo, useState} from "react";
+} from "./agent-client";
 
 export type AgentProfile = Awaited<ReturnType<AgentClient["profile"]>>;
 export type ApprovalRequest = Awaited<
@@ -14,7 +14,6 @@ export type ScheduledMessage = Awaited<
 >[number];
 
 export type AgentConnection = {
-  ingressUrl: string;
   agentId: string;
 };
 
@@ -34,12 +33,8 @@ function abortableDelay(milliseconds: number, signal: AbortSignal) {
 
 export function useAgent(connection: AgentConnection) {
   const client = useMemo(
-    () =>
-      createAgentClient({
-        ingressUrl: connection.ingressUrl,
-        agentId: connection.agentId,
-      }),
-    [connection],
+    () => createAgentClient(connection.agentId),
+    [connection.agentId],
   );
   const [entries, setEntries] = useState<SequencedEntry[]>([]);
   const [profile, setProfile] = useState<AgentProfile>();

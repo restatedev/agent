@@ -1,0 +1,17 @@
+.git
+.github
+.pnpm-store
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+
+docs
+*.md
+biome.json
+restate-data
+.restate
+
+modal.sh
+wire-secrets.sh
+.env*

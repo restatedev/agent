@@ -37,12 +37,10 @@ FROM base AS build
 # Manifests first: the dependency layer only rebuilds when the lockfile or a
 # package.json changes, not on every source edit.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/libs/client/package.json packages/libs/client/
 COPY packages/libs/core/package.json packages/libs/core/
 COPY packages/libs/types/package.json packages/libs/types/
-COPY packages/libs/ui/package.json packages/libs/ui/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile
+    pnpm install --filter @restate-agents/core... --frozen-lockfile
 
 COPY tsconfig.base.json ./
 COPY packages/libs/core/tsconfig.json packages/libs/core/

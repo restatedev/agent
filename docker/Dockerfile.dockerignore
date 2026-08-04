@@ -19,4 +19,5 @@ restate-data
 
 # local launcher with credentials, and env files
 modal.sh
+wire-secrets.sh
 .env*

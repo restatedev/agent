@@ -1,24 +1,27 @@
 {
-  "name": "@restate-agents/ui",
+  "name": "@restate-agents/web",
   "version": "0.0.1",
-  "description": "Demonstration-only browser UI for the Restate agent reference implementation.",
+  "description": "Demonstration-only Next.js UI and BFF for the Restate agent reference implementation.",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && node ./scripts/build.js",
-    "dev": "node ./scripts/build.js --serve"
+    "build": "next build",
+    "dev": "next dev",
+    "start": "next start"
   },
   "dependencies": {
     "@restate-agents/client": "workspace:*",
+    "@restate-agents/types": "workspace:*",
     "@shadcn/react": "^0.2.1",
     "lucide-react": "^1.28.0",
+    "next": "^16.2.12",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@types/node": "^22",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "esbuild": "^0.25.4",
     "typescript": "^6.0.3"
   }
 }

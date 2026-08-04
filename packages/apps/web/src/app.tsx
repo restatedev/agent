@@ -1,8 +1,5 @@
-import type {
-  AgentClient,
-  ScheduleSpecInput,
-  SequencedEntry,
-} from "@restate-agents/client";
+"use client";
+
 import {
   Activity,
   AlarmClock,
@@ -34,14 +31,19 @@ import {
   useRef,
   useState,
 } from "react";
-import {Transcript} from "./transcript.js";
+import type {
+  AgentClient,
+  ScheduleSpecInput,
+  SequencedEntry,
+} from "./agent-client";
+import {Transcript} from "./transcript";
 import {
   type AgentConnection,
   type AgentProfile,
   type ApprovalRequest,
   type ScheduledMessage,
   useAgent,
-} from "./use-agent.js";
+} from "./use-agent";
 
 type Mode = "ask" | "steer" | "interrupt";
 type Tab = "approvals" | "profile" | "evals";
@@ -95,27 +97,14 @@ const MODE_COPY: Record<Mode, {label: string; description: string}> = {
   },
   steer: {
     label: "Steer",
-    description: "Guides the current turn after its active tool batch completes.",
+    description:
+      "Guides the current turn after its active tool batch completes.",
   },
   interrupt: {
     label: "Interrupt",
     description: "Stops unfinished work and asks the turn for a final summary.",
   },
 };
-
-function initialConnection(): AgentConnection {
-  const params = new URLSearchParams(window.location.search);
-  return {
-    ingressUrl:
-      params.get("ingress") ??
-      localStorage.getItem("restateDemoUi.ingress") ??
-      "http://localhost:8080",
-    agentId:
-      params.get("agent") ??
-      localStorage.getItem("restateDemoUi.agent") ??
-      "demo",
-  };
-}
 
 function shortTurn(turnId: string) {
   return turnId.length > 14 ? `${turnId.slice(0, 14)}…` : turnId;
@@ -211,20 +200,20 @@ function ConnectionHeader({
   connection: AgentConnection;
   connected: boolean;
   error?: string;
-  onConnect: (ingressUrl: string, agentId: string) => void;
+  onConnect: (agentId: string) => void;
   onNewAgent: () => void;
 }) {
-  const [ingressUrl, setIngressUrl] = useState(connection.ingressUrl);
   const [agentId, setAgentId] = useState(connection.agentId);
   useEffect(() => {
-    setIngressUrl(connection.ingressUrl);
     setAgentId(connection.agentId);
-  }, [connection.agentId, connection.ingressUrl]);
+  }, [connection.agentId]);
 
   return (
     <header className="topbar">
       <div className="brand">
-        <div className="brand-mark"><Bot /></div>
+        <div className="brand-mark">
+          <Bot />
+        </div>
         <div>
           <strong>Restate Agent</strong>
           <span>durable runtime demo</span>
@@ -234,18 +223,9 @@ function ConnectionHeader({
         className="connection-form"
         onSubmit={(event) => {
           event.preventDefault();
-          onConnect(ingressUrl, agentId);
+          onConnect(agentId);
         }}
       >
-        <label>
-          <span>Ingress</span>
-          <input
-            aria-label="Restate ingress URL"
-            onChange={(event) => setIngressUrl(event.target.value)}
-            spellCheck={false}
-            value={ingressUrl}
-          />
-        </label>
         <label>
           <span>Agent</span>
           <input
@@ -255,18 +235,27 @@ function ConnectionHeader({
             value={agentId}
           />
         </label>
-        <button className="button secondary compact" type="submit">Connect</button>
+        <button className="button secondary compact" type="submit">
+          Connect
+        </button>
       </form>
       <div className="topbar-actions">
         <span
           className="connection-status"
           data-connected={connected}
-          title={error ?? (connected ? "Connected to Restate ingress" : "Connecting")}
+          title={
+            error ??
+            (connected ? "Connected to the agent runtime" : "Connecting")
+          }
         >
           <span className="connection-dot" />
           {connected ? "Live" : "Connecting"}
         </span>
-        <button className="button ghost compact" onClick={onNewAgent} type="button">
+        <button
+          className="button ghost compact"
+          onClick={onNewAgent}
+          type="button"
+        >
           <Plus /> New agent
         </button>
       </div>
@@ -280,7 +269,9 @@ function StatusStrip({turn}: {turn: ReturnType<typeof activeTurn>}) {
       <div className="status-strip">
         <span className="idle-dot" />
         <span>Idle</span>
-        <span className="status-detail">The next ask starts a durable turn.</span>
+        <span className="status-detail">
+          The next ask starts a durable turn.
+        </span>
       </div>
     );
   }
@@ -288,7 +279,9 @@ function StatusStrip({turn}: {turn: ReturnType<typeof activeTurn>}) {
     <div className="status-strip running">
       <Sparkles className="thinking-icon" />
       <strong>{turn.phase ?? "starting"}</strong>
-      <span className="status-detail shimmer">{turn.message ?? "Preparing the turn"}</span>
+      <span className="status-detail shimmer">
+        {turn.message ?? "Preparing the turn"}
+      </span>
       <span className="status-turn">{shortTurn(turn.turnId)}</span>
     </div>
   );
@@ -336,7 +329,7 @@ function Composer({
   return (
     <div className="composer-shell">
       <div className="mode-row">
-        <div className="mode-switcher" aria-label="Message delivery mode">
+        <fieldset className="mode-switcher" aria-label="Message delivery mode">
           {(Object.keys(MODE_COPY) as Mode[]).map((candidate) => (
             <button
               data-active={mode === candidate}
@@ -344,11 +337,17 @@ function Composer({
               onClick={() => setMode(candidate)}
               type="button"
             >
-              {candidate === "ask" ? <MessageSquareText /> : candidate === "steer" ? <GitBranch /> : <Ban />}
+              {candidate === "ask" ? (
+                <MessageSquareText />
+              ) : candidate === "steer" ? (
+                <GitBranch />
+              ) : (
+                <Ban />
+              )}
               {MODE_COPY[candidate].label}
             </button>
           ))}
-        </div>
+        </fieldset>
         <span className="mode-description">{MODE_COPY[mode].description}</span>
       </div>
       <div className="composer-box" data-mode={mode}>
@@ -374,7 +373,13 @@ function Composer({
           onClick={() => void submit()}
           type="button"
         >
-          {sending ? <RefreshCw className="spin" /> : mode === "interrupt" ? <Ban /> : <Send />}
+          {sending ? (
+            <RefreshCw className="spin" />
+          ) : mode === "interrupt" ? (
+            <Ban />
+          ) : (
+            <Send />
+          )}
         </button>
       </div>
       {mode === "interrupt" && (
@@ -386,7 +391,9 @@ function Composer({
         />
       )}
       {busy && mode === "ask" && (
-        <p className="composer-note">This request will be queued behind the active turn.</p>
+        <p className="composer-note">
+          This request will be queued behind the active turn.
+        </p>
       )}
     </div>
   );
@@ -408,7 +415,9 @@ function ApprovalsPanel({
       <div className="panel-empty">
         <ShieldCheck />
         <strong>No pending approvals</strong>
-        <span>Human decisions requested by tools or guardrails appear here.</span>
+        <span>
+          Human decisions requested by tools or guardrails appear here.
+        </span>
       </div>
     );
   }
@@ -418,7 +427,9 @@ function ApprovalsPanel({
         <article className="approval-card" key={approval.approvalId}>
           <div className="card-kicker">
             <ShieldCheck />
-            {approval.guardrailId ? `Guardrail · ${approval.guardrailId}` : "Agent request"}
+            {approval.guardrailId
+              ? `Guardrail · ${approval.guardrailId}`
+              : "Agent request"}
           </div>
           <h3>{approval.question}</h3>
           <p className="card-meta">
@@ -485,6 +496,9 @@ function GuardrailEditor({
   return (
     <div className="guardrail-editor">
       {guardrails.map((guardrail, index) => (
+        // Rows only append or delete in this local draft; their position is
+        // stable until the complete guardrail list is saved.
+        // biome-ignore lint/suspicious/noArrayIndexKey: see above
         <div className="guardrail-row" key={`${index}-${guardrail.id}`}>
           <input
             aria-label="Guardrail ID"
@@ -510,7 +524,9 @@ function GuardrailEditor({
           <button
             aria-label={`Remove guardrail ${guardrail.id || index + 1}`}
             className="icon-button danger"
-            onClick={() => onChange(guardrails.filter((_, row) => row !== index))}
+            onClick={() =>
+              onChange(guardrails.filter((_, row) => row !== index))
+            }
             type="button"
           >
             <Trash2 />
@@ -551,7 +567,8 @@ function ScheduleList({
             <div>
               <strong>{schedule.message}</strong>
               <span>
-                {schedule.scheduleId} · {nextRunLabel(schedule.nextRunAt)} · {schedule.whenBusy}
+                {schedule.scheduleId} · {nextRunLabel(schedule.nextRunAt)} ·{" "}
+                {schedule.whenBusy}
                 {schedule.repeatEverySeconds
                   ? ` · every ${formatDuration(schedule.repeatEverySeconds)}`
                   : " · once"}
@@ -562,7 +579,9 @@ function ScheduleList({
               className="icon-button danger"
               onClick={async () => {
                 try {
-                  const result = await client.cancelSchedule(schedule.scheduleId);
+                  const result = await client.cancelSchedule(
+                    schedule.scheduleId,
+                  );
                   notify(
                     result.accepted
                       ? result.cancelled
@@ -628,7 +647,13 @@ function ProfilePanel({
     <div className="settings-sections">
       <section className="settings-section">
         <div className="section-heading">
-          <div><Settings2 /><span><strong>Instructions</strong><small>User-owned prompt context</small></span></div>
+          <div>
+            <Settings2 />
+            <span>
+              <strong>Instructions</strong>
+              <small>User-owned prompt context</small>
+            </span>
+          </div>
         </div>
         <textarea
           onChange={(event) => {
@@ -646,7 +671,11 @@ function ProfilePanel({
               try {
                 await client.setInstructions(instructions.trim() || null);
                 setInstructionsDirty(false);
-                notify(instructions.trim() ? "Instructions saved" : "Instructions cleared");
+                notify(
+                  instructions.trim()
+                    ? "Instructions saved"
+                    : "Instructions cleared",
+                );
                 await refreshProfile();
               } catch (error) {
                 notify(errorMessage(error), true);
@@ -672,11 +701,19 @@ function ProfilePanel({
 
       <section className="settings-section">
         <div className="section-heading">
-          <div><ShieldCheck /><span><strong>Guardrails</strong><small>Runtime policy gates</small></span></div>
+          <div>
+            <ShieldCheck />
+            <span>
+              <strong>Guardrails</strong>
+              <small>Runtime policy gates</small>
+            </span>
+          </div>
           <button
             className="button primary small"
             onClick={async () => {
-              const next = guardrails.filter(({id, rule}) => id.trim() || rule.trim());
+              const next = guardrails.filter(
+                ({id, rule}) => id.trim() || rule.trim(),
+              );
               if (next.some(({id, rule}) => !id.trim() || !rule.trim())) {
                 notify("Every guardrail needs both an id and a policy", true);
                 return;
@@ -685,7 +722,11 @@ function ProfilePanel({
                 await client.setGuardrails(next);
                 setGuardrails(next);
                 setGuardrailsDirty(false);
-                notify(next.length ? `${next.length} guardrail(s) saved` : "Guardrails cleared");
+                notify(
+                  next.length
+                    ? `${next.length} guardrail(s) saved`
+                    : "Guardrails cleared",
+                );
                 await refreshProfile();
               } catch (error) {
                 notify(errorMessage(error), true);
@@ -697,14 +738,21 @@ function ProfilePanel({
           </button>
         </div>
         <p className="section-copy">
-          Natural-language policies evaluated before tool batches or responses are published.
+          Natural-language policies evaluated before tool batches or responses
+          are published.
         </p>
         <GuardrailEditor guardrails={guardrails} onChange={changeGuardrails} />
       </section>
 
       <section className="settings-section">
         <div className="section-heading">
-          <div><MemoryStick /><span><strong>Memories</strong><small>Model-managed agent context</small></span></div>
+          <div>
+            <MemoryStick />
+            <span>
+              <strong>Memories</strong>
+              <small>Model-managed agent context</small>
+            </span>
+          </div>
         </div>
         {profile?.memories.length ? (
           <div className="memory-list">
@@ -722,7 +770,13 @@ function ProfilePanel({
 
       <section className="settings-section">
         <div className="section-heading">
-          <div><AlarmClock /><span><strong>Schedules</strong><small>Durable message delivery</small></span></div>
+          <div>
+            <AlarmClock />
+            <span>
+              <strong>Schedules</strong>
+              <small>Durable message delivery</small>
+            </span>
+          </div>
         </div>
         <ScheduleList
           client={client}
@@ -738,8 +792,15 @@ function ProfilePanel({
             const repeatEverySeconds = schedule.repeatEverySeconds
               ? Number.parseInt(schedule.repeatEverySeconds, 10)
               : null;
-            if (!schedule.scheduleId.trim() || !schedule.message.trim() || delaySeconds < 1) {
-              notify("Schedule id, message, and positive delay are required", true);
+            if (
+              !schedule.scheduleId.trim() ||
+              !schedule.message.trim() ||
+              delaySeconds < 1
+            ) {
+              notify(
+                "Schedule id, message, and positive delay are required",
+                true,
+              );
               return;
             }
             try {
@@ -754,7 +815,11 @@ function ProfilePanel({
                 notify(result.error, true);
                 return;
               }
-              notify(result.replaced ? `Replaced ${result.schedule.scheduleId}` : `Scheduled ${result.schedule.scheduleId}`);
+              notify(
+                result.replaced
+                  ? `Replaced ${result.schedule.scheduleId}`
+                  : `Scheduled ${result.schedule.scheduleId}`,
+              );
               setSchedule({
                 scheduleId: "",
                 message: "",
@@ -770,13 +835,20 @@ function ProfilePanel({
         >
           <div className="form-grid two">
             <input
-              onChange={(event) => setSchedule({...schedule, scheduleId: event.target.value})}
+              onChange={(event) =>
+                setSchedule({...schedule, scheduleId: event.target.value})
+              }
               placeholder="Schedule id"
               value={schedule.scheduleId}
             />
             <select
               aria-label="Behavior when agent is busy"
-              onChange={(event) => setSchedule({...schedule, whenBusy: event.target.value as ScheduleSpecInput["whenBusy"]})}
+              onChange={(event) =>
+                setSchedule({
+                  ...schedule,
+                  whenBusy: event.target.value as ScheduleSpecInput["whenBusy"],
+                })
+              }
               value={schedule.whenBusy}
             >
               <option value="queue">Queue when busy</option>
@@ -785,21 +857,30 @@ function ProfilePanel({
             </select>
           </div>
           <input
-            onChange={(event) => setSchedule({...schedule, message: event.target.value})}
+            onChange={(event) =>
+              setSchedule({...schedule, message: event.target.value})
+            }
             placeholder="Message to deliver"
             value={schedule.message}
           />
           <div className="form-grid two">
             <input
               min="1"
-              onChange={(event) => setSchedule({...schedule, delaySeconds: event.target.value})}
+              onChange={(event) =>
+                setSchedule({...schedule, delaySeconds: event.target.value})
+              }
               placeholder="Delay seconds"
               type="number"
               value={schedule.delaySeconds}
             />
             <input
               min="1"
-              onChange={(event) => setSchedule({...schedule, repeatEverySeconds: event.target.value})}
+              onChange={(event) =>
+                setSchedule({
+                  ...schedule,
+                  repeatEverySeconds: event.target.value,
+                })
+              }
               placeholder="Repeat seconds (optional)"
               type="number"
               value={schedule.repeatEverySeconds}
@@ -814,7 +895,11 @@ function ProfilePanel({
   );
 }
 
-function EvalsPanel({ingressUrl, notify}: {ingressUrl: string; notify: (message: string, error?: boolean) => void}) {
+function EvalsPanel({
+  notify,
+}: {
+  notify: (message: string, error?: boolean) => void;
+}) {
   const [selected, setSelected] = useState<Set<string>>(new Set(EVAL_CASES));
   const [timeout, setTimeoutValue] = useState(300);
   const [running, setRunning] = useState(false);
@@ -828,19 +913,26 @@ function EvalsPanel({ingressUrl, notify}: {ingressUrl: string; notify: (message:
     setRunning(true);
     setSuite(undefined);
     try {
-      const response = await fetch(`${ingressUrl}/Evals/all`, {
+      const response = await fetch("/api/evals", {
         method: "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify({
           runId: "demo-ui",
           timeoutSeconds: timeout,
-          ...(selected.size === EVAL_CASES.length ? {} : {cases: [...selected]}),
+          ...(selected.size === EVAL_CASES.length
+            ? {}
+            : {cases: [...selected]}),
         }),
       });
       const text = await response.text();
-      const data = text ? (JSON.parse(text) as EvalSuite | {message?: string}) : undefined;
+      const data = text
+        ? (JSON.parse(text) as EvalSuite | {message?: string})
+        : undefined;
       if (!response.ok) {
-        throw new Error((data && "message" in data && data.message) || `${response.status} ${response.statusText}`);
+        throw new Error(
+          (data && "message" in data && data.message) ||
+            `${response.status} ${response.statusText}`,
+        );
       }
       setSuite(data as EvalSuite);
     } catch (error) {
@@ -856,7 +948,10 @@ function EvalsPanel({ingressUrl, notify}: {ingressUrl: string; notify: (message:
         <FlaskConical />
         <div>
           <strong>Durable protocol evals</strong>
-          <span>Each case drives a fresh Agent through public handlers and checks its transcript.</span>
+          <span>
+            Each case drives a fresh Agent through public handlers and checks
+            its transcript.
+          </span>
         </div>
       </div>
       <div className="eval-cases">
@@ -877,13 +972,26 @@ function EvalsPanel({ingressUrl, notify}: {ingressUrl: string; notify: (message:
         ))}
       </div>
       <div className="eval-actions">
-        <button className="button primary" disabled={running} onClick={() => void run()} type="button">
+        <button
+          className="button primary"
+          disabled={running}
+          onClick={() => void run()}
+          type="button"
+        >
           {running ? <RefreshCw className="spin" /> : <FlaskConical />}
-          {running ? `Running ${selected.size}…` : `Run ${selected.size} selected`}
+          {running
+            ? `Running ${selected.size}…`
+            : `Run ${selected.size} selected`}
         </button>
         <label>
           Timeout
-          <input min="10" max="600" onChange={(event) => setTimeoutValue(Number(event.target.value))} type="number" value={timeout} />
+          <input
+            min="10"
+            max="600"
+            onChange={(event) => setTimeoutValue(Number(event.target.value))}
+            type="number"
+            value={timeout}
+          />
           s
         </label>
       </div>
@@ -904,7 +1012,10 @@ function EvalsPanel({ingressUrl, notify}: {ingressUrl: string; notify: (message:
                 {result.assertions.map((assertion) => (
                   <li data-passed={assertion.passed} key={assertion.name}>
                     {assertion.passed ? <Check /> : <X />}
-                    <span>{assertion.name}{assertion.details ? ` · ${assertion.details}` : ""}</span>
+                    <span>
+                      {assertion.name}
+                      {assertion.details ? ` · ${assertion.details}` : ""}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -923,7 +1034,6 @@ function Inspector({
   profile,
   schedules,
   client,
-  connection,
   notify,
   refreshProfile,
   refreshSchedules,
@@ -934,7 +1044,6 @@ function Inspector({
   profile?: AgentProfile;
   schedules: ScheduledMessage[];
   client: AgentClient;
-  connection: AgentConnection;
   notify: (message: string, error?: boolean) => void;
   refreshProfile: () => Promise<AgentProfile>;
   refreshSchedules: () => Promise<unknown>;
@@ -957,13 +1066,19 @@ function Inspector({
             type="button"
           >
             <Icon /> {label}
-            {id === "approvals" && approvals.length > 0 && <span>{approvals.length}</span>}
+            {id === "approvals" && approvals.length > 0 && (
+              <span>{approvals.length}</span>
+            )}
           </button>
         ))}
       </div>
       <div className="inspector-content" role="tabpanel">
         {tab === "approvals" && (
-          <ApprovalsPanel approvals={approvals} client={client} notify={notify} />
+          <ApprovalsPanel
+            approvals={approvals}
+            client={client}
+            notify={notify}
+          />
         )}
         {tab === "profile" && (
           <ProfilePanel
@@ -975,16 +1090,16 @@ function Inspector({
             schedules={schedules}
           />
         )}
-        {tab === "evals" && (
-          <EvalsPanel ingressUrl={connection.ingressUrl} notify={notify} />
-        )}
+        {tab === "evals" && <EvalsPanel notify={notify} />}
       </div>
     </aside>
   );
 }
 
-export function App() {
-  const [connection, setConnection] = useState(initialConnection);
+export function App({initialAgentId}: {initialAgentId: string}) {
+  const [connection, setConnection] = useState<AgentConnection>({
+    agentId: initialAgentId,
+  });
   const [mode, setMode] = useState<Mode>("ask");
   const [tab, setTab] = useState<Tab>("approvals");
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -1012,16 +1127,13 @@ export function App() {
     );
   }
 
-  function connect(ingressUrl: string, agentId: string) {
-    const nextIngress = ingressUrl.trim().replace(/\/+$/, "");
+  function connect(agentId: string) {
     const nextAgent = agentId.trim() || "demo";
-    localStorage.setItem("restateDemoUi.ingress", nextIngress);
-    localStorage.setItem("restateDemoUi.agent", nextAgent);
+    const url = new URL(window.location.href);
+    url.searchParams.set("agent", nextAgent);
+    window.history.replaceState(null, "", url);
     setProvisionalTurn(undefined);
-    setConnection({
-      ingressUrl: nextIngress,
-      agentId: nextAgent,
-    });
+    setConnection({agentId: nextAgent});
   }
 
   async function sendMessage(message: string, replacement?: string) {
@@ -1039,12 +1151,17 @@ export function App() {
       } else if (mode === "steer") {
         const accepted = await agent.client.steer(message);
         notify(
-          accepted ? "Steering delivered to the active turn" : "No turn is accepting steering",
+          accepted
+            ? "Steering delivered to the active turn"
+            : "No turn is accepting steering",
           !accepted,
         );
       } else {
         const accepted = await agent.client.interrupt(message, replacement);
-        notify(accepted ? "Interruption requested" : "Nothing to interrupt", !accepted);
+        notify(
+          accepted ? "Interruption requested" : "Nothing to interrupt",
+          !accepted,
+        );
       }
     } catch (error) {
       notify(errorMessage(error), true);
@@ -1060,10 +1177,7 @@ export function App() {
         error={agent.connectionError}
         onConnect={connect}
         onNewAgent={() =>
-          connect(
-            connection.ingressUrl,
-            `agent-${Math.random().toString(36).slice(2, 8)}`,
-          )
+          connect(`agent-${Math.random().toString(36).slice(2, 8)}`)
         }
       />
       <main className="workspace">
@@ -1079,7 +1193,10 @@ export function App() {
             </div>
           </div>
           <div className="transcript-frame">
-            <Transcript entries={agent.entries} busy={Boolean(turn && !turn.terminal)} />
+            <Transcript
+              entries={agent.entries}
+              busy={Boolean(turn && !turn.terminal)}
+            />
           </div>
           <StatusStrip turn={turn} />
           <Composer
@@ -1092,7 +1209,6 @@ export function App() {
         <Inspector
           approvals={agent.approvals}
           client={agent.client}
-          connection={connection}
           notify={notify}
           profile={agent.profile}
           refreshProfile={agent.refreshProfile}

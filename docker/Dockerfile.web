@@ -1,0 +1,55 @@
+# Production image for the demonstration Next.js UI and BFF.
+#
+# Build from the repository root:
+#
+#   docker build -f docker/Dockerfile.web -t restate-agent-web .
+#
+# Runtime environment:
+#   RESTATE_INGRESS_URL  Restate ingress URL visible from this container
+#                       (default http://localhost:8080)
+#   RESTATE_AUTH_TOKEN  optional bearer token for Restate Cloud or another
+#                       authenticated ingress; omit it for local Restate
+#   PORT                HTTP listen port (default 3000)
+#   HOSTNAME            listen address (default 0.0.0.0)
+
+# syntax=docker/dockerfile:1
+
+ARG NODE_VERSION=22
+
+FROM node:${NODE_VERSION}-bookworm-slim AS base
+ARG PNPM_VERSION=11.9.0
+ENV npm_config_store_dir=/pnpm/store
+RUN npm install --global pnpm@${PNPM_VERSION}
+WORKDIR /app
+
+FROM base AS build
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/apps/web/package.json packages/apps/web/
+COPY packages/libs/client/package.json packages/libs/client/
+COPY packages/libs/types/package.json packages/libs/types/
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --filter @restate-agents/web... --frozen-lockfile
+
+COPY tsconfig.base.json ./
+COPY packages/apps/web packages/apps/web
+COPY packages/libs/client packages/libs/client
+COPY packages/libs/types packages/libs/types
+RUN pnpm --filter @restate-agents/web... build
+
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    RESTATE_INGRESS_URL=http://localhost:8080
+
+WORKDIR /app
+COPY --from=build /app/packages/apps/web/.next/standalone ./
+COPY --from=build /app/packages/apps/web/.next/static ./packages/apps/web/.next/static
+
+USER node
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "packages/apps/web/server.js"]

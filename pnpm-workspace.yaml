@@ -1,12 +1,15 @@
 packages:
+  - "packages/apps/*"
   - "packages/libs/*"
 
 # esbuild ships a native binary and needs its install/build script to run.
 # pnpm blocks dependency build scripts by default; allow it explicitly.
 onlyBuiltDependencies:
   - esbuild
+  - sharp
 
 allowBuilds:
   cbor-extract: false
   esbuild: true
   protobufjs: false
+  sharp: true

@@ -36,7 +36,8 @@ export OPENAI_API_KEY=...
 pnpm dev
 ```
 
-The endpoint listens on port 9080 by default. Register it:
+The endpoint listens on port 9080 by default and the demonstration Next.js UI
+and BFF listens on port 3000. Register the endpoint:
 
 ```sh
 restate deployments register http://localhost:9080
@@ -44,6 +45,19 @@ restate deployments register http://localhost:9080
 
 Restate ingress is normally `http://localhost:8080`, and the local Admin
 API/UI is `http://localhost:9070`.
+
+The web BFF uses that local ingress by default. For remote Restate, set
+`RESTATE_INGRESS_URL` and optionally `RESTATE_AUTH_TOKEN` on the web process.
+The bearer token is never sent to the browser:
+
+```sh
+RESTATE_INGRESS_URL=https://your-ingress.example.com \
+RESTATE_AUTH_TOKEN=your-token \
+pnpm dev:ui
+```
+
+See `packages/apps/web/env.example` and `docker/Dockerfile.web` for the complete
+web runtime configuration and container build.
 
 To use Modal:
 
