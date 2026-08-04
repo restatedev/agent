@@ -752,12 +752,15 @@ RESTATE_EXPERIMENTAL_ENABLE_VQUEUES=true \
 restate-server
 ```
 
-In another shell, start the service endpoint:
+In another shell, start the service endpoint and demonstration UI:
 
 ```sh
 pnpm install
 OPENAI_API_KEY=... pnpm dev
 ```
+
+The endpoint listens on `9080` and the UI on `http://127.0.0.1:3000`. Use
+`pnpm dev:service` when you only want the endpoint.
 
 To run the same endpoint with isolated Modal sandboxes:
 
@@ -813,8 +816,8 @@ schedules, profile state, and evaluations. It is provided strictly for
 demonstration and manual testing; it is not intended as a production UI,
 application template, or component library.
 
-With the Restate ingress and service endpoint running, start it in another
-shell:
+`pnpm dev` starts the UI alongside the service endpoint. To run the UI by
+itself against an already-running endpoint, use:
 
 ```sh
 pnpm dev:ui
