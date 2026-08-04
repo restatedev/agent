@@ -1,18 +1,29 @@
-// One Turn invocation is the durable agent-turn state machine. It owns the
-// transient model context, control-signal cursor, budgets, and pending tools.
-// Each iteration spawns one bounded agent step and applies its returned data.
+// AgentSession is a Virtual Object keyed by agent id. One doTurn invocation is
+// the durable agent-turn state machine and owns transient model context,
+// control-signal consumption, budgets, and pending tools. Each iteration
+// spawns one bounded agent step and applies its returned data.
 
-import {CancelledError} from "@restatedev/restate-sdk";
+import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
 import {
+  type ConversationCompactionPlan,
+  ConversationCompactionPlanSchema,
+  type ConversationCompactionResult,
+  ConversationCompactionResultSchema,
+  history,
+  type TurnHistory,
+} from "./agent-history.js";
+import {
   type AgentToolContext,
   agentTools,
   createAgentToolContext,
+  type PendingEvent,
   type ToolOutcome,
 } from "./agent-tools.js";
+import {compactConversation} from "./conversation-compactor.js";
 import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
 import type {GuardrailApproval} from "./model.js";
 import {
@@ -20,6 +31,7 @@ import {
   callGuardrailModel,
   callModel,
 } from "./model-gateway.js";
+import {raceBranches} from "./race.js";
 import {Sandbox} from "./sandbox.js";
 import {
   buildModelContext,
@@ -35,18 +47,21 @@ import {
   type ToolStep,
 } from "./turn-step.js";
 import {
-  type ExecutionReport,
+  AGENT_SESSION_SIGNALS,
+  type AgentSessionOutcome,
+  type AgentSessionRequest,
+  AgentSessionRequestSchema,
+  type AgentSessionSteering,
+  type ConversationEntry,
   type Guardrail,
-  type ProgressReport,
-  type SteeringSignal,
-  TURN_SIGNALS,
-  type TurnOutcome,
-  type TurnRequest,
-  TurnRequestSchema,
+  type HistoryPage,
+  HistoryPageSchema,
+  HistoryRequestSchema,
 } from "./types.js";
 
-type TurnState = {
+type AgentSessionState = {
   context: AgentToolContext;
+  transcript: TurnHistory;
   instructions?: string;
   guardrails: Guardrail[];
   approvedActions: GuardrailApproval[];
@@ -71,14 +86,29 @@ const MAX_STEPS = 50;
 const MAX_TOOL_CALLS = 24;
 const MAX_TURN_CONTEXT_CHARS = 32_000;
 
-function createTurnState(req: TurnRequest, turnId: string): TurnState {
+function sessionKey(): string {
+  const key = restate.handlerRequest().key;
+  if (!key) {
+    throw new TerminalError("AgentSession handlers require an agent key");
+  }
+  return key;
+}
+
+function createSessionState(
+  req: AgentSessionRequest,
+  agentId: string,
+  turnId: string,
+  transcript: TurnHistory,
+): AgentSessionState {
+  const conversation = transcript.context();
   const modelContext = buildModelContext(
-    req.history,
-    req.summary,
+    conversation.entries,
+    conversation.summary,
     req.memories,
   );
   return {
-    context: createAgentToolContext(req.agentId, turnId),
+    context: createAgentToolContext(agentId, turnId),
+    transcript,
     instructions: req.instructions,
     guardrails: req.guardrails,
     approvedActions: [],
@@ -90,7 +120,7 @@ function createTurnState(req: TurnRequest, turnId: string): TurnState {
     initialMessageCount: modelContext.messages.length,
     modelSeenThrough: modelContext.messages.length,
     contextReductionEnabled: true,
-    interrupt: restate.signal<string>(TURN_SIGNALS.interrupt),
+    interrupt: restate.signal<string>(AGENT_SESSION_SIGNALS.interrupt),
     steeringInbox: createSteeringInbox(),
     consumedSteering: 0,
     steps: 0,
@@ -107,7 +137,7 @@ type ContextReductionPlan = {
 };
 
 function contextReductionPlan(
-  state: TurnState,
+  state: AgentSessionState,
 ): ContextReductionPlan | undefined {
   if (!state.contextReductionEnabled || state.pending.size > 0) {
     return undefined;
@@ -141,7 +171,7 @@ function reducedContextMessage(summary: string): ModelMessage {
 }
 
 function adjustGuardrailEvidence(
-  state: TurnState,
+  state: AgentSessionState,
   {start, end}: ContextReductionPlan,
 ): void {
   if (
@@ -160,7 +190,7 @@ function adjustGuardrailEvidence(
 // never touches pending operations, and a reducer failure leaves the exact
 // context in place. Interruption still stops the scoped model call promptly.
 function* reduceCurrentContext(
-  state: TurnState,
+  state: AgentSessionState,
 ): restate.Operation<string | undefined> {
   const plan = contextReductionPlan(state);
   if (!plan) {
@@ -174,18 +204,18 @@ function* reduceCurrentContext(
     }),
   );
   try {
-    const selected = yield* restate.select({
+    const selected = yield* raceBranches({
       interrupt: state.interrupt,
       reduction: task,
     });
     if (selected.tag === "interrupt") {
-      const reason = yield* selected.future;
+      const reason = selected.value;
       task.interrupt(new restate.InterruptedError(reason));
       yield* restate.allSettled([task]);
       return reason;
     }
 
-    const {summary} = yield* selected.future;
+    const {summary} = selected.value;
     state.messages.splice(
       plan.start,
       plan.end - plan.start,
@@ -213,20 +243,30 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+type ProgressPhase = Extract<
+  ConversationEntry,
+  {role: "event"; type: "progress"}
+>["phase"];
+
 function* reportProgress(
-  context: AgentToolContext,
-  phase: ProgressReport["phase"],
+  state: AgentSessionState,
+  phase: ProgressPhase,
   message: string,
 ): restate.Operation<void> {
-  yield* restate.sendClient(Agent, context.agentId).reportProgress({
-    turnId: context.turnId,
+  yield* state.transcript.append({
+    role: "event",
+    type: "progress",
+    turnId: state.context.turnId,
     phase,
     message,
   });
 }
 
 type TranscriptToolStatus = Exclude<
-  Extract<ExecutionReport, {type: "tools"}>["calls"][number]["status"],
+  Extract<
+    ConversationEntry,
+    {role: "event"; type: "tools"}
+  >["calls"][number]["status"],
   undefined
 >;
 
@@ -236,8 +276,9 @@ function transcriptToolStatus(
 ): TranscriptToolStatus {
   if (
     interrupted &&
-    outcome.status === "failed" &&
-    outcome.error.startsWith("interrupted before completion:")
+    (outcome.status === "pending" ||
+      (outcome.status === "failed" &&
+        outcome.error.startsWith("interrupted before completion:")))
   ) {
     return "cancelled";
   }
@@ -245,24 +286,73 @@ function transcriptToolStatus(
 }
 
 function* reportToolsFinished(
-  state: TurnState,
+  state: AgentSessionState,
   step: ToolStep,
   outcomes: ToolOutcome[],
   interrupted = false,
 ): restate.Operation<void> {
-  yield* restate.sendClient(Agent, state.context.agentId).reportExecution([
-    {
-      type: "tools",
-      turnId: state.context.turnId,
-      step: step.step,
-      phase: "finished",
-      calls: outcomes.map((outcome) => ({
+  yield* state.transcript.append({
+    role: "event",
+    type: "tools",
+    turnId: state.context.turnId,
+    step: step.step,
+    phase: "finished",
+    calls: outcomes.map((outcome) => {
+      const summary = agentTools.summarize(outcome.call);
+      return {
         id: outcome.call.toolCallId,
         name: outcome.call.toolName,
+        ...(summary ? {summary} : {}),
         status: transcriptToolStatus(outcome, interrupted),
-      })),
-    },
-  ]);
+      };
+    }),
+  });
+}
+
+function toolTranscriptEntries(
+  state: AgentSessionState,
+  events: Array<ToolOutcome | PendingEvent>,
+  interruptedPendingReason?: string,
+): ConversationEntry[] {
+  return events.flatMap((event): ConversationEntry[] => {
+    const entries = agentTools.transcriptEntries(
+      event,
+      state.context,
+      interruptedPendingReason,
+    );
+    if (!("outcome" in event)) {
+      return entries;
+    }
+    const summary = agentTools.summarize(event.call);
+    return [
+      ...entries,
+      {
+        role: "event",
+        type: "tools",
+        turnId: state.context.turnId,
+        step: event.step,
+        phase: "finished",
+        calls: [
+          {
+            id: event.call.toolCallId,
+            name: event.call.toolName,
+            ...(summary ? {summary} : {}),
+            status: event.outcome.status,
+          },
+        ],
+      },
+    ];
+  });
+}
+
+function* appendToolTranscript(
+  state: AgentSessionState,
+  events: Array<ToolOutcome | PendingEvent>,
+  interruptedPendingReason?: string,
+): restate.Operation<void> {
+  yield* state.transcript.append(
+    ...toolTranscriptEntries(state, events, interruptedPendingReason),
+  );
 }
 
 function guardrailApprovalMessage({
@@ -284,7 +374,7 @@ function guardrailApprovalMessage({
 // Approval records retain the authorized proposal for coverage checks on later
 // actions; a human rejection prevents reopening the same policy in this request.
 function commitGuardrailDecisions(
-  state: TurnState,
+  state: AgentSessionState,
   decisions: GuardrailDecisions,
 ): void {
   state.approvedActions.push(...decisions.approvedActions);
@@ -296,20 +386,16 @@ function commitGuardrailDecisions(
   }
 }
 
-function resetGuardrailsForSteering(state: TurnState): void {
+function resetGuardrailRejectionsForSteering(state: AgentSessionState): void {
   state.blockedGuardrails.clear();
-  if (
-    state.approvedActions.length === 0 &&
-    state.rejectedGuardrails.size === 0
-  ) {
+  if (state.rejectedGuardrails.size === 0) {
     return;
   }
-  state.approvedActions = [];
   state.rejectedGuardrails.clear();
   state.messages.push({
     role: "user",
     content:
-      "[Runtime guardrail] Prior human approval decisions do not apply to the new steering update; all policies will be evaluated again.",
+      "[Runtime guardrail] Prior human rejections do not automatically apply to the new steering update; policies will evaluate the updated action again.",
   });
 }
 
@@ -325,7 +411,7 @@ function guardrailFeedback(guardrailId: string, reason: string): ModelMessage {
   };
 }
 
-function currentGuardrailContext(state: TurnState): ModelMessage[] {
+function currentGuardrailContext(state: AgentSessionState): ModelMessage[] {
   if (!state.guardrailInput) {
     return [];
   }
@@ -335,10 +421,30 @@ function currentGuardrailContext(state: TurnState): ModelMessage[] {
   ];
 }
 
-function applySteeringMessages(
-  state: TurnState,
-  steering: SteeringSignal[],
-): void {
+function* applySteeringMessages(
+  state: AgentSessionState,
+  steering: AgentSessionSteering[],
+): restate.Operation<void> {
+  for (const signal of steering) {
+    const queuedMessages = signal.queued.filter(
+      ({role}) => role === "user",
+    ).length;
+    yield* state.transcript.append(
+      ...signal.queued,
+      {
+        role: "user",
+        text: signal.message,
+        delivery: "steer",
+      },
+      {
+        role: "event",
+        type: "steer",
+        turnId: state.context.turnId,
+        queuedMessages,
+      },
+    );
+  }
+
   const messages = steering.map(steeringMessage);
   state.messages.push(...messages);
   const latest = messages.at(-1);
@@ -357,21 +463,22 @@ type EarlyExit =
     };
 
 function* finalizeEarlyExit(
-  state: TurnState,
+  state: AgentSessionState,
   exit: EarlyExit,
-): restate.Operation<TurnOutcome> {
+): restate.Operation<AgentSessionOutcome> {
   yield* reportProgress(
-    state.context,
+    state,
     "finalizing",
     "Stopping unfinished work before finalization",
   );
   const stopped = yield* state.pending.stop(
     new restate.InterruptedError(exit.reason),
   );
+  yield* appendToolTranscript(state, stopped);
   state.messages.push(...stopped.map(agentTools.toRuntimeMessage));
   state.messages.push(finalizationInstruction(exit.reason));
   yield* reportProgress(
-    state.context,
+    state,
     "finalizing",
     "Preparing a final response from completed results",
   );
@@ -426,18 +533,24 @@ function* finalizeEarlyExit(
   };
 }
 
-function drainSteering(state: TurnState): SteeringSignal[] {
-  const steering = state.steeringInbox.drain();
+function* consumeSteering(
+  state: AgentSessionState,
+  steering = state.steeringInbox.drain(),
+): restate.Operation<void> {
+  if (steering.length === 0) {
+    return;
+  }
+  resetGuardrailRejectionsForSteering(state);
+  yield* applySteeringMessages(state, steering);
   state.consumedSteering += steering.length;
-  return steering;
 }
 
 // Text is a candidate final answer. Pending work keeps the state machine alive
 // until a completion, steering update, or interruption chooses the next move.
 function* applyText(
-  state: TurnState,
+  state: AgentSessionState,
   text: string,
-): restate.Operation<TurnOutcome | undefined> {
+): restate.Operation<AgentSessionOutcome | undefined> {
   if (!text.trim()) {
     state.messages.push({
       role: "user",
@@ -456,7 +569,7 @@ function* applyText(
   }
 
   yield* reportProgress(
-    state.context,
+    state,
     "waiting",
     `Waiting for ${state.pending.size} pending operation(s): ${state.pending.describe()}`,
   );
@@ -465,12 +578,11 @@ function* applyText(
     state.interrupt,
   );
   if (next.type === "steering") {
-    const steering = drainSteering(state);
-    resetGuardrailsForSteering(state);
-    applySteeringMessages(state, steering);
+    yield* consumeSteering(state);
     return undefined;
   }
   if (next.type === "completion") {
+    yield* appendToolTranscript(state, [next.event]);
     state.messages.push(agentTools.toRuntimeMessage(next.event));
     return undefined;
   }
@@ -483,22 +595,28 @@ function* applyText(
 }
 
 function* applyTools(
-  state: TurnState,
+  state: AgentSessionState,
   step: ToolStep,
-  steering: SteeringSignal[],
+  steering: AgentSessionSteering[],
 ): restate.Operation<void> {
-  const applied = yield* state.pending.apply(step.outcomes, state.context);
+  yield* appendToolTranscript(state, step.outcomes);
+  const applied = yield* state.pending.apply(
+    step.outcomes,
+    state.context,
+    step.step,
+  );
+  yield* appendToolTranscript(state, applied.events);
   state.messages.push(
     step.action.message,
     agentTools.toModelMessage(applied.outcomes),
     ...applied.events.map(agentTools.toRuntimeMessage),
   );
-  applySteeringMessages(state, steering);
+  yield* consumeSteering(state, steering);
   yield* reportToolsFinished(state, step, applied.outcomes);
 }
 
 function retainInterruptedTools(
-  state: TurnState,
+  state: AgentSessionState,
   step: ToolStep,
   reason: string,
 ): void {
@@ -509,6 +627,7 @@ function retainInterruptedTools(
       outcome.status === "pending"
         ? [
             agentTools.toRuntimeMessage({
+              step: step.step,
               call: outcome.call,
               outcome: {status: "cancelled", reason},
             }),
@@ -521,10 +640,16 @@ function retainInterruptedTools(
 // Runs bounded agent steps until the turn completes, is interrupted, or
 // exhausts a budget. Every exit path returns exactly one outcome; failures
 // propagate to the caller.
-function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
+function* executeTurn(
+  state: AgentSessionState,
+): restate.Operation<AgentSessionOutcome> {
   state.discoveredTools = yield* discoverAgentTools(agentTools.names);
 
   while (state.steps < MAX_STEPS) {
+    // Steering received after the previous step's drain belongs before this
+    // model round. This is the stable hand-off boundary between rounds.
+    yield* consumeSteering(state);
+
     const interruptedWhileReducing = yield* reduceCurrentContext(state);
     if (interruptedWhileReducing) {
       return yield* finalizeEarlyExit(state, {
@@ -533,7 +658,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
       });
     }
 
-    yield* reportProgress(state.context, "thinking", "Thinking...");
+    yield* reportProgress(state, "thinking", "Thinking...");
 
     const modelMessageCount = state.messages.length;
     const task = restate.spawn(
@@ -545,6 +670,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
         guardrails: state.guardrails,
         approvedActions: [...state.approvedActions],
         rejectedGuardrails: [...state.rejectedGuardrails],
+        transcript: state.transcript,
         stepNumber: state.steps + 1,
         remainingToolCalls: MAX_TOOL_CALLS - state.toolCalls,
         discoveredTools: state.discoveredTools,
@@ -558,6 +684,7 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
         // check on the finalization text; no approval message is pushed
         // during shutdown.
         state.approvedActions.push(...step.tools.approvedActions);
+        yield* appendToolTranscript(state, step.tools.outcomes, step.reason);
         retainInterruptedTools(state, step.tools, step.reason);
         yield* reportToolsFinished(
           state,
@@ -573,23 +700,17 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
     }
 
     state.modelSeenThrough = modelMessageCount;
-    const steering = drainSteering(state);
+    const steering = state.steeringInbox.drain();
     state.steps += 1;
-    if (steering.length > 0) {
-      resetGuardrailsForSteering(state);
-    } else {
+    if (steering.length === 0 || step.type === "tools") {
       commitGuardrailDecisions(state, step);
     }
 
-    // A text/error response produced before buffered steering arrived has no
-    // side effects. Let the next step see the new messages.
-    if (
-      (step.type === "text" ||
-        step.type === "error" ||
-        step.type === "guardrail_blocked") &&
-      steering.length > 0
-    ) {
-      applySteeringMessages(state, steering);
+    // Only a tool step has side effects worth retaining when steering arrived
+    // during the step. Every other proposal is stale and is replaced by a new
+    // model round over the steering update.
+    if (steering.length > 0 && step.type !== "tools") {
+      yield* consumeSteering(state, steering);
       continue;
     }
 
@@ -644,9 +765,103 @@ function* executeTurn(state: TurnState): restate.Operation<TurnOutcome> {
   });
 }
 
-export const Turn = restate.service({
-  name: "Turn",
+function outcomeEntries(outcome: AgentSessionOutcome): ConversationEntry[] {
+  switch (outcome.status) {
+    case "completed":
+      return [
+        {
+          role: "assistant",
+          text: outcome.response,
+          turnId: outcome.turnId,
+          status: "completed",
+        },
+      ];
+
+    case "interrupted":
+      return [
+        {
+          role: "event",
+          type: "interrupt",
+          turnId: outcome.turnId,
+          reason: outcome.reason,
+        },
+        ...(outcome.response
+          ? [
+              {
+                role: "assistant" as const,
+                text: outcome.response,
+                turnId: outcome.turnId,
+                status: "interrupted" as const,
+              },
+            ]
+          : []),
+      ];
+
+    case "stopped":
+      return [
+        {
+          role: "event",
+          type: "stop",
+          turnId: outcome.turnId,
+          cause: outcome.cause,
+          reason: outcome.reason,
+        },
+        {
+          role: "assistant",
+          text: outcome.response,
+          turnId: outcome.turnId,
+          status: "stopped",
+        },
+      ];
+
+    case "failed":
+      return [
+        {
+          role: "assistant",
+          text: outcome.error,
+          turnId: outcome.turnId,
+          status: "failed",
+        },
+      ];
+  }
+}
+
+export const AgentSession = restate.object({
+  name: "AgentSession",
   handlers: {
+    /** Returns one page from this AgentSession's authoritative transcript. */
+    history: restate.schemas(
+      {input: HistoryRequestSchema, output: HistoryPageSchema},
+      function* ({fromSequence, limit}): restate.Operation<HistoryPage> {
+        return yield* history.page(fromSequence, limit);
+      },
+    ),
+
+    /** Summarizes one reserved transcript prefix without blocking writers. */
+    compact: restate.schemas(
+      {input: ConversationCompactionPlanSchema, output: z.void()},
+      function* (plan: ConversationCompactionPlan): restate.Operation<void> {
+        const input = yield* history.readCompaction(plan);
+        if (!input) {
+          return;
+        }
+        const result = yield* compactConversation(input);
+        yield* restate
+          .sendClient(AgentSession, sessionKey())
+          .applyCompaction(result);
+      },
+    ),
+
+    /** Applies a summary only when it matches the reserved transcript range. */
+    applyCompaction: restate.schemas(
+      {input: ConversationCompactionResultSchema, output: z.void()},
+      function* (
+        result: ConversationCompactionResult,
+      ): restate.Operation<void> {
+        yield* history.finishCompaction(result);
+      },
+    ),
+
     /**
      * Executes one complete durable conversation Turn.
      *
@@ -655,52 +870,106 @@ export const Turn = restate.service({
      * agent-scoped sandbox lease. It releases the sandbox and reports exactly
      * one terminal outcome to the owning Agent on every handled exit.
      *
-     * The handler supervises the state machine as a spawned task. External
-     * cancellation rejects that task, after which the handler stops pending
-     * tools, reports an interrupted outcome, and rethrows cancellation to
-     * preserve Restate semantics.
+     * External cancellation is caught at the handler boundary, where pending
+     * tools are stopped, an interrupted outcome is reported, and cancellation
+     * is rethrown to preserve Restate semantics.
      */
-    run: restate.schemas(
-      {input: TurnRequestSchema, output: z.void()},
-      function* (req: TurnRequest): restate.Operation<void> {
-        const state = createTurnState(req, restate.handlerRequest().id);
-        const execution = restate.spawn(executeTurn(state));
-        let outcome: TurnOutcome;
-        let cancellation: CancelledError | undefined;
+    doTurn: restate.schemas(
+      {input: AgentSessionRequestSchema, output: z.void()},
+      function* (req: AgentSessionRequest): restate.Operation<void> {
+        const agentId = sessionKey();
+        const turnId = restate.handlerRequest().id;
+        let state: AgentSessionState | undefined;
+        let transcript: TurnHistory | undefined;
+        let outcome: AgentSessionOutcome;
         try {
-          outcome = yield* execution;
+          transcript = yield* history.openTurn();
+          yield* transcript.append(...req.entries);
+          state = createSessionState(req, agentId, turnId, transcript);
+          outcome = yield* executeTurn(state);
         } catch (error) {
-          yield* state.pending.stop(error);
           if (error instanceof CancelledError) {
             outcome = {
-              turnId: state.context.turnId,
+              turnId,
               status: "interrupted",
               reason: "Turn cancelled",
-              consumedSteering: state.consumedSteering,
+              consumedSteering: state?.consumedSteering ?? 0,
             };
-            cancellation = error;
-          } else {
-            outcome = {
-              turnId: state.context.turnId,
-              status: "failed",
-              error: errorMessage(error),
-              consumedSteering: state.consumedSteering,
-            };
+
+            // Cancellation may reject every later parked operation. Record all
+            // local state synchronously before each best-effort send, and never
+            // wait for already-cancelled child tasks.
+            const stopped = state?.pending.cancelAll(error) ?? [];
+            if (transcript) {
+              try {
+                yield* transcript.append(
+                  ...(state ? toolTranscriptEntries(state, stopped) : []),
+                  ...outcomeEntries(outcome),
+                );
+              } catch {
+                // State writes precede the notification wait; reconciliation
+                // below remains the authoritative controller cleanup.
+              }
+            }
+            try {
+              yield* restate.sendClient(Sandbox, agentId).release({turnId});
+            } catch {
+              // The durable one-way call is emitted before its acknowledgement.
+            }
+            try {
+              yield* restate.sendClient(Agent, agentId).onTurnEnd(outcome);
+            } catch {
+              // The Agent invocation remains durable even if cancellation wins
+              // the local acknowledgement race.
+            }
+            throw error;
           }
+
+          if (state) {
+            const stopped = yield* state.pending.stop(error);
+            yield* appendToolTranscript(state, stopped);
+          }
+          outcome = {
+            turnId,
+            status: "failed",
+            error: errorMessage(error),
+            consumedSteering: state?.consumedSteering ?? 0,
+          };
         }
 
-        const release = {turnId: state.context.turnId};
-        yield* restate.client(Sandbox, req.agentId).release(release);
-        yield* restate.client(Agent, req.agentId).onTurnEnd(outcome);
-        if (cancellation) {
-          throw cancellation;
+        yield* restate.client(Sandbox, agentId).release({turnId});
+        const reconciled = yield* restate
+          .client(Agent, agentId)
+          .onTurnEnd(outcome);
+        if (reconciled && transcript) {
+          yield* transcript.append(...outcomeEntries(reconciled));
+          const compaction = yield* transcript.beginCompaction();
+          if (compaction) {
+            yield* restate
+              .sendClient(AgentSession, agentId)
+              .compact(compaction);
+          }
         }
       },
     ),
   },
   options: {
     handlers: {
-      run: {
+      history: {
+        shared: true,
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      compact: {
+        shared: true,
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      applyCompaction: {
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
+      doTurn: {
         inactivityTimeout: {hours: 1},
         abortTimeout: {minutes: 15},
       },

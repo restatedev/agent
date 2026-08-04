@@ -8,7 +8,7 @@ import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
-export const AGENT_TOOL_ANNOTATION = "restate.dev/agent";
+const AGENT_TOOL_ANNOTATION = "restate.dev/agent";
 
 type JsonSchema = boolean | Record<string, unknown>;
 

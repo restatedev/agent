@@ -1,46 +1,33 @@
 // Active-turn management for one Agent virtual object. This component owns the
-// `turn` and `pending` state keys plus the Turn invocation and signal lifecycle.
+// `turn` and `pending` state keys plus the AgentSession invocation and signals.
 // It deliberately knows nothing about conversation history.
 
 import * as restate from "@restatedev/restate-sdk-gen";
-import {Turn} from "./turn.js";
+import {AgentSession} from "./agent-session.js";
 import {
-  type SteeringSignal,
-  TURN_SIGNALS,
-  type TurnOutcome,
-  type TurnRequest,
+  AGENT_SESSION_SIGNALS,
+  type AgentSessionOutcome,
+  type AgentSessionRequest,
+  type AgentSessionSteering,
+  type ConversationEntry,
 } from "./types.js";
 
 /** Durable state for the invocation currently owned by the Agent. */
 type ActiveTurnState = {
-  /** Turn service invocation ID and signal target. */
+  /** AgentSession.doTurn invocation ID and signal target. */
   id: string;
-  /** Whether an interrupt was sent and the terminal outcome is still pending. */
-  interrupting: boolean;
-  /** Number of user messages carried by each steering signal sent in order. */
-  steeringBatches: number[];
+  /** The accepted interruption while its terminal outcome is still pending. */
+  interruptReason?: string;
+  /** Steering signals sent to this turn in FIFO order. */
+  steeringBatches: AgentSessionSteering[];
 };
 
 /** Information returned when an active turn is successfully retired. */
 type FinishedTurn = {
-  /** Number of user messages carried by unconsumed steering signals. */
-  missedSteeringMessages: number;
-  /** Number of messages accepted for the next turn while this one was active. */
-  pendingMessages: number;
-  /** Whether the Agent explicitly requested this turn's interruption. */
-  interruptionRequested: boolean;
-};
-
-type SentSteering = SteeringSignal & {
-  /** Turn invocation to which this steering signal was sent. */
-  turnId: string;
-};
-
-type InterruptedTurn = {
-  /** Turn invocation receiving, or already processing, the interruption. */
-  turnId: string;
-  /** Whether this call sent the Turn's first interruption signal. */
-  requested: boolean;
+  /** Final outcome after reconciling a late accepted interruption. */
+  outcome: AgentSessionOutcome;
+  /** Transcript entries that must open the next turn, in original order. */
+  queuedEntries: ConversationEntry[];
 };
 
 function* readActiveTurn(): restate.Operation<ActiveTurnState | undefined> {
@@ -59,54 +46,59 @@ export const activeTurn = {
   current: readActiveTurn,
 
   /**
-   * Starts a Turn invocation and records it as active.
+   * Starts an AgentSession invocation and records it as the active turn.
    *
    * The exclusive Agent caller is responsible for ensuring no turn is active.
    *
    * @returns The new invocation ID.
    */
-  *start(request: TurnRequest): restate.Operation<string> {
-    const started = yield* restate.sendClient(Turn).run(request);
+  *start(
+    agentId: string,
+    request: AgentSessionRequest,
+  ): restate.Operation<string> {
+    const started = yield* restate
+      .sendClient(AgentSession, agentId)
+      .doTurn(request);
     restate.state().set("turn", {
       id: started.id,
-      interrupting: false,
       steeringBatches: [],
     });
     return started.id;
   },
 
   /**
-   * Adds a message to the FIFO batch for the next turn.
+   * Adds transcript entries to the FIFO batch for the next turn.
    *
-   * @returns The new number of pending messages.
+   * @returns The new number of pending user messages.
    */
-  *enqueue(message: string): restate.Operation<number> {
-    const pending = (yield* restate.state().get<string[]>("pending")) ?? [];
-    pending.push(message);
+  *enqueue(...entries: ConversationEntry[]): restate.Operation<number> {
+    const pending =
+      (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
+    pending.push(...entries);
     restate.state().set("pending", pending);
-    return pending.length;
+    return pending.filter(({role}) => role === "user").length;
   },
 
   /**
    * Signals the active invocation to interrupt and marks it as winding down.
    *
-   * @returns The target Turn and whether this call sent its first interrupt
-   * signal, or `undefined` when no Turn is active.
+   * @returns `true` when this call sent the first interrupt, `false` when one
+   * was already pending, or `undefined` when no Turn is active.
    */
-  *interrupt(reason: string): restate.Operation<InterruptedTurn | undefined> {
+  *interrupt(reason: string): restate.Operation<boolean | undefined> {
     const current = yield* readActiveTurn();
     if (!current) {
       return undefined;
     }
-    if (current.interrupting) {
-      return {turnId: current.id, requested: false};
+    if (current.interruptReason !== undefined) {
+      return false;
     }
     restate
       .invocation(current.id)
-      .signal<string>(TURN_SIGNALS.interrupt)
+      .signal<string>(AGENT_SESSION_SIGNALS.interrupt)
       .resolve(reason);
-    restate.state().set("turn", {...current, interrupting: true});
-    return {turnId: current.id, requested: true};
+    restate.state().set("turn", {...current, interruptReason: reason});
+    return true;
   },
 
   /**
@@ -114,57 +106,74 @@ export const activeTurn = {
    *
    * Pending messages are drained into the signal as a separate FIFO list.
    *
-   * @returns The structured steering signal and its target invocation, or
-   * `undefined` when no turn is listening.
+   * @returns Whether an active turn accepted the steering signal.
    */
-  *steer(message: string): restate.Operation<SentSteering | undefined> {
+  *steer(
+    message: string,
+    ...entries: ConversationEntry[]
+  ): restate.Operation<boolean> {
     const current = yield* readActiveTurn();
-    if (!current || current.interrupting) {
-      return undefined;
+    if (!current || current.interruptReason !== undefined) {
+      return false;
     }
 
-    const pending = (yield* restate.state().get<string[]>("pending")) ?? [];
+    const pending =
+      (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
     restate.state().clear("pending");
-    const steering = {queued: pending, message};
+    const steering = {queued: [...pending, ...entries], message};
     restate.state().set("turn", {
       ...current,
-      steeringBatches: [...current.steeringBatches, steering.queued.length + 1],
+      steeringBatches: [...current.steeringBatches, steering],
     });
     restate
       .invocation(current.id)
-      .signal<SteeringSignal>(TURN_SIGNALS.steering)
+      .signal<AgentSessionSteering>(AGENT_SESSION_SIGNALS.steering)
       .resolve(steering);
-    return {...steering, turnId: current.id};
+    return true;
   },
 
   /**
    * Retires the matching active turn and drains its pending-message batch.
    *
-   * Stale or duplicate outcomes are ignored. An explicit interruption
-   * supersedes steering the Turn did not consume.
+   * Stale or duplicate outcomes are ignored. A late accepted interruption is
+   * reflected in the final outcome, and every unconsumed steering entry is
+   * recovered for the successor turn.
    *
    * @returns Reconciliation information, or `undefined` for an outcome that
    * does not belong to the active turn.
    */
-  *finish(outcome: TurnOutcome): restate.Operation<FinishedTurn | undefined> {
+  *finish(
+    outcome: AgentSessionOutcome,
+  ): restate.Operation<FinishedTurn | undefined> {
     const current = yield* readActiveTurn();
     if (current?.id !== outcome.turnId) {
       return undefined;
     }
 
     restate.state().clear("turn");
-    const pending = (yield* restate.state().get<string[]>("pending")) ?? [];
+    const pending =
+      (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
     restate.state().clear("pending");
 
-    const missedSteeringMessages = current.interrupting
-      ? 0
-      : current.steeringBatches
-          .slice(outcome.consumedSteering)
-          .reduce((total, size) => total + size, 0);
+    const missedSteeringEntries = current.steeringBatches
+      .slice(outcome.consumedSteering)
+      .flatMap(({queued, message}): ConversationEntry[] => [
+        ...queued,
+        {role: "user", text: message, delivery: "queued"},
+      ]);
+    const reconciled =
+      current.interruptReason !== undefined && outcome.status !== "interrupted"
+        ? {
+            turnId: outcome.turnId,
+            status: "interrupted" as const,
+            reason: current.interruptReason,
+            ...("response" in outcome ? {response: outcome.response} : {}),
+            consumedSteering: outcome.consumedSteering,
+          }
+        : outcome;
     return {
-      missedSteeringMessages,
-      pendingMessages: pending.length,
-      interruptionRequested: current.interrupting,
+      outcome: reconciled,
+      queuedEntries: [...missedSteeringEntries, ...pending],
     };
   },
 };

@@ -10,7 +10,6 @@ import {
   type Future,
   InterruptedError,
   type Operation,
-  select,
   sendClient,
   signal,
   spawn,
@@ -18,6 +17,7 @@ import {
 } from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {Agent} from "./agent.js";
+import type {TurnHistory} from "./agent-history.js";
 import {
   type AgentToolContext,
   agentTools,
@@ -31,10 +31,11 @@ import type {
   ProposedAction,
 } from "./model.js";
 import {callGuardrailModel, callModel} from "./model-gateway.js";
+import {raceBranches} from "./race.js";
 import {
   type ApprovalDecision,
   approvalSignalName,
-  type ExecutionReport,
+  type ConversationEntry,
   type Guardrail,
 } from "./types.js";
 
@@ -84,11 +85,12 @@ function executionStarted(
   context: AgentToolContext,
   step: number,
   action: ToolCallAction,
-): ExecutionReport[] {
+): ConversationEntry[] {
   return [
     ...(action.activity
       ? [
           {
+            role: "event" as const,
             type: "activity" as const,
             turnId: context.turnId,
             step,
@@ -97,44 +99,73 @@ function executionStarted(
         ]
       : []),
     {
+      role: "event",
       type: "tools",
       turnId: context.turnId,
       step,
       phase: "started",
-      calls: action.calls.map(({toolCallId, toolName}) => ({
-        id: toolCallId,
-        name: toolName,
-      })),
+      calls: action.calls.map((call) => {
+        const summary = agentTools.summarize(call);
+        return {
+          id: call.toolCallId,
+          name: call.toolName,
+          ...(summary ? {summary} : {}),
+        };
+      }),
     },
   ];
 }
 
 function* requestGuardrailApproval(
   context: AgentToolContext,
+  transcript: TurnHistory,
   stepNumber: number,
   approvalNumber: number,
   decision: Extract<GuardrailDecision, {decision: "require_approval"}>,
 ): Operation<ApprovalDecision | undefined> {
   const approvalId = `guardrail-${stepNumber}-${approvalNumber}`;
-  const registered = yield* client(Agent, context.agentId).requestApproval({
+  const request = {
     approvalId,
     turnId: context.turnId,
     question: decision.question,
     guardrailId: decision.guardrailId,
-  });
+  };
+  const registered = yield* client(Agent, context.agentId).requestApproval(
+    request,
+  );
   if (!registered) {
     return undefined;
   }
 
-  yield* sendClient(Agent, context.agentId).reportProgress({
-    turnId: context.turnId,
-    phase: "waiting",
-    message: `Guardrail ${decision.guardrailId} requires human approval`,
-  });
+  yield* transcript.append(
+    {role: "event", type: "approval_request", ...request},
+    {
+      role: "event",
+      type: "progress",
+      turnId: context.turnId,
+      phase: "waiting",
+      message: `Guardrail ${decision.guardrailId} requires human approval`,
+    },
+  );
   try {
-    return yield* signal<ApprovalDecision>(approvalSignalName(approvalId));
+    const resolution = yield* signal<ApprovalDecision>(
+      approvalSignalName(approvalId),
+    );
+    yield* transcript.append({
+      role: "event",
+      type: "approval",
+      ...request,
+      ...resolution,
+    });
+    return resolution;
   } catch (error) {
     yield* sendClient(Agent, context.agentId).cancelApproval({
+      approvalId,
+      turnId: context.turnId,
+    });
+    yield* transcript.append({
+      role: "event",
+      type: "approval_cancelled",
       approvalId,
       turnId: context.turnId,
     });
@@ -144,6 +175,7 @@ function* requestGuardrailApproval(
 
 function* enforceGuardrails({
   context,
+  transcript,
   instructions,
   messages,
   action,
@@ -153,6 +185,7 @@ function* enforceGuardrails({
   stepNumber,
 }: {
   context: AgentToolContext;
+  transcript: TurnHistory;
   instructions?: string;
   messages: ModelMessage[];
   action: ProposedAction;
@@ -210,6 +243,7 @@ function* enforceGuardrails({
 
     const resolution = yield* requestGuardrailApproval(
       context,
+      transcript,
       stepNumber,
       approvalNumber,
       decision,
@@ -248,6 +282,7 @@ function* enforceGuardrails({
 
 export function* agentStep({
   context,
+  transcript,
   instructions,
   messages,
   guardrailMessages,
@@ -259,6 +294,7 @@ export function* agentStep({
   discoveredTools,
 }: {
   context: AgentToolContext;
+  transcript: TurnHistory;
   instructions?: string;
   messages: ModelMessage[];
   guardrailMessages: ModelMessage[];
@@ -300,6 +336,7 @@ export function* agentStep({
 
     const guarded = yield* enforceGuardrails({
       context,
+      transcript,
       instructions,
       messages: guardrailMessages,
       action: proposedAction(action),
@@ -326,9 +363,7 @@ export function* agentStep({
 
     const tasks: Task<ToolOutcome>[] = [];
     activeTools = {action, tasks, decisions};
-    yield* sendClient(Agent, context.agentId).reportExecution(
-      executionStarted(context, stepNumber, action),
-    );
+    yield* transcript.append(...executionStarted(context, stepNumber, action));
     tasks.push(
       ...action.calls.map((call) =>
         spawn(agentTools.execute(call, context, discoveredTools)),
@@ -388,12 +423,12 @@ export function* settleStep(
   interrupt: Future<string>,
 ): Operation<AgentStepResult> {
   try {
-    const selected = yield* select({interrupt, task});
+    const selected = yield* raceBranches({interrupt, task});
     if (selected.tag === "task") {
-      return yield* selected.future;
+      return selected.value;
     }
 
-    const reason = yield* selected.future;
+    const reason = selected.value;
     task.interrupt(new AgentStepInterrupt(reason));
     const [settled] = yield* allSettled([task]);
     const completed =

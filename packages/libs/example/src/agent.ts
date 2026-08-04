@@ -1,47 +1,43 @@
 // Agent is the durable conversation controller. It is a Virtual Object keyed
 // by agent id, so its exclusive handlers serialize every decision about the
-// active turn, queued messages, user-facing history, persistent profile, and
-// scheduled messages and summary checkpoints.
+// active turn, queued messages, persistent profile, approvals, schedules, and
+// transcript-reader notifications.
 //
 // It never runs turn execution itself. `ask` starts or queues work,
-// `interrupt` and `steer` resolve signals on the active stateless Turn
+// `interrupt` and `steer` resolve signals on the active AgentSession
 // invocation, scheduled self-sends re-enter the same routing decisions, and
-// `onTurnEnd` accepts that Turn's single high-level outcome.
+// `onTurnEnd` accepts that invocation's single high-level outcome.
 
 import {rpc, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {approvals} from "./agent-approval.js";
-import {
-  type ConversationCompactionPlan,
-  ConversationCompactionPlanSchema,
-  type ConversationCompactionResult,
-  ConversationCompactionResultSchema,
-  history,
-} from "./agent-history.js";
+import {notifications} from "./agent-notifications.js";
 import {profile} from "./agent-profile.js";
 import {schedules} from "./agent-schedules.js";
 import {activeTurn} from "./agent-turn.js";
-import {compactConversation} from "./conversation-compactor.js";
+import {raceBranches} from "./race.js";
 import {
+  type AgentNotificationSnapshot,
+  AgentNotificationSnapshotSchema,
+  AgentNotificationSubscriptionSchema,
+  AgentNotificationTopicSchema,
+  AgentNotificationUnsubscribeSchema,
+  AgentNotificationWatchRequestSchema,
   type AgentProfile,
   AgentProfileSchema,
+  type AgentSessionOutcome,
+  AgentSessionOutcomeSchema,
   ApprovalCancellationSchema,
   type ApprovalRequest,
   ApprovalRequestSchema,
   ApprovalResolutionSchema,
   type ConversationEntry,
-  type ExecutionReport,
-  ExecutionReportSchema,
   GuardrailSchema,
-  type HistoryPage,
-  HistoryPageSchema,
   type MemoryUpdate,
   type MemoryUpdateResult,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
-  type ProgressReport,
-  ProgressReportSchema,
   type ScheduleCancellation,
   type ScheduleCancellationResult,
   ScheduleCancellationResultSchema,
@@ -53,7 +49,6 @@ import {
   type ScheduleMutationResult,
   ScheduleMutationResultSchema,
   ScheduleMutationSchema,
-  TurnOutcomeSchema,
 } from "./types.js";
 
 // The agent id is this object's key. Object handlers always have one, but read
@@ -107,33 +102,6 @@ const AskResultSchema = z.discriminatedUnion("decision", [
 ]);
 export type AskResult = z.infer<typeof AskResultSchema>;
 
-const HistoryQuerySchema = z.object({
-  fromSequence: z.number().int().positive().default(1),
-  limit: z.number().int().min(1).max(100).default(50),
-});
-
-const WatchHistorySchema = z.object({
-  fromSequence: z.number().int().positive(),
-  timeoutSeconds: z
-    .number()
-    .int()
-    .min(1)
-    .max(300)
-    .default(300)
-    .describe(
-      "How long this wait window may park before returning false, up to the five-minute safety ceiling. Callers loop; the window bounds server-side residency, not the overall wait.",
-    ),
-});
-
-const RegisterHistoryWatcherSchema = z.object({
-  fromSequence: z.number().int().positive(),
-  awakeableId: z.string().min(1),
-});
-
-const UnregisterHistoryWatcherSchema = z.object({
-  awakeableId: z.string().min(1),
-});
-
 const SetInstructionsSchema = z.object({
   instructions: z.string().nullable(),
 });
@@ -155,17 +123,6 @@ const SetGuardrailsSchema = z.object({
 // invocations carry no information worth retaining.
 const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 
-function executionEntry(report: ExecutionReport): ConversationEntry {
-  return {role: "event", ...report};
-}
-
-function approvalCancelledEntry({
-  approvalId,
-  turnId,
-}: ApprovalRequest): ConversationEntry {
-  return {role: "event", type: "approval_cancelled", approvalId, turnId};
-}
-
 export const Agent = restate.object({
   name: "Agent",
   handlers: {
@@ -183,8 +140,7 @@ export const Agent = restate.object({
         const agentId = agentKey();
         const current = yield* activeTurn.current();
         if (current) {
-          const pendingMessages = yield* activeTurn.enqueue(message);
-          yield* history.append({
+          const pendingMessages = yield* activeTurn.enqueue({
             role: "user",
             text: message,
             delivery: "queued",
@@ -197,8 +153,9 @@ export const Agent = restate.object({
           };
         }
 
-        yield* history.append({role: "user", text: message, delivery: "turn"});
-        const turnId = yield* startTurn(agentId);
+        const turnId = yield* startTurn(agentId, [
+          {role: "user", text: message, delivery: "turn"},
+        ]);
         return {
           decision: "start",
           turnId,
@@ -218,29 +175,22 @@ export const Agent = restate.object({
     interrupt: restate.schemas(
       {input: InterruptRequestSchema, output: z.boolean()},
       function* ({reason, message}): restate.Operation<boolean> {
-        const interruption = yield* activeTurn.interrupt(reason);
-        if (!interruption) {
+        const requested = yield* activeTurn.interrupt(reason);
+        if (requested === undefined) {
           return false;
         }
 
         if (message) {
-          yield* activeTurn.enqueue(message);
-          yield* history.append({
+          yield* activeTurn.enqueue({
             role: "user",
             text: message,
             delivery: "queued",
           });
         }
-        if (!interruption.requested) {
+        if (!requested) {
           return message !== undefined;
         }
 
-        yield* history.append({
-          role: "event",
-          type: "interrupt",
-          turnId: interruption.turnId,
-          reason,
-        });
         return true;
       },
     ),
@@ -255,24 +205,7 @@ export const Agent = restate.object({
     steer: restate.schemas(
       {input: MessageSchema, output: z.boolean()},
       function* (message): restate.Operation<boolean> {
-        const steering = yield* activeTurn.steer(message);
-        if (!steering) {
-          return false;
-        }
-        yield* history.append(
-          {
-            role: "user",
-            text: steering.message,
-            delivery: "steer",
-          },
-          {
-            role: "event",
-            type: "steer",
-            turnId: steering.turnId,
-            queuedMessages: steering.queued.length,
-          },
-        );
-        return true;
+        return yield* activeTurn.steer(message);
       },
     ),
 
@@ -315,16 +248,8 @@ export const Agent = restate.object({
           restate.invocation(timer.id).cancel();
           return {accepted: false, error: stored.error};
         }
+        yield* notifications.publish("schedules");
 
-        yield* history.append({
-          role: "event",
-          type: "schedule",
-          action: stored.replaced ? "updated" : "created",
-          scheduleId: schedule.scheduleId,
-          ...(turnId ? {turnId} : {}),
-          nextRunAt: timer.nextRunAt,
-          whenBusy: schedule.whenBusy,
-        });
         return {
           accepted: true,
           replaced: stored.replaced,
@@ -358,13 +283,7 @@ export const Agent = restate.object({
           return {accepted: true, cancelled: false};
         }
         restate.invocation(removed.timerId).cancel();
-        yield* history.append({
-          role: "event",
-          type: "schedule",
-          action: "cancelled",
-          scheduleId,
-          ...(turnId ? {turnId} : {}),
-        });
+        yield* notifications.publish("schedules");
         return {accepted: true, cancelled: true};
       },
     ),
@@ -408,82 +327,55 @@ export const Agent = restate.object({
             throw new TerminalError(stored.error);
           }
         }
+        yield* notifications.publish("schedules");
 
         yield* deliverScheduledMessage(agentKey(), schedule);
       },
     ),
 
-    /**
-     * Reads a page from the canonical transcript using an inclusive sequence
-     * cursor.
-     *
-     * @returns Up to the requested limit and the next unread sequence.
-     */
-    history: restate.schemas(
-      {input: HistoryQuerySchema, output: HistoryPageSchema},
-      function* ({fromSequence, limit}): restate.Operation<HistoryPage> {
-        return yield* history.page(fromSequence, limit);
+    /** Publishes an invalidation and forwards it to waiting subscribers. */
+    notify: restate.schemas(
+      {input: AgentNotificationTopicSchema, output: z.void()},
+      function* (topic): restate.Operation<void> {
+        yield* notifications.publish(topic);
       },
     ),
 
-    /**
-     * Waits until a transcript cursor is readable or the wait window elapses.
-     *
-     * Callers re-read `history` and repeat as needed. The shared-state fast
-     * path may lag slightly, but the exclusive registration path re-checks the
-     * cursor and prevents missed entries.
-     *
-     * @returns Whether the requested sequence is ready to read.
-     */
-    watchHistory: restate.schemas(
-      {input: WatchHistorySchema, output: z.boolean()},
-      function* ({fromSequence, timeoutSeconds}): restate.Operation<boolean> {
-        if (yield* history.isReadable(fromSequence)) {
-          return true;
-        }
-
-        const changed = restate.awakeable<void>();
-        yield* restate.client(Agent, agentKey()).registerHistoryWatcher({
-          fromSequence,
-          awakeableId: changed.id,
-        });
-        const selected = yield* restate.select({
-          readable: changed.promise,
-          timeout: restate.sleep(timeoutSeconds * 1_000, "watch window"),
-        });
-        yield* selected.future;
-        if (selected.tag === "timeout") {
-          // Withdraw the registration so idle repeat watchers do not
-          // accumulate in Agent state.
-          yield* restate
-            .sendClient(Agent, agentKey())
-            .unregisterHistoryWatcher({awakeableId: changed.id});
-          return false;
-        }
-        return true;
+    /** Returns the current notification revision and per-area watermarks. */
+    notifications: restate.schemas(
+      {input: z.void(), output: AgentNotificationSnapshotSchema},
+      function* () {
+        return yield* notifications.read();
       },
     ),
 
-    /**
-     * Registers a caller-owned awakeable for a history cursor.
-     *
-     * The exclusive cursor re-check closes the race between an empty shared
-     * read and watcher registration.
-     */
-    registerHistoryWatcher: restate.schemas(
-      {input: RegisterHistoryWatcherSchema, output: z.void()},
-      function* ({fromSequence, awakeableId}): restate.Operation<void> {
-        yield* history.watch(fromSequence, awakeableId);
+    /** Waits for any transcript or Agent-state invalidation after a revision. */
+    watchNotifications: restate.schemas(
+      {
+        input: AgentNotificationWatchRequestSchema,
+        output: AgentNotificationSnapshotSchema,
+      },
+      function* (request): restate.Operation<AgentNotificationSnapshot> {
+        return yield* waitForNotification(request);
       },
     ),
 
-    /**
-     * Removes a caller-owned history watcher after its wait window expires.
-     */
-    unregisterHistoryWatcher: restate.schemas(
-      {input: UnregisterHistoryWatcherSchema, output: z.void()},
+    /** Registers a caller-owned awakeable for the next notification. */
+    subscribeNotifications: restate.schemas(
+      {
+        input: AgentNotificationSubscriptionSchema,
+        output: AgentNotificationSnapshotSchema.nullable(),
+      },
+      function* (subscription) {
+        return yield* notifications.subscribe(subscription);
+      },
+    ),
+
+    /** Removes a timed-out or cancelled notification subscription. */
+    unsubscribeNotifications: restate.schemas(
+      {input: AgentNotificationUnsubscribeSchema, output: z.void()},
       function* ({awakeableId}): restate.Operation<void> {
-        yield* history.unwatch(awakeableId);
+        yield* notifications.unsubscribe(awakeableId);
       },
     ),
 
@@ -499,7 +391,7 @@ export const Agent = restate.object({
     ),
 
     /**
-     * Replaces persistent user instructions and records the profile change.
+     * Replaces persistent user instructions.
      *
      * `null` clears the instructions. Running Turns retain their initial
      * profile snapshot.
@@ -508,19 +400,12 @@ export const Agent = restate.object({
       {input: SetInstructionsSchema, output: z.void()},
       function* ({instructions}): restate.Operation<void> {
         profile.setInstructions(instructions);
-        yield* history.append({
-          role: "event",
-          type: "profile",
-          change: {
-            field: "instructions",
-            configured: Boolean(instructions?.trim()),
-          },
-        });
+        yield* notifications.publish("profile");
       },
     ),
 
     /**
-     * Replaces the complete per-Agent guardrail list and records its IDs.
+     * Replaces the complete per-Agent guardrail list.
      *
      * Running Turns retain their initial profile snapshot; subsequent Turns
      * enforce the replacement list.
@@ -529,14 +414,7 @@ export const Agent = restate.object({
       {input: SetGuardrailsSchema, output: z.void()},
       function* ({guardrails}): restate.Operation<void> {
         profile.setGuardrails(guardrails);
-        yield* history.append({
-          role: "event",
-          type: "profile",
-          change: {
-            field: "guardrails",
-            ids: guardrails.map(({id}) => id),
-          },
-        });
+        yield* notifications.publish("profile");
       },
     ),
 
@@ -552,7 +430,7 @@ export const Agent = restate.object({
         changes,
       }: MemoryUpdate): restate.Operation<MemoryUpdateResult> {
         const current = yield* activeTurn.current();
-        if (current?.id !== turnId || current.interrupting) {
+        if (current?.id !== turnId || current.interruptReason !== undefined) {
           return {
             applied: false,
             error:
@@ -562,52 +440,9 @@ export const Agent = restate.object({
 
         const result = yield* profile.applyMemory(changes);
         if (result.applied) {
-          yield* history.append({
-            role: "event",
-            type: "memory",
-            turnId,
-            changes: changes.map(({operation, key}) => ({operation, key})),
-          });
+          yield* notifications.publish("profile");
         }
         return result;
-      },
-    ),
-
-    /**
-     * Appends a semantic progress event from the active Turn.
-     *
-     * This is a one-way coordination path; reports from stale Turns are
-     * ignored.
-     */
-    reportProgress: restate.schemas(
-      {input: ProgressReportSchema, output: z.void()},
-      function* (report: ProgressReport): restate.Operation<void> {
-        const current = yield* activeTurn.current();
-        if (current?.id === report.turnId) {
-          yield* history.append({
-            role: "event",
-            type: "progress",
-            ...report,
-          });
-        }
-      },
-    ),
-
-    /**
-     * Appends structured activity or tool lifecycle reports from the active
-     * Turn.
-     *
-     * Reports in one batch remain adjacent; batches containing a stale Turn
-     * ID are ignored.
-     */
-    reportExecution: restate.schemas(
-      {input: z.array(ExecutionReportSchema).min(1), output: z.void()},
-      function* (reports: ExecutionReport[]): restate.Operation<void> {
-        const current = yield* activeTurn.current();
-        if (reports.some(({turnId}) => turnId !== current?.id)) {
-          return;
-        }
-        yield* history.append(...reports.map(executionEntry));
       },
     ),
 
@@ -623,7 +458,10 @@ export const Agent = restate.object({
       {input: ApprovalRequestSchema, output: z.boolean()},
       function* (request: ApprovalRequest): restate.Operation<boolean> {
         const current = yield* activeTurn.current();
-        if (current?.id !== request.turnId || current.interrupting) {
+        if (
+          current?.id !== request.turnId ||
+          current.interruptReason !== undefined
+        ) {
           return false;
         }
         const registration = yield* approvals.register(request);
@@ -631,11 +469,7 @@ export const Agent = restate.object({
           return false;
         }
         if (registration === "added") {
-          yield* history.append({
-            role: "event",
-            type: "approval_request",
-            ...request,
-          });
+          yield* notifications.publish("approvals");
         }
         return true;
       },
@@ -643,14 +477,13 @@ export const Agent = restate.object({
 
     /**
      * Idempotently removes an approval request abandoned by interruption or
-     * Turn failure and records its cancellation when present.
+     * Turn failure.
      */
     cancelApproval: restate.schemas(
       {input: ApprovalCancellationSchema, output: z.void()},
       function* (request): restate.Operation<void> {
-        const cancelled = yield* approvals.cancel(request);
-        if (cancelled) {
-          yield* history.append(approvalCancelledEntry(cancelled));
+        if (yield* approvals.cancel(request)) {
+          yield* notifications.publish("approvals");
         }
       },
     ),
@@ -669,7 +502,7 @@ export const Agent = restate.object({
      * Resolves a pending approval and signals its waiting tool or policy gate.
      *
      * The decision is accepted only while the originating Turn is active and
-     * not interrupting, then recorded in the canonical transcript.
+     * not interrupting.
      *
      * @returns Whether the decision was delivered.
      */
@@ -679,21 +512,12 @@ export const Agent = restate.object({
         const current = yield* activeTurn.current();
         const request = yield* approvals.resolve(
           resolution,
-          current?.interrupting ? undefined : current?.id,
+          current?.interruptReason === undefined ? current?.id : undefined,
         );
         if (!request) {
           return false;
         }
-        yield* history.append({
-          role: "event",
-          type: "approval",
-          approvalId: request.approvalId,
-          turnId: request.turnId,
-          question: request.question,
-          ...(request.guardrailId ? {guardrailId: request.guardrailId} : {}),
-          decision: resolution.decision,
-          ...(resolution.reason ? {reason: resolution.reason} : {}),
-        });
+        yield* notifications.publish("approvals");
         return true;
       },
     ),
@@ -702,162 +526,122 @@ export const Agent = restate.object({
      * Reconciles the active Turn's single terminal outcome.
      *
      * The handler retires matching Turn state, clears abandoned approvals,
-     * appends terminal transcript entries, dispatches queued work, and starts
-     * compaction when eligible. Stale or duplicate outcomes are ignored.
+     * and dispatches queued work. Stale or duplicate outcomes are ignored.
+     *
+     * @returns The reconciled outcome AgentSession must append, or `null` for
+     * a stale or duplicate outcome.
      */
     onTurnEnd: restate.schemas(
-      {input: TurnOutcomeSchema, output: z.void()},
-      function* (outcome): restate.Operation<void> {
+      {
+        input: AgentSessionOutcomeSchema,
+        output: AgentSessionOutcomeSchema.nullable(),
+      },
+      function* (outcome): restate.Operation<AgentSessionOutcome | null> {
         const finished = yield* activeTurn.finish(outcome);
         if (!finished) {
-          return;
+          return null;
         }
-        const cancelledApprovals = yield* approvals.clearTurn(outcome.turnId);
-        yield* history.append(
-          ...cancelledApprovals.map(approvalCancelledEntry),
+        const cancelledApprovals = yield* approvals.clearTurn(
+          finished.outcome.turnId,
         );
-
-        if (outcome.status === "interrupted") {
-          if (!finished.interruptionRequested) {
-            yield* history.append({
-              role: "event",
-              type: "interrupt",
-              turnId: outcome.turnId,
-              reason: outcome.reason,
-            });
-          }
-          if (outcome.response) {
-            yield* history.append({
-              role: "assistant",
-              text: outcome.response,
-              turnId: outcome.turnId,
-              status: "interrupted",
-            });
-          }
-        } else if (outcome.status === "stopped") {
-          yield* history.append(
-            {
-              role: "event",
-              type: "stop",
-              turnId: outcome.turnId,
-              cause: outcome.cause,
-              reason: outcome.reason,
-            },
-            {
-              role: "assistant",
-              text: outcome.response,
-              turnId: outcome.turnId,
-              status: "stopped",
-            },
-          );
-        } else {
-          yield* history.append({
-            role: "assistant",
-            text:
-              outcome.status === "completed" ? outcome.response : outcome.error,
-            turnId: outcome.turnId,
-            status: outcome.status,
-          });
+        if (cancelledApprovals.length > 0) {
+          yield* notifications.publish("approvals");
         }
-        const agentId = agentKey();
-        const queuedMessages =
-          finished.missedSteeringMessages + finished.pendingMessages;
+
+        const queuedMessages = finished.queuedEntries.filter(
+          ({role}) => role === "user",
+        ).length;
         if (queuedMessages > 0) {
-          // Keep queued messages and their activation boundary in the same
-          // compaction prefix.
-          yield* startTurn(agentId, queuedMessages);
+          yield* startTurn(agentKey(), [
+            ...finished.queuedEntries,
+            {
+              role: "event",
+              type: "dispatch",
+              queuedMessages,
+            },
+          ]);
         }
-
-        const plan = yield* history.beginCompaction();
-        if (plan) {
-          yield* restate.sendClient(Agent, agentId).compact(plan);
-        }
-      },
-    ),
-
-    /**
-     * Summarizes one reserved transcript prefix from a shared handler.
-     *
-     * The derived result is sent to the exclusive `applyCompaction` path so
-     * conversation handlers are not blocked by model inference.
-     */
-    compact: restate.schemas(
-      {input: ConversationCompactionPlanSchema, output: z.void()},
-      function* (plan: ConversationCompactionPlan): restate.Operation<void> {
-        const input = yield* history.readCompaction(plan);
-        if (!input) {
-          return;
-        }
-        const result = yield* compactConversation(input);
-        yield* restate.sendClient(Agent, agentKey()).applyCompaction(result);
-      },
-    ),
-
-    /**
-     * Applies a derived summary only when it matches the currently reserved
-     * transcript prefix.
-     */
-    applyCompaction: restate.schemas(
-      {input: ConversationCompactionResultSchema, output: z.void()},
-      function* (
-        result: ConversationCompactionResult,
-      ): restate.Operation<void> {
-        yield* history.finishCompaction(result);
+        return finished.outcome;
       },
     ),
   },
   options: {
     enableLazyState: true,
     handlers: {
-      // Coordination paths keep no completed-invocation state; the user-facing
-      // conversation handlers retain the server defaults.
+      // High-volume coordination paths keep no completed-invocation state.
       onTurnEnd: noRetention,
-      watchHistory: {
+      notify: noRetention,
+      notifications: {shared: true, ...noRetention},
+      watchNotifications: {
         shared: true,
         inactivityTimeout: {seconds: 1},
         ...noRetention,
       },
-      registerHistoryWatcher: noRetention,
-      unregisterHistoryWatcher: noRetention,
+      subscribeNotifications: noRetention,
+      unsubscribeNotifications: noRetention,
       updateMemory: noRetention,
       scheduleMessage: noRetention,
       cancelSchedule: noRetention,
       fireSchedule: noRetention,
-      reportProgress: noRetention,
-      reportExecution: noRetention,
       requestApproval: noRetention,
       cancelApproval: noRetention,
-      applyCompaction: noRetention,
       approvals: {shared: true, ...noRetention},
       schedules: {shared: true, ...noRetention},
-      history: {shared: true, ...noRetention},
       profile: {shared: true, ...noRetention},
-      compact: {shared: true, ...noRetention},
     },
   },
 });
 
-// Cross-component coordination belongs here: mark queued messages as active,
-// prepare the complete transcript, then let activeTurn own the invocation.
+function* waitForNotification({
+  afterRevision,
+  timeoutSeconds,
+}: {
+  afterRevision: number;
+  timeoutSeconds: number;
+}): restate.Operation<AgentNotificationSnapshot> {
+  const changed = restate.awakeable<AgentNotificationSnapshot>();
+  const available = yield* restate
+    .client(Agent, agentKey())
+    .subscribeNotifications({
+      afterRevision,
+      awakeableId: changed.id,
+    });
+  if (available) {
+    return available;
+  }
+
+  try {
+    const selected = yield* raceBranches({
+      notification: changed.promise,
+      timeout: restate.sleep(
+        timeoutSeconds * 1_000,
+        "notification watch window",
+      ),
+    });
+    if (selected.tag === "notification") {
+      return selected.value;
+    }
+
+    yield* restate
+      .client(Agent, agentKey())
+      .unsubscribeNotifications({awakeableId: changed.id});
+    return yield* notifications.read();
+  } catch (error) {
+    yield* restate
+      .sendClient(Agent, agentKey())
+      .unsubscribeNotifications({awakeableId: changed.id});
+    throw error;
+  }
+}
+
+// Cross-component coordination belongs here: snapshot the Agent profile and
+// let AgentSession append the entries that open the turn.
 function* startTurn(
   agentId: string,
-  queuedMessages = 0,
+  entries: ConversationEntry[],
 ): restate.Operation<string> {
-  if (queuedMessages > 0) {
-    yield* history.append({
-      role: "event",
-      type: "dispatch",
-      queuedMessages,
-    });
-  }
-  const context = yield* history.context();
   const agentProfile = yield* profile.read();
-  return yield* activeTurn.start({
-    agentId,
-    ...agentProfile,
-    summary: context.summary,
-    history: context.entries,
-  });
+  return yield* activeTurn.start(agentId, {...agentProfile, entries});
 }
 
 function* createScheduleTimer(
@@ -879,7 +663,7 @@ function* scheduleTurnRejection(
     return undefined;
   }
   const current = yield* activeTurn.current();
-  return current?.id === turnId && !current.interrupting
+  return current?.id === turnId && current.interruptReason === undefined
     ? undefined
     : "schedule mutation rejected because its Turn is no longer active";
 }
@@ -889,65 +673,60 @@ function* deliverScheduledMessage(
   schedule: ScheduledMessage,
 ): restate.Operation<void> {
   const current = yield* activeTurn.current();
-  const event = {
-    role: "event" as const,
-    type: "schedule" as const,
-    action: "fired" as const,
-    scheduleId: schedule.scheduleId,
-    whenBusy: schedule.whenBusy,
-  };
 
   if (!current) {
-    yield* history.append(
-      {...event, routing: "start"},
+    yield* startTurn(agentId, [
+      scheduleFired(schedule, "start"),
       {role: "user", text: schedule.message, delivery: "turn"},
-    );
-    yield* startTurn(agentId);
+    ]);
     return;
   }
 
-  if (current.interrupting || schedule.whenBusy === "queue") {
-    yield* activeTurn.enqueue(schedule.message);
-    yield* history.append(
-      {...event, routing: "queue"},
-      {role: "user", text: schedule.message, delivery: "queued"},
-    );
+  if (current.interruptReason !== undefined || schedule.whenBusy === "queue") {
+    yield* activeTurn.enqueue(scheduleFired(schedule, "queue", current.id), {
+      role: "user",
+      text: schedule.message,
+      delivery: "queued",
+    });
     return;
   }
 
   if (schedule.whenBusy === "steer") {
-    const steering = yield* activeTurn.steer(schedule.message);
-    if (!steering) {
+    const accepted = yield* activeTurn.steer(
+      schedule.message,
+      scheduleFired(schedule, "steer", current.id),
+    );
+    if (!accepted) {
       throw new TerminalError("active Turn rejected scheduled steering");
     }
-    yield* history.append(
-      {...event, routing: "steer"},
-      {role: "user", text: schedule.message, delivery: "steer"},
-      {
-        role: "event",
-        type: "steer",
-        turnId: steering.turnId,
-        queuedMessages: steering.queued.length,
-      },
-    );
     return;
   }
 
-  yield* activeTurn.enqueue(schedule.message);
-  const interruption = yield* activeTurn.interrupt(
+  yield* activeTurn.enqueue(scheduleFired(schedule, "interrupt", current.id), {
+    role: "user",
+    text: schedule.message,
+    delivery: "queued",
+  });
+  const requested = yield* activeTurn.interrupt(
     `Scheduled message "${schedule.scheduleId}" became due`,
   );
-  if (!interruption?.requested) {
+  if (!requested) {
     throw new TerminalError("active Turn rejected scheduled interruption");
   }
-  yield* history.append(
-    {...event, routing: "interrupt"},
-    {role: "user", text: schedule.message, delivery: "queued"},
-    {
-      role: "event",
-      type: "interrupt",
-      turnId: interruption.turnId,
-      reason: `Scheduled message "${schedule.scheduleId}" became due`,
-    },
-  );
+}
+
+function scheduleFired(
+  schedule: ScheduledMessage,
+  routing: "start" | "queue" | "steer" | "interrupt",
+  turnId?: string,
+): ConversationEntry {
+  return {
+    role: "event",
+    type: "schedule",
+    action: "fired",
+    scheduleId: schedule.scheduleId,
+    whenBusy: schedule.whenBusy,
+    routing,
+    ...(turnId ? {turnId} : {}),
+  };
 }

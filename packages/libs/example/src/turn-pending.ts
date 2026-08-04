@@ -10,8 +10,10 @@ import {
   type ToolOutcome,
 } from "./agent-tools.js";
 import type {ToolCall} from "./model.js";
+import {raceBranches} from "./race.js";
 
 type PendingOperation = {
+  step: number;
   call: ToolCall;
   task: restate.Task<PendingEvent>;
 };
@@ -39,13 +41,17 @@ export function createPendingOperations() {
     *apply(
       outcomes: ToolOutcome[],
       context: AgentToolContext,
+      step: number,
     ): restate.Operation<{outcomes: ToolOutcome[]; events: PendingEvent[]}> {
       const starting = outcomes.flatMap((outcome): PendingOperation[] =>
         outcome.status === "pending"
           ? [
               {
+                step,
                 call: outcome.call,
-                task: restate.spawn(agentTools.complete(outcome.call, context)),
+                task: restate.spawn(
+                  agentTools.complete(outcome.call, context, step),
+                ),
               },
             ]
           : [],
@@ -87,6 +93,7 @@ export function createPendingOperations() {
           }
 
           events.push({
+            step: operation.step,
             call: operation.call,
             outcome: {status: "cancelled", reason: outcome.reason},
           });
@@ -114,21 +121,19 @@ export function createPendingOperations() {
       steeringReady: restate.Future<void>,
       interrupt: restate.Future<string>,
     ): restate.Operation<PendingStep> {
-      const selected = yield* restate.select({
+      const selected = yield* raceBranches({
         interrupt,
         steering: steeringReady,
         completion: restate.race([...active.values()].map(({task}) => task)),
       });
       if (selected.tag === "interrupt") {
-        return {type: "interrupted", reason: yield* selected.future};
+        return {type: "interrupted", reason: selected.value};
       }
       if (selected.tag === "steering") {
-        yield* selected.future;
         return {type: "steering"};
       }
-      const event = yield* selected.future;
-      active.delete(event.call.toolCallId);
-      return {type: "completion", event};
+      active.delete(selected.value.call.toolCallId);
+      return {type: "completion", event: selected.value};
     },
 
     *stop(reason: unknown): restate.Operation<PendingEvent[]> {
@@ -142,6 +147,7 @@ export function createPendingOperations() {
         result.status === "fulfilled"
           ? result.value
           : {
+              step: stopped[index].step,
               call: stopped[index].call,
               outcome: {
                 status: "cancelled",
@@ -150,6 +156,29 @@ export function createPendingOperations() {
               },
             },
       );
+    },
+
+    /**
+     * Abandons every pending operation without waiting for cancelled work.
+     *
+     * Invocation cancellation has already interrupted the whole coroutine
+     * tree. This synchronous snapshot lets the cancelled root record cleanup
+     * and hand control back to the Agent without parking on those children.
+     */
+    cancelAll(reason: unknown): PendingEvent[] {
+      const stopped = [...active.values()];
+      active.clear();
+      for (const operation of stopped) {
+        operation.task.interrupt(reason);
+      }
+      return stopped.map(({step, call}) => ({
+        step,
+        call,
+        outcome: {
+          status: "cancelled",
+          reason: reason instanceof Error ? reason.message : String(reason),
+        },
+      }));
     },
   };
 }

@@ -10,6 +10,7 @@ import {
   type AgentModelRequest,
   AgentModelRequestSchema,
   completeAgent,
+  confirmGuardrailDecision,
   evaluateGuardrails,
   GUARDRAIL_MODEL,
   type GuardrailDecision,
@@ -60,10 +61,19 @@ export const ModelGateway = restate.service({
       function* (
         request: GuardrailEvaluationRequest,
       ): restate.Operation<GuardrailDecision> {
-        return yield* restate.run(
+        const decision = yield* restate.run(
           ({signal}) => evaluateGuardrails(request, signal),
           {name: "guardrail-model", retry: MODEL_RETRY},
         );
+        if (decision.decision === "allow") {
+          return decision;
+        }
+
+        const confirmed = yield* restate.run(
+          ({signal}) => confirmGuardrailDecision(request, decision, signal),
+          {name: "guardrail-review", retry: MODEL_RETRY},
+        );
+        return confirmed ? decision : {decision: "allow"};
       },
     ),
 

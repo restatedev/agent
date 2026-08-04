@@ -7,7 +7,9 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent.js";
+import {AgentSession} from "./agent-session.js";
 import {callContextReducer} from "./model-gateway.js";
+import {raceBranches} from "./race.js";
 import {type HistoryPage, HistoryPageSchema} from "./types.js";
 
 const EvalCaseIdSchema = z.enum([
@@ -78,6 +80,7 @@ type EntryPredicate = (candidate: SequencedEntry) => boolean;
 type HistoryReader = {
   agentId: string;
   nextSequence: number;
+  notificationRevision: number;
   entries: SequencedEntry[];
   deadline: restate.Future<void>;
 };
@@ -116,7 +119,7 @@ function requireStarted(result: {
 function* readAvailable(reader: HistoryReader): restate.Operation<void> {
   while (true) {
     const page = yield* restate
-      .client(Agent, reader.agentId)
+      .client(AgentSession, reader.agentId)
       .history({fromSequence: reader.nextSequence, limit: 100});
     if (page.entries.length === 0) {
       return;
@@ -138,21 +141,21 @@ function* waitForHistory(
       return found;
     }
 
-    // watchHistory parks inside the Agent until the cursor becomes readable
-    // or its wait window elapses; either way the loop re-reads the cursor.
-    // A window abandoned by the case deadline times out and cleans itself up.
-    const watch = restate.client(Agent, reader.agentId).watchHistory({
-      fromSequence: reader.nextSequence,
+    // Agent owns and resolves the durable notification subscription. History
+    // remains an authoritative read from AgentSession.
+    const watch = restate.client(Agent, reader.agentId).watchNotifications({
+      afterRevision: reader.notificationRevision,
       timeoutSeconds: 30,
     });
-    const selected = yield* restate.select({
+    const selected = yield* raceBranches({
       watch,
       deadline: reader.deadline,
     });
-    yield* selected.future;
     if (selected.tag === "deadline") {
       throw new EvalTimeout(`timed out waiting for ${description}`);
     }
+    const notification = selected.value;
+    reader.notificationRevision = notification.revision;
   }
 }
 
@@ -476,6 +479,16 @@ function* interruption({
       entry.turnId === ask.turnId &&
       entry.phase === "finalizing",
   );
+  const cancelledSleep = history.entries.find(
+    ({entry}) =>
+      entry.role === "event" &&
+      entry.type === "tools" &&
+      entry.turnId === ask.turnId &&
+      entry.phase === "finished" &&
+      entry.calls.some(
+        ({name, status}) => name === "sleep" && status === "cancelled",
+      ),
+  );
 
   return [
     assertion("interruption is accepted", accepted),
@@ -492,6 +505,10 @@ function* interruption({
       "the terminal response is marked interrupted",
       terminal.entry.role === "assistant" &&
         terminal.entry.status === "interrupted",
+    ),
+    assertion(
+      "the interrupted pending sleep is recorded as cancelled",
+      cancelledSleep !== undefined,
     ),
     assertion(
       "completed Berlin work remains available to finalization",
@@ -567,9 +584,9 @@ function* externalCancellation({
   ];
 }
 
-// Interruption may carry a replacement request. The Agent must record it before
-// the interruption boundary, let the old Turn finalize, then activate it in a
-// new Turn through an explicit dispatch boundary.
+// Interruption may carry a replacement request. Agent holds it until the old
+// run finalizes; the successor AgentSession then appends the queued message and
+// its dispatch boundary before executing it.
 function* interruptionReplacement({
   agentId,
   history,
@@ -632,16 +649,18 @@ function* interruptionReplacement({
       replacement !== undefined,
     ),
     assertion(
-      "the replacement is recorded before the interruption boundary",
+      "the replacement is recorded after the interrupted turn finishes",
       replacement !== undefined &&
         interruptEntry !== undefined &&
-        replacement.sequence < interruptEntry.sequence,
+        interruptEntry.sequence < firstTerminal.sequence &&
+        firstTerminal.sequence < replacement.sequence,
     ),
     assertion(
-      "the old turn finalizes before the replacement is dispatched",
+      "the replacement is appended immediately before its dispatch boundary",
       firstTerminal.entry.role === "assistant" &&
         firstTerminal.entry.status === "interrupted" &&
-        firstTerminal.sequence < dispatch.sequence,
+        replacement !== undefined &&
+        replacement.sequence + 1 === dispatch.sequence,
     ),
     assertion(
       "the dispatch boundary activates exactly one queued message",
@@ -878,6 +897,7 @@ function* guardrailApproval({
       },
     ],
   });
+  const configuredProfile = yield* restate.client(Agent, agentId).profile();
   const ask = yield* restate.client(Agent, agentId).ask({
     message: "What is the current weather in Tokyo, Japan?",
   });
@@ -888,14 +908,6 @@ function* guardrailApproval({
     "the guardrail approval request",
     isWaitingForGuardrail(ask.turnId, "japan-approval"),
   );
-  const profileEvent = history.entries.find(
-    ({entry}) =>
-      entry.role === "event" &&
-      entry.type === "profile" &&
-      entry.change.field === "guardrails" &&
-      entry.change.ids.includes("japan-approval"),
-  );
-
   const pending = yield* restate.client(Agent, agentId).approvals();
   const approval = pending.find(
     ({turnId, guardrailId}) =>
@@ -960,9 +972,8 @@ function* guardrailApproval({
 
   return [
     assertion(
-      "the profile update is discoverable through history",
-      profileEvent !== undefined &&
-        profileEvent.sequence < approvalRequestEvent.sequence,
+      "the configured guardrail is visible in the authoritative profile",
+      configuredProfile.guardrails.some(({id}) => id === "japan-approval"),
     ),
     assertion(
       "the approval request is a structured history event",
@@ -1355,7 +1366,7 @@ function* guardrailRemoval({
         reason: "Rejected while the temporary policy is active",
       })
     : false;
-  const guardedTerminal = yield* waitForHistory(
+  yield* waitForHistory(
     history,
     "the rejected guarded turn to finish",
     isTerminalFor(guarded.turnId),
@@ -1400,15 +1411,6 @@ function* guardrailRemoval({
         "the unguarded Tokyo turn to finish",
         isTerminalFor(unguarded.turnId),
       );
-  const clearedEvent = history.entries.find(
-    ({sequence, entry}) =>
-      sequence > guardedTerminal.sequence &&
-      sequence < unguardedTerminal.sequence &&
-      entry.role === "event" &&
-      entry.type === "profile" &&
-      entry.change.field === "guardrails" &&
-      entry.change.ids.length === 0,
-  );
   const response =
     unguardedTerminal.entry.role === "assistant"
       ? unguardedTerminal.entry.text.toLowerCase()
@@ -1424,10 +1426,6 @@ function* guardrailRemoval({
       "the cleared profile contains no guardrails",
       clearedProfile.guardrails.length === 0,
       `found ${clearedProfile.guardrails.length}`,
-    ),
-    assertion(
-      "guardrail removal is ordered between the two turns",
-      clearedEvent !== undefined,
     ),
     assertion(
       "the removed guardrail does not request approval in a later turn",
@@ -1598,6 +1596,7 @@ function* evaluate(
   const history: HistoryReader = {
     agentId,
     nextSequence: 1,
+    notificationRevision: 0,
     entries: [],
     deadline: restate.sleep(timeoutSeconds * 1_000, "eval deadline"),
   };

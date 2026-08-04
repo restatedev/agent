@@ -1,13 +1,15 @@
-// Durable conversation history for one Agent virtual object. Turn lifecycle
-// state and pending work belong to agent-turn.ts.
+// Durable conversation history for one AgentSession virtual object. Turn
+// lifecycle state and pending work belong to agent-turn.ts.
 //
 // The append-only transcript remains the source of truth. User messages record
 // how they originally arrived; later routing decisions are separate lifecycle
 // events. A rolling summary is a replaceable model-context checkpoint over an
 // older prefix of that log.
 
+import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
+import {Agent} from "./agent.js";
 import {
   type ConversationEntry,
   type HistoryPage,
@@ -39,14 +41,18 @@ type HistoryMeta = {
   compaction?: ConversationCompactionPlan;
 };
 
-type HistoryWatcher = {
-  awakeableId: string;
-  fromSequence: number;
-};
-
 type ConversationContext = {
   summary?: string;
   entries: ConversationEntry[];
+};
+
+export type TurnHistory = {
+  /** Returns model context from the state loaded when this Turn began. */
+  context(): ConversationContext;
+  /** Appends entries using the invocation-local sequence and tail chunk. */
+  append(...entries: ConversationEntry[]): restate.Operation<void>;
+  /** Reserves the finished prefix when the local message count reaches the threshold. */
+  beginCompaction(): restate.Operation<ConversationCompactionPlan | undefined>;
 };
 
 export type ConversationCompactionInput = ConversationCompactionPlan & {
@@ -75,8 +81,6 @@ export type ConversationCompactionResult = z.infer<
 
 const HISTORY_META = "history/meta";
 const HISTORY_SUMMARY = "history/summary";
-const HISTORY_WATCHERS = "history/watchers";
-
 const CHUNK_SIZE = 32;
 const COMPACT_AFTER_MESSAGES = 32;
 
@@ -106,37 +110,6 @@ function* readSummary(): restate.Operation<ConversationSummary | undefined> {
     (yield* restate.sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
     undefined
   );
-}
-
-function* readWatchers(): restate.Operation<HistoryWatcher[]> {
-  return (
-    (yield* restate.sharedState().get<HistoryWatcher[]>(HISTORY_WATCHERS)) ?? []
-  );
-}
-
-function storeWatchers(watchers: HistoryWatcher[]): void {
-  if (watchers.length === 0) {
-    restate.state().clear(HISTORY_WATCHERS);
-  } else {
-    restate.state().set(HISTORY_WATCHERS, watchers);
-  }
-}
-
-function* notifyWatchers(nextSequence: number): restate.Operation<void> {
-  const watchers = yield* readWatchers();
-  const ready = watchers.filter(
-    ({fromSequence}) => fromSequence < nextSequence,
-  );
-  if (ready.length === 0) {
-    return;
-  }
-
-  storeWatchers(
-    watchers.filter(({fromSequence}) => fromSequence >= nextSequence),
-  );
-  for (const watcher of ready) {
-    restate.resolveAwakeable<void>(watcher.awakeableId);
-  }
 }
 
 // Lazily walks a stable sequence range. Only the current chunk is loaded, so a
@@ -187,10 +160,10 @@ function readEntries(
 }
 
 /**
- * Handler-scoped access to conversation history for the current Agent object.
+ * Handler-scoped access to conversation history for the current AgentSession.
  *
- * These operations must run inside an Agent handler. The object is a namespace
- * over Restate's current context and holds no process-local state.
+ * These operations must run inside an AgentSession handler. The object is a
+ * namespace over Restate's current context and holds no process-local state.
  */
 export const history = {
   *page(fromSequence: number, limit: number): restate.Operation<HistoryPage> {
@@ -207,115 +180,86 @@ export const history = {
     };
   },
 
-  *context(): restate.Operation<ConversationContext> {
+  /**
+   * Loads the transcript state needed by one Turn exactly once.
+   *
+   * The returned writer owns an invocation-local cursor, tail chunk, and
+   * uncompacted prefix. Appending and checking compaction therefore only emit
+   * state writes for the remainder of the Turn.
+   */
+  *openTurn(): restate.Operation<TurnHistory> {
     const meta = yield* readMeta();
     const summary = yield* readSummary();
-    const entries = (yield* readEntries(
+    const uncompacted = yield* readEntries(
       meta,
       (summary?.through ?? 0) + 1,
-    ).collect()).flatMap(({entry}): ConversationEntry[] =>
-      isDerivedConversationEvent(entry) ? [] : [entry],
-    );
-    return {summary: summary?.text, entries};
-  },
-
-  *append(...entries: ConversationEntry[]): restate.Operation<void> {
-    if (entries.length === 0) {
-      return;
-    }
-
-    const meta = yield* readMeta();
+    ).collect();
     let index = Math.floor((meta.nextSequence - 1) / CHUNK_SIZE);
-    let chunk =
-      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
+    let chunk: StoredEntry[] = [];
+    if ((meta.nextSequence - 1) % CHUNK_SIZE !== 0) {
+      chunk =
+        (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ??
+        [];
+    }
+    const agentId = restate.handlerRequest().key;
+    if (!agentId) {
+      throw new TerminalError("history writers require an AgentSession key");
+    }
 
-    for (const entry of entries) {
-      if (chunk.length >= CHUNK_SIZE) {
+    return {
+      context(): ConversationContext {
+        return {
+          summary: summary?.text,
+          entries: uncompacted.flatMap(({entry}): ConversationEntry[] =>
+            isDerivedConversationEvent(entry) ? [] : [entry],
+          ),
+        };
+      },
+
+      *append(...entries: ConversationEntry[]): restate.Operation<void> {
+        if (entries.length === 0) {
+          return;
+        }
+
+        for (const entry of entries) {
+          if (chunk.length >= CHUNK_SIZE) {
+            restate.state().set(chunkKey(index), chunk);
+            index += 1;
+            chunk = [];
+          }
+          const stored = {sequence: meta.nextSequence, entry};
+          chunk.push(stored);
+          uncompacted.push(stored);
+          meta.nextSequence += 1;
+        }
+
         restate.state().set(chunkKey(index), chunk);
-        index += 1;
-        chunk = [];
-      }
-      chunk.push({sequence: meta.nextSequence, entry});
-      meta.nextSequence += 1;
-    }
+        restate.state().set(HISTORY_META, meta);
+        yield* restate.sendClient(Agent, agentId).notify("history");
+      },
 
-    restate.state().set(chunkKey(index), chunk);
-    restate.state().set(HISTORY_META, meta);
-    yield* notifyWatchers(meta.nextSequence);
+      *beginCompaction(): restate.Operation<
+        ConversationCompactionPlan | undefined
+      > {
+        if (
+          meta.compaction ||
+          uncompacted.filter(({entry}) => entry.role !== "event").length <
+            COMPACT_AFTER_MESSAGES
+        ) {
+          return undefined;
+        }
+
+        meta.compaction = {
+          baseThrough: summary?.through ?? 0,
+          through: meta.nextSequence - 1,
+        };
+        restate.state().set(HISTORY_META, meta);
+        return meta.compaction;
+      },
+    };
   },
 
-  /**
-   * Resolves a caller-owned awakeable when `fromSequence` becomes readable.
-   *
-   * Registration and the cursor check run in one exclusive Agent handler, so
-   * an append cannot get lost between them. Callers wait on their own
-   * awakeable and then read the regular cursor API.
-   */
-  *watch(fromSequence: number, awakeableId: string): restate.Operation<void> {
-    const meta = yield* readMeta();
-    if (fromSequence < meta.nextSequence) {
-      restate.resolveAwakeable<void>(awakeableId);
-      return;
-    }
-
-    const watchers = yield* readWatchers();
-    if (!watchers.some((watcher) => watcher.awakeableId === awakeableId)) {
-      watchers.push({awakeableId, fromSequence});
-      restate.state().set(HISTORY_WATCHERS, watchers);
-    }
-  },
-
-  /** Whether `fromSequence` is already readable. Safe from shared handlers. */
-  *isReadable(fromSequence: number): restate.Operation<boolean> {
-    const meta = yield* readMeta();
-    return fromSequence < meta.nextSequence;
-  },
-
-  /**
-   * Withdraws one registered watcher after its wait window elapsed, so idle
-   * repeat watchers do not accumulate. Safe to repeat; a watcher that was
-   * already resolved by an append is simply gone.
-   */
-  *unwatch(awakeableId: string): restate.Operation<void> {
-    const watchers = yield* readWatchers();
-    const remaining = watchers.filter(
-      (watcher) => watcher.awakeableId !== awakeableId,
-    );
-    if (remaining.length !== watchers.length) {
-      storeWatchers(remaining);
-    }
-  },
-
-  // Called after a turn outcome is appended. Once enough conversation messages
-  // have accumulated, reserve the entire finished prefix.
-  *beginCompaction(): restate.Operation<
-    ConversationCompactionPlan | undefined
-  > {
-    const meta = yield* readMeta();
-    if (meta.compaction) {
-      return undefined;
-    }
-
-    const summary = yield* readSummary();
-    const baseThrough = summary?.through ?? 0;
-    const entries = readEntries(meta, baseThrough + 1);
-    let remaining = COMPACT_AFTER_MESSAGES;
-    while (remaining > 0) {
-      const stored = yield* entries.next();
-      if (!stored) {
-        return undefined;
-      }
-      if (stored.entry.role !== "event") {
-        remaining -= 1;
-      }
-    }
-
-    meta.compaction = {baseThrough, through: meta.nextSequence - 1};
-    restate.state().set(HISTORY_META, meta);
-    return meta.compaction;
-  },
-
-  // Resolve a reserved cursor range into model input from a shared Agent
+  // Resolve a reserved cursor range into model input from a shared AgentSession
   // handler. No state is mutated here.
   *readCompaction(
     plan: ConversationCompactionPlan,

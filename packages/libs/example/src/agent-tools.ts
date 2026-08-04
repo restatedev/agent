@@ -21,24 +21,32 @@ import {
 import {
   type ApprovalDecision,
   approvalSignalName,
+  type ConversationEntry,
   type MemoryChange,
   ScheduleCancellationSchema,
   ScheduleSpecSchema,
 } from "./types.js";
 
-type ToolExecution =
+type ToolTranscript = {transcript?: ConversationEntry[]};
+
+type ToolExecution = (
   | {status: "succeeded"; result: string}
   | {status: "failed"; error: string}
   | {status: "pending"; result: Record<string, unknown>}
-  | {status: "cancel_requested"; operationId: string; reason: string};
+  | {status: "cancel_requested"; operationId: string; reason: string}
+) &
+  ToolTranscript;
 
-type ToolCompletion =
+type ToolCompletion = (
   | Extract<ToolExecution, {status: "succeeded" | "failed"}>
-  | {status: "cancelled"; reason: string};
+  | {status: "cancelled"; reason: string}
+) &
+  ToolTranscript;
 
 export type ToolOutcome = ToolExecution & {call: ToolCall};
 
 export type PendingEvent = {
+  step: number;
   call: ToolCall;
   outcome: ToolCompletion;
 };
@@ -59,6 +67,7 @@ type AgentTool = {
   name: string;
   description: string;
   inputSchema: z.ZodType;
+  summarize(input: unknown): string | undefined;
   execute(
     input: unknown,
     context: ToolCallContext,
@@ -133,6 +142,7 @@ function defineAgentTool<Schema extends z.ZodType>(definition: {
   name: string;
   description: string;
   inputSchema: Schema;
+  summarize?(input: z.output<Schema>): string;
   run(
     input: z.output<Schema>,
     context: ToolCallContext,
@@ -146,6 +156,13 @@ function defineAgentTool<Schema extends z.ZodType>(definition: {
     name: definition.name,
     description: definition.description,
     inputSchema: definition.inputSchema,
+    summarize(input: unknown): string | undefined {
+      if (!definition.summarize) {
+        return undefined;
+      }
+      const parsed = definition.inputSchema.safeParse(input);
+      return parsed.success ? definition.summarize(parsed.data) : undefined;
+    },
     *execute(
       input: unknown,
       context: ToolCallContext,
@@ -294,9 +311,10 @@ const humanApprovalTool = defineAgentTool({
         status: "pending",
         question,
       },
+      transcript: [{role: "event", type: "approval_request", ...request}],
     };
   },
-  *complete({question: _question}, context): restate.Operation<ToolCompletion> {
+  *complete({question}, context): restate.Operation<ToolCompletion> {
     try {
       const decision = yield* restate.signal<ApprovalDecision>(
         approvalSignalName(context.toolCallId),
@@ -308,6 +326,16 @@ const humanApprovalTool = defineAgentTool({
           decision.decision === "approved"
             ? `Human approved the request.${reason}`
             : `Human rejected the request.${reason}`,
+        transcript: [
+          {
+            role: "event",
+            type: "approval",
+            approvalId: context.toolCallId,
+            turnId: context.turnId,
+            question,
+            ...decision,
+          },
+        ],
       };
     } catch (error) {
       yield* restate.sendClient(Agent, context.agentId).cancelApproval({
@@ -394,6 +422,14 @@ const manageMemoryTool = defineAgentTool({
       ? {
           status: "succeeded",
           result: `Applied ${changes.length} memory change(s); the agent now has ${result.memoryCount} memories`,
+          transcript: [
+            {
+              role: "event",
+              type: "memory",
+              turnId: context.turnId,
+              changes: normalized.map(({operation, key}) => ({operation, key})),
+            },
+          ],
         }
       : {status: "failed", error: result.error};
   },
@@ -471,9 +507,10 @@ const listFilesTool = defineAgentTool({
   inputSchema: z.object({
     path: z.string().min(1).describe("Directory path to list."),
   }),
+  summarize: ({path}) => `Listed files in ${path}`,
   *run({path}, context): restate.Operation<ToolExecution> {
     return yield* runSandboxTool(
-      "listSandboxFiles",
+      `Listed files in ${path}`,
       context,
       async (client, signal) =>
         JSON.stringify(await client.listFiles(path, {signal})),
@@ -487,9 +524,10 @@ const readFileTool = defineAgentTool({
   inputSchema: z.object({
     path: z.string().min(1).describe("Path of the text file to read."),
   }),
+  summarize: ({path}) => `Read ${path}`,
   *run({path}, context): restate.Operation<ToolExecution> {
     return yield* runSandboxTool(
-      "readSandboxFile",
+      `Read ${path}`,
       context,
       async (client, signal) => client.readFile(path, {signal}),
     );
@@ -504,9 +542,10 @@ const writeFileTool = defineAgentTool({
     path: z.string().min(1).describe("Path of the text file to write."),
     content: z.string().describe("Complete new contents of the file."),
   }),
+  summarize: ({path}) => `Wrote ${path}`,
   *run({path, content}, context): restate.Operation<ToolExecution> {
     return yield* runSandboxTool(
-      "writeSandboxFile",
+      `Wrote ${path}`,
       context,
       async (client, signal) => {
         await client.writeFile(path, content, {signal});
@@ -537,12 +576,13 @@ const executeCommandTool = defineAgentTool({
         "Command timeout in seconds, or null for the provider default.",
       ),
   }),
+  summarize: () => "Ran command",
   *run(
     {command, cwd, timeoutSeconds},
     context,
   ): restate.Operation<ToolExecution> {
     return yield* runSandboxTool(
-      "executeSandboxCommand",
+      "Ran command",
       context,
       async (client, signal) => {
         const result = await client.executeCommand(
@@ -710,11 +750,40 @@ function toRuntimeMessage({call, outcome}: PendingEvent): ModelMessage {
   };
 }
 
+function transcriptEntries(
+  event: ToolOutcome | PendingEvent,
+  context: AgentToolContext,
+  interruptedPendingReason?: string,
+): ConversationEntry[] {
+  const pendingEvent = "outcome" in event;
+  const result = pendingEvent ? event.outcome : event;
+  const entries = [...(result.transcript ?? [])];
+  const cancelledApproval =
+    event.call.toolName === "humanApproval" &&
+    ((pendingEvent && result.status === "cancelled") ||
+      (!pendingEvent &&
+        result.status === "pending" &&
+        interruptedPendingReason !== undefined));
+  if (cancelledApproval) {
+    entries.push({
+      role: "event",
+      type: "approval_cancelled",
+      approvalId: event.call.toolCallId,
+      turnId: context.turnId,
+    });
+  }
+  return entries;
+}
+
 export const agentTools = {
   names: definitions.map(({name}) => name),
 
   manifests(discovered: DiscoveredAgentTool[]): ToolManifest[] {
     return [...definitions.map(toManifest), ...discovered.map(dynamicManifest)];
+  },
+
+  summarize(call: ToolCall): string | undefined {
+    return findTool(call.toolName)?.summarize(call.input);
   },
 
   *execute(
@@ -746,16 +815,19 @@ export const agentTools = {
   *complete(
     call: ToolCall,
     context: AgentToolContext,
+    step: number,
   ): restate.Operation<PendingEvent> {
     const tool = findTool(call.toolName);
     if (!tool) {
       return {
+        step,
         call,
         outcome: {status: "failed", error: `unknown tool: ${call.toolName}`},
       };
     }
     try {
       return {
+        step,
         call,
         outcome: yield* tool.complete(call.input, {
           ...context,
@@ -770,6 +842,7 @@ export const agentTools = {
         throw error;
       }
       return {
+        step,
         call,
         outcome: {
           status: "failed",
@@ -781,4 +854,5 @@ export const agentTools = {
 
   toModelMessage,
   toRuntimeMessage,
+  transcriptEntries,
 };

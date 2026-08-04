@@ -2,8 +2,7 @@
 //
 // This file is the canonical external consumer of the protocol: one typed
 // method per public handler plus the consumption patterns a client needs —
-// the cursor + watchHistory long-poll loop and the transcript projection
-// that folds pending approvals and change signals from lifecycle events.
+// the cursor + notification long-poll loop used to follow transcript updates.
 //
 // It imports types only, so it compiles to dependency-free JS that runs
 // anywhere `fetch` and `crypto.randomUUID` exist (Node 18+, browsers), while
@@ -22,10 +21,10 @@
 
 import type {AskResult} from "./agent.js";
 import type {
+  AgentNotificationSnapshot,
   AgentProfile,
   ApprovalRequest,
   ApprovalResolution,
-  ConversationEntry,
   Guardrail,
   HistoryPage,
   ScheduleCancellationResult,
@@ -48,7 +47,7 @@ export type ScheduleSpecInput = {
 export type FollowOptions = {
   /** Inclusive cursor to start from. Defaults to the beginning. */
   fromSequence?: number;
-  /** Wait-window length per watchHistory long-poll. */
+  /** Wait-window length per notification long-poll. */
   timeoutSeconds?: number;
   /** Stops the generator at the next checkpoint when aborted. */
   signal?: AbortSignal;
@@ -79,13 +78,17 @@ export function createAgentClient({
   agentId,
   fetch: fetchImpl = fetch,
 }: AgentClientOptions) {
-  const base = `${ingressUrl.replace(/\/+$/, "")}/Agent/${encodeURIComponent(agentId)}`;
+  const ingress = ingressUrl.replace(/\/+$/, "");
+  const key = encodeURIComponent(agentId);
+  const agentBase = `${ingress}/Agent/${key}`;
+  const sessionBase = `${ingress}/AgentSession/${key}`;
 
   // One POST per handler. An `undefined` body means a void-input handler:
   // the ingress requires those requests to carry no body and no content-type.
   // An idempotency key makes retries of the same logical request attach to
   // the already-running invocation instead of spawning a new one.
   async function invoke<T>(
+    base: string,
     handler: string,
     body?: unknown,
     options?: {idempotencyKey?: string; signal?: AbortSignal},
@@ -117,15 +120,20 @@ export function createAgentClient({
   }
 
   async function history(fromSequence = 1, limit = 100): Promise<HistoryPage> {
-    return invoke("history", {fromSequence, limit});
+    return invoke(sessionBase, "history", {fromSequence, limit});
   }
 
-  async function watchHistory(
-    fromSequence: number,
+  async function watchNotifications(
+    afterRevision: number,
     timeoutSeconds: number,
     options?: {idempotencyKey?: string; signal?: AbortSignal},
-  ): Promise<boolean> {
-    return invoke("watchHistory", {fromSequence, timeoutSeconds}, options);
+  ): Promise<AgentNotificationSnapshot> {
+    return invoke(
+      agentBase,
+      "watchNotifications",
+      {afterRevision, timeoutSeconds},
+      options,
+    );
   }
 
   return {
@@ -133,7 +141,7 @@ export function createAgentClient({
 
     /** Starts a turn when the Agent is idle, queues for the next turn otherwise. */
     async ask(message?: string): Promise<AskResult> {
-      return invoke("ask", message === undefined ? {} : {message});
+      return invoke(agentBase, "ask", message === undefined ? {} : {message});
     },
 
     /**
@@ -142,23 +150,31 @@ export function createAgentClient({
      * @returns false when no turn is listening (idle or already interrupting).
      */
     async steer(message: string): Promise<boolean> {
-      return invoke("steer", message);
+      return invoke(agentBase, "steer", message);
     },
 
     /**
      * Gracefully stops the active turn. The optional replacement message is
-     * recorded immediately and queued for a new turn after finalization.
+     * queued and enters the transcript when the successor turn starts.
      */
     async interrupt(reason: string, message?: string): Promise<boolean> {
-      return invoke("interrupt", {reason, ...(message ? {message} : {})});
+      return invoke(agentBase, "interrupt", {
+        reason,
+        ...(message ? {message} : {}),
+      });
     },
 
     history,
-    watchHistory,
+    watchNotifications,
+
+    /** Returns the Agent's current notification watermarks. */
+    async notifications(): Promise<AgentNotificationSnapshot> {
+      return invoke(agentBase, "notifications");
+    },
 
     /**
      * Yields transcript entries in sequence order, forever: drains the cursor,
-     * then parks in one watchHistory wait window per idempotency key and
+     * then parks in one notification wait window per idempotency key and
      * repeats. A network-failed window retries under the same key, attaching
      * to the still-parked invocation instead of stacking a new one.
      */
@@ -168,6 +184,7 @@ export function createAgentClient({
       signal,
     }: FollowOptions = {}): AsyncGenerator<SequencedEntry, void, void> {
       let cursor = fromSequence;
+      let revision = 0;
       let windowKey = crypto.randomUUID();
       while (!signal?.aborted) {
         try {
@@ -177,10 +194,11 @@ export function createAgentClient({
             yield* page.entries;
             continue;
           }
-          await watchHistory(cursor, timeoutSeconds, {
+          const watched = await watchNotifications(revision, timeoutSeconds, {
             idempotencyKey: windowKey,
             signal,
           });
+          revision = watched.revision;
           windowKey = crypto.randomUUID();
         } catch (error) {
           if (signal?.aborted) {
@@ -199,23 +217,23 @@ export function createAgentClient({
     // ---- profile ----
 
     async profile(): Promise<AgentProfile> {
-      return invoke("profile");
+      return invoke(agentBase, "profile");
     },
 
     /** Replaces the persistent instructions; null clears them. */
     async setInstructions(instructions: string | null): Promise<void> {
-      return invoke("setInstructions", {instructions});
+      return invoke(agentBase, "setInstructions", {instructions});
     },
 
     /** Replaces the complete guardrail list; an empty list clears it. */
     async setGuardrails(guardrails: Guardrail[]): Promise<void> {
-      return invoke("setGuardrails", {guardrails});
+      return invoke(agentBase, "setGuardrails", {guardrails});
     },
 
     // ---- human approvals ----
 
     async approvals(): Promise<ApprovalRequest[]> {
-      return invoke("approvals");
+      return invoke(agentBase, "approvals");
     },
 
     /**
@@ -225,93 +243,28 @@ export function createAgentClient({
      * eligible to receive the decision.
      */
     async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
-      return invoke("resolveApproval", resolution);
+      return invoke(agentBase, "resolveApproval", resolution);
     },
 
     // ---- scheduled messages ----
 
     async schedules(): Promise<ScheduledMessage[]> {
-      return invoke("schedules");
+      return invoke(agentBase, "schedules");
     },
 
     /** Creates or replaces one schedule through the administrative path. */
     async scheduleMessage(
       schedule: ScheduleSpecInput,
     ): Promise<ScheduleMutationResult> {
-      return invoke("scheduleMessage", {turnId: null, schedule});
+      return invoke(agentBase, "scheduleMessage", {turnId: null, schedule});
     },
 
     async cancelSchedule(
       scheduleId: string,
     ): Promise<ScheduleCancellationResult> {
-      return invoke("cancelSchedule", {turnId: null, scheduleId});
+      return invoke(agentBase, "cancelSchedule", {turnId: null, scheduleId});
     },
   };
 }
 
 export type AgentClient = ReturnType<typeof createAgentClient>;
-
-// ---- transcript projection ----
-
-export type PendingApproval = Extract<
-  ConversationEntry,
-  {role: "event"; type: "approval_request"}
->;
-
-export type ProjectionSignals = {
-  /** The pending-approval set changed. */
-  approvalsChanged: boolean;
-  /** Instructions, guardrails, or memories changed; re-read `profile`. */
-  profileChanged: boolean;
-  /** A schedule was created, updated, cancelled, or fired; re-read `schedules`. */
-  schedulesChanged: boolean;
-};
-
-/**
- * Folds client-relevant durable state from the transcript, so a consumer of
- * `follow` needs no polling beyond the history cursor itself.
- *
- * Pending approvals fold exactly: every transition is a transcript event
- * (approval_request adds; approval and approval_cancelled remove — including
- * the cancellations the Agent appends when a turn ends). Profile contents and
- * schedules deliberately stay out of the transcript, so their events are
- * refresh signals rather than state.
- */
-export function createTranscriptProjection() {
-  const pendingApprovals = new Map<string, PendingApproval>();
-
-  return {
-    /** Live view; keyed by approvalId. Do not mutate. */
-    pendingApprovals,
-
-    apply(entry: ConversationEntry): ProjectionSignals {
-      const signals: ProjectionSignals = {
-        approvalsChanged: false,
-        profileChanged: false,
-        schedulesChanged: false,
-      };
-      if (entry.role !== "event") {
-        return signals;
-      }
-      switch (entry.type) {
-        case "approval_request":
-          pendingApprovals.set(entry.approvalId, entry);
-          signals.approvalsChanged = true;
-          return signals;
-        case "approval":
-        case "approval_cancelled":
-          signals.approvalsChanged = pendingApprovals.delete(entry.approvalId);
-          return signals;
-        case "profile":
-        case "memory":
-          signals.profileChanged = true;
-          return signals;
-        case "schedule":
-          signals.schedulesChanged = true;
-          return signals;
-        default:
-          return signals;
-      }
-    },
-  };
-}

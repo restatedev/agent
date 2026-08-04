@@ -9,16 +9,18 @@ import {
   signal,
   spawn,
 } from "@restatedev/restate-sdk-gen";
-import {type SteeringSignal, TURN_SIGNALS} from "./types.js";
+import {AGENT_SESSION_SIGNALS, type AgentSessionSteering} from "./types.js";
 
 export function createSteeringInbox() {
-  const queue: SteeringSignal[] = [];
+  const queue: AgentSessionSteering[] = [];
   let notification = channel<void>();
 
   spawn(
     gen(function* receiveSteering() {
       while (true) {
-        const steering = yield* signal<SteeringSignal>(TURN_SIGNALS.steering);
+        const steering = yield* signal<AgentSessionSteering>(
+          AGENT_SESSION_SIGNALS.steering,
+        );
         if (queue.push(steering) === 1) {
           yield* notification.send();
         }
@@ -31,7 +33,7 @@ export function createSteeringInbox() {
       return notification.receive;
     },
 
-    drain(): SteeringSignal[] {
+    drain(): AgentSessionSteering[] {
       if (queue.length === 0) {
         return [];
       }

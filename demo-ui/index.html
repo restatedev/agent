@@ -10,7 +10,7 @@
     &agent=demo                        override the agent id
 
   Covered protocol surface: ask, steer, interrupt (with replacement message),
-  history (cursor polling), profile, setInstructions, setGuardrails,
+  history (cursor reads + notification subscription), profile, setInstructions, setGuardrails,
   approvals + resolveApproval, schedules (scheduleMessage, cancelSchedule,
   schedules), and the Evals/all suite runner.
 
@@ -468,7 +468,7 @@
       </div>
       <div id="replacementRow">
         <input type="text" id="replacementBox"
-          placeholder="Optional replacement request — recorded now, runs as a new turn after finalization" />
+          placeholder="Optional replacement request — queued for a new turn after finalization" />
       </div>
     </div>
   </section>
@@ -578,16 +578,17 @@ const state = {
   // generation; a superseded chain stops at its next checkpoint instead of
   // surviving alongside the new one.
   pollGeneration: 0,
-  // Pending approvals fold directly from transcript events: approval_request
-  // adds, approval (resolved) and approval_cancelled remove. History is the
-  // only feed. approvalId -> approval_request entry.
+  // Authoritative side state is pulled from Agent after its corresponding
+  // notification watermark advances. approvalId -> approval request.
   pendingApprovals: new Map(),
-  approvalsDirty: false,
-  // Profile *contents* stay out of the transcript by design; profile and
-  // memory events signal exactly when one fetch is needed.
+  refreshApprovalsNeeded: true,
   refreshProfileNeeded: false,
-  // Same pattern for the durable schedule timers.
   refreshSchedulesNeeded: false,
+  notificationsInitialized: false,
+  notification: {
+    revision: 0,
+    versions: {history: 0, profile: 0, approvals: 0, schedules: 0},
+  },
   mode: "ask",
 };
 
@@ -863,7 +864,7 @@ function updateTurnSummary(group, entry) {
   } else if (entry.type === "tools") {
     group.live.textContent =
       `${entry.phase === "started" ? "running" : "finished"} ` +
-      entry.calls.map(({name}) => name).join(", ");
+      entry.calls.map((call) => call.summary ?? call.name).join(", ");
   }
 }
 
@@ -906,15 +907,15 @@ function turnDetailLine(entry) {
       return block;
     }
     case "tools": {
-      const line = el("div", "toolcall");
-      if (entry.phase === "started") {
-        line.append(`🔧 step ${entry.step} ▶ `);
-        line.append(entry.calls.map(({name}) => name).join(", "));
-        return line;
-      }
-      line.append(`🔧 step ${entry.step} ■ `);
+      const block = el("div", "toolcall");
       entry.calls.forEach((call, index) => {
-        if (index > 0) line.append("  ");
+        const line = el("div");
+        const prefix = index === 0 ? `🔧 step ${entry.step} ` : "　";
+        if (entry.phase === "started") {
+          line.append(`${prefix}▶ ${call.summary ?? call.name}`);
+          block.appendChild(line);
+          return;
+        }
         const cls =
           call.status === "succeeded" ? "ok" :
           call.status === "failed" ? "bad" :
@@ -924,9 +925,11 @@ function turnDetailLine(entry) {
           call.status === "failed" ? "✗" :
           call.status === "pending" ? "…" :
           call.status === "cancelled" ? "⊘" : "·";
-        line.appendChild(el("span", cls, `${icon} ${call.name}`));
+        line.append(`${prefix}■ `);
+        line.appendChild(el("span", cls, `${icon} ${call.summary ?? call.name}`));
+        block.appendChild(line);
       });
-      return line;
+      return block;
     }
     case "steer":
       return el("div", "event",
@@ -1023,26 +1026,9 @@ function renderEntry({entry}) {
       t.appendChild(line);
       return;
     }
-    case "profile": {
-      const change = entry.change;
-      t.appendChild(el("div", "event",
-        change.field === "instructions"
-          ? `⚙️ instructions ${change.configured ? "updated" : "cleared"}`
-          : `⚙️ guardrails set: ${change.ids.length ? change.ids.join(", ") : "(none)"}`));
-      return;
-    }
     case "schedule": {
-      const when = entry.nextRunAt
-        ? ` — next at ${new Date(entry.nextRunAt).toLocaleTimeString()}`
-        : "";
-      const detail =
-        entry.action === "fired" && entry.routing
-          ? ` → ${entry.routing}`
-          : entry.whenBusy
-            ? ` (${entry.whenBusy} when busy)`
-            : "";
       t.appendChild(el("div", "event",
-        `⏰ schedule "${entry.scheduleId}" ${entry.action}${when}${detail}`));
+        `⏰ schedule "${entry.scheduleId}" fired → ${entry.routing}`));
       return;
     }
     default:
@@ -1052,37 +1038,8 @@ function renderEntry({entry}) {
   }
 }
 
-// Every approval transition is a transcript event, so pending approvals fold
-// exactly from the log. Profile events carry only change metadata; contents
-// still need one fetch.
-function foldSideState(entry) {
-  if (entry.role !== "event") {
-    return;
-  }
-  switch (entry.type) {
-    case "approval_request":
-      state.pendingApprovals.set(entry.approvalId, entry);
-      state.approvalsDirty = true;
-      return;
-    case "approval":
-    case "approval_cancelled":
-      if (state.pendingApprovals.delete(entry.approvalId)) {
-        state.approvalsDirty = true;
-      }
-      return;
-    case "profile":
-    case "memory":
-      state.refreshProfileNeeded = true;
-      return;
-    case "schedule":
-      state.refreshSchedulesNeeded = true;
-      return;
-  }
-}
-
 function ingest(item) {
   const {entry} = item;
-  foldSideState(entry);
 
   // active-turn tracking
   const turnOf = (e) =>
@@ -1164,6 +1121,23 @@ function startPolling() {
   void pollTranscript(generation);
 }
 
+function ingestPage(page) {
+  if (page.entries.length === 0) {
+    return false;
+  }
+  state.nextSequence = page.nextSequence;
+  for (const item of page.entries) ingest(item);
+  return true;
+}
+
+function applyNotification(next) {
+  const previous = state.notification.versions;
+  state.refreshApprovalsNeeded ||= next.versions.approvals > previous.approvals;
+  state.refreshProfileNeeded ||= next.versions.profile > previous.profile;
+  state.refreshSchedulesNeeded ||= next.versions.schedules > previous.schedules;
+  state.notification = next;
+}
+
 async function pollTranscript(generation) {
   // One idempotency key per watch window: a retry after a network error
   // attaches to the still-parked invocation instead of stacking a new one.
@@ -1171,41 +1145,49 @@ async function pollTranscript(generation) {
   let watchKey = crypto.randomUUID();
   while (generation === state.pollGeneration) {
     try {
+      if (!state.notificationsInitialized) {
+        state.notification = await rpc("notifications");
+        if (generation !== state.pollGeneration) return;
+        state.notificationsInitialized = true;
+      }
+
       while (true) {
-        const page = await rpc("history", {fromSequence: state.nextSequence, limit: 100});
+        const page = await rpc(
+          "history",
+          {fromSequence: state.nextSequence, limit: 100},
+          {service: "AgentSession"},
+        );
         // A newer chain (action or agent switch) owns the state now; this
         // response may even belong to a previous agent. Drop it.
         if (generation !== state.pollGeneration) return;
-        if (page.entries.length === 0) break;
-        state.nextSequence = page.nextSequence;
-        for (const item of page.entries) ingest(item);
+        if (!ingestPage(page)) break;
       }
       setConnected(true);
       renderStatusStrip();
 
-      // Approvals are already folded in memory; profile needs one fetch when
-      // the transcript said it changed.
-      if (state.approvalsDirty) {
-        state.approvalsDirty = false;
-        renderApprovals();
+      if (state.refreshApprovalsNeeded) {
+        await refreshApprovals();
+        state.refreshApprovalsNeeded = false;
       }
       if (state.refreshProfileNeeded) {
-        state.refreshProfileNeeded = false;
         await refreshProfile({keepEdits: true});
+        state.refreshProfileNeeded = false;
       }
       if (state.refreshSchedulesNeeded) {
-        state.refreshSchedulesNeeded = false;
         await refreshSchedules();
+        state.refreshSchedulesNeeded = false;
       }
       if (generation !== state.pollGeneration) return;
 
-      // Park inside the Agent's shared watchHistory handler until the cursor
-      // becomes readable or the wait window elapses, then loop to re-read.
-      await rpc(
-        "watchHistory",
-        {fromSequence: state.nextSequence, timeoutSeconds: 25},
-        {idempotencyKey: watchKey},
+      // Agent owns both the durable subscription and this waiting invocation.
+      // History remains an authoritative read from AgentSession.
+      const notification = await rpc(
+        "watchNotifications",
+        {afterRevision: state.notification.revision, timeoutSeconds: 25},
+        {service: "Agent", idempotencyKey: watchKey},
       );
+      if (generation !== state.pollGeneration) return;
+      applyNotification(notification);
       watchKey = crypto.randomUUID();
     } catch (error) {
       if (generation !== state.pollGeneration) return;
@@ -1245,7 +1227,7 @@ async function send() {
       const result = await rpc("ask", {message});
       toast(result.decision === "start"
         ? `Turn started: ${shortTurn(result.turnId)}`
-        : `Queued (${result.stats.pendingMessages} pending) behind ${shortTurn(result.turnId)}`);
+        : `Queued (${result.stats.pendingMessages} pending) behind ${shortTurn(result.activeTurnId)}`);
     } else if (state.mode === "steer") {
       const accepted = await rpc("steer", message);
       toast(accepted ? "Steering delivered to the active turn"
@@ -1271,7 +1253,14 @@ async function send() {
 
 /* ---------------- approvals ---------------- */
 
-// Rendered purely from the transcript fold — no approvals endpoint involved.
+async function refreshApprovals() {
+  const pending = await rpc("approvals");
+  state.pendingApprovals = new Map(
+    pending.map((request) => [request.approvalId, request]),
+  );
+  renderApprovals();
+}
+
 function renderApprovals() {
   const pending = [...state.pendingApprovals.values()];
   const count = $("approvalCount");
@@ -1308,8 +1297,8 @@ function renderApprovals() {
           });
           toast(delivered ? `Decision delivered: ${decision}`
                           : "Approval was stale — its turn is no longer eligible", !delivered);
-          // The card disappears when the approval/approval_cancelled event
-          // arrives through the history feed.
+          // The card disappears when the Agent forwards its approval-state
+          // notification and the client pulls the authoritative list.
         } catch (error) {
           toast(error.message, true);
           btn.disabled = false;
@@ -1581,17 +1570,21 @@ function connect() {
   state.turnGroups.clear();
   state.activeTurnId = undefined;
   state.pendingApprovals.clear();
-  state.approvalsDirty = true;
+  state.refreshApprovalsNeeded = true;
   state.refreshProfileNeeded = true;
   state.refreshSchedulesNeeded = true;
+  state.notificationsInitialized = false;
+  state.notification = {
+    revision: 0,
+    versions: {history: 0, profile: 0, approvals: 0, schedules: 0},
+  };
   profileEditing = false;
   $("transcript").replaceChildren();
   renderStatusStrip();
   document.title = `Restate Agent — ${state.agent}`;
 
-  // One polling loop: the history cursor. Approvals fold from its events;
-  // profile is fetched once here and again whenever a profile or memory
-  // event announces a change.
+  // One polling loop: read history from AgentSession, then wait for Agent to
+  // forward the next invalidation before pulling the changed authoritative state.
   startPolling();
 }
 

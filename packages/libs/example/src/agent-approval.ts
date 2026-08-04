@@ -91,8 +91,8 @@ export const approvals = {
    * Resolves and removes a request only while its originating Turn remains
    * eligible to receive the decision.
    *
-   * @returns The resolved request when the signal was delivered, allowing the
-   * Agent to record the complete decision in its transcript.
+   * @returns The resolved request when the signal was delivered. The waiting
+   * AgentSession invocation records the complete decision in its transcript.
    */
   *resolve(
     resolution: ApprovalResolution,

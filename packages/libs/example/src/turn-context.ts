@@ -3,10 +3,10 @@
 
 import type {ModelMessage} from "ai";
 import {
+  type AgentSessionSteering,
   type ConversationEntry,
   isDerivedConversationEvent,
   type MemoryEntry,
-  type SteeringSignal,
 } from "./types.js";
 
 function interruptionBoundary(
@@ -97,7 +97,8 @@ function approvalBoundary(
       `Decision: ${entry.decision}`,
       ...(entry.reason ? [`Reason: ${JSON.stringify(entry.reason)}`] : []),
       "This is a completed runtime decision, not a new user request.",
-      "Do not ask for approval again for the same action. A materially changed action may require a new decision.",
+      "It applied to that proposal in that turn; it is not a persistent instruction or guardrail.",
+      "Use it to answer questions about the prior decision, but do not independently approve, reject, or block later requests from it. The runtime enforces the currently configured guardrails separately.",
     ].join("\n"),
   };
 }
@@ -212,17 +213,22 @@ export function buildModelContext(
 export function steeringMessage({
   queued,
   message,
-}: SteeringSignal): ModelMessage {
-  const queuedMessages =
-    queued.length === 0
+}: AgentSessionSteering): ModelMessage {
+  const queuedMessages = queued.flatMap((entry): string[] =>
+    entry.role === "user" ? [entry.text] : [],
+  );
+  const formatted =
+    queuedMessages.length === 0
       ? ["(none)"]
-      : queued.map((text, index) => `${index + 1}. ${JSON.stringify(text)}`);
+      : queuedMessages.map(
+          (text, index) => `${index + 1}. ${JSON.stringify(text)}`,
+        );
   return {
     role: "user",
     content: [
       "[Steering update]",
       "Queued user messages promoted into this turn:",
-      ...queuedMessages,
+      ...formatted,
       "",
       "New steering message:",
       message,

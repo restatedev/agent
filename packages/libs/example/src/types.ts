@@ -3,18 +3,11 @@
 
 import {z} from "zod";
 
-// Durable signal names shared by the Agent sender and Turn receiver.
-export const TURN_SIGNALS = {
+// Durable signal names shared by the Agent controller and AgentSession doTurn.
+export const AGENT_SESSION_SIGNALS = {
   interrupt: "interrupt",
   steering: "steering",
 } as const;
-
-// One controller steering decision. Queued messages keep their original order
-// and the explicit steering message remains distinguishable inside Turn.
-export type SteeringSignal = {
-  queued: string[];
-  message: string;
-};
 
 // How the Agent originally accepted a user message. This never changes; later
 // steering and dispatch events record when queued work enters a Turn.
@@ -123,13 +116,13 @@ export const ScheduleFireSchema = z.object({
 
 const ProgressPhaseSchema = z.enum(["thinking", "waiting", "finalizing"]);
 
-// A semantic progress update sent from one active Turn to its Agent.
-export const ProgressReportSchema = z.object({
+const ProgressEventSchema = z.object({
+  role: z.literal("event"),
+  type: z.literal("progress"),
   turnId: z.string(),
   phase: ProgressPhaseSchema,
   message: z.string(),
 });
-export type ProgressReport = z.infer<typeof ProgressReportSchema>;
 
 const ToolExecutionStatusSchema = z.enum([
   "succeeded",
@@ -138,14 +131,16 @@ const ToolExecutionStatusSchema = z.enum([
   "cancelled",
 ]);
 
-const ActivityReportSchema = z.object({
+const ActivityEventSchema = z.object({
+  role: z.literal("event"),
   type: z.literal("activity"),
   turnId: z.string(),
   step: z.number().int().positive(),
   message: z.string().trim().min(1),
 });
 
-const ToolReportSchema = z.object({
+const ToolEventSchema = z.object({
+  role: z.literal("event"),
   type: z.literal("tools"),
   turnId: z.string(),
   step: z.number().int().positive(),
@@ -154,16 +149,11 @@ const ToolReportSchema = z.object({
     z.object({
       id: z.string(),
       name: z.string(),
+      summary: z.string().trim().min(1).optional(),
       status: ToolExecutionStatusSchema.optional(),
     }),
   ),
 });
-
-export const ExecutionReportSchema = z.discriminatedUnion("type", [
-  ActivityReportSchema,
-  ToolReportSchema,
-]);
-export type ExecutionReport = z.infer<typeof ExecutionReportSchema>;
 
 // Durable prompt context owned by one Agent. Instructions are authoritative
 // user configuration, memories are model-managed data, and guardrails are
@@ -240,21 +230,6 @@ const ApprovalDecisionSchema = z.object({
 });
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
-const ProfileEventSchema = z.object({
-  role: z.literal("event"),
-  type: z.literal("profile"),
-  change: z.discriminatedUnion("field", [
-    z.object({
-      field: z.literal("instructions"),
-      configured: z.boolean(),
-    }),
-    z.object({
-      field: z.literal("guardrails"),
-      ids: z.array(z.string()),
-    }),
-  ]),
-});
-
 const ApprovalRequestEventSchema = z.object({
   role: z.literal("event"),
   type: z.literal("approval_request"),
@@ -314,11 +289,10 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
     role: z.literal("event"),
     type: z.literal("schedule"),
     scheduleId: ScheduleIdSchema,
-    action: z.enum(["created", "updated", "cancelled", "fired"]),
+    action: z.literal("fired"),
     turnId: z.string().optional(),
-    nextRunAt: z.number().int().nonnegative().optional(),
-    whenBusy: ScheduleWhenBusySchema.optional(),
-    routing: z.enum(["start", "queue", "steer", "interrupt"]).optional(),
+    whenBusy: ScheduleWhenBusySchema,
+    routing: z.enum(["start", "queue", "steer", "interrupt"]),
   }),
   z
     .object({
@@ -332,17 +306,9 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
     .extend(ApprovalDecisionSchema.shape),
   ApprovalRequestEventSchema,
   ApprovalCancelledEventSchema,
-  ProfileEventSchema,
-  ProgressReportSchema.extend({
-    role: z.literal("event"),
-    type: z.literal("progress"),
-  }),
-  ActivityReportSchema.extend({
-    role: z.literal("event"),
-  }),
-  ToolReportSchema.extend({
-    role: z.literal("event"),
-  }),
+  ProgressEventSchema,
+  ActivityEventSchema,
+  ToolEventSchema,
 ]);
 
 const ConversationEntrySchema = z.discriminatedUnion("role", [
@@ -361,12 +327,19 @@ const ConversationEntrySchema = z.discriminatedUnion("role", [
 ]);
 export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
 
+// One controller steering decision. Queued transcript entries retain their
+// original order and provenance; the explicit steering message remains
+// distinguishable inside the active run.
+export type AgentSessionSteering = {
+  queued: ConversationEntry[];
+  message: string;
+};
+
 type DerivedConversationEvent = Extract<
   ConversationEntry,
   {
     role: "event";
     type:
-      | "profile"
       | "approval_request"
       | "approval_cancelled"
       | "progress"
@@ -387,7 +360,6 @@ export function isDerivedConversationEvent(
     return false;
   }
   switch (entry.type) {
-    case "profile":
     case "approval_request":
     case "approval_cancelled":
     case "progress":
@@ -410,23 +382,74 @@ const SequencedConversationEntrySchema = z.object({
   entry: ConversationEntrySchema,
 });
 
+export const HistoryRequestSchema = z.object({
+  fromSequence: z.number().int().positive().default(1),
+  limit: z.number().int().min(1).max(100).default(50),
+});
+
+export const AgentNotificationTopicSchema = z.enum([
+  "history",
+  "profile",
+  "approvals",
+  "schedules",
+]);
+export type AgentNotificationTopic = z.infer<
+  typeof AgentNotificationTopicSchema
+>;
+
+const AgentNotificationVersionsSchema = z.object({
+  history: z.number().int().nonnegative(),
+  profile: z.number().int().nonnegative(),
+  approvals: z.number().int().nonnegative(),
+  schedules: z.number().int().nonnegative(),
+});
+
+export const AgentNotificationSnapshotSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  versions: AgentNotificationVersionsSchema,
+});
+export type AgentNotificationSnapshot = z.infer<
+  typeof AgentNotificationSnapshotSchema
+>;
+
+export const AgentNotificationWatchRequestSchema = z.object({
+  afterRevision: z.number().int().nonnegative(),
+  timeoutSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(300)
+    .default(300)
+    .describe(
+      "Maximum time to wait for a newer notification before returning the current snapshot.",
+    ),
+});
+export const AgentNotificationSubscriptionSchema = z.object({
+  afterRevision: z.number().int().nonnegative(),
+  awakeableId: z.string().min(1),
+});
+export type AgentNotificationSubscription = z.infer<
+  typeof AgentNotificationSubscriptionSchema
+>;
+
+export const AgentNotificationUnsubscribeSchema = z.object({
+  awakeableId: z.string().min(1),
+});
+
 export const HistoryPageSchema = z.object({
   entries: z.array(SequencedConversationEntrySchema),
   nextSequence: z.number().int().positive(),
 });
 export type HistoryPage = z.infer<typeof HistoryPageSchema>;
 
-// Input to a turn: which Agent object it belongs to, its stable profile
-// snapshot, an optional checkpoint over older entries, and the model-relevant
-// uncompacted transcript. New messages are already appended before dispatch.
-export const TurnRequestSchema = AgentProfileSchema.extend({
-  agentId: z.string(),
-  summary: z.string().min(1).optional(),
-  history: z.array(ConversationEntrySchema),
+// Input to one AgentSession doTurn. The object key supplies the agent id; Agent
+// supplies a stable profile snapshot and the entries that open this turn.
+export const AgentSessionRequestSchema = AgentProfileSchema.extend({
+  entries: z.array(ConversationEntrySchema),
 });
-export type TurnRequest = z.infer<typeof TurnRequestSchema>;
+export type AgentSessionRequest = z.infer<typeof AgentSessionRequestSchema>;
 
-const TurnOutcomeBaseSchema = z.object({
+const AgentSessionOutcomeBaseSchema = z.object({
   turnId: z.string(),
   // Number of steering signals this turn actually consumed, in FIFO order.
   // The Agent uses it to recover every history message carried by unconsumed
@@ -434,31 +457,31 @@ const TurnOutcomeBaseSchema = z.object({
   consumedSteering: z.number().int().nonnegative(),
 });
 
-// The single structured outcome a Turn reports to its Agent.
-export const TurnOutcomeSchema = z.discriminatedUnion("status", [
-  TurnOutcomeBaseSchema.extend({
+// The single structured outcome AgentSession.doTurn reports to its Agent.
+export const AgentSessionOutcomeSchema = z.discriminatedUnion("status", [
+  AgentSessionOutcomeBaseSchema.extend({
     status: z.literal("completed"),
     response: z.string(),
   }),
-  TurnOutcomeBaseSchema.extend({
+  AgentSessionOutcomeBaseSchema.extend({
     status: z.literal("interrupted"),
     reason: z.string(),
     // Graceful interruption produces a final response. Hard invocation
     // cancellation can still retire the Turn without one.
     response: z.string().optional(),
   }),
-  TurnOutcomeBaseSchema.extend({
+  AgentSessionOutcomeBaseSchema.extend({
     status: z.literal("stopped"),
     cause: z.enum(["step_limit", "tool_limit"]),
     reason: z.string(),
     response: z.string(),
   }),
-  TurnOutcomeBaseSchema.extend({
+  AgentSessionOutcomeBaseSchema.extend({
     status: z.literal("failed"),
     error: z.string(),
   }),
 ]);
-export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
+export type AgentSessionOutcome = z.infer<typeof AgentSessionOutcomeSchema>;
 
 // A human approval requested by a tool or runtime policy gate inside a Turn.
 export const ApprovalRequestSchema = z.object({
