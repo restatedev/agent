@@ -9,6 +9,7 @@
     "format": "biome check --write .",
     "bundle": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core bundle",
     "start": "pnpm --filter @restate-agents/core... build && pnpm --filter @restate-agents/core start",
+    "start:ui": "pnpm --filter @restate-agents/web... build && pnpm --filter @restate-agents/web start",
     "dev": "pnpm --filter @restate-agents/client... build && pnpm --parallel --filter @restate-agents/core --filter @restate-agents/web dev",
     "dev:service": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core dev",
     "dev:ui": "pnpm --filter @restate-agents/client... build && pnpm --filter @restate-agents/web dev"
