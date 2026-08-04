@@ -5,13 +5,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node ./scripts/build.js",
+    "build": "tsc --noEmit && node ./scripts/build.js",
     "dev": "node ./scripts/build.js --serve"
   },
   "dependencies": {
-    "@restate-agents/client": "workspace:*"
+    "@restate-agents/client": "workspace:*",
+    "@shadcn/react": "^0.2.1",
+    "lucide-react": "^1.28.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "esbuild": "^0.25.4"
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "esbuild": "^0.25.4",
+    "typescript": "^6.0.3"
   }
 }

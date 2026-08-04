@@ -965,8 +965,8 @@ request-response, one-way send, attach, and cancellation variants.
   implemented by core and used to derive ingress clients
 - `packages/libs/client/src/index.ts` — browser-compatible ingress client: one
   method per public handler plus cursor-based transcript following
-- `packages/libs/ui/index.html` — demonstration-only browser UI built on the
-  public client package
+- `packages/libs/ui/src/` — React demonstration UI built on the public client
+  package and shadcn's headless message scroller
 - `packages/libs/core/src/agent.ts` — durable conversation controller
 - `packages/libs/core/src/agent-session.ts` — transcript owner and durable
   agent-turn state machine

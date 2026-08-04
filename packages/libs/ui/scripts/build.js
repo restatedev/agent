@@ -1,30 +1,16 @@
-import {mkdir, readFile, writeFile} from "node:fs/promises";
+import {copyFile, mkdir, readFile} from "node:fs/promises";
 import {createServer} from "node:http";
 import {dirname, extname, join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {build} from "esbuild";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const sourcePath = join(root, "index.html");
 const outputDirectory = join(root, "dist");
 
 async function compile() {
-  const source = await readFile(sourcePath, "utf8");
-  const match = source.match(
-    /<script type="module">\s*([\s\S]*?)\s*<\/script>/,
-  );
-  if (!match) {
-    throw new Error("index.html must contain one inline module script");
-  }
-
   await mkdir(outputDirectory, {recursive: true});
   await build({
-    stdin: {
-      contents: match[1],
-      loader: "ts",
-      resolveDir: root,
-      sourcefile: "ui.ts",
-    },
+    entryPoints: [join(root, "src/main.tsx")],
     bundle: true,
     format: "esm",
     platform: "browser",
@@ -33,16 +19,15 @@ async function compile() {
     sourcemap: true,
     outfile: join(outputDirectory, "app.js"),
   });
-  await writeFile(
-    join(outputDirectory, "index.html"),
-    source.replace(match[0], '<script type="module" src="./app.js"></script>'),
-  );
+  await copyFile(join(root, "index.html"), join(outputDirectory, "index.html"));
 }
 
 await compile();
 
 if (process.argv.includes("--serve")) {
+  const port = Number(process.env.UI_PORT ?? 3000);
   const contentTypes = {
+    ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".map": "application/json",
@@ -52,19 +37,16 @@ if (process.argv.includes("--serve")) {
       request.url ?? "/",
       "http://127.0.0.1",
     ).pathname;
-    const fileName =
-      pathname === "/"
-        ? "index.html"
-        : ["/app.js", "/app.js.map"].includes(pathname)
-          ? pathname.slice(1)
-          : undefined;
-    if (!fileName) {
+    const fileName = pathname === "/" ? "index.html" : pathname.slice(1);
+    const allowed = new Set(["index.html", "app.js", "app.js.map", "app.css", "app.css.map"]);
+    if (!allowed.has(fileName)) {
       response.statusCode = 404;
       response.end("Not found");
       return;
     }
     try {
-      const file = join(outputDirectory, fileName);
+      const file =
+        fileName === "index.html" ? join(root, "index.html") : join(outputDirectory, fileName);
       response.setHeader(
         "content-type",
         contentTypes[extname(file)] ?? "application/octet-stream",
@@ -75,7 +57,7 @@ if (process.argv.includes("--serve")) {
       response.end("Not found");
     }
   });
-  server.listen(3000, "127.0.0.1", () => {
-    console.log("Demo UI: http://127.0.0.1:3000");
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`Demo UI: http://127.0.0.1:${port}`);
   });
 }
