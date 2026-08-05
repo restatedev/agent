@@ -263,7 +263,7 @@ When changing `ask`, `steer`, `interrupt`, or turn completion:
 
 ### Turn loop
 
-When changing `agent-session.ts` or `turn-step.ts`:
+When changing `session/service.ts` or `session/step.ts`:
 
 1. keep one step bounded;
 2. settle and join every spawned task;
@@ -317,21 +317,21 @@ behavior can be tested without manufacturing many full agent runs.
 
 | Goal | Primary file |
 | --- | --- |
-| Change Agent API or controller routing | `src/agent.ts` |
-| Change active-turn bookkeeping/signals | `src/agent-turn.ts` |
-| Change transcript storage | `src/agent-history.ts` |
-| Change invalidation subscriptions | `src/agent-notifications.ts` |
-| Change instructions/memories/guardrails | `src/agent-profile.ts` |
-| Change approvals | `src/agent-approval.ts` |
-| Change schedules | `src/agent-schedules.ts` |
-| Change the turn state machine | `src/agent-session.ts` |
-| Change one inference/tool step | `src/turn-step.ts` |
-| Add a built-in tool | `src/agent-tools.ts` |
-| Change dynamic discovery | `src/dynamic-tools.ts` |
-| Change provider inference | `src/model.ts` |
-| Change model admission/retries | `src/model-gateway.ts` |
-| Change sandbox lifecycle | `src/sandbox.ts` |
-| Add a sandbox provider | `src/sandbox-provider.ts` and an adapter module |
+| Change Agent API or controller routing | `src/agent/service.ts` |
+| Change active-turn bookkeeping/signals | `src/agent/active-turn.ts` |
+| Change transcript storage | `src/session/history.ts` |
+| Change invalidation subscriptions | `src/agent/notifications.ts` |
+| Change instructions/memories/guardrails | `src/agent/profile.ts` |
+| Change approvals | `src/agent/approval.ts` |
+| Change schedules | `src/agent/schedules.ts` |
+| Change the turn state machine | `src/session/service.ts` |
+| Change one inference/tool step | `src/session/step.ts` |
+| Add a built-in tool | `src/session/tools.ts` |
+| Change dynamic discovery | `src/session/dynamic-tools.ts` |
+| Change provider inference | `src/gateway/model.ts` |
+| Change model admission/retries | `src/gateway/service.ts` |
+| Change sandbox lifecycle | `src/sandbox/service.ts` |
+| Add a sandbox provider | `src/sandbox/provider.ts` and an adapter module |
 | Change public wire/domain schemas | `packages/libs/types/src/index.ts` |
 | Change Agent handler contracts | `packages/libs/types/src/services.ts` |
 | Change the external client | `packages/libs/client/src/index.ts` |

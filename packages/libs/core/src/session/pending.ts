@@ -3,14 +3,14 @@
 // cleanup.
 
 import * as restate from "@restatedev/restate-sdk-gen";
+import type {ToolCall} from "../gateway/index.js";
+import {raceBranches} from "../race.js";
 import {
   type AgentToolContext,
   agentTools,
   type PendingEvent,
   type ToolOutcome,
-} from "./agent-tools.js";
-import type {ToolCall} from "./model.js";
-import {raceBranches} from "./race.js";
+} from "./tools.js";
 
 type PendingOperation = {
   step: number;

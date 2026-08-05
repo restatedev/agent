@@ -12,7 +12,7 @@ import {
 import {
   AGENT_SESSION_SIGNALS,
   type AgentSessionSteering,
-} from "./internal-types.js";
+} from "../internal-types.js";
 
 export function createSteeringInbox() {
   const queue: AgentSessionSteering[] = [];

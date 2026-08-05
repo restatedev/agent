@@ -1,13 +1,13 @@
-// The model operation used by Agent.compact. State access and checkpoint
-// application remain on the Agent virtual object.
+// The model operation used by AgentSession.compact. State access and
+// checkpoint application remain on the AgentSession virtual object.
 
+import type {ConversationCompactionResult} from "@restate-agents/types";
 import {type Operation, run} from "@restatedev/restate-sdk-gen";
 import {generateText} from "ai";
-import type {
-  ConversationCompactionInput,
-  ConversationCompactionResult,
-} from "./agent-history.js";
-import {isDerivedConversationEvent} from "./internal-types.js";
+import {
+  type ConversationCompactionInput,
+  isDerivedConversationEvent,
+} from "../internal-types.js";
 import {withOpenAI} from "./model.js";
 
 const COMPACTOR_MODEL = "gpt-4o-mini";

@@ -35,9 +35,9 @@ type ToolCall = {
 };
 ```
 
-`model.ts` reconstructs AI SDK tool declarations from the manifests. It does
-not receive tool executors. `agent-tools.ts` owns execution, and `turn-step.ts`
-owns batch policy and concurrency.
+`gateway/model.ts` reconstructs AI SDK tool declarations from the manifests.
+It does not receive tool executors. `session/tools.ts` owns execution, and
+`session/step.ts` owns batch policy and concurrency.
 
 That separation keeps these decisions explicit:
 
@@ -46,11 +46,11 @@ That separation keeps these decisions explicit:
 - the active `agentStep` starts every allowed foreground call in the batch together;
 - Restate journals every operation and its result;
 - results are projected back into model messages as observations by
-  `agent-tools.ts`.
+  `session/tools.ts`.
 
 ## Built-in tools
 
-Built-ins live in `packages/libs/core/src/agent-tools.ts`. A definition owns
+Built-ins live in `packages/libs/core/src/session/tools.ts`. A definition owns
 its name, model-facing description, Zod input schema, validation, durable
 behavior, and optional pending completion:
 
@@ -189,7 +189,7 @@ The context intentionally does not expose general orchestration hooks.
 
 ## Adding a built-in tool
 
-1. Define it beside the existing tools in `agent-tools.ts`.
+1. Define it beside the existing tools in `session/tools.ts`.
 2. Give it a unique model-safe name and a precise description.
 3. Define the complete Zod object schema. Make nullable fields explicitly
    nullable rather than optional when strict model schemas require every

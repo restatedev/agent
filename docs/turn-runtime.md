@@ -1,8 +1,8 @@
 # Turn runtime semantics
 
 This is the behavioral reference for
-`packages/libs/core/src/agent-session.ts` and
-`packages/libs/core/src/turn-step.ts`.
+`packages/libs/core/src/session/service.ts` and
+`packages/libs/core/src/session/step.ts`.
 
 One `AgentSession.doTurn` invocation is an **agent run** for one conversation
 turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
@@ -19,12 +19,13 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
   builds model context from the session summary and uncompacted entries.
 - The Agent-supplied profile snapshot is stable for the run. Changes to
   instructions, memories, or guardrails affect the next turn.
-- `turn-step.ts` owns one bounded transition: model call, guardrail gate,
+- `session/step.ts` owns one bounded transition: model call, guardrail gate,
   optional approval wait, and allowed foreground tool batch. It owns no task
   after returning.
-- `turn-steering.ts` owns the background durable-signal receiver and transient
-  FIFO. `turn-pending.ts` owns completion tasks that survive across steps.
-- `agent-tools.ts` owns concrete tool definitions, validation, execution,
+- `session/steering.ts` owns the background durable-signal receiver and
+  transient FIFO. `session/pending.ts` owns completion tasks that survive
+  across steps.
+- `session/tools.ts` owns concrete tool definitions, validation, execution,
   completion, and model/transcript projections.
 - `Sandbox`, keyed by `agentId`, owns external workspace state across turns.
   One turn borrows lazily and releases on every handled exit.

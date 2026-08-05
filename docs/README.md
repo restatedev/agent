@@ -97,13 +97,14 @@ differ. Use this order:
 1. public Zod schemas in
    [`@restate-agents/types`](../packages/libs/types/src/index.ts), service
    descriptors in [`services.ts`](../packages/libs/types/src/services.ts), and
-   provider schemas in [`model.ts`](../packages/libs/core/src/model.ts);
+   provider schemas in
+   [`gateway/model.ts`](../packages/libs/core/src/gateway/model.ts);
 2. handler control flow in
-   [`agent.ts`](../packages/libs/core/src/agent.ts),
-   [`agent-session.ts`](../packages/libs/core/src/agent-session.ts), and
-   [`sandbox.ts`](../packages/libs/core/src/sandbox.ts);
-3. focused component modules such as `agent-history.ts`, `agent-turn.ts`,
-   `turn-step.ts`, `turn-pending.ts`, and `agent-tools.ts`;
+   [`agent/service.ts`](../packages/libs/core/src/agent/service.ts),
+   [`session/service.ts`](../packages/libs/core/src/session/service.ts), and
+   [`sandbox/service.ts`](../packages/libs/core/src/sandbox/service.ts);
+3. focused component modules under `agent/`, `session/`, `gateway/`, and
+   `sandbox/`;
 4. these documents.
 
 When behavior changes, update the schema, implementation, relevant eval, and
@@ -128,7 +129,7 @@ re-reads whichever area has a newer version.
 
 There are three intended ways to add capability:
 
-1. Add a built-in tool in `agent-tools.ts` when it needs active-turn context,
+1. Add a built-in tool in `session/tools.ts` when it needs active-turn context,
    pending-operation support, Agent state, or the shared sandbox lease.
 2. Annotate a separately deployed Restate JSON handler with
    `restate.dev/agent: <tool-name>` when it should remain an independent

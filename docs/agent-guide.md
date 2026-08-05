@@ -28,9 +28,9 @@ Use executable contracts before prose:
 
 1. Public Zod schemas in `packages/libs/types/src/index.ts`, shared Restate
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
-   internal handlers, and `src/model.ts`;
-2. handler code in `src/agent.ts`, `src/agent-session.ts`,
-   `src/model-gateway.ts`, and `src/sandbox.ts`;
+   internal handlers, and `src/gateway/model.ts`;
+2. handler code in `src/agent/service.ts`, `src/session/service.ts`,
+   `src/gateway/service.ts`, and `src/sandbox/service.ts`;
 3. focused ownership modules;
 4. docs.
 
@@ -105,7 +105,7 @@ The detailed turn-runtime list lives in
   explicit model-selected pending tool.
 - Resolved approval events are model-relevant. Approval-request and
   cancellation events are derived client status and are not model context.
-- Process-local caches (`dynamic-tools.ts`, provider clients) are
+- Process-local caches (`session/dynamic-tools.ts`, provider clients) are
   optimizations, never durable sources of truth.
 - A sandbox reference carries its provider. Changing `SANDBOX_PROVIDER` does
   not migrate an already-provisioned Agent sandbox.
@@ -130,25 +130,25 @@ The detailed turn-runtime list lives in
 
 | Change | Primary owner |
 | --- | --- |
-| User message routing and public controller handler | `agent.ts` |
-| Active turn ID, pending user queue, signal delivery/reconciliation | `agent-turn.ts` |
-| History chunks, cursor, writer, summary checkpoint | `agent-history.ts` |
-| Notification revisions, subscriptions, and awakeables | `agent-notifications.ts` |
-| Instructions, memories, guardrails | `agent-profile.ts` |
-| Pending approval state and decision signal | `agent-approval.ts` |
-| Durable scheduled-message state | `agent-schedules.ts` |
-| Cross-step loop, transcript append, budgets, finalization, context reduction | `agent-session.ts` |
-| One model/guardrail/foreground-tool transition | `turn-step.ts` |
-| Steering signal receiver and transient FIFO | `turn-steering.ts` |
-| Pending tool tasks and cancellation races | `turn-pending.ts` |
-| Built-in tool schema, execution, result projection | `agent-tools.ts` |
-| Transcript-to-model projection | `turn-context.ts` |
-| Dynamic Restate tool discovery | `dynamic-tools.ts` |
-| AI SDK provider behavior and model contracts | `model.ts` |
-| Restate model admission, limit keys, retries | `model-gateway.ts` |
-| Agent sandbox lifecycle | `sandbox.ts` |
-| Provider contract and provider selection | `sandbox-provider.ts` |
-| Modal-specific compute/storage | `modal-sandbox-provider.ts` |
+| User message routing and public controller handler | `agent/service.ts` |
+| Active turn ID, pending user queue, signal delivery/reconciliation | `agent/active-turn.ts` |
+| History chunks, cursor, writer, summary checkpoint | `session/history.ts` |
+| Notification revisions, subscriptions, and awakeables | `agent/notifications.ts` |
+| Instructions, memories, guardrails | `agent/profile.ts` |
+| Pending approval state and decision signal | `agent/approval.ts` |
+| Durable scheduled-message state | `agent/schedules.ts` |
+| Cross-step loop, transcript append, budgets, finalization, context reduction | `session/service.ts` |
+| One model/guardrail/foreground-tool transition | `session/step.ts` |
+| Steering signal receiver and transient FIFO | `session/steering.ts` |
+| Pending tool tasks and cancellation races | `session/pending.ts` |
+| Built-in tool schema, execution, result projection | `session/tools.ts` |
+| Transcript-to-model projection | `session/context.ts` |
+| Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
+| AI SDK provider behavior and model contracts | `gateway/model.ts` |
+| Restate model admission, limit keys, retries | `gateway/service.ts` |
+| Agent sandbox lifecycle | `sandbox/service.ts` |
+| Provider contract and provider selection | `sandbox/provider.ts` |
+| Modal-specific compute/storage | `sandbox/modal-provider.ts` |
 | Black-box protocol coverage | `eval.ts` |
 | External HTTP consumption | `packages/libs/client/src/index.ts` |
 
@@ -161,7 +161,7 @@ contract.
 ### Built-in tool
 
 Read [tools.md](tools.md). Keep name, description, Zod schema, execution, and
-pending completion together in `agent-tools.ts`. Add it to `definitions`,
+pending completion together in `session/tools.ts`. Add it to `definitions`,
 preserve cancellation errors, and add a focused eval when behavior affects the
 Agent protocol.
 
@@ -182,8 +182,8 @@ state and transcript effects, and add protocol coverage.
 ### New transcript event
 
 Update `ConversationEventSchema`, then make an explicit exhaustive decision in
-`isDerivedConversationEvent`. Update `turn-context.ts`,
-`conversation-compactor.ts`, external consumers, protocol docs, and eval
+`isDerivedConversationEvent`. Update `session/context.ts`,
+`gateway/compactor.ts`, external consumers, protocol docs, and eval
 assertions as applicable. Never let different consumers silently invent their
 own relevance policy.
 

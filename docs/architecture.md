@@ -57,12 +57,12 @@ queued work.
 
 State logic is grouped into handler-scoped namespaces:
 
-- `agent-turn.ts` — active invocation, pending input, steering bookkeeping,
-  and signal delivery;
-- `agent-profile.ts` — instructions, memories, and guardrails;
-- `agent-approval.ts` — pending approval records and decision signals;
-- `agent-schedules.ts` — schedule records and delayed invocation IDs; and
-- `agent-notifications.ts` — revision watermarks and awakeable subscriptions.
+- `agent/active-turn.ts` — active invocation, pending input, steering
+  bookkeeping, and signal delivery;
+- `agent/profile.ts` — instructions, memories, and guardrails;
+- `agent/approval.ts` — pending approval records and decision signals;
+- `agent/schedules.ts` — schedule records and delayed invocation IDs; and
+- `agent/notifications.ts` — revision watermarks and awakeable subscriptions.
 
 These modules use the current Restate handler context. They are not process
 services or dependency containers.
@@ -305,9 +305,9 @@ later iterations.
 
 ## Transcript and notifications
 
-`agent-history.ts` stores entries in chunks of 32 with stable positive sequence
-numbers. `AgentSession.history({fromSequence, limit})` uses an inclusive cursor
-and loads only the chunks needed for that page.
+`session/history.ts` stores entries in chunks of 32 with stable positive
+sequence numbers. `AgentSession.history({fromSequence, limit})` uses an
+inclusive cursor and loads only the chunks needed for that page.
 
 The transcript contains user messages, terminal assistant outcomes, control
 boundaries, resolved approvals, semantic progress, concise activity, structured

@@ -4,6 +4,8 @@
 // spawns one bounded agent step and applies its returned data.
 
 import type {
+  ConversationCompactionPlan,
+  ConversationCompactionResult,
   ConversationEntry,
   Guardrail,
   HistoryPage,
@@ -12,49 +14,44 @@ import {AgentSessionDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
-import {Agent} from "./agent.js";
+import {Agent} from "../agent/index.js";
 import {
-  type ConversationCompactionPlan,
-  type ConversationCompactionResult,
-  history,
-  type TurnHistory,
-} from "./agent-history.js";
+  callContextReducer,
+  callGuardrailModel,
+  callModel,
+  compactConversation,
+  type GuardrailApproval,
+} from "../gateway/index.js";
+import {
+  AGENT_SESSION_SIGNALS,
+  type AgentSessionOutcome,
+  type AgentSessionRequest,
+  type AgentSessionSteering,
+} from "../internal-types.js";
+import {raceBranches} from "../race.js";
+import {Sandbox} from "../sandbox/index.js";
+import {
+  buildModelContext,
+  finalizationInstruction,
+  steeringMessage,
+} from "./context.js";
+import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
+import {history, type TurnHistory} from "./history.js";
+import {createPendingOperations} from "./pending.js";
+import {createSteeringInbox} from "./steering.js";
+import {
+  agentStep,
+  type GuardrailDecisions,
+  settleStep,
+  type ToolStep,
+} from "./step.js";
 import {
   type AgentToolContext,
   agentTools,
   createAgentToolContext,
   type PendingEvent,
   type ToolOutcome,
-} from "./agent-tools.js";
-import {compactConversation} from "./conversation-compactor.js";
-import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
-import {
-  AGENT_SESSION_SIGNALS,
-  type AgentSessionOutcome,
-  type AgentSessionRequest,
-  type AgentSessionSteering,
-} from "./internal-types.js";
-import type {GuardrailApproval} from "./model.js";
-import {
-  callContextReducer,
-  callGuardrailModel,
-  callModel,
-} from "./model-gateway.js";
-import {raceBranches} from "./race.js";
-import {Sandbox} from "./sandbox.js";
-import {
-  buildModelContext,
-  finalizationInstruction,
-  steeringMessage,
-} from "./turn-context.js";
-import {createPendingOperations} from "./turn-pending.js";
-import {createSteeringInbox} from "./turn-steering.js";
-import {
-  agentStep,
-  type GuardrailDecisions,
-  settleStep,
-  type ToolStep,
-} from "./turn-step.js";
+} from "./tools.js";
 
 type AgentSessionState = {
   context: AgentToolContext;

@@ -10,7 +10,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import type {
   AgentNotificationSubscription,
   AgentNotificationTopic,
-} from "./internal-types.js";
+} from "../internal-types.js";
 
 const SNAPSHOT = "notifications/snapshot";
 const SUBSCRIPTIONS = "notifications/subscriptions";

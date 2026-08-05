@@ -10,7 +10,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import {
   type ApprovalCancellation,
   approvalSignalName,
-} from "./internal-types.js";
+} from "../internal-types.js";
 
 const APPROVALS = "approvals";
 

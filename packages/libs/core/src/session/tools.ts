@@ -1,7 +1,7 @@
 // Concrete tools available to the example agent. Each definition owns its
 // model description, input schema, validation, and local durable behavior.
 // The exported object is deliberately concrete rather than a generic runtime:
-// Turn owns orchestration and turn-step owns foreground execution while this
+// AgentSession owns orchestration, step.ts owns foreground execution, and this
 // module owns tool mechanics.
 
 import {setTimeout} from "node:timers/promises";
@@ -16,16 +16,16 @@ import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
-import {Agent} from "./agent.js";
-import type {DiscoveredAgentTool} from "./dynamic-tools.js";
-import {approvalSignalName} from "./internal-types.js";
-import type {ToolCall, ToolManifest} from "./model.js";
-import {Sandbox} from "./sandbox.js";
+import {Agent} from "../agent/index.js";
+import type {ToolCall, ToolManifest} from "../gateway/index.js";
+import {approvalSignalName} from "../internal-types.js";
 import {
+  Sandbox,
   type SandboxClient,
   type SandboxRef,
   sandboxProvider,
-} from "./sandbox-provider.js";
+} from "../sandbox/index.js";
+import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
 

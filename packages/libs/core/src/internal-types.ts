@@ -1,43 +1,26 @@
 // Durable coordination contracts used only inside the Restate service package.
 // Public Agent/client wire contracts live in @restate-agents/types.
 
-import {
-  type AgentNotificationSubscription,
-  AgentNotificationSubscriptionSchema,
-  type AgentNotificationTopic,
-  AgentNotificationTopicSchema,
-  AgentNotificationUnsubscribeSchema,
-  type AgentSessionOutcome,
-  AgentSessionOutcomeSchema,
-  type AgentSessionRequest,
-  AgentSessionRequestSchema,
-  type ApprovalCancellation,
-  ApprovalCancellationSchema,
-  type ConversationEntry,
-  type MemoryUpdate,
-  type MemoryUpdateResult,
-  MemoryUpdateResultSchema,
-  MemoryUpdateSchema,
-  ScheduleFireSchema,
+import type {
+  AgentNotificationSubscription,
+  AgentNotificationTopic,
+  AgentSessionOutcome,
+  AgentSessionRequest,
+  ApprovalCancellation,
+  ConversationCompactionPlan,
+  ConversationEntry,
+  MemoryUpdate,
+  MemoryUpdateResult,
 } from "@restate-agents/types";
 
-export {
-  type AgentNotificationSubscription,
-  AgentNotificationSubscriptionSchema,
-  type AgentNotificationTopic,
-  AgentNotificationTopicSchema,
-  AgentNotificationUnsubscribeSchema,
-  type AgentSessionOutcome,
-  AgentSessionOutcomeSchema,
-  type AgentSessionRequest,
-  AgentSessionRequestSchema,
-  type ApprovalCancellation,
-  ApprovalCancellationSchema,
-  type MemoryUpdate,
-  type MemoryUpdateResult,
-  MemoryUpdateResultSchema,
-  MemoryUpdateSchema,
-  ScheduleFireSchema,
+export type {
+  AgentNotificationSubscription,
+  AgentNotificationTopic,
+  AgentSessionOutcome,
+  AgentSessionRequest,
+  ApprovalCancellation,
+  MemoryUpdate,
+  MemoryUpdateResult,
 };
 
 export const AGENT_SESSION_SIGNALS = {
@@ -48,6 +31,11 @@ export const AGENT_SESSION_SIGNALS = {
 export type AgentSessionSteering = {
   queued: ConversationEntry[];
   message: string;
+};
+
+export type ConversationCompactionInput = ConversationCompactionPlan & {
+  previousSummary?: string;
+  entries: ConversationEntry[];
 };
 
 export function approvalSignalName(approvalId: string): string {

@@ -8,7 +8,7 @@ import {
   type SandboxRef,
   SandboxRefSchema,
   sandboxProvider,
-} from "./sandbox-provider.js";
+} from "./provider.js";
 
 const BorrowSchema = z.object({turnId: z.string().min(1)});
 const ReleaseSchema = BorrowSchema;

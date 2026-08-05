@@ -208,7 +208,7 @@ record. The mutation is invocation-local and never affects later turns.
 
 ## Tools
 
-Built-in tools are self-contained definitions in `agent-tools.ts`. Each keeps
+Built-in tools are self-contained definitions in `session/tools.ts`. Each keeps
 its name, description, Zod schema, input validation, durable execution, pending
 completion, transcript summary, and model result projection together.
 
@@ -236,8 +236,8 @@ A deployed JSON handler opts in with metadata:
 restate.dev/agent: query_grafana
 ```
 
-`dynamic-tools.ts` reads an endpoint-local, coalescing Admin API cache. A
-successful catalog refresh is reused for five minutes; failure with a prior
+`session/dynamic-tools.ts` reads an endpoint-local, coalescing Admin API cache.
+A successful catalog refresh is reused for five minutes; failure with a prior
 snapshot uses last-known-good data and retries after 30 seconds. The selected
 catalog is returned through `restate.run`, so the turn journals one stable
 snapshot for inference and execution.
@@ -446,31 +446,13 @@ Production systems should add deadline-based reconciliation.
   ingress target definitions
 - `packages/libs/client/` — typed Agent client built on
   `@restatedev/restate-sdk-clients`
-- `packages/libs/core/src/agent.ts` — controller and notification API
-- `packages/libs/core/src/agent-session.ts` — transcript owner and turn state
-  machine
-- `packages/libs/core/src/agent-history.ts` — chunked transcript and compaction
-  checkpoint
-- `packages/libs/core/src/agent-turn.ts` — active invocation, pending input,
-  signals, and reconciliation
-- `packages/libs/core/src/agent-notifications.ts` — versioned invalidation
-  subscriptions
-- `packages/libs/core/src/agent-profile.ts` — instructions, memories, and
-  guardrails
-- `packages/libs/core/src/agent-approval.ts` — pending approvals and signals
-- `packages/libs/core/src/agent-schedules.ts` — scheduled messages
-- `packages/libs/core/src/turn-step.ts` — one model/policy/tool iteration
-- `packages/libs/core/src/turn-steering.ts` — steering inbox
-- `packages/libs/core/src/turn-pending.ts` — pending tasks and cancellation
-- `packages/libs/core/src/agent-tools.ts` — built-in tool definitions
-- `packages/libs/core/src/dynamic-tools.ts` — dynamic Restate tool discovery
-- `packages/libs/core/src/model.ts` — AI SDK provider integration and model
-  contracts
-- `packages/libs/core/src/model-gateway.ts` — scoped inference admission
-- `packages/libs/core/src/sandbox.ts` — durable workspace lifecycle
-- `packages/libs/core/src/sandbox-provider.ts` — provider/client contracts
-- `packages/libs/core/src/modal-sandbox-provider.ts` — Modal adapter
-- `packages/libs/core/src/conversation-compactor.ts` — conversation summary
-  operation
+- `packages/libs/core/src/agent/` — controller service, active invocation,
+  profile, approvals, schedules, and notification subscriptions
+- `packages/libs/core/src/session/` — transcript owner, turn state machine,
+  model-context projection, tools, steering, and pending operations
+- `packages/libs/core/src/gateway/` — AI SDK provider integration, model
+  contracts, scoped inference admission, and model-backed compaction
+- `packages/libs/core/src/sandbox/` — durable workspace lifecycle, provider
+  contract, and Modal adapter
 - `packages/libs/core/src/eval.ts` — black-box evaluation harness
 - `packages/libs/core/src/app.ts` — executable Restate endpoint

@@ -21,23 +21,19 @@ import {
   type Task,
 } from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
-import {Agent} from "./agent.js";
-import type {TurnHistory} from "./agent-history.js";
-import {
-  type AgentToolContext,
-  agentTools,
-  type ToolOutcome,
-} from "./agent-tools.js";
-import type {DiscoveredAgentTool} from "./dynamic-tools.js";
-import {approvalSignalName} from "./internal-types.js";
+import {Agent} from "../agent/index.js";
 import type {
   GuardrailApproval,
   GuardrailDecision,
   ModelResult,
   ProposedAction,
-} from "./model.js";
-import {callGuardrailModel, callModel} from "./model-gateway.js";
-import {raceBranches} from "./race.js";
+} from "../gateway/index.js";
+import {callGuardrailModel, callModel} from "../gateway/index.js";
+import {approvalSignalName} from "../internal-types.js";
+import {raceBranches} from "../race.js";
+import type {DiscoveredAgentTool} from "./dynamic-tools.js";
+import type {TurnHistory} from "./history.js";
+import {type AgentToolContext, agentTools, type ToolOutcome} from "./tools.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
 

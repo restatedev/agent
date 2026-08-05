@@ -4,13 +4,13 @@
 
 import type {ConversationEntry} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
-import {AgentSession} from "./agent-session.js";
 import {
   AGENT_SESSION_SIGNALS,
   type AgentSessionOutcome,
   type AgentSessionRequest,
   type AgentSessionSteering,
-} from "./internal-types.js";
+} from "../internal-types.js";
+import {AgentSession} from "../session/index.js";
 
 /** Durable state for the invocation currently owned by the Agent. */
 type ActiveTurnState = {

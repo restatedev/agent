@@ -6,7 +6,7 @@ import type {ModelMessage} from "ai";
 import {
   type AgentSessionSteering,
   isDerivedConversationEvent,
-} from "./internal-types.js";
+} from "../internal-types.js";
 
 function interruptionBoundary(
   entry: Extract<ConversationEntry, {role: "event"; type: "interrupt"}>,

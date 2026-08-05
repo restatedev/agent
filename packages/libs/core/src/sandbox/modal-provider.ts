@@ -14,7 +14,7 @@ import type {
   SandboxOperationOptions,
   SandboxProvider,
   SandboxRef,
-} from "./sandbox-provider.js";
+} from "./provider.js";
 
 const WORKDIR = "/workspace";
 const DEFAULT_APP = "restate-agent-sandboxes";

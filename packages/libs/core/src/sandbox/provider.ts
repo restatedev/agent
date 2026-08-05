@@ -7,7 +7,7 @@ import {mkdir, readdir, readFile, rm, writeFile} from "node:fs/promises";
 import {dirname, join, resolve, sep} from "node:path";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {z} from "zod";
-import {modalSandboxProvider} from "./modal-sandbox-provider.js";
+import {modalSandboxProvider} from "./modal-provider.js";
 
 export const SandboxRefSchema = z.discriminatedUnion("provider", [
   z.object({

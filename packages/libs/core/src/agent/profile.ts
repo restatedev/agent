@@ -9,7 +9,7 @@ import type {
   MemoryEntry,
 } from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
-import type {MemoryUpdateResult} from "./internal-types.js";
+import type {MemoryUpdateResult} from "../internal-types.js";
 
 const INSTRUCTIONS = "profile/instructions";
 const MEMORIES = "profile/memories";

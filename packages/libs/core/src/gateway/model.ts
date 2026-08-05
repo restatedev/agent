@@ -256,7 +256,7 @@ function modelTools(tools: ToolManifest[]): ToolSet {
       {
         description: tool.description,
         // Tool manifests are produced from Zod's draft-07 JSON Schema output
-        // in agent-tools. The model deliberately receives no executors.
+        // in session/tools. The model deliberately receives no executors.
         inputSchema: jsonSchema(
           tool.inputSchema as Parameters<typeof jsonSchema>[0],
         ),

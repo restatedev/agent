@@ -30,11 +30,11 @@ The maintainer documentation starts at
   authoritative area whose version changed.
 - **`agentStep`** is one bounded model → guardrail → optional foreground-tool
   transition. A step owns and joins its model, policy, approval-wait, and
-  foreground tool tasks. `turn-steering.ts` receives durable steering signals;
-  `turn-pending.ts` owns sleeps and explicit approvals that survive across
-  steps.
+  foreground tool tasks. `session/steering.ts` receives durable steering
+  signals; `session/pending.ts` owns sleeps and explicit approvals that survive
+  across steps.
 - **Built-in tools** live with their schemas and execution mechanics in
-  `agent-tools.ts`. Independent Restate handlers can opt in as dynamic tools
+  `session/tools.ts`. Independent Restate handlers can opt in as dynamic tools
   with `restate.dev/agent: <tool-name>` metadata. Discovery uses an
   endpoint-local read-through Admin API cache; each turn journals one stable
   catalog snapshot for both inference and execution.
@@ -87,28 +87,13 @@ Restate supplies:
 
 ## Core source map
 
-- `src/agent.ts` — controller routing, profile/approval/schedule API, and
-  notification long-poll
-- `src/agent-session.ts` — transcript owner and durable turn state machine
-- `src/agent-history.ts` — chunked transcript and compaction checkpoint
-- `src/agent-turn.ts` — Agent-owned active invocation, pending queue, and
-  signal reconciliation
-- `src/agent-notifications.ts` — revisioned invalidation subscriptions
-- `src/agent-profile.ts` — instructions, memories, and guardrails
-- `src/agent-approval.ts` — pending approvals and decision signals
-- `src/agent-schedules.ts` — scheduled-message state and timer IDs
-- `src/turn-context.ts` — transcript-to-model projection
-- `src/turn-step.ts` — one bounded model/policy/tool iteration
-- `src/turn-steering.ts` — invocation-local steering inbox
-- `src/turn-pending.ts` — cross-step pending tasks and cancellation races
-- `src/agent-tools.ts` — built-in tools and result projection
-- `src/dynamic-tools.ts` — annotated Restate handler discovery
-- `src/sandbox.ts` — Agent-scoped sandbox lifecycle
-- `src/sandbox-provider.ts` — provider and one-shot client contracts
-- `src/modal-sandbox-provider.ts` — Modal Sandbox and Volume adapter
-- `src/conversation-compactor.ts` — conversation-summary model operation
-- `src/model.ts` — provider-specific AI SDK requests and model contracts
-- `src/model-gateway.ts` — scoped model admission and retry boundary
+- `src/agent/` — controller service plus active-turn, profile, approval,
+  schedule, and notification state
+- `src/session/` — transcript owner and turn state machine plus context, tools,
+  steering, pending work, and dynamic discovery
+- `src/gateway/` — provider-specific inference, model contracts, admission,
+  limit keys, retry policy, and conversation compaction
+- `src/sandbox/` — Agent-scoped lifecycle, provider contract, and Modal adapter
 - `src/eval.ts` — durable black-box protocol evaluations
 - `src/app.ts` — executable Restate endpoint
 

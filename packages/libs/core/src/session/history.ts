@@ -1,5 +1,5 @@
-// Durable conversation history for one AgentSession virtual object. Turn
-// lifecycle state and pending work belong to agent-turn.ts.
+// Durable conversation history for one AgentSession virtual object. Active
+// invocation state and pending input belong to Agent's active-turn module.
 //
 // The append-only transcript remains the source of truth. User messages record
 // how they originally arrived; later routing decisions are separate lifecycle
@@ -14,15 +14,11 @@ import type {
 } from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import {Agent} from "./agent.js";
-import {isDerivedConversationEvent} from "./internal-types.js";
-
-export {
-  type ConversationCompactionPlan,
-  ConversationCompactionPlanSchema,
-  type ConversationCompactionResult,
-  ConversationCompactionResultSchema,
-} from "@restate-agents/types";
+import {Agent} from "../agent/index.js";
+import {
+  type ConversationCompactionInput,
+  isDerivedConversationEvent,
+} from "../internal-types.js";
 
 type StoredEntry = {
   sequence: number;
@@ -51,11 +47,6 @@ export type TurnHistory = {
   append(...entries: ConversationEntry[]): restate.Operation<void>;
   /** Reserves the finished prefix when the local message count reaches the threshold. */
   beginCompaction(): restate.Operation<ConversationCompactionPlan | undefined>;
-};
-
-export type ConversationCompactionInput = ConversationCompactionPlan & {
-  previousSummary?: string;
-  entries: ConversationEntry[];
 };
 
 const HISTORY_META = "history/meta";

@@ -7,10 +7,10 @@ import {type HistoryPage, HistoryPageSchema} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {z} from "zod";
-import {Agent} from "./agent.js";
-import {AgentSession} from "./agent-session.js";
-import {callContextReducer} from "./model-gateway.js";
+import {Agent} from "./agent/index.js";
+import {callContextReducer} from "./gateway/index.js";
 import {raceBranches} from "./race.js";
+import {AgentSession} from "./session/index.js";
 
 const EvalCaseIdSchema = z.enum([
   "basic-turn",
