@@ -1,6 +1,78 @@
-// Pending tools outlive the agent step that started them. This Turn-scoped
-// registry owns lookup, completion races, selective cancellation, and final
-// cleanup.
+/**
+ * Supervises tool calls whose work continues beyond one agent step.
+ *
+ * ## Turns, steps, and model tool calls
+ *
+ * An AgentSession `doTurn` invocation is one **turn**: it starts with user
+ * input and runs until the agent produces a final answer or the turn is
+ * interrupted or stopped. A turn usually contains several **steps**. Each
+ * step gives the model the conversation so far and accepts one response:
+ * text, tool calls, or an invalid/error result. Tool calls proposed together
+ * are executed in parallel as part of that step.
+ *
+ * ```text
+ * turn
+ *   |
+ *   +-- step 1: model --> [tool A, tool B] --> tool results
+ *   |                                         |
+ *   +-- step 2: model <-----------------------+
+ *   |             |
+ *   |             +-- final text, or more tool calls
+ *   |
+ *   +-- step N: model --> final text --> turn completes
+ * ```
+ *
+ * Most tools finish during the step that invokes them. Some tools instead
+ * return a `pending` outcome containing an operation id. That outcome is sent
+ * to the model immediately, so the current step can finish, while this module
+ * starts the tool's separate `complete` phase. For example, `sleep` creates a
+ * Restate durable timer and `humanApproval` waits for a durable signal.
+ *
+ * The completion is deliberately not another model-protocol tool result for
+ * the same call. The original tool result already said that the operation was
+ * accepted and is pending. Once the operation settles, the turn adds an
+ * explicit runtime message to the conversation before asking the model what
+ * to do next.
+ *
+ * ```text
+ * model calls sleep
+ *        |
+ *        v
+ * execute() --> { status: "pending", operationId }
+ *        |                         |
+ *        |                         +--> model may continue to another step
+ *        v
+ * apply() spawns complete() --> Restate durable sleep/signal
+ *                                      |
+ *                                      v
+ * next() observes completion --> runtime message --> next model step
+ * ```
+ *
+ * ## Why this registry exists
+ *
+ * A model step is a bounded unit of planning and foreground execution; it
+ * owns no state after it returns. Pending work instead belongs to the whole
+ * turn. This turn-scoped registry bridges those lifetimes by retaining each
+ * pending call and its spawned Restate task across later model steps.
+ *
+ * Although the registry is an in-memory `Map`, its tasks run inside the
+ * durable `doTurn` invocation. Restate journals the effects used by those
+ * tasks (timers, signals, calls, and so on), suspends the invocation while it
+ * is parked, and reconstructs the same deterministic control flow during
+ * recovery. Thus a pending tool can survive both the step that created it and
+ * process failure without becoming an independent application-level job.
+ * It cannot outlive its enclosing turn: normal early exit stops pending work,
+ * and invocation cancellation abandons it through `cancelAll`.
+ *
+ * The registry has two principal operations:
+ *
+ * - `apply` commits the outcomes of an accepted tool step. It starts the
+ *   completion phase of new pending tools and applies model-requested
+ *   cancellation to previously pending tools.
+ * - `next` parks the turn until pending work completes, steering arrives, or
+ *   the user interrupts the turn. It reports one event; the turn loop owns the
+ *   resulting conversation update and policy decision.
+ */
 
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ToolCall} from "../gateway/index.js";
@@ -9,17 +81,25 @@ import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
 
 type PendingOperation = {
+  /** Step that originally emitted the pending tool result. */
   step: number;
   call: ToolCall;
+  /** Durable child task running the tool's completion phase. */
   task: restate.Task<PendingEvent>;
 };
 
+/** The next reason for a turn parked on pending work to resume. */
 type PendingStep =
   | {type: "steering"}
   | {type: "completion"; event: PendingEvent}
   | {type: "interrupted"; reason: string};
 
-/** Creates the Turn-scoped registry that supervises long-running tool work. */
+/**
+ * Creates the turn-scoped registry that supervises long-running tool work.
+ *
+ * Create exactly one registry for a `doTurn` invocation. Its mutable state is
+ * intentionally local to that invocation and must not be shared across turns.
+ */
 export function createPendingOperations() {
   const active = new Map<string, PendingOperation>();
 
@@ -32,9 +112,54 @@ export function createPendingOperations() {
       return [...active.values()].map(({call}) => call.toolName).join(", ");
     },
 
-    // Start new pending completions immediately, resolve cancellation requests
-    // against older operations, then register the new operations. A completion
-    // that wins the cancellation race remains completed.
+    /**
+     * Commits the pending-work effects of one accepted tool step.
+     *
+     * `agentStep` first executes every model-selected tool and returns a batch
+     * of `ToolOutcome`s. The AgentSession calls `apply` only after it has
+     * accepted that step's side effects. This method then interprets the two
+     * non-terminal outcome variants:
+     *
+     * - `pending`: spawn `agentTools.complete(...)` immediately and retain the
+     *   resulting Restate task under the tool-call id. The original pending
+     *   outcome remains in the returned `outcomes`, because it is the immediate
+     *   result paired with the model's tool call.
+     * - `cancel_requested`: look up an operation retained by an earlier step,
+     *   interrupt its completion task, join it, and replace the cancellation
+     *   request with a terminal success or failure result for the
+     *   `cancelOperation` tool call.
+     *
+     * New completion tasks are spawned before cancellations are processed so
+     * independent durable work begins without waiting for cancellation joins.
+     * They are added to the registry only after cancellation processing
+     * succeeds. A cancellation can therefore target an operation from an
+     * earlier step, not a pending operation created in the same batch.
+     *
+     * Cancellation is a race, not a rewrite of history. If the target task has
+     * already completed when it is joined, its real completion is returned in
+     * `events`, and the cancellation tool reports that it was too late. If the
+     * interrupt wins, `events` contains a synthetic cancelled completion so
+     * the transcript and model both see how the pending operation ended.
+     * Missing operation ids become ordinary failed tool outcomes; they do not
+     * fail the turn.
+     *
+     * The result separates two protocols:
+     *
+     * - `outcomes` completes the current model tool-call exchange and preserves
+     *   the order of the model's calls.
+     * - `events` reports older pending operations that became terminal while
+     *   this batch was being applied.
+     *
+     * If applying the batch throws, every newly spawned but not-yet-registered
+     * task is interrupted and joined before the error escapes. Operations that
+     * were already registered remain owned by the turn.
+     *
+     * @param outcomes - Ordered immediate results from the current tool step.
+     * @param context - Agent and turn capabilities needed by completion tasks.
+     * @param step - Number of the model step that produced these outcomes.
+     * @returns Outcomes for the current tool-call exchange plus terminal events
+     *   discovered for operations created by earlier steps.
+     */
     *apply(
       outcomes: ToolOutcome[],
       context: AgentToolContext,
@@ -114,6 +239,47 @@ export function createPendingOperations() {
       }
     },
 
+    /**
+     * Waits for the next event that can advance a turn with pending work.
+     *
+     * This is the synchronization boundary used after the model offers final
+     * text while one or more operations are still pending. Finishing the turn
+     * at that point would orphan its turn-scoped work, so the AgentSession
+     * parks here and races three durable sources:
+     *
+     * ```text
+     *                         +-- interrupt signal --> { type: "interrupted" }
+     * AgentSession.next() ----+-- steering ready ---> { type: "steering" }
+     *                         +-- any tool task ----> { type: "completion" }
+     * ```
+     *
+     * The caller must invoke `next` only while `size > 0`; otherwise there are
+     * no completion tasks to race. The supplied futures belong to the enclosing
+     * turn: `steeringReady` says that the steering inbox can be drained, while
+     * `interrupt` carries the reason the turn should stop.
+     *
+     * Exactly one event is returned per call:
+     *
+     * - A completion is removed from the registry before it is returned. The
+     *   caller records it, converts it to a runtime model message, and starts a
+     *   fresh model step. Other pending tasks continue running.
+     * - Steering only wakes the caller. This method neither drains steering nor
+     *   changes pending tasks; the turn incorporates the new messages and lets
+     *   the model decide whether existing work should continue or be cancelled.
+     * - Interruption likewise reports intent without stopping tasks here. The
+     *   turn's finalization path owns cancellation, transcript updates, and its
+     *   final response, keeping cleanup policy out of this readiness primitive.
+     *
+     * `raceBranches` cancels only its temporary losing waiters. It does not
+     * cancel the registered completion tasks merely because steering or an
+     * interrupt won this race.
+     *
+     * @param steeringReady - Resolves when the turn's steering inbox is
+     *   non-empty; the caller remains responsible for draining that inbox.
+     * @param interrupt - Resolves with the reason for interrupting this turn.
+     * @returns The single completion, steering, or interruption event that won
+     *   the durable race.
+     */
     *next(
       steeringReady: restate.Future<void>,
       interrupt: restate.Future<string>,
