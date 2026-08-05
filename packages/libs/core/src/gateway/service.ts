@@ -38,8 +38,7 @@ const MODEL_RETRY = {
   exponentiationFactor: 2,
 };
 
-// Model calls are service handlers so Restate can apply scope-based concurrency
-// control before provider requests start.
+/** Model-call service boundary governed by Restate scope concurrency controls. */
 export const ModelGateway = restate.service({
   name: "ModelGateway",
   handlers: {
@@ -94,6 +93,63 @@ export const ModelGateway = restate.service({
   },
 });
 
+/** Calls the agent model through provider-, model-, and Agent-scoped admission. */
+export function* callModel(
+  request: AgentModelRequest & {agentId: string},
+): restate.Operation<ModelResult> {
+  const {agentId, ...modelRequest} = request;
+  return yield* awaitCancellable(
+    restate
+      .scope(MODEL_SCOPE)
+      .client(ModelGateway)
+      .complete(
+        modelRequest,
+        Opts.from({
+          limitKey: agentLimitKey(AGENT_MODEL, agentId),
+          name: "agent-model",
+        }),
+      ),
+  );
+}
+
+/** Calls policy evaluation through the same cancellable admission boundary. */
+export function* callGuardrailModel(
+  request: GuardrailEvaluationRequest & {agentId: string},
+): restate.Operation<GuardrailDecision> {
+  const {agentId, ...evaluationRequest} = request;
+  return yield* awaitCancellable(
+    restate
+      .scope(MODEL_SCOPE)
+      .client(ModelGateway)
+      .evaluateGuardrails(
+        evaluationRequest,
+        Opts.from({
+          limitKey: agentLimitKey(GUARDRAIL_MODEL, agentId),
+          name: "guardrail-model",
+        }),
+      ),
+  );
+}
+
+/** Calls transient Turn-context reduction through scoped model admission. */
+export function* callContextReducer(
+  request: TurnContextReductionRequest & {agentId: string},
+): restate.Operation<TurnContextReductionResult> {
+  const {agentId, ...reductionRequest} = request;
+  return yield* awaitCancellable(
+    restate
+      .scope(MODEL_SCOPE)
+      .client(ModelGateway)
+      .reduceContext(
+        reductionRequest,
+        Opts.from({
+          limitKey: agentLimitKey(TURN_CONTEXT_MODEL, agentId),
+          name: "turn-context-model",
+        }),
+      ),
+  );
+}
+
 function agentLimitKey(model: string, agentId: string): string {
   const agent = createHash("sha256").update(agentId).digest("hex").slice(0, 24);
   return `${model}/${agent}`;
@@ -117,60 +173,4 @@ function* awaitCancellable<T>(
     }
     throw error;
   }
-}
-
-// Agent-step model work goes through the scoped gateway. The `openai` scope is
-// the provider-wide budget; the two limit-key levels are model and agent.
-export function* callModel(
-  request: AgentModelRequest & {agentId: string},
-): restate.Operation<ModelResult> {
-  const {agentId, ...modelRequest} = request;
-  return yield* awaitCancellable(
-    restate
-      .scope(MODEL_SCOPE)
-      .client(ModelGateway)
-      .complete(
-        modelRequest,
-        Opts.from({
-          limitKey: agentLimitKey(AGENT_MODEL, agentId),
-          name: "agent-model",
-        }),
-      ),
-  );
-}
-
-export function* callGuardrailModel(
-  request: GuardrailEvaluationRequest & {agentId: string},
-): restate.Operation<GuardrailDecision> {
-  const {agentId, ...evaluationRequest} = request;
-  return yield* awaitCancellable(
-    restate
-      .scope(MODEL_SCOPE)
-      .client(ModelGateway)
-      .evaluateGuardrails(
-        evaluationRequest,
-        Opts.from({
-          limitKey: agentLimitKey(GUARDRAIL_MODEL, agentId),
-          name: "guardrail-model",
-        }),
-      ),
-  );
-}
-
-export function* callContextReducer(
-  request: TurnContextReductionRequest & {agentId: string},
-): restate.Operation<TurnContextReductionResult> {
-  const {agentId, ...reductionRequest} = request;
-  return yield* awaitCancellable(
-    restate
-      .scope(MODEL_SCOPE)
-      .client(ModelGateway)
-      .reduceContext(
-        reductionRequest,
-        Opts.from({
-          limitKey: agentLimitKey(TURN_CONTEXT_MODEL, agentId),
-          name: "turn-context-model",
-        }),
-      ),
-  );
 }

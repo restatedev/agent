@@ -35,20 +35,11 @@ import * as notifications from "./notifications.js";
 import * as profile from "./profile.js";
 import * as schedules from "./schedules.js";
 
-// The agent id is this object's key. Object handlers always have one, but read
-// it through here so a missing key is a clear error, not a stray `!`.
-function agentKey(): string {
-  const key = restate.handlerRequest().key;
-  if (!key) {
-    throw new TerminalError("Agent handlers require an agent key");
-  }
-  return key;
-}
-
 // Internal coordination handlers are high-volume and their completed
 // invocations carry no information worth retaining.
 const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 
+/** Durable per-Agent controller for turns, routing, profile, and notifications. */
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
     /**
@@ -231,7 +222,55 @@ export const Agent = restate.implement(AgentDefinition, {
       }
       yield* notifications.publish("schedules");
 
-      yield* deliverScheduledMessage(agentKey(), schedule);
+      const current = yield* activeTurn.current();
+      if (!current) {
+        yield* startTurn(agentKey(), [
+          scheduleFired(schedule, "start"),
+          {role: "user", text: schedule.message, delivery: "turn"},
+        ]);
+        return;
+      }
+
+      if (
+        current.interruptReason !== undefined ||
+        schedule.whenBusy === "queue"
+      ) {
+        yield* activeTurn.enqueue(
+          scheduleFired(schedule, "queue", current.id),
+          {
+            role: "user",
+            text: schedule.message,
+            delivery: "queued",
+          },
+        );
+        return;
+      }
+
+      if (schedule.whenBusy === "steer") {
+        const accepted = yield* activeTurn.steer(
+          schedule.message,
+          scheduleFired(schedule, "steer", current.id),
+        );
+        if (!accepted) {
+          throw new TerminalError("active Turn rejected scheduled steering");
+        }
+        return;
+      }
+
+      yield* activeTurn.enqueue(
+        scheduleFired(schedule, "interrupt", current.id),
+        {
+          role: "user",
+          text: schedule.message,
+          delivery: "queued",
+        },
+      );
+      const requested = yield* activeTurn.interrupt(
+        `Scheduled message "${schedule.scheduleId}" became due`,
+      );
+      if (!requested) {
+        throw new TerminalError("active Turn rejected scheduled interruption");
+      }
     },
 
     /** Publishes an invalidation and forwards it to waiting subscribers. */
@@ -246,7 +285,39 @@ export const Agent = restate.implement(AgentDefinition, {
 
     /** Waits for any transcript or Agent-state invalidation after a revision. */
     *watchNotifications(request): restate.Operation<AgentNotificationSnapshot> {
-      return yield* waitForNotification(request);
+      const changed = restate.awakeable<AgentNotificationSnapshot>();
+      const available = yield* restate
+        .client(Agent, agentKey())
+        .subscribeNotifications({
+          afterRevision: request.afterRevision,
+          awakeableId: changed.id,
+        });
+      if (available) {
+        return available;
+      }
+
+      try {
+        const selected = yield* raceBranches({
+          notification: changed.promise,
+          timeout: restate.sleep(
+            request.timeoutSeconds * 1_000,
+            "notification watch window",
+          ),
+        });
+        if (selected.tag === "notification") {
+          return selected.value;
+        }
+
+        yield* restate
+          .client(Agent, agentKey())
+          .unsubscribeNotifications({awakeableId: changed.id});
+        return yield* notifications.read();
+      } catch (error) {
+        yield* restate
+          .sendClient(Agent, agentKey())
+          .unsubscribeNotifications({awakeableId: changed.id});
+        throw error;
+      }
     },
 
     /** Registers a caller-owned awakeable for the next notification. */
@@ -441,48 +512,6 @@ export const Agent = restate.implement(AgentDefinition, {
   },
 });
 
-function* waitForNotification({
-  afterRevision,
-  timeoutSeconds,
-}: {
-  afterRevision: number;
-  timeoutSeconds: number;
-}): restate.Operation<AgentNotificationSnapshot> {
-  const changed = restate.awakeable<AgentNotificationSnapshot>();
-  const available = yield* restate
-    .client(Agent, agentKey())
-    .subscribeNotifications({
-      afterRevision,
-      awakeableId: changed.id,
-    });
-  if (available) {
-    return available;
-  }
-
-  try {
-    const selected = yield* raceBranches({
-      notification: changed.promise,
-      timeout: restate.sleep(
-        timeoutSeconds * 1_000,
-        "notification watch window",
-      ),
-    });
-    if (selected.tag === "notification") {
-      return selected.value;
-    }
-
-    yield* restate
-      .client(Agent, agentKey())
-      .unsubscribeNotifications({awakeableId: changed.id});
-    return yield* notifications.read();
-  } catch (error) {
-    yield* restate
-      .sendClient(Agent, agentKey())
-      .unsubscribeNotifications({awakeableId: changed.id});
-    throw error;
-  }
-}
-
 // Cross-component coordination belongs here: snapshot the Agent profile and
 // let AgentSession append the entries that open the turn.
 function* startTurn(
@@ -517,53 +546,6 @@ function* scheduleTurnRejection(
     : "schedule mutation rejected because its Turn is no longer active";
 }
 
-function* deliverScheduledMessage(
-  agentId: string,
-  schedule: ScheduledMessage,
-): restate.Operation<void> {
-  const current = yield* activeTurn.current();
-
-  if (!current) {
-    yield* startTurn(agentId, [
-      scheduleFired(schedule, "start"),
-      {role: "user", text: schedule.message, delivery: "turn"},
-    ]);
-    return;
-  }
-
-  if (current.interruptReason !== undefined || schedule.whenBusy === "queue") {
-    yield* activeTurn.enqueue(scheduleFired(schedule, "queue", current.id), {
-      role: "user",
-      text: schedule.message,
-      delivery: "queued",
-    });
-    return;
-  }
-
-  if (schedule.whenBusy === "steer") {
-    const accepted = yield* activeTurn.steer(
-      schedule.message,
-      scheduleFired(schedule, "steer", current.id),
-    );
-    if (!accepted) {
-      throw new TerminalError("active Turn rejected scheduled steering");
-    }
-    return;
-  }
-
-  yield* activeTurn.enqueue(scheduleFired(schedule, "interrupt", current.id), {
-    role: "user",
-    text: schedule.message,
-    delivery: "queued",
-  });
-  const requested = yield* activeTurn.interrupt(
-    `Scheduled message "${schedule.scheduleId}" became due`,
-  );
-  if (!requested) {
-    throw new TerminalError("active Turn rejected scheduled interruption");
-  }
-}
-
 function scheduleFired(
   schedule: ScheduledMessage,
   routing: "start" | "queue" | "steer" | "interrupt",
@@ -578,4 +560,14 @@ function scheduleFired(
     routing,
     ...(turnId ? {turnId} : {}),
   };
+}
+
+// The agent id is this object's key. Object handlers always have one, but read
+// it through here so a missing key is a clear error, not a stray `!`.
+function agentKey(): string {
+  const key = restate.handlerRequest().key;
+  if (!key) {
+    throw new TerminalError("Agent handlers require an agent key");
+  }
+  return key;
 }

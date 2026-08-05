@@ -19,8 +19,10 @@ export const SandboxRefSchema = z.discriminatedUnion("provider", [
   }),
 ]);
 
+/** Durable, provider-specific identity needed to reconnect to a sandbox. */
 export type SandboxRef = z.infer<typeof SandboxRefSchema>;
 
+/** Cancellation context passed to every external sandbox operation. */
 export type SandboxOperationOptions = {
   signal: AbortSignal;
 };
@@ -29,18 +31,21 @@ type SandboxProvisionOptions = SandboxOperationOptions & {
   agentId: string;
 };
 
+/** One synchronous shell command requested by an agent tool. */
 export type SandboxCommand = {
   command: string;
   cwd?: string;
   timeoutMs?: number;
 };
 
+/** Captured result of a completed sandbox command. */
 export type SandboxCommandResult = {
   exitCode: number;
   stdout: string;
   stderr: string;
 };
 
+/** Provider-neutral filesystem and command surface exposed to model tools. */
 export interface SandboxClient {
   listFiles(path: string, options: SandboxOperationOptions): Promise<string[]>;
   readFile(path: string, options: SandboxOperationOptions): Promise<string>;
@@ -55,6 +60,7 @@ export interface SandboxClient {
   ): Promise<SandboxCommandResult>;
 }
 
+/** External sandbox lifecycle and process-local client adapter contract. */
 export interface SandboxProvider {
   provision(options: SandboxProvisionOptions): Promise<SandboxRef>;
   suspend(
@@ -72,29 +78,23 @@ export interface SandboxProvider {
   connect(ref: SandboxRef): SandboxClient;
 }
 
-function configuredProvider(): SandboxProvider {
-  const name = process.env.SANDBOX_PROVIDER?.trim().toLowerCase() || "local";
-  switch (name) {
-    case "local":
-      return localSandboxProvider;
-    case "modal":
-      return modalSandboxProvider;
-    default:
-      throw new TerminalError(
-        `unknown SANDBOX_PROVIDER ${JSON.stringify(name)}; expected local or modal`,
-      );
-  }
-}
-
-function providerFor(ref: SandboxRef): SandboxProvider {
-  return ref.provider === "modal" ? modalSandboxProvider : localSandboxProvider;
-}
-
-// New sandboxes use the configured provider. Existing references continue to
-// use the provider that created them, even if process configuration changes.
+/**
+ * Routes lifecycle operations to the configured or reference-owning provider.
+ * Existing references remain valid when process configuration later changes.
+ */
 export const sandboxProvider: SandboxProvider = {
   provision(options) {
-    return configuredProvider().provision(options);
+    const name = process.env.SANDBOX_PROVIDER?.trim().toLowerCase() || "local";
+    switch (name) {
+      case "local":
+        return localSandboxProvider.provision(options);
+      case "modal":
+        return modalSandboxProvider.provision(options);
+      default:
+        throw new TerminalError(
+          `unknown SANDBOX_PROVIDER ${JSON.stringify(name)}; expected local or modal`,
+        );
+    }
   },
 
   suspend(ref, options) {
@@ -113,3 +113,7 @@ export const sandboxProvider: SandboxProvider = {
     return providerFor(ref).connect(ref);
   },
 };
+
+function providerFor(ref: SandboxRef): SandboxProvider {
+  return ref.provider === "modal" ? modalSandboxProvider : localSandboxProvider;
+}

@@ -43,14 +43,17 @@ type ToolCompletion = (
 ) &
   ToolTranscript;
 
+/** Initial result of invoking one model-selected tool. */
 export type ToolOutcome = ToolExecution & {call: ToolCall};
 
+/** Completion emitted later by a tool that initially returned pending. */
 export type PendingEvent = {
   step: number;
   call: ToolCall;
   outcome: ToolCompletion;
 };
 
+/** Agent- and Turn-scoped capabilities passed to concrete tool definitions. */
 export type AgentToolContext = {
   agentId: string;
   turnId: string;
@@ -78,45 +81,10 @@ type AgentTool = {
   ): restate.Operation<ToolCompletion>;
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function validationMessage(error: z.ZodError): string {
-  return error.issues
-    .slice(0, 4)
-    .map((issue) => {
-      const path = issue.path.length > 0 ? issue.path.join(".") : "input";
-      return `${path}: ${issue.message}`;
-    })
-    .join("; ");
-}
-
-function* runSandboxTool(
-  name: string,
-  context: ToolCallContext,
-  operation: (client: SandboxClient, signal: AbortSignal) => Promise<string>,
-): restate.Operation<ToolExecution> {
-  try {
-    const client = yield* context.sandbox.client();
-    const result = yield* restate.run(({signal}) => operation(client, signal), {
-      name,
-    });
-    return {status: "succeeded", result};
-  } catch (error) {
-    if (
-      error instanceof restate.InterruptedError ||
-      error instanceof CancelledError
-    ) {
-      throw error;
-    }
-    return {status: "failed", error: `${name} failed: ${errorMessage(error)}`};
-  }
-}
-
-// The Agent owns one sandbox; this context owns one lazy Turn lease over it.
-// Parallel tools share the same in-flight borrow future and later steps reuse
-// the resolved ref without another Sandbox RPC.
+/**
+ * Creates the tool context and lazily borrows the Agent-owned sandbox once.
+ * Parallel tools share the same in-flight borrow and later steps reuse it.
+ */
 export function createAgentToolContext(
   agentId: string,
   turnId: string,
@@ -136,66 +104,236 @@ export function createAgentToolContext(
   };
 }
 
-// The schema type parameter exists only to type `run`/`complete` inputs from
-// `inputSchema`; callers see a plain AgentTool.
-function defineAgentTool<Schema extends z.ZodType>(definition: {
-  name: string;
-  description: string;
-  inputSchema: Schema;
-  summarize?(input: z.output<Schema>): string;
-  run(
-    input: z.output<Schema>,
-    context: ToolCallContext,
-  ): restate.Operation<ToolExecution>;
-  complete?(
-    input: z.output<Schema>,
-    context: ToolCallContext,
-  ): restate.Operation<ToolCompletion>;
-}): AgentTool {
+/** Converts one foreground tool batch into the model's tool-result message. */
+export function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
   return {
-    name: definition.name,
-    description: definition.description,
-    inputSchema: definition.inputSchema,
-    summarize(input: unknown): string | undefined {
-      if (!definition.summarize) {
-        return undefined;
+    role: "tool",
+    content: outcomes.map((outcome): ToolModelMessage["content"][number] => {
+      let value: JSONValue;
+      switch (outcome.status) {
+        case "succeeded":
+          value = {ok: true, result: outcome.result};
+          break;
+        case "failed":
+          value = {ok: false, error: outcome.error};
+          break;
+        case "pending":
+          value = {ok: true, pending: true, ...outcome.result};
+          break;
+        case "cancel_requested":
+          value = {
+            ok: false,
+            error: `cancellation request for ${outcome.operationId} was not applied`,
+          };
+          break;
       }
-      const parsed = definition.inputSchema.safeParse(input);
-      return parsed.success ? definition.summarize(parsed.data) : undefined;
-    },
-    *execute(
-      input: unknown,
-      context: ToolCallContext,
-    ): restate.Operation<ToolExecution> {
-      const parsed = definition.inputSchema.safeParse(input);
-      if (!parsed.success) {
-        return {
-          status: "failed",
-          error: `invalid input: ${validationMessage(parsed.error)}`,
-        };
-      }
-      return yield* definition.run(parsed.data, context);
-    },
-    *complete(
-      input: unknown,
-      context: ToolCallContext,
-    ): restate.Operation<ToolCompletion> {
-      const parsed = definition.inputSchema.safeParse(input);
-      if (!parsed.success) {
-        return {
-          status: "failed",
-          error: `invalid pending input: ${validationMessage(parsed.error)}`,
-        };
-      }
-      if (!definition.complete) {
-        return {
-          status: "failed",
-          error: `${definition.name} did not provide a pending completion`,
-        };
-      }
-      return yield* definition.complete(parsed.data, context);
-    },
+      return {
+        type: "tool-result",
+        toolCallId: outcome.call.toolCallId,
+        toolName: outcome.call.toolName,
+        output: {type: "json", value},
+      };
+    }),
   };
+}
+
+/** Converts a pending completion into an explicit runtime message for the model. */
+export function toRuntimeMessage({call, outcome}: PendingEvent): ModelMessage {
+  const result =
+    outcome.status === "succeeded"
+      ? `completed successfully: ${outcome.result}`
+      : outcome.status === "failed"
+        ? `failed: ${outcome.error}`
+        : `was cancelled: ${outcome.reason}`;
+  return {
+    role: "user",
+    content: `[Runtime event] Pending tool ${call.toolName} (${call.toolCallId}) ${result}`,
+  };
+}
+
+/** Projects tool-specific lifecycle effects into the durable transcript. */
+export function transcriptEntries(
+  event: ToolOutcome | PendingEvent,
+  context: AgentToolContext,
+  interruptedPendingReason?: string,
+): ConversationEntry[] {
+  const pendingEvent = "outcome" in event;
+  const result = pendingEvent ? event.outcome : event;
+  const entries = [...(result.transcript ?? [])];
+  const cancelledApproval =
+    event.call.toolName === "humanApproval" &&
+    ((pendingEvent && result.status === "cancelled") ||
+      (!pendingEvent &&
+        result.status === "pending" &&
+        interruptedPendingReason !== undefined));
+  if (cancelledApproval) {
+    entries.push({
+      role: "event",
+      type: "approval_cancelled",
+      approvalId: event.call.toolCallId,
+      turnId: context.turnId,
+    });
+  }
+  return entries;
+}
+
+/** Builds the complete static and dynamically discovered model tool catalog. */
+export function manifests(discovered: DiscoveredAgentTool[]): ToolManifest[] {
+  return [
+    ...definitions.map(
+      (tool): ToolManifest => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
+        strict: true,
+      }),
+    ),
+    ...discovered.map(
+      (tool): ToolManifest => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        // Third-party JSON Schema is not guaranteed to satisfy OpenAI's
+        // requirement that every object property appear in `required`.
+        strict: false,
+      }),
+    ),
+  ];
+}
+
+/** Returns the concise user-facing activity label for a tool call. */
+export function summarize(call: ToolCall): string | undefined {
+  return findTool(call.toolName)?.summarize(call.input);
+}
+
+/** Executes a static or dynamically discovered tool inside the active step. */
+export function* execute(
+  call: ToolCall,
+  context: AgentToolContext,
+  discovered: DiscoveredAgentTool[],
+): restate.Operation<ToolOutcome> {
+  const tool = findTool(call.toolName);
+  if (tool) {
+    return {
+      call,
+      ...(yield* tool.execute(call.input, {
+        ...context,
+        toolCallId: call.toolCallId,
+      })),
+    };
+  }
+
+  const dynamic = discovered.find(({name}) => name === call.toolName);
+  if (!dynamic) {
+    return {
+      call,
+      status: "failed",
+      error: `unknown tool: ${call.toolName}`,
+    };
+  }
+  if (
+    typeof call.input !== "object" ||
+    call.input === null ||
+    Array.isArray(call.input)
+  ) {
+    return {
+      call,
+      status: "failed",
+      error: "dynamic tool input must be an object",
+    };
+  }
+  const fields = call.input as Record<string, unknown>;
+  let key: string | undefined;
+  if (dynamic.target.keyed) {
+    if (typeof fields.key !== "string" || fields.key.length === 0) {
+      return {
+        call,
+        status: "failed",
+        error: "dynamic Virtual Object and Workflow tools require a key",
+      };
+    }
+    key = fields.key;
+  }
+  if (dynamic.target.acceptsInput && !("input" in fields)) {
+    return {
+      call,
+      status: "failed",
+      error: "dynamic tool input is missing input",
+    };
+  }
+
+  try {
+    const result = yield* restate.call<unknown, unknown>({
+      service: dynamic.target.service,
+      method: dynamic.target.handler,
+      ...(key === undefined ? {} : {key}),
+      parameter: dynamic.target.acceptsInput ? fields.input : undefined,
+      inputSerde: restate.serde.json,
+      outputSerde: restate.serde.json,
+      name: `dynamic-tool-${dynamic.name}`,
+    });
+    return {
+      call,
+      status: "succeeded",
+      result:
+        typeof result === "string"
+          ? result
+          : (JSON.stringify(result) ?? "Handler completed without a result"),
+    };
+  } catch (error) {
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
+      throw error;
+    }
+    return {
+      call,
+      status: "failed",
+      error: `${dynamic.name} failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
+/** Waits for a concrete pending tool to complete after its originating step. */
+export function* complete(
+  call: ToolCall,
+  context: AgentToolContext,
+  step: number,
+): restate.Operation<PendingEvent> {
+  const tool = findTool(call.toolName);
+  if (!tool) {
+    return {
+      step,
+      call,
+      outcome: {status: "failed", error: `unknown tool: ${call.toolName}`},
+    };
+  }
+  try {
+    return {
+      step,
+      call,
+      outcome: yield* tool.complete(call.input, {
+        ...context,
+        toolCallId: call.toolCallId,
+      }),
+    };
+  } catch (error) {
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
+      throw error;
+    }
+    return {
+      step,
+      call,
+      outcome: {
+        status: "failed",
+        error: `${call.toolName} failed while pending: ${errorMessage(error)}`,
+      },
+    };
+  }
 }
 
 const getWeatherTool = defineAgentTool({
@@ -615,84 +753,100 @@ const definitions = [
   executeCommandTool,
 ] as const;
 
+/** Names reserved by built-in tools and unavailable to dynamic discovery. */
+export const names = definitions.map(({name}) => name);
+
+// The schema type parameter exists only to type `run`/`complete` inputs from
+// `inputSchema`; callers see a plain AgentTool.
+function defineAgentTool<Schema extends z.ZodType>(definition: {
+  name: string;
+  description: string;
+  inputSchema: Schema;
+  summarize?(input: z.output<Schema>): string;
+  run(
+    input: z.output<Schema>,
+    context: ToolCallContext,
+  ): restate.Operation<ToolExecution>;
+  complete?(
+    input: z.output<Schema>,
+    context: ToolCallContext,
+  ): restate.Operation<ToolCompletion>;
+}): AgentTool {
+  return {
+    name: definition.name,
+    description: definition.description,
+    inputSchema: definition.inputSchema,
+    summarize(input: unknown): string | undefined {
+      if (!definition.summarize) {
+        return undefined;
+      }
+      const parsed = definition.inputSchema.safeParse(input);
+      return parsed.success ? definition.summarize(parsed.data) : undefined;
+    },
+    *execute(
+      input: unknown,
+      context: ToolCallContext,
+    ): restate.Operation<ToolExecution> {
+      const parsed = definition.inputSchema.safeParse(input);
+      if (!parsed.success) {
+        return {
+          status: "failed",
+          error: `invalid input: ${validationMessage(parsed.error)}`,
+        };
+      }
+      return yield* definition.run(parsed.data, context);
+    },
+    *complete(
+      input: unknown,
+      context: ToolCallContext,
+    ): restate.Operation<ToolCompletion> {
+      const parsed = definition.inputSchema.safeParse(input);
+      if (!parsed.success) {
+        return {
+          status: "failed",
+          error: `invalid pending input: ${validationMessage(parsed.error)}`,
+        };
+      }
+      if (!definition.complete) {
+        return {
+          status: "failed",
+          error: `${definition.name} did not provide a pending completion`,
+        };
+      }
+      return yield* definition.complete(parsed.data, context);
+    },
+  };
+}
+
 function findTool(name: string): AgentTool | undefined {
   return definitions.find((candidate) => candidate.name === name);
 }
 
-function toManifest(tool: AgentTool): ToolManifest {
-  return {
-    name: tool.name,
-    description: tool.description,
-    inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
-    strict: true,
-  };
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function dynamicManifest(tool: DiscoveredAgentTool): ToolManifest {
-  return {
-    name: tool.name,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-    // Third-party JSON Schema is not guaranteed to satisfy OpenAI's stricter
-    // requirement that every object property appear in `required`.
-    strict: false,
-  };
+function validationMessage(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 4)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "input";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
 }
 
-function dynamicToolInput(
-  tool: DiscoveredAgentTool,
-  input: unknown,
-): {ok: true; key?: string; parameter: unknown} | {ok: false; error: string} {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    return {ok: false, error: "dynamic tool input must be an object"};
-  }
-  const fields = input as Record<string, unknown>;
-  let key: string | undefined;
-  if (tool.target.keyed) {
-    if (typeof fields.key !== "string" || fields.key.length === 0) {
-      return {
-        ok: false,
-        error: "dynamic Virtual Object and Workflow tools require a key",
-      };
-    }
-    key = fields.key;
-  }
-  if (tool.target.acceptsInput && !("input" in fields)) {
-    return {ok: false, error: "dynamic tool input is missing input"};
-  }
-  return {
-    ok: true,
-    ...(key === undefined ? {} : {key}),
-    parameter: tool.target.acceptsInput ? fields.input : undefined,
-  };
-}
-
-function* executeDynamicTool(
-  tool: DiscoveredAgentTool,
-  call: ToolCall,
-): restate.Operation<ToolOutcome> {
-  const parsed = dynamicToolInput(tool, call.input);
-  if (!parsed.ok) {
-    return {call, status: "failed", error: parsed.error};
-  }
+function* runSandboxTool(
+  name: string,
+  context: ToolCallContext,
+  operation: (client: SandboxClient, signal: AbortSignal) => Promise<string>,
+): restate.Operation<ToolExecution> {
   try {
-    const result = yield* restate.call<unknown, unknown>({
-      service: tool.target.service,
-      method: tool.target.handler,
-      ...(parsed.key === undefined ? {} : {key: parsed.key}),
-      parameter: parsed.parameter,
-      inputSerde: restate.serde.json,
-      outputSerde: restate.serde.json,
-      name: `dynamic-tool-${tool.name}`,
+    const client = yield* context.sandbox.client();
+    const result = yield* restate.run(({signal}) => operation(client, signal), {
+      name,
     });
-    return {
-      call,
-      status: "succeeded",
-      result:
-        typeof result === "string"
-          ? result
-          : (JSON.stringify(result) ?? "Handler completed without a result"),
-    };
+    return {status: "succeeded", result};
   } catch (error) {
     if (
       error instanceof restate.InterruptedError ||
@@ -700,153 +854,6 @@ function* executeDynamicTool(
     ) {
       throw error;
     }
-    return {
-      call,
-      status: "failed",
-      error: `${tool.name} failed: ${errorMessage(error)}`,
-    };
-  }
-}
-
-// The JSON payload the model sees for one tool result.
-function toolResultValue(outcome: ToolOutcome): JSONValue {
-  switch (outcome.status) {
-    case "succeeded":
-      return {ok: true, result: outcome.result};
-    case "failed":
-      return {ok: false, error: outcome.error};
-    case "pending":
-      return {ok: true, pending: true, ...outcome.result};
-    case "cancel_requested":
-      return {
-        ok: false,
-        error: `cancellation request for ${outcome.operationId} was not applied`,
-      };
-  }
-}
-
-export function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
-  return {
-    role: "tool",
-    content: outcomes.map((outcome): ToolModelMessage["content"][number] => ({
-      type: "tool-result",
-      toolCallId: outcome.call.toolCallId,
-      toolName: outcome.call.toolName,
-      output: {type: "json", value: toolResultValue(outcome)},
-    })),
-  };
-}
-
-export function toRuntimeMessage({call, outcome}: PendingEvent): ModelMessage {
-  const result =
-    outcome.status === "succeeded"
-      ? `completed successfully: ${outcome.result}`
-      : outcome.status === "failed"
-        ? `failed: ${outcome.error}`
-        : `was cancelled: ${outcome.reason}`;
-  return {
-    role: "user",
-    content: `[Runtime event] Pending tool ${call.toolName} (${call.toolCallId}) ${result}`,
-  };
-}
-
-export function transcriptEntries(
-  event: ToolOutcome | PendingEvent,
-  context: AgentToolContext,
-  interruptedPendingReason?: string,
-): ConversationEntry[] {
-  const pendingEvent = "outcome" in event;
-  const result = pendingEvent ? event.outcome : event;
-  const entries = [...(result.transcript ?? [])];
-  const cancelledApproval =
-    event.call.toolName === "humanApproval" &&
-    ((pendingEvent && result.status === "cancelled") ||
-      (!pendingEvent &&
-        result.status === "pending" &&
-        interruptedPendingReason !== undefined));
-  if (cancelledApproval) {
-    entries.push({
-      role: "event",
-      type: "approval_cancelled",
-      approvalId: event.call.toolCallId,
-      turnId: context.turnId,
-    });
-  }
-  return entries;
-}
-
-export const names = definitions.map(({name}) => name);
-
-export function manifests(discovered: DiscoveredAgentTool[]): ToolManifest[] {
-  return [...definitions.map(toManifest), ...discovered.map(dynamicManifest)];
-}
-
-export function summarize(call: ToolCall): string | undefined {
-  return findTool(call.toolName)?.summarize(call.input);
-}
-
-export function* execute(
-  call: ToolCall,
-  context: AgentToolContext,
-  discovered: DiscoveredAgentTool[],
-): restate.Operation<ToolOutcome> {
-  const tool = findTool(call.toolName);
-  if (!tool) {
-    const dynamic = discovered.find(({name}) => name === call.toolName);
-    if (dynamic) {
-      return yield* executeDynamicTool(dynamic, call);
-    }
-    return {
-      call,
-      status: "failed",
-      error: `unknown tool: ${call.toolName}`,
-    };
-  }
-  return {
-    call,
-    ...(yield* tool.execute(call.input, {
-      ...context,
-      toolCallId: call.toolCallId,
-    })),
-  };
-}
-
-export function* complete(
-  call: ToolCall,
-  context: AgentToolContext,
-  step: number,
-): restate.Operation<PendingEvent> {
-  const tool = findTool(call.toolName);
-  if (!tool) {
-    return {
-      step,
-      call,
-      outcome: {status: "failed", error: `unknown tool: ${call.toolName}`},
-    };
-  }
-  try {
-    return {
-      step,
-      call,
-      outcome: yield* tool.complete(call.input, {
-        ...context,
-        toolCallId: call.toolCallId,
-      }),
-    };
-  } catch (error) {
-    if (
-      error instanceof restate.InterruptedError ||
-      error instanceof CancelledError
-    ) {
-      throw error;
-    }
-    return {
-      step,
-      call,
-      outcome: {
-        status: "failed",
-        error: `${call.toolName} failed while pending: ${errorMessage(error)}`,
-      },
-    };
+    return {status: "failed", error: `${name} failed: ${errorMessage(error)}`};
   }
 }

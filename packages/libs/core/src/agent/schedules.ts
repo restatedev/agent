@@ -12,34 +12,6 @@ type StoredSchedule = ScheduledMessage & {
 const SCHEDULES = "schedules";
 const MAX_SCHEDULES = 32;
 
-function* readSchedules(): restate.Operation<StoredSchedule[]> {
-  return (yield* restate.sharedState().get<StoredSchedule[]>(SCHEDULES)) ?? [];
-}
-
-function visible({
-  scheduleId,
-  message,
-  repeatEverySeconds,
-  whenBusy,
-  nextRunAt,
-}: StoredSchedule): ScheduledMessage {
-  return {
-    scheduleId,
-    message,
-    repeatEverySeconds,
-    whenBusy,
-    nextRunAt,
-  };
-}
-
-function store(all: StoredSchedule[]): void {
-  if (all.length === 0) {
-    restate.state().clear(SCHEDULES);
-  } else {
-    restate.state().set(SCHEDULES, all);
-  }
-}
-
 /**
  * Handler-scoped access to scheduled messages for the current Agent object.
  *
@@ -48,9 +20,24 @@ function store(all: StoredSchedule[]): void {
  * detail used to reject stale timer deliveries.
  */
 export function* list(): restate.Operation<ScheduledMessage[]> {
-  return (yield* readSchedules()).map(visible);
+  return (yield* readSchedules()).map(
+    ({
+      scheduleId,
+      message,
+      repeatEverySeconds,
+      whenBusy,
+      nextRunAt,
+    }): ScheduledMessage => ({
+      scheduleId,
+      message,
+      repeatEverySeconds,
+      whenBusy,
+      nextRunAt,
+    }),
+  );
 }
 
+/** Returns one stored schedule including its private delayed invocation ID. */
 export function* get(
   scheduleId: string,
 ): restate.Operation<StoredSchedule | undefined> {
@@ -59,6 +46,7 @@ export function* get(
   );
 }
 
+/** Inserts or replaces a schedule while enforcing the per-Agent entry bound. */
 export function* set(
   schedule: ScheduledMessage,
   timerId: string,
@@ -81,6 +69,7 @@ export function* set(
   return {replaced: index >= 0};
 }
 
+/** Removes and returns one schedule so its delayed invocation can be cancelled. */
 export function* remove(
   scheduleId: string,
 ): restate.Operation<StoredSchedule | undefined> {
@@ -92,4 +81,16 @@ export function* remove(
   const [removed] = all.splice(index, 1);
   store(all);
   return removed;
+}
+
+function* readSchedules(): restate.Operation<StoredSchedule[]> {
+  return (yield* restate.sharedState().get<StoredSchedule[]>(SCHEDULES)) ?? [];
+}
+
+function store(all: StoredSchedule[]): void {
+  if (all.length === 0) {
+    restate.state().clear(SCHEDULES);
+  } else {
+    restate.state().set(SCHEDULES, all);
+  }
 }

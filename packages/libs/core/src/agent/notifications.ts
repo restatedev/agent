@@ -25,26 +25,6 @@ const EMPTY_SNAPSHOT: AgentNotificationSnapshot = {
   },
 };
 
-function* readSubscriptions(): restate.Operation<
-  AgentNotificationSubscription[]
-> {
-  return (
-    (yield* restate
-      .sharedState()
-      .get<AgentNotificationSubscription[]>(SUBSCRIPTIONS)) ?? []
-  );
-}
-
-function storeSubscriptions(
-  subscriptions: AgentNotificationSubscription[],
-): void {
-  if (subscriptions.length === 0) {
-    restate.state().clear(SUBSCRIPTIONS);
-  } else {
-    restate.state().set(SUBSCRIPTIONS, subscriptions);
-  }
-}
-
 /** Returns the current invalidation watermark for every authoritative area. */
 export function* read(): restate.Operation<AgentNotificationSnapshot> {
   return (
@@ -115,5 +95,25 @@ export function* unsubscribe(awakeableId: string): restate.Operation<void> {
   );
   if (remaining.length !== subscriptions.length) {
     storeSubscriptions(remaining);
+  }
+}
+
+function* readSubscriptions(): restate.Operation<
+  AgentNotificationSubscription[]
+> {
+  return (
+    (yield* restate
+      .sharedState()
+      .get<AgentNotificationSubscription[]>(SUBSCRIPTIONS)) ?? []
+  );
+}
+
+function storeSubscriptions(
+  subscriptions: AgentNotificationSubscription[],
+): void {
+  if (subscriptions.length === 0) {
+    restate.state().clear(SUBSCRIPTIONS);
+  } else {
+    restate.state().set(SUBSCRIPTIONS, subscriptions);
   }
 }

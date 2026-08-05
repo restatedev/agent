@@ -19,14 +19,6 @@ export function* list(): restate.Operation<ApprovalRequest[]> {
   return (yield* restate.sharedState().get<ApprovalRequest[]>(APPROVALS)) ?? [];
 }
 
-function storeApprovals(pending: ApprovalRequest[]): void {
-  if (pending.length === 0) {
-    restate.state().clear(APPROVALS);
-  } else {
-    restate.state().set(APPROVALS, pending);
-  }
-}
-
 /**
  * Handler-scoped access to human approvals for the current Agent object.
  *
@@ -122,4 +114,12 @@ export function* resolve(
     .signal<ApprovalDecision>(approvalSignalName(request.approvalId))
     .resolve(decision);
   return request;
+}
+
+function storeApprovals(pending: ApprovalRequest[]): void {
+  if (pending.length === 0) {
+    restate.state().clear(APPROVALS);
+  } else {
+    restate.state().set(APPROVALS, pending);
+  }
 }

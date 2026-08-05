@@ -14,6 +14,7 @@ import {
   type AgentSessionSteering,
 } from "../internal-types.js";
 
+/** Drains durable steering signals into a transient FIFO for the active Turn. */
 export function createSteeringInbox() {
   const queue: AgentSessionSteering[] = [];
   let notification = channel<void>();

@@ -40,6 +40,7 @@ type ConversationContext = {
   entries: ConversationEntry[];
 };
 
+/** Invocation-local access to an AgentSession's append-only transcript. */
 export type TurnHistory = {
   /** Returns model context from the state loaded when this Turn began. */
   context(): ConversationContext;
@@ -53,81 +54,6 @@ const HISTORY_META = "history/meta";
 const HISTORY_SUMMARY = "history/summary";
 const CHUNK_SIZE = 32;
 const COMPACT_AFTER_MESSAGES = 32;
-
-function chunkKey(index: number): string {
-  return `history/chunk/${index}`;
-}
-
-function samePlan(
-  left: ConversationCompactionPlan,
-  right: ConversationCompactionPlan,
-): boolean {
-  return (
-    left.baseThrough === right.baseThrough && left.through === right.through
-  );
-}
-
-function* readMeta(): restate.Operation<HistoryMeta> {
-  return (
-    (yield* restate.sharedState().get<HistoryMeta>(HISTORY_META)) ?? {
-      nextSequence: 1,
-    }
-  );
-}
-
-function* readSummary(): restate.Operation<ConversationSummary | undefined> {
-  return (
-    (yield* restate.sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
-    undefined
-  );
-}
-
-// Lazily walks a stable sequence range. Only the current chunk is loaded, so a
-// caller that stops reading also avoids every later state read.
-function readEntries(
-  meta: HistoryMeta,
-  fromSequence = 1,
-  throughSequence = meta.nextSequence - 1,
-) {
-  let sequence = Math.max(1, fromSequence);
-  const through = Math.min(throughSequence, meta.nextSequence - 1);
-  let chunkIndex = -1;
-  let chunk: StoredEntry[] = [];
-
-  function* next(): restate.Operation<StoredEntry | undefined> {
-    if (sequence > through) {
-      return undefined;
-    }
-    const nextChunk = Math.floor((sequence - 1) / CHUNK_SIZE);
-    if (nextChunk !== chunkIndex) {
-      chunk =
-        (yield* restate
-          .sharedState()
-          .get<StoredEntry[]>(chunkKey(nextChunk))) ?? [];
-      chunkIndex = nextChunk;
-    }
-    const entry = chunk[(sequence - 1) % CHUNK_SIZE];
-    sequence += 1;
-    return entry;
-  }
-
-  return {
-    next,
-    *collect(
-      limit = Number.POSITIVE_INFINITY,
-    ): restate.Operation<StoredEntry[]> {
-      const result: StoredEntry[] = [];
-      while (result.length < limit) {
-        const entry = yield* next();
-        if (!entry) {
-          break;
-        }
-        result.push(entry);
-      }
-      return result;
-    },
-  };
-}
 
 /**
  * Handler-scoped access to conversation history for the current AgentSession.
@@ -230,8 +156,7 @@ export function* openTurn(): restate.Operation<TurnHistory> {
   };
 }
 
-// Resolve a reserved cursor range into model input from a shared AgentSession
-// handler. No state is mutated here.
+/** Resolves a reserved transcript prefix into compactor input without mutation. */
 export function* readCompaction(
   plan: ConversationCompactionPlan,
 ): restate.Operation<ConversationCompactionInput | undefined> {
@@ -253,8 +178,7 @@ export function* readCompaction(
   };
 }
 
-// Apply only the result for the currently reserved finished-turn prefix.
-// Newer transcript entries do not invalidate that checkpoint.
+/** Applies a summary only to the finished-turn prefix that reserved it. */
 export function* finishCompaction(
   result: ConversationCompactionResult,
 ): restate.Operation<boolean> {
@@ -277,4 +201,79 @@ export function* finishCompaction(
     text: result.summary,
   } satisfies ConversationSummary);
   return true;
+}
+
+function chunkKey(index: number): string {
+  return `history/chunk/${index}`;
+}
+
+function samePlan(
+  left: ConversationCompactionPlan,
+  right: ConversationCompactionPlan,
+): boolean {
+  return (
+    left.baseThrough === right.baseThrough && left.through === right.through
+  );
+}
+
+function* readMeta(): restate.Operation<HistoryMeta> {
+  return (
+    (yield* restate.sharedState().get<HistoryMeta>(HISTORY_META)) ?? {
+      nextSequence: 1,
+    }
+  );
+}
+
+function* readSummary(): restate.Operation<ConversationSummary | undefined> {
+  return (
+    (yield* restate.sharedState().get<ConversationSummary>(HISTORY_SUMMARY)) ??
+    undefined
+  );
+}
+
+// Lazily walks a stable sequence range. Only the current chunk is loaded, so a
+// caller that stops reading also avoids every later state read.
+function readEntries(
+  meta: HistoryMeta,
+  fromSequence = 1,
+  throughSequence = meta.nextSequence - 1,
+) {
+  let sequence = Math.max(1, fromSequence);
+  const through = Math.min(throughSequence, meta.nextSequence - 1);
+  let chunkIndex = -1;
+  let chunk: StoredEntry[] = [];
+
+  function* next(): restate.Operation<StoredEntry | undefined> {
+    if (sequence > through) {
+      return undefined;
+    }
+    const nextChunk = Math.floor((sequence - 1) / CHUNK_SIZE);
+    if (nextChunk !== chunkIndex) {
+      chunk =
+        (yield* restate
+          .sharedState()
+          .get<StoredEntry[]>(chunkKey(nextChunk))) ?? [];
+      chunkIndex = nextChunk;
+    }
+    const entry = chunk[(sequence - 1) % CHUNK_SIZE];
+    sequence += 1;
+    return entry;
+  }
+
+  return {
+    next,
+    *collect(
+      limit = Number.POSITIVE_INFINITY,
+    ): restate.Operation<StoredEntry[]> {
+      const result: StoredEntry[] = [];
+      while (result.length < limit) {
+        const entry = yield* next();
+        if (!entry) {
+          break;
+        }
+        result.push(entry);
+      }
+      return result;
+    },
+  };
 }

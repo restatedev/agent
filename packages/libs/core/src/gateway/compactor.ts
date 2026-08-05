@@ -22,95 +22,7 @@ const COMPACTOR_SYSTEM = [
   "Return only the updated summary.",
 ].join(" ");
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function compactorInput(request: ConversationCompactionInput): string {
-  return JSON.stringify({
-    previousSummary: request.previousSummary ?? null,
-    conversation: request.entries.flatMap(
-      (entry): Record<string, unknown>[] => {
-        if (entry.role === "user") {
-          return [
-            {
-              role: entry.role,
-              text: entry.text,
-              delivery: entry.delivery,
-            },
-          ];
-        }
-        if (entry.role === "assistant") {
-          return [
-            {
-              role: entry.role,
-              text: entry.text,
-              turnId: entry.turnId,
-              status: entry.status,
-            },
-          ];
-        }
-        if (isDerivedConversationEvent(entry)) {
-          return [];
-        }
-        switch (entry.type) {
-          case "steer":
-            return [
-              {
-                role: entry.role,
-                type: entry.type,
-                turnId: entry.turnId,
-                queuedMessages: entry.queuedMessages,
-              },
-            ];
-          case "interrupt":
-            return [
-              {
-                role: entry.role,
-                type: entry.type,
-                turnId: entry.turnId,
-                reason: entry.reason,
-              },
-            ];
-          case "stop":
-            return [
-              {
-                role: entry.role,
-                type: entry.type,
-                turnId: entry.turnId,
-                cause: entry.cause,
-                reason: entry.reason,
-              },
-            ];
-          case "approval":
-            return [
-              {
-                role: entry.role,
-                type: entry.type,
-                approvalId: entry.approvalId,
-                turnId: entry.turnId,
-                question: entry.question,
-                guardrailId: entry.guardrailId,
-                decision: entry.decision,
-                reason: entry.reason,
-              },
-            ];
-          case "dispatch":
-            return [
-              {
-                role: entry.role,
-                type: entry.type,
-                queuedMessages: entry.queuedMessages,
-              },
-            ];
-        }
-        const unreachable: never = entry;
-        return unreachable;
-      },
-    ),
-  });
-}
-
+/** Summarizes a reserved, immutable transcript prefix for later model context. */
 export function* compactConversation(
   request: ConversationCompactionInput,
 ): Operation<ConversationCompactionResult> {
@@ -121,7 +33,88 @@ export function* compactConversation(
           const response = await generateText({
             model: openai.chat(COMPACTOR_MODEL),
             system: COMPACTOR_SYSTEM,
-            prompt: compactorInput(request),
+            prompt: JSON.stringify({
+              previousSummary: request.previousSummary ?? null,
+              conversation: request.entries.flatMap(
+                (entry): Record<string, unknown>[] => {
+                  if (entry.role === "user") {
+                    return [
+                      {
+                        role: entry.role,
+                        text: entry.text,
+                        delivery: entry.delivery,
+                      },
+                    ];
+                  }
+                  if (entry.role === "assistant") {
+                    return [
+                      {
+                        role: entry.role,
+                        text: entry.text,
+                        turnId: entry.turnId,
+                        status: entry.status,
+                      },
+                    ];
+                  }
+                  if (isDerivedConversationEvent(entry)) {
+                    return [];
+                  }
+                  switch (entry.type) {
+                    case "steer":
+                      return [
+                        {
+                          role: entry.role,
+                          type: entry.type,
+                          turnId: entry.turnId,
+                          queuedMessages: entry.queuedMessages,
+                        },
+                      ];
+                    case "interrupt":
+                      return [
+                        {
+                          role: entry.role,
+                          type: entry.type,
+                          turnId: entry.turnId,
+                          reason: entry.reason,
+                        },
+                      ];
+                    case "stop":
+                      return [
+                        {
+                          role: entry.role,
+                          type: entry.type,
+                          turnId: entry.turnId,
+                          cause: entry.cause,
+                          reason: entry.reason,
+                        },
+                      ];
+                    case "approval":
+                      return [
+                        {
+                          role: entry.role,
+                          type: entry.type,
+                          approvalId: entry.approvalId,
+                          turnId: entry.turnId,
+                          question: entry.question,
+                          guardrailId: entry.guardrailId,
+                          decision: entry.decision,
+                          reason: entry.reason,
+                        },
+                      ];
+                    case "dispatch":
+                      return [
+                        {
+                          role: entry.role,
+                          type: entry.type,
+                          queuedMessages: entry.queuedMessages,
+                        },
+                      ];
+                  }
+                  const unreachable: never = entry;
+                  return unreachable;
+                },
+              ),
+            }),
             maxOutputTokens: 1_000,
             maxRetries: 0,
             abortSignal: signal,
@@ -154,7 +147,7 @@ export function* compactConversation(
       status: "failed",
       baseThrough: request.baseThrough,
       through: request.through,
-      error: errorMessage(error),
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }

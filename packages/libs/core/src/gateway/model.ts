@@ -21,6 +21,7 @@ const ToolManifestSchema = z.object({
   inputSchema: z.record(z.string(), z.unknown()),
   strict: z.boolean().optional(),
 });
+/** Provider-neutral model description of one executable agent tool. */
 export type ToolManifest = z.infer<typeof ToolManifestSchema>;
 
 export const AgentModelRequestSchema = z.object({
@@ -28,6 +29,7 @@ export const AgentModelRequestSchema = z.object({
   messages: z.array(modelMessageSchema),
   tools: z.array(ToolManifestSchema),
 });
+/** Complete input for one agent-model inference step. */
 export type AgentModelRequest = z.infer<typeof AgentModelRequestSchema>;
 
 const ToolCallSchema = z.object({
@@ -35,6 +37,7 @@ const ToolCallSchema = z.object({
   toolName: z.string(),
   input: z.unknown(),
 });
+/** One validated tool call emitted by the model. */
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
 export const ModelResultSchema = z.discriminatedUnion("type", [
@@ -47,6 +50,7 @@ export const ModelResultSchema = z.discriminatedUnion("type", [
   }),
   z.object({type: z.literal("error"), message: z.string()}),
 ]);
+/** Normalized agent-model result consumed by the session state machine. */
 export type ModelResult = z.infer<typeof ModelResultSchema>;
 
 const ProposedActionSchema = z.discriminatedUnion("type", [
@@ -57,6 +61,7 @@ const ProposedActionSchema = z.discriminatedUnion("type", [
     activity: z.string().optional(),
   }),
 ]);
+/** Text or tool action evaluated by runtime guardrails before commitment. */
 export type ProposedAction = z.infer<typeof ProposedActionSchema>;
 
 const GuardrailApprovalSchema = z.object({
@@ -64,6 +69,7 @@ const GuardrailApprovalSchema = z.object({
   question: z.string(),
   action: ProposedActionSchema,
 });
+/** Human authorization retained for scope checks later in the same Turn. */
 export type GuardrailApproval = z.infer<typeof GuardrailApprovalSchema>;
 
 export const GuardrailEvaluationRequestSchema = z.object({
@@ -74,6 +80,7 @@ export const GuardrailEvaluationRequestSchema = z.object({
   messages: z.array(modelMessageSchema),
   action: ProposedActionSchema,
 });
+/** Full evidence supplied to one guardrail evaluation. */
 export type GuardrailEvaluationRequest = z.infer<
   typeof GuardrailEvaluationRequestSchema
 >;
@@ -81,6 +88,7 @@ export type GuardrailEvaluationRequest = z.infer<
 export const TurnContextReductionRequestSchema = z.object({
   messages: z.array(modelMessageSchema).min(1),
 });
+/** Settled current-Turn context eligible for transient reduction. */
 export type TurnContextReductionRequest = z.infer<
   typeof TurnContextReductionRequestSchema
 >;
@@ -88,6 +96,7 @@ export type TurnContextReductionRequest = z.infer<
 export const TurnContextReductionResultSchema = z.object({
   summary: z.string().trim().min(1),
 });
+/** Lossless working record returned by current-Turn reduction. */
 export type TurnContextReductionResult = z.infer<
   typeof TurnContextReductionResultSchema
 >;
@@ -106,6 +115,7 @@ export const GuardrailDecisionSchema = z.discriminatedUnion("decision", [
     question: z.string(),
   }),
 ]);
+/** Runtime policy outcome for one proposed model action. */
 export type GuardrailDecision = z.infer<typeof GuardrailDecisionSchema>;
 
 export const AGENT_MODEL = "gpt-5.6-terra";
@@ -217,22 +227,17 @@ const GuardrailReviewSchema = z.object({
 
 let provider: OpenAIProvider | undefined;
 
-function openAI(): OpenAIProvider {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new TerminalError("OPENAI_API_KEY is not set");
-  }
-  if (!provider) {
-    provider = createOpenAI({apiKey});
-  }
-  return provider;
-}
-
+/** Applies consistent provider construction and terminal-error classification. */
 export async function withOpenAI<T>(
   call: (provider: OpenAIProvider) => Promise<T>,
 ): Promise<T> {
   try {
-    return await call(openAI());
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new TerminalError("OPENAI_API_KEY is not set");
+    }
+    provider ??= createOpenAI({apiKey});
+    return await call(provider);
   } catch (error) {
     // Restate owns retries. Invalid requests and authentication failures are
     // terminal; throttling and transient provider failures remain retryable.
@@ -245,40 +250,7 @@ export async function withOpenAI<T>(
   }
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function modelTools(tools: ToolManifest[]): ToolSet {
-  return Object.fromEntries(
-    tools.map((tool) => [
-      tool.name,
-      {
-        description: tool.description,
-        // Tool manifests are produced from Zod's draft-07 JSON Schema output
-        // in session/tools. The model deliberately receives no executors.
-        inputSchema: jsonSchema(
-          tool.inputSchema as Parameters<typeof jsonSchema>[0],
-        ),
-        strict: tool.strict ?? true,
-      },
-    ]),
-  );
-}
-
-function modelSystem({instructions}: AgentModelRequest): string {
-  if (!instructions) {
-    return AGENT_SYSTEM;
-  }
-  return [
-    AGENT_SYSTEM,
-    "",
-    "[Persistent user instructions]",
-    "These instructions apply across turns.",
-    instructions,
-  ].join("\n");
-}
-
+/** Evaluates a proposed model action against configured natural-language policy. */
 export async function evaluateGuardrails(
   request: GuardrailEvaluationRequest,
   signal: AbortSignal,
@@ -384,6 +356,7 @@ export async function confirmGuardrailDecision(
   });
 }
 
+/** Produces a lossless compact working record of settled current-Turn context. */
 export async function reduceTurnContext(
   request: TurnContextReductionRequest,
   signal: AbortSignal,
@@ -407,6 +380,7 @@ export async function reduceTurnContext(
   });
 }
 
+/** Performs one provider inference and normalizes text, tool, and error output. */
 export async function completeAgent(
   request: AgentModelRequest,
   signal: AbortSignal,
@@ -416,13 +390,34 @@ export async function completeAgent(
     const toolOptions =
       tools.length > 0
         ? {
-            tools: modelTools(tools),
+            tools: Object.fromEntries(
+              tools.map((tool) => [
+                tool.name,
+                {
+                  description: tool.description,
+                  // Manifests contain draft-07 JSON Schema and deliberately
+                  // carry no executors across the model boundary.
+                  inputSchema: jsonSchema(
+                    tool.inputSchema as Parameters<typeof jsonSchema>[0],
+                  ),
+                  strict: tool.strict ?? true,
+                },
+              ]),
+            ) as ToolSet,
             toolChoice: "auto" as const,
           }
         : {};
     const result = await generateText({
       model: openai.responses(AGENT_MODEL),
-      system: modelSystem(request),
+      system: request.instructions
+        ? [
+            AGENT_SYSTEM,
+            "",
+            "[Persistent user instructions]",
+            "These instructions apply across turns.",
+            request.instructions,
+          ].join("\n")
+        : AGENT_SYSTEM,
       messages,
       ...toolOptions,
       maxOutputTokens: 2_000,
@@ -448,7 +443,7 @@ export async function completeAgent(
           message: invalidCalls
             .map(
               (call) =>
-                `${call.toolName}: ${call.error ? errorMessage(call.error) : "invalid tool call"}`,
+                `${call.toolName}: ${call.error ? (call.error instanceof Error ? call.error.message : String(call.error)) : "invalid tool call"}`,
             )
             .join("; "),
         };

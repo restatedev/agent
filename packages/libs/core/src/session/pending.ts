@@ -19,6 +19,7 @@ type PendingStep =
   | {type: "completion"; event: PendingEvent}
   | {type: "interrupted"; reason: string};
 
+/** Creates the Turn-scoped registry that supervises long-running tool work. */
 export function createPendingOperations() {
   const active = new Map<string, PendingOperation>();
 

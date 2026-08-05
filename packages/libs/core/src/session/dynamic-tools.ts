@@ -12,6 +12,7 @@ const AGENT_TOOL_ANNOTATION = "restate.dev/agent";
 
 type JsonSchema = boolean | Record<string, unknown>;
 
+/** A deployed Restate handler projected into the agent's tool protocol. */
 export type DiscoveredAgentTool = {
   name: string;
   description: string;
@@ -60,145 +61,216 @@ let cachedCatalog:
   | undefined;
 let refreshInFlight: Promise<DiscoveryResult> | undefined;
 
-function jsonSchema(value: unknown): JsonSchema | undefined {
-  return typeof value === "boolean" ||
-    (typeof value === "object" && value !== null && !Array.isArray(value))
-    ? (value as JsonSchema)
-    : undefined;
-}
-
-function nestedInputSchema(schema: JsonSchema): JsonSchema {
-  if (typeof schema === "boolean") {
-    return schema;
-  }
-  const rewrite = (value: unknown): unknown => {
-    if (Array.isArray(value)) {
-      return value.map(rewrite);
-    }
-    if (typeof value !== "object" || value === null) {
-      return value;
-    }
-    return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [
-        key,
-        (key === "$ref" || key === "$dynamicRef") &&
-        typeof child === "string" &&
-        child.startsWith("#")
-          ? `#/properties/input${child.slice(1)}`
-          : rewrite(child),
-      ]),
-    );
-  };
-  return rewrite(schema) as Record<string, unknown>;
-}
-
-function modelInputSchema(
-  inputSchema: JsonSchema | undefined,
-  keyed: boolean,
-): Record<string, unknown> {
-  const properties: Record<string, unknown> = {};
-  const required: string[] = [];
-  if (keyed) {
-    properties.key = {
-      type: "string",
-      minLength: 1,
-      description: "Virtual Object key or Workflow ID.",
-    };
-    required.push("key");
-  }
-  if (inputSchema !== undefined) {
-    // The handler schema becomes the `input` property of the model tool. Keep
-    // local JSON pointers valid after moving that schema below a new root.
-    properties.input = nestedInputSchema(inputSchema);
-    required.push("input");
-  }
-  return {
-    type: "object",
-    properties,
-    required,
-    additionalProperties: false,
-  };
-}
-
-function adminUrl(): string {
-  return (process.env.RESTATE_ADMIN_URL ?? DEFAULT_ADMIN_URL).replace(
-    /\/+$/,
-    "",
-  );
-}
-
-async function fetchTools(
+/**
+ * Discovers annotated Restate handlers and journals one catalog snapshot.
+ *
+ * Endpoint-local caching coalesces Admin API reads while the surrounding
+ * `restate.run` makes the catalog deterministic for this invocation.
+ */
+export function* discoverAgentTools(
   reservedNames: string[],
-  signal: AbortSignal,
-): Promise<DiscoveryResult> {
-  const headers: Record<string, string> = {accept: "application/json"};
-  const token = process.env.RESTATE_ADMIN_TOKEN;
-  if (token) {
-    headers.authorization = `Bearer ${token}`;
-  }
+): restate.Operation<DiscoveredAgentTool[]> {
+  try {
+    const result = yield* restate.run(
+      async ({signal}) => {
+        if (cachedCatalog && Date.now() < cachedCatalog.refreshAfter) {
+          return {tools: cachedCatalog.tools, warnings: []};
+        }
+        if (refreshInFlight) {
+          // One request refreshes this endpoint replica. Other Turns keep using the
+          // last known-good snapshot instead of accumulating behind network I/O.
+          if (cachedCatalog) {
+            return {tools: cachedCatalog.tools, warnings: []};
+          }
+          const result = await waitForRefresh(refreshInFlight, signal);
+          // Only the Turn that initiated a cold refresh reports catalog warnings.
+          return {tools: result.tools, warnings: []};
+        }
+        // The Admin GET is shared by independent Turn runs, so its lifetime is
+        // process-bounded rather than owned by whichever Turn first noticed expiry.
+        // Each caller still stops waiting on its own run AbortSignal.
+        const refresh = (async () => {
+          const signal = AbortSignal.timeout(ADMIN_REQUEST_TIMEOUT_MS);
+          const headers: Record<string, string> = {accept: "application/json"};
+          const token = process.env.RESTATE_ADMIN_TOKEN;
+          if (token) {
+            headers.authorization = `Bearer ${token}`;
+          }
 
-  const response = await fetch(`${adminUrl()}/services`, {headers, signal});
-  if (!response.ok) {
-    throw new Error(
-      `Restate Admin API returned ${response.status} ${response.statusText}`,
-    );
-  }
+          const adminUrl = (
+            process.env.RESTATE_ADMIN_URL ?? DEFAULT_ADMIN_URL
+          ).replace(/\/+$/, "");
+          const response = await fetch(`${adminUrl}/services`, {
+            headers,
+            signal,
+          });
+          if (!response.ok) {
+            throw new Error(
+              `Restate Admin API returned ${response.status} ${response.statusText}`,
+            );
+          }
 
-  const {services} = ServicesResponseSchema.parse(await response.json());
-  const reserved = new Set(reservedNames);
-  const tools: DiscoveredAgentTool[] = [];
-  const warnings: string[] = [];
+          const {services} = ServicesResponseSchema.parse(
+            await response.json(),
+          );
+          const reserved = new Set(reservedNames);
+          const tools: DiscoveredAgentTool[] = [];
+          const warnings: string[] = [];
 
-  // Admin API ordering is not part of the tool contract. Sort targets so a
-  // duplicate annotation is resolved consistently within a fresh Turn.
-  const handlers = services
-    .flatMap((service) =>
-      service.handlers.map((handler) => ({service, handler})),
-    )
-    .sort((left, right) =>
-      `${left.service.name}/${left.handler.name}`.localeCompare(
-        `${right.service.name}/${right.handler.name}`,
-      ),
-    );
+          // Admin API ordering is not part of the tool contract. Sort targets so a
+          // duplicate annotation is resolved consistently within a fresh Turn.
+          const handlers = services
+            .flatMap((service) =>
+              service.handlers.map((handler) => ({service, handler})),
+            )
+            .sort((left, right) =>
+              `${left.service.name}/${left.handler.name}`.localeCompare(
+                `${right.service.name}/${right.handler.name}`,
+              ),
+            );
 
-  for (const {service, handler} of handlers) {
-    const annotatedName = handler.metadata[AGENT_TOOL_ANNOTATION]?.trim();
-    if (!annotatedName) {
-      continue;
-    }
-    const target = `${service.name}/${handler.name}`;
-    if (!TOOL_NAME.test(annotatedName)) {
-      warnings.push(
-        `ignored ${target}: ${AGENT_TOOL_ANNOTATION} must be a 1-64 character model tool name`,
-      );
-      continue;
-    }
-    if (reserved.has(annotatedName)) {
-      warnings.push(
-        `ignored ${target}: tool name ${annotatedName} is already registered`,
-      );
-      continue;
-    }
+          for (const {service, handler} of handlers) {
+            const annotatedName =
+              handler.metadata[AGENT_TOOL_ANNOTATION]?.trim();
+            if (!annotatedName) {
+              continue;
+            }
+            const target = `${service.name}/${handler.name}`;
+            if (!TOOL_NAME.test(annotatedName)) {
+              warnings.push(
+                `ignored ${target}: ${AGENT_TOOL_ANNOTATION} must be a 1-64 character model tool name`,
+              );
+              continue;
+            }
+            if (reserved.has(annotatedName)) {
+              warnings.push(
+                `ignored ${target}: tool name ${annotatedName} is already registered`,
+              );
+              continue;
+            }
 
-    const discoveredInput = jsonSchema(handler.input_json_schema);
-    const keyed = service.ty !== "Service";
-    tools.push({
-      name: annotatedName,
-      description:
-        handler.documentation?.trim() ||
-        `Invoke ${target} as a durable Restate handler.`,
-      inputSchema: modelInputSchema(discoveredInput, keyed),
-      target: {
-        service: service.name,
-        handler: handler.name,
-        keyed,
-        acceptsInput: discoveredInput !== undefined,
+            const input = handler.input_json_schema;
+            const discoveredInput =
+              typeof input === "boolean" ||
+              (typeof input === "object" &&
+                input !== null &&
+                !Array.isArray(input))
+                ? (input as JsonSchema)
+                : undefined;
+            const keyed = service.ty !== "Service";
+            const properties: Record<string, unknown> = {};
+            const required: string[] = [];
+            if (keyed) {
+              properties.key = {
+                type: "string",
+                minLength: 1,
+                description: "Virtual Object key or Workflow ID.",
+              };
+              required.push("key");
+            }
+            if (discoveredInput !== undefined) {
+              // The handler schema becomes the `input` property of the model tool.
+              // Rewrite local JSON pointers after moving that schema below a new root.
+              const rewrite = (value: unknown): unknown => {
+                if (Array.isArray(value)) {
+                  return value.map(rewrite);
+                }
+                if (typeof value !== "object" || value === null) {
+                  return value;
+                }
+                return Object.fromEntries(
+                  Object.entries(value).map(([key, child]) => [
+                    key,
+                    (key === "$ref" || key === "$dynamicRef") &&
+                    typeof child === "string" &&
+                    child.startsWith("#")
+                      ? `#/properties/input${child.slice(1)}`
+                      : rewrite(child),
+                  ]),
+                );
+              };
+              properties.input =
+                typeof discoveredInput === "boolean"
+                  ? discoveredInput
+                  : rewrite(discoveredInput);
+              required.push("input");
+            }
+            tools.push({
+              name: annotatedName,
+              description:
+                handler.documentation?.trim() ||
+                `Invoke ${target} as a durable Restate handler.`,
+              inputSchema: {
+                type: "object",
+                properties,
+                required,
+                additionalProperties: false,
+              },
+              target: {
+                service: service.name,
+                handler: handler.name,
+                keyed,
+                acceptsInput: discoveredInput !== undefined,
+              },
+            });
+            reserved.add(annotatedName);
+          }
+
+          return {tools, warnings};
+        })()
+          .then((result) => {
+            cachedCatalog = {
+              tools: result.tools,
+              refreshAfter: Date.now() + REFRESH_INTERVAL_MS,
+            };
+            return result;
+          })
+          .catch((error: unknown) => {
+            if (!cachedCatalog) {
+              throw error;
+            }
+            cachedCatalog.refreshAfter = Date.now() + REFRESH_RETRY_INTERVAL_MS;
+            return {
+              tools: cachedCatalog.tools,
+              warnings: [
+                `Admin API refresh failed; using the last known catalog: ${errorMessage(error)}`,
+              ],
+            };
+          })
+          .finally(() => {
+            refreshInFlight = undefined;
+          });
+        refreshInFlight = refresh;
+        return waitForRefresh(refresh, signal);
       },
-    });
-    reserved.add(annotatedName);
+      {
+        name: "discover-agent-tools",
+        retry: {
+          maxAttempts: 3,
+          initialInterval: 200,
+          maxInterval: 2_000,
+          exponentiationFactor: 2,
+        },
+      },
+    );
+    for (const warning of result.warnings) {
+      restate.logger().warn(`Dynamic tool discovery: ${warning}`);
+    }
+    return result.tools;
+  } catch (error) {
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
+      throw error;
+    }
+    restate
+      .logger()
+      .warn(
+        `Dynamic tool discovery unavailable; continuing with built-in tools: ${errorMessage(error)}`,
+      );
+    return [];
   }
-
-  return {tools, warnings};
 }
 
 function errorMessage(error: unknown): string {
@@ -235,94 +307,4 @@ function waitForRefresh(
       },
     );
   });
-}
-
-function startRefresh(reservedNames: string[]): Promise<DiscoveryResult> {
-  // The Admin GET is shared by independent Turn runs, so its lifetime is
-  // process-bounded rather than owned by whichever Turn first noticed expiry.
-  // Each caller still stops waiting on its own run AbortSignal.
-  const refresh = fetchTools(
-    reservedNames,
-    AbortSignal.timeout(ADMIN_REQUEST_TIMEOUT_MS),
-  )
-    .then((result) => {
-      cachedCatalog = {
-        tools: result.tools,
-        refreshAfter: Date.now() + REFRESH_INTERVAL_MS,
-      };
-      return result;
-    })
-    .catch((error: unknown) => {
-      if (!cachedCatalog) {
-        throw error;
-      }
-      cachedCatalog.refreshAfter = Date.now() + REFRESH_RETRY_INTERVAL_MS;
-      return {
-        tools: cachedCatalog.tools,
-        warnings: [
-          `Admin API refresh failed; using the last known catalog: ${errorMessage(error)}`,
-        ],
-      };
-    })
-    .finally(() => {
-      refreshInFlight = undefined;
-    });
-  refreshInFlight = refresh;
-  return refresh;
-}
-
-async function cachedTools(
-  reservedNames: string[],
-  signal: AbortSignal,
-): Promise<DiscoveryResult> {
-  if (cachedCatalog && Date.now() < cachedCatalog.refreshAfter) {
-    return {tools: cachedCatalog.tools, warnings: []};
-  }
-  if (refreshInFlight) {
-    // One request refreshes this endpoint replica. Other Turns keep using the
-    // last known-good snapshot instead of accumulating behind network I/O.
-    if (cachedCatalog) {
-      return {tools: cachedCatalog.tools, warnings: []};
-    }
-    const result = await waitForRefresh(refreshInFlight, signal);
-    // Only the Turn that initiated a cold refresh reports catalog warnings.
-    return {tools: result.tools, warnings: []};
-  }
-  return waitForRefresh(startRefresh(reservedNames), signal);
-}
-
-export function* discoverAgentTools(
-  reservedNames: string[],
-): restate.Operation<DiscoveredAgentTool[]> {
-  try {
-    const result = yield* restate.run(
-      ({signal}) => cachedTools(reservedNames, signal),
-      {
-        name: "discover-agent-tools",
-        retry: {
-          maxAttempts: 3,
-          initialInterval: 200,
-          maxInterval: 2_000,
-          exponentiationFactor: 2,
-        },
-      },
-    );
-    for (const warning of result.warnings) {
-      restate.logger().warn(`Dynamic tool discovery: ${warning}`);
-    }
-    return result.tools;
-  } catch (error) {
-    if (
-      error instanceof restate.InterruptedError ||
-      error instanceof CancelledError
-    ) {
-      throw error;
-    }
-    restate
-      .logger()
-      .warn(
-        `Dynamic tool discovery unavailable; continuing with built-in tools: ${errorMessage(error)}`,
-      );
-    return [];
-  }
 }

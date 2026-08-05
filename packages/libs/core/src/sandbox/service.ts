@@ -21,18 +21,10 @@ type SandboxState =
 const STATE = "sandbox";
 const IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
 
-function sandboxKey(): string {
-  const key = restate.handlerRequest().key;
-  if (!key) {
-    throw new TerminalError("Sandbox handlers require an agent key");
-  }
-  return key;
-}
-
-function* readSandbox(): restate.Operation<SandboxState | undefined> {
-  return (yield* restate.state().get<SandboxState>(STATE)) ?? undefined;
-}
-
+/**
+ * Agent-scoped durable owner of sandbox provisioning, leases, idle suspension,
+ * resumption, and destruction.
+ */
 export const Sandbox = restate.object({
   name: "Sandbox",
   handlers: {
@@ -143,3 +135,15 @@ export const Sandbox = restate.object({
     ),
   },
 });
+
+function sandboxKey(): string {
+  const key = restate.handlerRequest().key;
+  if (!key) {
+    throw new TerminalError("Sandbox handlers require an agent key");
+  }
+  return key;
+}
+
+function* readSandbox(): restate.Operation<SandboxState | undefined> {
+  return (yield* restate.state().get<SandboxState>(STATE)) ?? undefined;
+}

@@ -35,6 +35,7 @@ export function* read(): restate.Operation<AgentProfile> {
   };
 }
 
+/** Replaces or clears the persistent user-authored instructions. */
 export function setInstructions(instructions: string | null): void {
   const value = instructions?.trim();
   if (value) {
@@ -44,6 +45,7 @@ export function setInstructions(instructions: string | null): void {
   }
 }
 
+/** Replaces the complete user-authored natural-language policy set. */
 export function setGuardrails(guardrails: Guardrail[]): void {
   if (guardrails.length > 0) {
     restate.state().set(GUARDRAILS, guardrails);
@@ -52,6 +54,7 @@ export function setGuardrails(guardrails: Guardrail[]): void {
   }
 }
 
+/** Atomically applies model-requested changes to the bounded Agent memory. */
 export function* applyMemory(
   changes: MemoryChange[],
 ): restate.Operation<MemoryUpdateResult> {
