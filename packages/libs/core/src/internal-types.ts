@@ -2,8 +2,6 @@
 // Public Agent/client wire contracts live in @restate-agents/types.
 
 import type {
-  AgentNotificationSubscription,
-  AgentNotificationTopic,
   AgentTurnOutcome,
   AgentTurnRequest,
   ApprovalCancellation,
@@ -14,8 +12,6 @@ import type {
 } from "@restate-agents/types";
 
 export type {
-  AgentNotificationSubscription,
-  AgentNotificationTopic,
   AgentTurnOutcome,
   AgentTurnRequest,
   ApprovalCancellation,
@@ -53,7 +49,7 @@ type DerivedConversationEvent = Extract<
       | "activity"
       | "tools"
       | "memory"
-      | "schedule";
+      | "delivery";
   }
 >;
 
@@ -70,7 +66,7 @@ export function isDerivedConversationEvent(
     case "activity":
     case "tools":
     case "memory":
-    case "schedule":
+    case "delivery":
       return true;
     case "interrupt":
     case "stop":

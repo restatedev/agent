@@ -9,9 +9,10 @@ import {
   type ApprovalDecision,
   type ConversationEntry,
   type MemoryChange,
-  ScheduleCancellationSchema,
+  ScheduleIdRequestSchema,
   ScheduleSpecSchema,
 } from "@restate-agents/types";
+import {AgentSchedulerDefinition} from "@restate-agents/types/services";
 import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
@@ -576,12 +577,12 @@ const manageMemoryTool = defineAgentTool({
 const scheduleMessageTool = defineAgentTool({
   name: "scheduleMessage",
   description:
-    "Create or replace an Agent-owned durable schedule that will deliver a future user request. Scheduling returns immediately and survives this Turn. Reuse a scheduleId to update it. Use queue unless the user explicitly asks the due message to steer or interrupt active work.",
+    "Create or replace a durable schedule for this Agent that will deliver a future user request. Once accepted, the schedule persists independently of this Turn. Reuse a scheduleId to update it. Use queue unless the user explicitly asks the due message to steer or interrupt active work.",
   inputSchema: ScheduleSpecSchema,
   *run(schedule, context): restate.Operation<ToolExecution> {
     const result = yield* restate
-      .client(Agent, context.agentId)
-      .scheduleMessage({turnId: context.turnId, schedule});
+      .client(AgentSchedulerDefinition, context.agentId)
+      .upsert(schedule);
     if (!result.accepted) {
       return {status: "failed", error: result.error};
     }
@@ -601,12 +602,12 @@ const scheduleMessageTool = defineAgentTool({
 const cancelScheduleTool = defineAgentTool({
   name: "cancelSchedule",
   description:
-    "Cancel one Agent-owned scheduled message by its scheduleId. This is idempotent; cancelling an unknown schedule succeeds without changing anything.",
-  inputSchema: ScheduleCancellationSchema.pick({scheduleId: true}),
+    "Cancel one durable message scheduled for this Agent by its scheduleId. This is idempotent; cancelling an unknown schedule succeeds without changing anything.",
+  inputSchema: ScheduleIdRequestSchema,
   *run({scheduleId}, context): restate.Operation<ToolExecution> {
     const result = yield* restate
-      .client(Agent, context.agentId)
-      .cancelSchedule({turnId: context.turnId, scheduleId});
+      .client(AgentSchedulerDefinition, context.agentId)
+      .cancel({scheduleId});
     if (!result.accepted) {
       return {status: "failed", error: result.error};
     }
@@ -625,7 +626,9 @@ const listSchedulesTool = defineAgentTool({
     "List the Agent's active scheduled messages, including their next delivery time, recurrence, and busy-turn policy.",
   inputSchema: z.object({}),
   *run(_input, context): restate.Operation<ToolExecution> {
-    const active = yield* restate.client(Agent, context.agentId).schedules();
+    const active = yield* restate
+      .client(AgentSchedulerDefinition, context.agentId)
+      .list();
     return {
       status: "succeeded",
       result: JSON.stringify(

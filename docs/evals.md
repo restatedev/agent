@@ -15,6 +15,7 @@ sequenceDiagram
   participant E as Evals/all
   participant A as Agent/eval-agent-id
   participant S as AgentSession/eval-agent-id
+  participant N as AgentNotifications/eval-agent-id
   participant M as ModelGateway
 
   E->>A: Configure profile
@@ -25,8 +26,8 @@ sequenceDiagram
   loop Cursor plus notification observation
     E->>S: history(fromSequence)
     S-->>E: transcript entries
-    E->>A: watchNotifications(afterRevision)
-    A-->>E: notification snapshot
+    E->>N: watch(afterRevision)
+    N-->>E: notification snapshot
   end
 
   E->>A: steer, interrupt, or resolveApproval
@@ -92,8 +93,8 @@ The wire contract retains the existing names `caseId` and `transcript`:
 ## History notifications
 
 The eval reads available entries from `AgentSession.history`. When the cursor
-is empty, it long-polls `Agent.watchNotifications` with its last revision and
-a bounded wait window. Agent owns only the subscription and notification
+is empty, it long-polls `AgentNotifications.watch` with its last revision and
+a bounded wait window. AgentNotifications owns only subscriptions and
 watermarks; AgentSession remains the authoritative history owner.
 
 The internal subscription handler re-checks the revision before storing the
@@ -121,10 +122,11 @@ races the watch against its durable case deadline.
    boundary, and that a new turn answers it.
 6. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
-7. `scheduling` creates, lists, and cancels one delayed message without model
-   inference, then lets a one-shot schedule wake an idle Agent. It checks the
-   firing route, adjacent user entry, terminal response, and one-shot state
-   cleanup with one small agent run.
+7. `scheduling` drives AgentScheduler directly to create, list, and cancel one
+   delayed message without model inference, then lets a one-shot delivery wake
+   an idle Agent through `Agent.deliver`. It checks the delivery route,
+   adjacent user entry, terminal response, and one-shot state cleanup with one
+   small agent run.
 8. Six isolated guardrail cases cover:
    - `guardrail-approval` verifies the configured guardrail through the
      authoritative profile, verifies the pending request as a structured

@@ -1,45 +1,39 @@
 // Agent is the durable conversation controller. It is a Virtual Object keyed
 // by agent id, so its exclusive handlers serialize every decision about the
-// active turn, queued messages, persistent profile, approvals, schedules, and
-// transcript-reader notifications.
+// active turn, queued messages, persistent profile, and approvals.
 //
 // It never runs turn execution itself. `ask` starts or queues work,
 // `interrupt` and `steer` resolve signals on the active AgentSession
-// invocation, scheduled self-sends re-enter the same routing decisions, and
-// `onTurnEnd` accepts that invocation's single high-level outcome.
+// invocation, external producers use `deliver` to enter those same routing
+// decisions, and `onTurnEnd` accepts the invocation's high-level outcome.
 
 import type {
-  AgentNotificationSnapshot,
+  AgentDelivery,
   AgentProfile,
   ApprovalRequest,
   AskResult,
   ConversationEntry,
-  ScheduleCancellation,
-  ScheduleCancellationResult,
-  ScheduledMessage,
-  ScheduleMutation,
-  ScheduleMutationResult,
 } from "@restate-agents/types";
-import {AgentDefinition} from "@restate-agents/types/services";
-import {rpc, TerminalError} from "@restatedev/restate-sdk";
+import {
+  AgentDefinition,
+  AgentNotificationsDefinition,
+} from "@restate-agents/types/services";
+import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {
   AgentTurnOutcome,
   MemoryUpdate,
   MemoryUpdateResult,
 } from "../internal-types.js";
-import {raceBranches} from "../race.js";
 import * as activeTurn from "./active-turn.js";
 import * as approvals from "./approval.js";
-import * as notifications from "./notifications.js";
 import * as profile from "./profile.js";
-import * as schedules from "./schedules.js";
 
 // Internal coordination handlers are high-volume and their completed
 // invocations carry no information worth retaining.
 const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 
-/** Durable per-Agent controller for turns, routing, profile, and notifications. */
+/** Durable per-Agent controller for turns, routing, profile, and approvals. */
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
     /**
@@ -117,217 +111,57 @@ export const Agent = restate.implement(AgentDefinition, {
     },
 
     /**
-     * Creates or replaces an Agent-owned scheduled message.
+     * Routes a message delivered by an external producer.
      *
-     * A Turn-scoped mutation is accepted only from the active Turn; a `null`
-     * Turn ID permits direct administration. The durable delayed self-send is
-     * identified by its invocation ID.
+     * Idle Agents start a Turn. Busy Agents apply the producer's queue,
+     * steer, or interrupt policy using the same active-turn primitives as
+     * direct user interaction.
      */
-    *scheduleMessage({
-      turnId,
-      schedule: spec,
-    }: ScheduleMutation): restate.Operation<ScheduleMutationResult> {
-      const rejection = yield* scheduleTurnRejection(turnId);
-      if (rejection) {
-        return {accepted: false, error: rejection};
-      }
-
-      const existing = yield* schedules.get(spec.scheduleId);
-      if (existing) {
-        restate.invocation(existing.timerId).cancel();
-      }
-
-      const timer = yield* createScheduleTimer(
-        spec.scheduleId,
-        spec.delaySeconds,
-      );
-      const schedule: ScheduledMessage = {
-        scheduleId: spec.scheduleId,
-        message: spec.message,
-        repeatEverySeconds: spec.repeatEverySeconds,
-        whenBusy: spec.whenBusy ?? "queue",
-        nextRunAt: timer.nextRunAt,
-      };
-      const stored = yield* schedules.set(schedule, timer.id);
-      if ("error" in stored) {
-        restate.invocation(timer.id).cancel();
-        return {accepted: false, error: stored.error};
-      }
-      yield* notifications.publish("schedules");
-
-      return {
-        accepted: true,
-        replaced: stored.replaced,
-        schedule,
-      };
-    },
-
-    /**
-     * Cancels an Agent-owned schedule and its current delayed invocation.
-     *
-     * Stale timer invocations verify their identity when delivered, making
-     * cancellation races harmless.
-     */
-    *cancelSchedule({
-      turnId,
-      scheduleId,
-    }: ScheduleCancellation): restate.Operation<ScheduleCancellationResult> {
-      const rejection = yield* scheduleTurnRejection(turnId);
-      if (rejection) {
-        return {accepted: false, error: rejection};
-      }
-
-      const removed = yield* schedules.remove(scheduleId);
-      if (!removed) {
-        return {accepted: true, cancelled: false};
-      }
-      restate.invocation(removed.timerId).cancel();
-      yield* notifications.publish("schedules");
-      return {accepted: true, cancelled: true};
-    },
-
-    /**
-     * Returns the authoritative snapshot of active Agent-owned schedules.
-     */
-    *schedules(): restate.Operation<ScheduledMessage[]> {
-      return yield* schedules.list();
-    },
-
-    /**
-     * Delivers a due scheduled message through normal Agent routing.
-     *
-     * Only the invocation recorded in schedule state may fire. Repeating
-     * schedules install their next timer before routing the current message.
-     */
-    *fireSchedule({scheduleId}): restate.Operation<void> {
-      const schedule = yield* schedules.get(scheduleId);
-      if (schedule?.timerId !== restate.handlerRequest().id) {
-        return;
-      }
-
-      if (schedule.repeatEverySeconds === null) {
-        yield* schedules.remove(scheduleId);
-      } else {
-        const timer = yield* createScheduleTimer(
-          scheduleId,
-          schedule.repeatEverySeconds,
-        );
-        const stored = yield* schedules.set(
-          {...schedule, nextRunAt: timer.nextRunAt},
-          timer.id,
-        );
-        if ("error" in stored) {
-          throw new TerminalError(stored.error);
-        }
-      }
-      yield* notifications.publish("schedules");
-
+    *deliver(delivery): restate.Operation<void> {
       const current = yield* activeTurn.current();
       if (!current) {
         yield* startTurn(agentKey(), [
-          scheduleFired(schedule, "start"),
-          {role: "user", text: schedule.message, delivery: "turn"},
+          deliveryEvent(delivery, "start"),
+          {role: "user", text: delivery.message, delivery: "turn"},
         ]);
         return;
       }
 
       if (
         current.interruptReason !== undefined ||
-        schedule.whenBusy === "queue"
+        delivery.whenBusy === "queue"
       ) {
         yield* activeTurn.enqueue(
-          scheduleFired(schedule, "queue", current.id),
+          deliveryEvent(delivery, "queue", current.id),
           {
             role: "user",
-            text: schedule.message,
+            text: delivery.message,
             delivery: "queued",
           },
         );
         return;
       }
 
-      if (schedule.whenBusy === "steer") {
-        const accepted = yield* activeTurn.steer(
-          schedule.message,
-          scheduleFired(schedule, "steer", current.id),
+      if (delivery.whenBusy === "steer") {
+        yield* activeTurn.steer(
+          delivery.message,
+          deliveryEvent(delivery, "steer", current.id),
         );
-        if (!accepted) {
-          throw new TerminalError("active Turn rejected scheduled steering");
-        }
         return;
       }
 
       yield* activeTurn.enqueue(
-        scheduleFired(schedule, "interrupt", current.id),
+        deliveryEvent(delivery, "interrupt", current.id),
         {
           role: "user",
-          text: schedule.message,
+          text: delivery.message,
           delivery: "queued",
         },
       );
-      const requested = yield* activeTurn.interrupt(
-        `Scheduled message "${schedule.scheduleId}" became due`,
+      yield* activeTurn.interrupt(
+        delivery.interruptReason ??
+          `${delivery.source} delivered a message that requested interruption`,
       );
-      if (!requested) {
-        throw new TerminalError("active Turn rejected scheduled interruption");
-      }
-    },
-
-    /** Publishes an invalidation and forwards it to waiting subscribers. */
-    *notify(topic): restate.Operation<void> {
-      yield* notifications.publish(topic);
-    },
-
-    /** Returns the current notification revision and per-area watermarks. */
-    *notifications() {
-      return yield* notifications.read();
-    },
-
-    /** Waits for any transcript or Agent-state invalidation after a revision. */
-    *watchNotifications(request): restate.Operation<AgentNotificationSnapshot> {
-      const changed = restate.awakeable<AgentNotificationSnapshot>();
-      const available = yield* restate
-        .client(Agent, agentKey())
-        .subscribeNotifications({
-          afterRevision: request.afterRevision,
-          awakeableId: changed.id,
-        });
-      if (available) {
-        return available;
-      }
-
-      try {
-        const selected = yield* raceBranches({
-          notification: changed.promise,
-          timeout: restate.sleep(
-            request.timeoutSeconds * 1_000,
-            "notification watch window",
-          ),
-        });
-        if (selected.tag === "notification") {
-          return selected.value;
-        }
-
-        yield* restate
-          .client(Agent, agentKey())
-          .unsubscribeNotifications({awakeableId: changed.id});
-        return yield* notifications.read();
-      } catch (error) {
-        yield* restate
-          .sendClient(Agent, agentKey())
-          .unsubscribeNotifications({awakeableId: changed.id});
-        throw error;
-      }
-    },
-
-    /** Registers a caller-owned awakeable for the next notification. */
-    *subscribeNotifications(subscription) {
-      return yield* notifications.subscribe(subscription);
-    },
-
-    /** Removes a timed-out or cancelled notification subscription. */
-    *unsubscribeNotifications({awakeableId}): restate.Operation<void> {
-      yield* notifications.unsubscribe(awakeableId);
     },
 
     /**
@@ -346,7 +180,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *setInstructions({instructions}): restate.Operation<void> {
       profile.setInstructions(instructions);
-      yield* notifications.publish("profile");
+      yield* publishNotification("profile");
     },
 
     /**
@@ -357,7 +191,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *setGuardrails({guardrails}): restate.Operation<void> {
       profile.setGuardrails(guardrails);
-      yield* notifications.publish("profile");
+      yield* publishNotification("profile");
     },
 
     /**
@@ -379,7 +213,7 @@ export const Agent = restate.implement(AgentDefinition, {
 
       const result = yield* profile.applyMemory(changes);
       if (result.applied) {
-        yield* notifications.publish("profile");
+        yield* publishNotification("profile");
       }
       return result;
     },
@@ -405,7 +239,7 @@ export const Agent = restate.implement(AgentDefinition, {
         return false;
       }
       if (registration === "added") {
-        yield* notifications.publish("approvals");
+        yield* publishNotification("approvals");
       }
       return true;
     },
@@ -416,7 +250,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *cancelApproval(request): restate.Operation<void> {
       if (yield* approvals.cancel(request)) {
-        yield* notifications.publish("approvals");
+        yield* publishNotification("approvals");
       }
     },
 
@@ -444,7 +278,7 @@ export const Agent = restate.implement(AgentDefinition, {
       if (!request) {
         return false;
       }
-      yield* notifications.publish("approvals");
+      yield* publishNotification("approvals");
       return true;
     },
 
@@ -466,7 +300,7 @@ export const Agent = restate.implement(AgentDefinition, {
         finished.outcome.turnId,
       );
       if (cancelledApprovals.length > 0) {
-        yield* notifications.publish("approvals");
+        yield* publishNotification("approvals");
       }
 
       const queuedMessages = finished.queuedEntries.filter(
@@ -490,23 +324,11 @@ export const Agent = restate.implement(AgentDefinition, {
     handlers: {
       // High-volume coordination paths keep no completed-invocation state.
       onTurnEnd: noRetention,
-      notify: noRetention,
-      notifications: {shared: true, ...noRetention},
-      watchNotifications: {
-        shared: true,
-        inactivityTimeout: {seconds: 1},
-        ...noRetention,
-      },
-      subscribeNotifications: noRetention,
-      unsubscribeNotifications: noRetention,
       updateMemory: noRetention,
-      scheduleMessage: noRetention,
-      cancelSchedule: noRetention,
-      fireSchedule: noRetention,
+      deliver: noRetention,
       requestApproval: noRetention,
       cancelApproval: noRetention,
       approvals: {shared: true, ...noRetention},
-      schedules: {shared: true, ...noRetention},
       profile: {shared: true, ...noRetention},
     },
   },
@@ -522,41 +344,25 @@ function* startTurn(
   return yield* activeTurn.start(agentId, {...agentProfile, entries});
 }
 
-function* createScheduleTimer(
-  scheduleId: string,
-  delaySeconds: number,
-): restate.Operation<{id: string; nextRunAt: number}> {
-  const delay = delaySeconds * 1_000;
-  const nextRunAt = (yield* restate.date().now()) + delay;
-  const timer = yield* restate
-    .sendClient(Agent, agentKey())
-    .fireSchedule({scheduleId}, rpc.sendOpts({delay}));
-  return {id: timer.id, nextRunAt};
+function* publishNotification(
+  topic: "profile" | "approvals",
+): restate.Operation<void> {
+  yield* restate
+    .sendClient(AgentNotificationsDefinition, agentKey())
+    .publish(topic);
 }
 
-function* scheduleTurnRejection(
-  turnId: string | null,
-): restate.Operation<string | undefined> {
-  if (turnId === null) {
-    return undefined;
-  }
-  const current = yield* activeTurn.current();
-  return current?.id === turnId && current.interruptReason === undefined
-    ? undefined
-    : "schedule mutation rejected because its Turn is no longer active";
-}
-
-function scheduleFired(
-  schedule: ScheduledMessage,
+function deliveryEvent(
+  delivery: AgentDelivery,
   routing: "start" | "queue" | "steer" | "interrupt",
   turnId?: string,
 ): ConversationEntry {
   return {
     role: "event",
-    type: "schedule",
-    action: "fired",
-    scheduleId: schedule.scheduleId,
-    whenBusy: schedule.whenBusy,
+    type: "delivery",
+    source: delivery.source,
+    ...(delivery.sourceId ? {sourceId: delivery.sourceId} : {}),
+    whenBusy: delivery.whenBusy,
     routing,
     ...(turnId ? {turnId} : {}),
   };

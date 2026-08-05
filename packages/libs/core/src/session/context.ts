@@ -48,7 +48,7 @@ export function buildModelContext(
 
   // Projects each transcript entry into zero or one model messages. Activity,
   // tool lifecycle, progress, profile changes, pending approval lifecycle,
-  // memory, and schedule events are derived status, never model context.
+  // memory, and external-delivery events are derived status, never model context.
   for (const entry of history) {
     let message: ModelMessage | undefined;
     if (entry.role === "user") {

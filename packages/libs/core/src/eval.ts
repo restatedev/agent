@@ -4,6 +4,10 @@
 // structured assertions rather than relying on exact model prose.
 
 import {type HistoryPage, HistoryPageSchema} from "@restate-agents/types";
+import {
+  AgentNotificationsDefinition,
+  AgentSchedulerDefinition,
+} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {Agent} from "./agent/index.js";
@@ -137,12 +141,14 @@ function* waitForHistory(
       return found;
     }
 
-    // Agent owns and resolves the durable notification subscription. History
-    // remains an authoritative read from AgentSession.
-    const watch = restate.client(Agent, reader.agentId).watchNotifications({
-      afterRevision: reader.notificationRevision,
-      timeoutSeconds: 30,
-    });
+    // AgentNotifications owns the durable subscription. History remains an
+    // authoritative read from AgentSession.
+    const watch = restate
+      .client(AgentNotificationsDefinition, reader.agentId)
+      .watch({
+        afterRevision: reader.notificationRevision,
+        timeoutSeconds: 30,
+      });
     const selected = yield* raceBranches({
       watch,
       deadline: reader.deadline,
@@ -288,42 +294,36 @@ function* scheduling({
   agentId,
   history,
 }: EvalContext): restate.Operation<EvalAssertion[]> {
-  const pending = yield* restate.client(Agent, agentId).scheduleMessage({
-    turnId: null,
-    schedule: {
-      scheduleId: "cancelled-reminder",
-      message: "This message must never be delivered.",
-      delaySeconds: 60,
-      repeatEverySeconds: null,
-      whenBusy: "queue",
-    },
+  const scheduler = restate.client(AgentSchedulerDefinition, agentId);
+  const pending = yield* scheduler.upsert({
+    scheduleId: "cancelled-reminder",
+    message: "This message must never be delivered.",
+    delaySeconds: 60,
+    repeatEverySeconds: null,
+    whenBusy: "queue",
   });
-  const beforeCancel = yield* restate.client(Agent, agentId).schedules();
-  const cancellation = yield* restate.client(Agent, agentId).cancelSchedule({
-    turnId: null,
+  const beforeCancel = yield* scheduler.list();
+  const cancellation = yield* scheduler.cancel({
     scheduleId: "cancelled-reminder",
   });
-  const afterCancel = yield* restate.client(Agent, agentId).schedules();
+  const afterCancel = yield* scheduler.list();
 
-  const scheduled = yield* restate.client(Agent, agentId).scheduleMessage({
-    turnId: null,
-    schedule: {
-      scheduleId: "one-shot",
-      message:
-        "Reply briefly that the scheduled delivery was received. Do not call tools.",
-      delaySeconds: 1,
-      repeatEverySeconds: null,
-      whenBusy: "queue",
-    },
+  const scheduled = yield* scheduler.upsert({
+    scheduleId: "one-shot",
+    message:
+      "Reply briefly that the scheduled delivery was received. Do not call tools.",
+    delaySeconds: 1,
+    repeatEverySeconds: null,
+    whenBusy: "queue",
   });
   const fired = yield* waitForHistory(
     history,
     "the one-shot schedule to fire",
     ({entry}) =>
       entry.role === "event" &&
-      entry.type === "schedule" &&
-      entry.scheduleId === "one-shot" &&
-      entry.action === "fired",
+      entry.type === "delivery" &&
+      entry.source === "schedule" &&
+      entry.sourceId === "one-shot",
   );
   const terminal = yield* waitForHistory(
     history,
@@ -331,7 +331,7 @@ function* scheduling({
     ({sequence, entry}) =>
       sequence > fired.sequence && entry.role === "assistant",
   );
-  const remaining = yield* restate.client(Agent, agentId).schedules();
+  const remaining = yield* scheduler.list();
   const delivered = history.entries.find(
     ({sequence, entry}) =>
       sequence === fired.sequence + 1 &&
@@ -359,7 +359,7 @@ function* scheduling({
     assertion(
       "an idle scheduled delivery starts a turn",
       fired.entry.role === "event" &&
-        fired.entry.type === "schedule" &&
+        fired.entry.type === "delivery" &&
         fired.entry.routing === "start",
     ),
     assertion(

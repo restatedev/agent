@@ -417,14 +417,18 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
           </MarkerContent>
         </Marker>
       );
-    case "schedule":
+    case "delivery":
       return (
         <Marker>
           <MarkerIcon>
             <Clock3 />
           </MarkerIcon>
           <MarkerContent>
-            Schedule “{entry.scheduleId}” fired · routed as {entry.routing}
+            {entry.source === "schedule"
+              ? "Schedule"
+              : `Delivery from ${entry.source}`}
+            {entry.sourceId ? ` “${entry.sourceId}”` : ""} · routed as{" "}
+            {entry.routing}
           </MarkerContent>
         </Marker>
       );

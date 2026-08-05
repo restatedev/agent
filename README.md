@@ -29,8 +29,10 @@ map.
 | Term | Meaning in this repository |
 | --- | --- |
 | Agent | The model and harness operating together for one `agentId` |
-| `Agent` Virtual Object | The deterministic controller for active work, queued input, profile, approvals, schedules, and notifications |
+| `Agent` Virtual Object | The deterministic controller for active work, queued input, profile, approvals, and externally delivered messages |
 | `AgentSession` Virtual Object | The transcript owner and durable turn executor for the same `agentId` |
+| `AgentNotifications` Virtual Object | The per-Agent invalidation stream for history, profile, approvals, and schedules |
+| `AgentScheduler` Virtual Object | The per-Agent owner of durable schedules, delayed invocations, and recurrence |
 | Agent run | One `AgentSession.doTurn` invocation; its invocation ID is the `turnId` |
 | Agent loop | The repeated model-action-observation cycle inside that run |
 | Loop iteration | One `agentStep`: model proposal, policy evaluation, and optional tool batch |
@@ -64,10 +66,10 @@ chain-of-thought.
 | Runtime guardrails | A separate policy pass gates the exact proposed text or complete tool batch before it runs. Non-allow decisions receive an independent confirmation pass. |
 | Human-in-the-loop approval | Policy gates and the explicit approval tool register durable Agent state and resume through turn-scoped signals. |
 | Persistent profile | User instructions, model-managed semantic memory, and user-defined guardrails are durable per Agent and snapshotted at turn start. |
-| General change notifications | Revisioned `history`, `profile`, `approvals`, and `schedules` watermarks wake clients, which then re-read authoritative state. |
+| General change notifications | `AgentNotifications/{agentId}` maintains revisioned `history`, `profile`, `approvals`, and `schedules` watermarks that wake clients to re-read authoritative state. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
-| Agent-owned schedules | Durable one-shot and fixed-interval messages route as `queue`, `steer`, or `interrupt` when busy. |
+| Durable schedules | `AgentScheduler/{agentId}` owns durable one-shot and fixed-interval messages and delivers them through the Agent's generic `queue`, `steer`, or `interrupt` router. |
 | Inference admission control | Model calls use a Restate scope with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Agent-scoped sandbox | A `Sandbox` Virtual Object lazily provisions/resumes a local or Modal workspace, lends it to one turn, and suspends it after idle release. |
 | Restate-native dynamic tools | A deployed JSON handler can opt in through `restate.dev/agent` metadata; one journaled catalog snapshot drives both inference and execution. |
@@ -79,7 +81,8 @@ chain-of-thought.
 flowchart LR
   C["Client"] -->|"ask / steer / interrupt / profile"| A["Agent VO\nkey = agentId"]
   C -->|"history pages"| S["AgentSession VO\nkey = agentId"]
-  C -->|"notification long-poll"| A
+  C -->|"notification long-poll"| N["AgentNotifications VO\nkey = agentId"]
+  C -->|"schedule API"| Q["AgentScheduler VO\nkey = agentId"]
   A -->|"one-way doTurn"| S
   A -.->|"control and approval signals"| S
   S -->|"spawn one iteration"| Step["agentStep"]
@@ -88,9 +91,13 @@ flowchart LR
   Step -->|"parallel built-ins"| T["Local tools"]
   Step -->|"durable RPC"| D["Discovered Restate tools"]
   T -->|"Agent state"| A
+  T -->|"schedule RPC"| Q
   T -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
   X --> P["Local or Modal provider"]
-  S -->|"history invalidation"| A
+  S -->|"history invalidation"| N
+  A -->|"profile / approval invalidation"| N
+  Q -->|"schedule invalidation"| N
+  Q -->|"deliver(source=schedule)"| A
   S -->|"terminal outcome"| A
   E["Evals"] --> A
   E --> S
@@ -103,9 +110,8 @@ Agent owns only the state that must remain responsive while a run is active:
 - active `doTurn` invocation ID and accepted interrupt reason;
 - pending user/event entries and steering reconciliation batches;
 - instructions, memories, and guardrails;
-- pending approvals;
-- schedules and delayed invocation IDs; and
-- notification revisions, topic watermarks, and subscriptions.
+- pending approvals; and
+- routing of external deliveries according to their busy-turn policy.
 
 An idle `ask` snapshots the profile and one-way sends
 `AgentSession.doTurn({entries, ...profile})`. A busy `ask` stores a queued user
@@ -114,6 +120,22 @@ entry in Agent state. `steer` drains that queue into one durable signal;
 request for the next turn. `onTurnEnd` retires exactly the matching invocation,
 recovers missed steering, clears abandoned approvals, and dispatches queued
 work.
+
+### `AgentNotifications`: invalidation plane
+
+AgentNotifications is keyed by `agentId`. It owns only revision watermarks,
+caller awakeables, and subscriptions. History remains authoritative on
+AgentSession; profile and approvals remain authoritative on Agent; schedules
+remain authoritative on AgentScheduler. Producers publish topic invalidations,
+and consumers wake before re-reading the corresponding owner.
+
+### `AgentScheduler`: durable message scheduling
+
+AgentScheduler is keyed by `agentId` and owns the bounded schedule registry,
+delayed invocation IDs, replacement, cancellation, and fixed-delay recurrence.
+When a valid timer fires, it advances its state and calls the source-agnostic
+`Agent.deliver`. The Agent then starts, queues, steers, or interrupts without
+knowing how the message was scheduled.
 
 ### `AgentSession`: conversation and execution plane
 
@@ -162,7 +184,7 @@ returns. This preserves the old turn's terminal boundary before the queued
 entries and successor dispatch.
 
 Clients read the log through `AgentSession.history` using an inclusive cursor.
-For changes, Agent exposes:
+For changes, AgentNotifications exposes:
 
 ```ts
 type AgentNotificationSnapshot = {
@@ -176,8 +198,10 @@ type AgentNotificationSnapshot = {
 };
 ```
 
-`watchNotifications` parks on a caller-owned awakeable until any version
-changes or its bounded wait expires. The notification contains no domain data.
+The client-facing `watchNotifications` method targets
+`AgentNotifications.watch` and parks on a caller-owned awakeable until any
+version changes or its bounded wait expires. The notification contains no
+domain data.
 Clients drain history and re-read profile, approvals, or schedules when their
 watermark advances. The internal registration re-check closes the read/watch
 race, and timeout/cancellation withdraws abandoned subscriptions.
@@ -214,7 +238,7 @@ Current built-ins:
 | `humanApproval` | pending | Explicit signal-backed human decision |
 | `cancelOperation` | foreground control | Stop one pending task by operation ID |
 | `manageMemory` | foreground Agent RPC | Set or delete persistent memory entries |
-| `scheduleMessage` / `cancelSchedule` / `listSchedules` | foreground Agent RPC | Manage durable scheduled input |
+| `scheduleMessage` / `cancelSchedule` / `listSchedules` | foreground AgentScheduler RPC | Manage durable scheduled input independently of the current turn |
 | `listFiles` / `readFile` / `writeFile` / `executeCommand` | foreground sandbox | Work in the Agent-scoped workspace |
 
 All allowed foreground calls in one model response are spawned together and
@@ -298,9 +322,10 @@ configuration.
 ## Durable evaluation harness
 
 `Evals/all` spawns all selected trials concurrently. Every trial gets a fresh
-`agentId`, drives Agent and AgentSession through their public handlers, waits on
-notification revisions, and returns code-based assertions over transcript
-structure, ordering, IDs, profile state, and terminal outcomes.
+`agentId`, drives Agent, AgentSession, AgentScheduler, and AgentNotifications
+through their public handlers, waits on notification revisions, and returns
+code-based assertions over transcript structure, ordering, IDs, profile state,
+and terminal outcomes.
 
 The current suite covers basic completion, steering, interruption, external
 cancellation, interruption with replacement input, memory, schedules, and six
@@ -371,7 +396,7 @@ curl localhost:8080/Agent/demo/ask \
 curl localhost:8080/AgentSession/demo/history \
   --json '{"fromSequence":1,"limit":100}'
 
-curl -X POST localhost:8080/Agent/demo/notifications
+curl -X POST localhost:8080/AgentNotifications/demo/snapshot
 ```
 
 Void-input handlers require an empty body with no JSON content type. `steer`
@@ -438,7 +463,11 @@ Production systems should add deadline-based reconciliation.
 - `packages/libs/client/` — typed Agent client built on
   `@restatedev/restate-sdk-clients`
 - `packages/libs/core/src/agent/` — controller service, active invocation,
-  profile, approvals, schedules, and notification subscriptions
+  profile, and approvals
+- `packages/libs/core/src/notifications/` — invalidation revisions,
+  awakeables, and long-poll subscriptions
+- `packages/libs/core/src/scheduler/` — schedule state, durable timers,
+  recurrence, and delivery
 - `packages/libs/core/src/session/` — transcript owner, turn state machine,
   model-context projection, tools, steering, and pending operations
 - `packages/libs/core/src/gateway/` — AI SDK provider integration, model

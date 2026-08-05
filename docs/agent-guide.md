@@ -30,6 +30,7 @@ Use executable contracts before prose:
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
    internal handlers, and `src/gateway/model.ts`;
 2. handler code in `src/agent/service.ts`, `src/session/service.ts`,
+   `src/notifications/service.ts`, `src/scheduler/service.ts`,
    `src/gateway/service.ts`, and `src/sandbox/service.ts`;
 3. focused ownership modules;
 4. docs.
@@ -41,9 +42,10 @@ an unimplemented behavior is a bug.
 
 Preserve these unless the requested change explicitly replaces them:
 
-1. `Agent` is the only durable controller for an `agentId`. Its exclusive
-   handlers serialize the active invocation, pending input, profile, approval,
-   and schedule decisions. It does not own conversation history.
+1. `Agent` is the only durable conversation controller for an `agentId`. Its
+   exclusive handlers serialize the active invocation, pending input,
+   profile, approvals, and externally delivered messages. It does not own
+   conversation history, notifications, or schedules.
 2. `AgentSession`, keyed by the same `agentId`, owns the canonical transcript
    and summary checkpoint. The transcript is append-only; never rewrite an
    existing user entry to explain later routing.
@@ -82,6 +84,12 @@ Preserve these unless the requested change explicitly replaces them:
     deterministic controller, `AgentSession` owns session history and turn
     execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
     iteration, and the model plus harness/runtime is the operational agent.
+18. `AgentNotifications` carries invalidation only. `AgentSession`, `Agent`,
+    and `AgentScheduler` remain authoritative for history, profile/approvals,
+    and schedules respectively.
+19. `AgentScheduler` owns schedule state and timers. Once `upsert` completes,
+    that durable side effect outlives the originating turn; due messages enter
+    conversation control only through source-agnostic `Agent.deliver`.
 
 The detailed turn-runtime list lives in
 [turn-runtime.md#refactoring-constraints](turn-runtime.md#refactoring-constraints).
@@ -118,7 +126,7 @@ The detailed turn-runtime list lives in
   agent trajectory or Restate execution trace. The `transcript` wire name is
   retained in evaluation results.
 - History is not the invalidation mechanism for every current-state area.
-  Drain `AgentSession.history`, then use Agent notification versions to decide
+  Drain `AgentSession.history`, then use AgentNotifications versions to decide
   whether to re-read history, profile, approvals, or schedules.
 - `activity` and `progress` are status communication, not chain-of-thought or
   model reasoning.
@@ -133,10 +141,10 @@ The detailed turn-runtime list lives in
 | User message routing and public controller handler | `agent/service.ts` |
 | Active turn ID, pending user queue, signal delivery/reconciliation | `agent/active-turn.ts` |
 | History chunks, cursor, writer, summary checkpoint | `session/history.ts` |
-| Notification revisions, subscriptions, and awakeables | `agent/notifications.ts` |
+| Notification revisions, subscriptions, and awakeables | `notifications/service.ts` |
 | Instructions, memories, guardrails | `agent/profile.ts` |
 | Pending approval state and decision signal | `agent/approval.ts` |
-| Durable scheduled-message state | `agent/schedules.ts` |
+| Durable scheduled-message state, timers, and delivery | `scheduler/service.ts` |
 | Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |

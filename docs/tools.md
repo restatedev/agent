@@ -88,9 +88,9 @@ of the model contract, not cosmetic documentation.
 | `humanApproval` | Signal-backed human decision | Pending |
 | `cancelOperation` | Cancel one pending operation by ID | Foreground control |
 | `manageMemory` | Atomically set or delete Agent memories | Foreground Agent RPC |
-| `scheduleMessage` | Create or replace an Agent-owned schedule | Foreground Agent RPC |
-| `cancelSchedule` | Idempotently cancel a schedule | Foreground Agent RPC |
-| `listSchedules` | Read active Agent schedules | Foreground Agent RPC |
+| `scheduleMessage` | Create or replace a per-Agent durable schedule | Foreground AgentScheduler RPC |
+| `cancelSchedule` | Idempotently cancel a schedule | Foreground AgentScheduler RPC |
+| `listSchedules` | Read active schedules for this Agent | Foreground AgentScheduler RPC |
 | `listFiles` | List an agent sandbox directory | Foreground sandbox operation |
 | `readFile` | Read a UTF-8 sandbox file | Foreground sandbox operation |
 | `writeFile` | Replace a UTF-8 sandbox file | Foreground sandbox operation |
@@ -181,11 +181,15 @@ type AgentToolContext = {
 The internal call context also contains `toolCallId`. Use:
 
 - `agentId` for Agent-owned state or resources;
-- `turnId` to prove that a mutation belongs to the current active turn;
+- `turnId` for Agent-owned state that must be correlated with the current
+  active turn, such as memory and approval;
 - `toolCallId` for stable operation identity;
 - `sandbox.client()` for a lazy, shared turn lease on the agent's sandbox.
 
 The context intentionally does not expose general orchestration hooks.
+Schedule mutations use `agentId` to address `AgentScheduler` directly. Once an
+upsert completes, the schedule is an independent durable side effect and is
+not rolled back if the originating turn later ends or is interrupted.
 
 ## Adding a built-in tool
 

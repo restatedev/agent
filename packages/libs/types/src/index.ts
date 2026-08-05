@@ -53,10 +53,10 @@ export type AskResult = z.infer<typeof AskResultSchema>;
 // steering and dispatch events record when queued work enters a Turn.
 const UserMessageDeliverySchema = z.enum(["turn", "steer", "queued"]);
 
-const ScheduleWhenBusySchema = z
+const DeliveryWhenBusySchema = z
   .enum(["queue", "steer", "interrupt"])
   .describe(
-    "How a due message enters the conversation when a Turn is active. Queue is the default unless the user explicitly asks to affect current work.",
+    "How a delivered message enters the conversation when a Turn is active.",
   );
 
 const ScheduleIdSchema = z
@@ -90,10 +90,12 @@ export const ScheduleSpecSchema = z.object({
     .describe(
       "Fixed delay between later deliveries, or null for a one-shot schedule.",
     ),
-  whenBusy: ScheduleWhenBusySchema,
+  whenBusy: DeliveryWhenBusySchema,
 });
 
-export const ScheduleFireSchema = ScheduleSpecSchema.pick({scheduleId: true});
+export const ScheduleIdRequestSchema = ScheduleSpecSchema.pick({
+  scheduleId: true,
+});
 
 export const ScheduledMessageSchema = ScheduleSpecSchema.omit({
   delaySeconds: true,
@@ -105,14 +107,6 @@ export const ScheduledMessageSchema = ScheduleSpecSchema.omit({
     .describe("Unix epoch milliseconds for the next delivery."),
 });
 export type ScheduledMessage = z.infer<typeof ScheduledMessageSchema>;
-
-export const ScheduleMutationSchema = z.object({
-  turnId: z.string().min(1).nullable(),
-  schedule: ScheduleSpecSchema.extend({
-    whenBusy: ScheduleWhenBusySchema.optional(),
-  }),
-});
-export type ScheduleMutation = z.infer<typeof ScheduleMutationSchema>;
 
 export const ScheduleMutationResultSchema = z.discriminatedUnion("accepted", [
   z.object({
@@ -128,12 +122,6 @@ export const ScheduleMutationResultSchema = z.discriminatedUnion("accepted", [
 export type ScheduleMutationResult = z.infer<
   typeof ScheduleMutationResultSchema
 >;
-
-export const ScheduleCancellationSchema = z.object({
-  turnId: z.string().min(1).nullable(),
-  scheduleId: ScheduleIdSchema,
-});
-export type ScheduleCancellation = z.infer<typeof ScheduleCancellationSchema>;
 
 export const ScheduleCancellationResultSchema = z.discriminatedUnion(
   "accepted",
@@ -151,6 +139,25 @@ export const ScheduleCancellationResultSchema = z.discriminatedUnion(
 export type ScheduleCancellationResult = z.infer<
   typeof ScheduleCancellationResultSchema
 >;
+
+/** A source-attributed message entering the Agent's serialized router. */
+export const AgentDeliverySchema = z.object({
+  source: z
+    .string()
+    .trim()
+    .min(1)
+    .describe("The external system delivering this message."),
+  sourceId: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("An optional source-owned identifier for observability."),
+  message: MessageSchema,
+  whenBusy: DeliveryWhenBusySchema,
+  interruptReason: MessageSchema.optional(),
+});
+export type AgentDelivery = z.infer<typeof AgentDeliverySchema>;
 
 const ProgressPhaseSchema = z.enum(["thinking", "waiting", "finalizing"]);
 
@@ -338,11 +345,11 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     role: z.literal("event"),
-    type: z.literal("schedule"),
-    scheduleId: ScheduleIdSchema,
-    action: z.literal("fired"),
+    type: z.literal("delivery"),
+    source: z.string(),
+    sourceId: z.string().optional(),
     turnId: z.string().optional(),
-    whenBusy: ScheduleWhenBusySchema,
+    whenBusy: DeliveryWhenBusySchema,
     routing: z.enum(["start", "queue", "steer", "interrupt"]),
   }),
   z

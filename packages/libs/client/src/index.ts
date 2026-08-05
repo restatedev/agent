@@ -18,6 +18,7 @@
 //   }
 
 import type {
+  AgentDelivery,
   AgentNotificationSnapshot,
   AgentProfile,
   ApprovalRequest,
@@ -32,6 +33,10 @@ import type {
 import {
   AgentIngressDefinition,
   type AgentIngressHandlers,
+  AgentNotificationsIngressDefinition,
+  type AgentNotificationsIngressHandlers,
+  AgentSchedulerIngressDefinition,
+  type AgentSchedulerIngressHandlers,
   AgentSessionIngressDefinition,
   type AgentSessionIngressHandlers,
   DEFAULT_ASK,
@@ -106,6 +111,14 @@ export function createAgentClient({
     AgentSessionIngressDefinition,
     agentId,
   );
+  const notifications = ingress.objectClient<AgentNotificationsIngressHandlers>(
+    AgentNotificationsIngressDefinition,
+    agentId,
+  );
+  const scheduler = ingress.objectClient<AgentSchedulerIngressHandlers>(
+    AgentSchedulerIngressDefinition,
+    agentId,
+  );
 
   async function invoke<T>(operation: PromiseLike<T>): Promise<T> {
     try {
@@ -136,7 +149,7 @@ export function createAgentClient({
     options?: {idempotencyKey?: string; signal?: AbortSignal},
   ): Promise<AgentNotificationSnapshot> {
     return invoke(
-      agent.watchNotifications(
+      notifications.watch(
         {afterRevision, timeoutSeconds},
         rpc.opts(options ?? {}),
       ),
@@ -168,13 +181,18 @@ export function createAgentClient({
       return invoke(agent.interrupt({reason, ...(message ? {message} : {})}));
     },
 
+    /** Routes source-attributed input through the Agent's busy-turn policy. */
+    async deliver(delivery: AgentDelivery): Promise<void> {
+      return invoke(agent.deliver(delivery));
+    },
+
     history,
     watchNotifications,
 
     /** Returns the Agent's current notification watermarks. */
     async notifications(): Promise<AgentNotificationSnapshot> {
       return invoke(
-        agent.notifications(
+        notifications.snapshot(
           rpc.opts<void, AgentNotificationSnapshot>({input: serde.empty}),
         ),
       );
@@ -264,7 +282,7 @@ export function createAgentClient({
 
     async schedules(): Promise<ScheduledMessage[]> {
       return invoke(
-        agent.schedules(
+        scheduler.list(
           rpc.opts<void, ScheduledMessage[]>({input: serde.empty}),
         ),
       );
@@ -274,13 +292,15 @@ export function createAgentClient({
     async scheduleMessage(
       schedule: ScheduleSpecInput,
     ): Promise<ScheduleMutationResult> {
-      return invoke(agent.scheduleMessage({turnId: null, schedule}));
+      return invoke(
+        scheduler.upsert({...schedule, whenBusy: schedule.whenBusy ?? "queue"}),
+      );
     },
 
     async cancelSchedule(
       scheduleId: string,
     ): Promise<ScheduleCancellationResult> {
-      return invoke(agent.cancelSchedule({turnId: null, scheduleId}));
+      return invoke(scheduler.cancel({scheduleId}));
     },
   };
 }

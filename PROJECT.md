@@ -14,20 +14,23 @@ The maintainer documentation starts at
 
 - **`Agent`** is the deterministic controller Virtual Object keyed by
   `agentId`. It owns the active `AgentSession.doTurn` invocation ID, queued
-  input, persistent instructions/memories/guardrails, pending approvals,
-  schedules, and notification subscriptions. `ask` starts work when idle and
-  queues while busy; clients use `steer` or `interrupt` to affect active work.
+  input, persistent instructions/memories/guardrails, and pending approvals.
+  `ask` starts work when idle and queues while busy; clients use `steer` or
+  `interrupt` to affect active work, while external producers use `deliver`.
 - **`AgentSession`** is a second Virtual Object with the same key. It owns the
   append-only conversation event log and compaction checkpoint. Its exclusive
   `doTurn` handler is one durable agent run; that invocation ID is the
   `turnId`. At turn start it loads conversation state once, appends the
   activated input, and then writes new transcript entries directly while the
   loop runs.
-- **Notifications** are an invalidation channel, not another state store.
-  `AgentSession` publishes `history` invalidations to `Agent`; Agent also
-  publishes profile, approval, and schedule revisions. Clients drain
-  `AgentSession.history`, long-poll `Agent.watchNotifications`, and re-read the
-  authoritative area whose version changed.
+- **`AgentNotifications`** is an invalidation Virtual Object, not a domain
+  state store. AgentSession, Agent, and AgentScheduler publish history,
+  profile/approval, and schedule revisions. Clients drain
+  `AgentSession.history`, long-poll `AgentNotifications.watch`, and re-read the
+  authoritative owner whose version changed.
+- **`AgentScheduler`** owns the per-Agent schedule registry, delayed
+  invocations, cancellation, and recurrence. A valid timer calls generic
+  `Agent.deliver`, which applies its queue, steer, or interrupt policy.
 - **`agentStep`** is one bounded model → guardrail → optional foreground-tool
   transition. A step owns and joins its model, policy, approval-wait, and
   foreground tool tasks. `session/steering.ts` receives durable steering
@@ -54,8 +57,10 @@ The maintainer documentation starts at
   and state.
 
 ```text
-client → Agent/{agentId}        controller + notifications
-       → AgentSession/{agentId} transcript + doTurn
+client → Agent/{agentId}              controller + profile + approvals
+       → AgentSession/{agentId}       transcript + doTurn
+       → AgentNotifications/{agentId} invalidation stream
+       → AgentScheduler/{agentId}     durable schedules
                     │
                     ├─ agentStep → ModelGateway → model
                     ├─ built-in tools → Agent / Sandbox
@@ -86,8 +91,10 @@ Restate supplies:
 
 ## Core source map
 
-- `src/agent/` — controller service plus active-turn, profile, approval,
-  schedule, and notification state
+- `src/agent/` — controller service plus active-turn, profile, and approval
+  state
+- `src/notifications/` — invalidation revisions, awakeables, and long-polls
+- `src/scheduler/` — schedule state, durable timers, and delivery
 - `src/session/` — transcript owner and turn state machine plus context, tools,
   steering, pending work, and dynamic discovery
 - `src/gateway/` — provider-specific inference, model contracts, admission,

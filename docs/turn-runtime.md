@@ -10,8 +10,10 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 
 ## Ownership
 
-- `Agent` owns the active invocation ID, queued input, profile, approvals,
-  schedules, and notification subscriptions.
+- `Agent` owns the active invocation ID, queued input, profile, approvals, and
+  external-message routing.
+- `AgentNotifications` owns invalidation revisions and subscriptions;
+  `AgentScheduler` owns schedules and durable timers.
 - `AgentSession`, keyed by the same `agentId`, owns the append-only transcript
   and compaction checkpoint. Its exclusive `doTurn` handler owns transient
   cross-step execution state.
@@ -31,9 +33,9 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
   One turn borrows lazily and releases on every handled exit.
 
 Built-in tool mechanics execute inside `doTurn`; they are not services merely
-for durability. Tools call Agent only for Agent-owned state, Sandbox only for
-serialized resource lifecycle, and independently deployed dynamic handlers as
-ordinary durable RPCs.
+for durability. Tools call Agent only for Agent-owned state, AgentScheduler for
+durable schedules, Sandbox for serialized resource lifecycle, and independently
+deployed dynamic handlers as ordinary durable RPCs.
 
 ## Execution shape
 
@@ -133,8 +135,9 @@ write history.
   be proposed in separate loop iterations.
 - `manageMemory` atomically mutates at most 32 Agent memory entries and is
   accepted only for the active, non-interrupting `turnId`.
-- Schedule tools mutate Agent-owned delayed messages. A schedule survives the
-  turn that created it and is not a pending turn operation.
+- Schedule tools call AgentScheduler directly. Once an upsert completes, that
+  durable side effect survives the turn that created it and is not a pending
+  turn operation.
 - Assistant tool-call and matching tool-result messages are committed together
   to working model context.
 - Foreground outcomes are `succeeded`, `failed`, `pending`, or
@@ -180,15 +183,16 @@ directly through its invocation-local history writer. Tool events include IDs,
 names, summaries, and final statuses, but not raw arguments or results.
 
 Approval registration/cancellation and delivered decisions are also appended
-by the active session. A successful memory tool appends changed keys. Schedule
-delivery appends its routing event with the delivered input. These derived
-events are omitted from future model context and compaction where appropriate.
+by the active session. A successful memory tool appends changed keys. External
+delivery appends its source and selected route with the delivered input. These
+derived events are omitted from future model context and compaction where
+appropriate.
 
-Profile setters do not append transcript events; they publish Agent
-notification versions. Every transcript append one-way publishes the `history`
-topic. Consumers use history for ordered conversation data and Agent's
-`profile`, `approvals`, `schedules`, and notification snapshot for authoritative
-current state.
+Profile setters do not append transcript events; Agent publishes profile
+versions to AgentNotifications. Every transcript append one-way publishes the
+`history` topic, and AgentScheduler publishes schedule changes. Consumers use
+history for ordered conversation data, Agent for `profile` and `approvals`,
+AgentScheduler for schedules, and AgentNotifications for invalidation state.
 
 Every `completed`, `interrupted`, `stopped`, or `failed` outcome includes
 `consumedSteering`.

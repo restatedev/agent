@@ -156,7 +156,7 @@ questions.
 - In what order did AgentSession append activated input, steering,
   interruption, approvals, and terminal outcomes?
 - Which tool names started and how did the batch settle?
-- Did an approval, schedule-delivery, or lifecycle event occur?
+- Did an approval, external-delivery, or lifecycle event occur?
 
 ### The Restate execution trace answers
 
@@ -172,7 +172,8 @@ runtime trace.
 
 ### Useful correlations
 
-- `agentId` is the Agent and Sandbox Virtual Object key.
+- `agentId` is the shared Agent, AgentSession, AgentNotifications,
+  AgentScheduler, and Sandbox Virtual Object key.
 - `turnId` is the `AgentSession/doTurn` invocation ID.
 - `toolCallId` is the stable pending-operation ID.
 - `approvalId` is the tool call or guardrail approval signal identity.
@@ -312,10 +313,10 @@ behavior can be tested without manufacturing many full agent runs.
 | Change Agent API or controller routing | `src/agent/service.ts` |
 | Change active-turn bookkeeping/signals | `src/agent/active-turn.ts` |
 | Change transcript storage | `src/session/history.ts` |
-| Change invalidation subscriptions | `src/agent/notifications.ts` |
+| Change invalidation subscriptions | `src/notifications/service.ts` |
 | Change instructions/memories/guardrails | `src/agent/profile.ts` |
 | Change approvals | `src/agent/approval.ts` |
-| Change schedules | `src/agent/schedules.ts` |
+| Change schedules and timer delivery | `src/scheduler/service.ts` |
 | Change the turn state machine | `src/session/service.ts` |
 | Change one inference/tool step | `src/session/step.ts` |
 | Add a built-in tool | `src/session/tools.ts` |

@@ -5,6 +5,7 @@
 import {iface} from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {
+  AgentDeliverySchema,
   AgentNotificationSnapshotSchema,
   AgentNotificationSubscriptionSchema,
   AgentNotificationTopicSchema,
@@ -27,15 +28,19 @@ import {
   MemoryUpdateSchema,
   MessageSchema,
   ScheduleCancellationResultSchema,
-  ScheduleCancellationSchema,
   ScheduledMessageSchema,
-  ScheduleFireSchema,
+  ScheduleIdRequestSchema,
   ScheduleMutationResultSchema,
-  ScheduleMutationSchema,
+  ScheduleSpecSchema,
   SetGuardrailsSchema,
   SetInstructionsSchema,
 } from "./index.js";
-import {AGENT_SERVICE_NAME, AGENT_SESSION_SERVICE_NAME} from "./targets.js";
+import {
+  AGENT_NOTIFICATIONS_SERVICE_NAME,
+  AGENT_SCHEDULER_SERVICE_NAME,
+  AGENT_SERVICE_NAME,
+  AGENT_SESSION_SERVICE_NAME,
+} from "./targets.js";
 
 /** Restate contract implemented by core and consumed by external clients. */
 export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
@@ -45,39 +50,7 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     output: z.boolean(),
   }),
   steer: iface.schemas({input: MessageSchema, output: z.boolean()}),
-  scheduleMessage: iface.schemas({
-    input: ScheduleMutationSchema,
-    output: ScheduleMutationResultSchema,
-  }),
-  cancelSchedule: iface.schemas({
-    input: ScheduleCancellationSchema,
-    output: ScheduleCancellationResultSchema,
-  }),
-  schedules: iface.schemas({
-    input: z.void(),
-    output: z.array(ScheduledMessageSchema),
-  }),
-  fireSchedule: iface.schemas({input: ScheduleFireSchema, output: z.void()}),
-  notify: iface.schemas({
-    input: AgentNotificationTopicSchema,
-    output: z.void(),
-  }),
-  notifications: iface.schemas({
-    input: z.void(),
-    output: AgentNotificationSnapshotSchema,
-  }),
-  watchNotifications: iface.schemas({
-    input: AgentNotificationWatchRequestSchema,
-    output: AgentNotificationSnapshotSchema,
-  }),
-  subscribeNotifications: iface.schemas({
-    input: AgentNotificationSubscriptionSchema,
-    output: AgentNotificationSnapshotSchema.nullable(),
-  }),
-  unsubscribeNotifications: iface.schemas({
-    input: AgentNotificationUnsubscribeSchema,
-    output: z.void(),
-  }),
+  deliver: iface.schemas({input: AgentDeliverySchema, output: z.void()}),
   profile: iface.schemas({input: z.void(), output: AgentProfileSchema}),
   setInstructions: iface.schemas({
     input: SetInstructionsSchema,
@@ -109,6 +82,53 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     output: AgentTurnOutcomeSchema.nullable(),
   }),
 });
+
+/** Per-Agent invalidation stream consumed by transcript and state watchers. */
+export const AgentNotificationsDefinition = iface.object(
+  AGENT_NOTIFICATIONS_SERVICE_NAME,
+  {
+    publish: iface.schemas({
+      input: AgentNotificationTopicSchema,
+      output: z.void(),
+    }),
+    snapshot: iface.schemas({
+      input: z.void(),
+      output: AgentNotificationSnapshotSchema,
+    }),
+    watch: iface.schemas({
+      input: AgentNotificationWatchRequestSchema,
+      output: AgentNotificationSnapshotSchema,
+    }),
+    subscribe: iface.schemas({
+      input: AgentNotificationSubscriptionSchema,
+      output: AgentNotificationSnapshotSchema.nullable(),
+    }),
+    unsubscribe: iface.schemas({
+      input: AgentNotificationUnsubscribeSchema,
+      output: z.void(),
+    }),
+  },
+);
+
+/** Per-Agent durable schedule registry and timer lifecycle. */
+export const AgentSchedulerDefinition = iface.object(
+  AGENT_SCHEDULER_SERVICE_NAME,
+  {
+    upsert: iface.schemas({
+      input: ScheduleSpecSchema,
+      output: ScheduleMutationResultSchema,
+    }),
+    cancel: iface.schemas({
+      input: ScheduleIdRequestSchema,
+      output: ScheduleCancellationResultSchema,
+    }),
+    list: iface.schemas({
+      input: z.void(),
+      output: z.array(ScheduledMessageSchema),
+    }),
+    fire: iface.schemas({input: ScheduleIdRequestSchema, output: z.void()}),
+  },
+);
 
 /** AgentSession contract implemented by core and consumed by clients. */
 export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {

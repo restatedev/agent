@@ -10,17 +10,21 @@ Restate execution trace.
 
 ## Addressing and serialization
 
-One logical agent uses the same `agentId` as the key of two Virtual Objects:
+One logical agent uses the same `agentId` as the key of four public protocol
+Virtual Objects:
 
 ```text
 POST <ingress>/Agent/<agentId>/<handler>
 POST <ingress>/AgentSession/<agentId>/<handler>
+POST <ingress>/AgentNotifications/<agentId>/<handler>
+POST <ingress>/AgentScheduler/<agentId>/<handler>
 ```
 
-`Agent` is the controller and current-state API. `AgentSession` owns history
-and executes turns. The typed client in
-`packages/libs/client/src/index.ts` wraps both, so normal callers do not need
-to manage this split.
+`Agent` is the controller and profile/approval API. `AgentSession` owns history
+and executes turns. `AgentNotifications` owns invalidation subscriptions, and
+`AgentScheduler` owns schedules and timers. The typed client in
+`packages/libs/client/src/index.ts` wraps all four, so normal callers do not
+need to manage this split.
 
 All non-void requests use JSON. A void-input handler must receive an empty body
 without `content-type`; `{}` with `application/json` is not equivalent. Use an
@@ -129,9 +133,9 @@ type HistoryPage = {
 Use `nextSequence` as the next inclusive cursor. An empty page leaves the
 cursor unchanged.
 
-### Agent notifications
+### `AgentNotifications.snapshot`
 
-`Agent.notifications` is a void-input shared read returning:
+This is a void-input shared read returning:
 
 ```ts
 type AgentNotificationSnapshot = {
@@ -145,7 +149,9 @@ type AgentNotificationSnapshot = {
 };
 ```
 
-`Agent.watchNotifications` accepts:
+### `AgentNotifications.watch`
+
+Input:
 
 ```ts
 {
@@ -158,8 +164,9 @@ It returns a newer snapshot when any topic changes, or the current snapshot
 when the wait window expires. The response is an invalidation watermark, not
 the changed data. Compare topic versions and re-read the authoritative handler.
 
-The public client's `follow()` generator combines AgentSession history pages
-with this notification wait for history-only consumers.
+The public client's `notifications()` and `watchNotifications()` methods route
+to these handlers. Its `follow()` generator combines AgentSession history
+pages with the notification wait for history-only consumers.
 
 ## Profile API
 
@@ -233,38 +240,58 @@ decision when the waiting turn consumes the signal.
 
 ## Scheduled messages
 
-### `Agent.scheduleMessage`
+### `AgentScheduler.upsert`
 
-External administration uses `turnId: null`:
+Input:
 
 ```ts
 {
-  turnId: null;
-  schedule: {
-    scheduleId: string; // 1..64 chars
-    message: string;
-    delaySeconds: number; // 1..31,536,000
-    repeatEverySeconds: number | null;
-    whenBusy?: "queue" | "steer" | "interrupt";
-  };
+  scheduleId: string; // 1..64 chars
+  message: string;
+  delaySeconds: number; // 1..31,536,000
+  repeatEverySeconds: number | null;
+  whenBusy: "queue" | "steer" | "interrupt";
 }
 ```
 
-Omitted `whenBusy` defaults to `queue`; reusing `scheduleId` replaces the
-existing timer. Success returns `{accepted: true, replaced, schedule}` with
-`nextRunAt` as epoch milliseconds. Tool calls supply their active `turnId`, and
-Agent rejects stale or interrupting-turn mutations.
+Reusing `scheduleId` replaces the existing timer. Success returns
+`{accepted: true, replaced, schedule}` with `nextRunAt` as epoch milliseconds.
+The high-level client defaults an omitted `whenBusy` to `queue` before calling
+the Restate handler.
 
-### `Agent.cancelSchedule`
+Schedule tools call AgentScheduler directly. Once `upsert` completes, the
+schedule is a durable side effect independent of the originating turn; a
+later interruption does not roll it back.
 
-External input is `{turnId: null, scheduleId}`. Success is idempotent and
-returns `{accepted: true, cancelled: boolean}`.
+### `AgentScheduler.cancel`
 
-### `Agent.schedules`
+Input is `{scheduleId}`. Success is idempotent and returns
+`{accepted: true, cancelled: boolean}`.
+
+### `AgentScheduler.list`
 
 Void input. Returns the authoritative list of active schedules. Schedule
-mutation publishes a `schedules` notification. Only delivery appends a
-`schedule` event to the transcript.
+mutation publishes a `schedules` notification. Delivery appends a generic
+`delivery` event with `source: "schedule"` to the transcript.
+
+### `Agent.deliver`
+
+External producers route messages through:
+
+```ts
+{
+  source: string;
+  sourceId?: string;
+  message: string;
+  whenBusy: "queue" | "steer" | "interrupt";
+  interruptReason?: string;
+}
+```
+
+An idle Agent starts a turn. A busy Agent queues, steers, or interrupts. An
+already-interrupting Agent always queues. The handler is source-agnostic;
+AgentScheduler is currently its only built-in producer. The typed client
+exposes the same contract as `agent.deliver(...)`.
 
 ## Internal coordination handlers
 
@@ -274,14 +301,24 @@ These are ingress-visible for inspection but are not normal client operations.
 
 | Handler | Caller | Purpose |
 | --- | --- | --- |
-| `fireSchedule` | delayed Agent self-send | Verify timer ID, advance recurrence, and route a due message |
-| `notify` | AgentSession | Publish one topic invalidation |
-| `subscribeNotifications` | `watchNotifications` | Re-check revision and register a caller awakeable |
-| `unsubscribeNotifications` | timed-out/cancelled watch | Remove an abandoned subscription |
 | `updateMemory` | `manageMemory` tool | Apply one active-turn memory batch |
 | `requestApproval` | tool or policy gate | Register a pending request for the active turn |
 | `cancelApproval` | interrupted waiter | Remove abandoned approval state |
 | `onTurnEnd` | AgentSession | Retire the matching turn, recover missed steering, and dispatch queued work |
+
+### AgentNotifications
+
+| Handler | Caller | Purpose |
+| --- | --- | --- |
+| `publish` | AgentSession, Agent, or AgentScheduler | Advance one topic watermark and wake subscribers |
+| `subscribe` | `watch` | Re-check the revision and register a caller awakeable |
+| `unsubscribe` | timed-out/cancelled `watch` | Remove an abandoned subscription |
+
+### AgentScheduler
+
+| Handler | Caller | Purpose |
+| --- | --- | --- |
+| `fire` | delayed AgentScheduler self-send | Verify timer ID, advance recurrence, and call `Agent.deliver` |
 
 ### AgentSession
 
@@ -378,7 +415,7 @@ interrupt event without a model-authored assistant entry.
 | `memory` | Memory keys changed; re-read profile |
 | `approval_request` | A pending approval was registered |
 | `approval_cancelled` | An abandoned approval was removed |
-| `schedule` | A scheduled message fired and how it was routed |
+| `delivery` | An external source delivered a message and how it was routed |
 | `progress` | `thinking`, `waiting`, or `finalizing` milestone |
 | `activity` | Brief model-authored user-facing activity |
 | `tools` | Tool-batch start/finish, IDs, names, summaries, and statuses |
@@ -430,6 +467,7 @@ while (!stopped) {
 ```
 
 Always drain history again after waking; a history notification can arrive
-before or after the corresponding one-way `Agent.notify` is acknowledged.
+before or after the corresponding one-way `AgentNotifications.publish` is
+acknowledged.
 Retry a transport-failed watch with the same idempotency key so it attaches to
 the parked invocation. Generate a new key after a completed wait window.

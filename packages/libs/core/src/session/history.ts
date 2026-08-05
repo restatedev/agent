@@ -12,9 +12,9 @@ import type {
   ConversationEntry,
   HistoryPage,
 } from "@restate-agents/types";
+import {AgentNotificationsDefinition} from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import {Agent} from "../agent/index.js";
 import {
   type ConversationCompactionInput,
   isDerivedConversationEvent,
@@ -132,7 +132,9 @@ export function* openTurn(): restate.Operation<TurnHistory> {
 
       restate.state().set(chunkKey(index), chunk);
       restate.state().set(HISTORY_META, meta);
-      yield* restate.sendClient(Agent, agentId).notify("history");
+      yield* restate
+        .sendClient(AgentNotificationsDefinition, agentId)
+        .publish("history");
     },
 
     *beginCompaction(): restate.Operation<

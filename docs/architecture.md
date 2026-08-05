@@ -18,20 +18,22 @@ run.
 ## Design principles
 
 1. **Durable ownership is explicit.** `Agent` owns control state,
-   `AgentSession` owns conversation state and turn execution, and `Sandbox`
-   owns external workspace lifecycle.
+   `AgentSession` owns conversation state and turn execution,
+   `AgentNotifications` owns invalidation delivery, `AgentScheduler` owns
+   schedules, and `Sandbox` owns external workspace lifecycle.
 2. **The conversation event log is authoritative.** Summaries and model
    messages are derived context; they never replace the append-only log.
 3. **Control stays responsive.** `Agent` never waits for model inference or
    tool execution. It sends a one-way `doTurn` invocation and remains available
-   to queue, steer, interrupt, resolve approvals, and manage schedules.
+   to queue, steer, interrupt, resolve approvals, and accept external
+   deliveries.
 4. **Turn execution is colocated with history.** The exclusive `doTurn`
    handler reads the session transcript once, then appends directly to the same
    Virtual Object state throughout the run.
 5. **Concurrency stays structured.** Spawned work is owned and joined by one
    step, the pending registry, or the `doTurn` supervisor.
 6. **Notifications carry invalidation, not data.** Consumers always re-read
-   the authoritative transcript or Agent state after a notification.
+   AgentSession, Agent, or AgentScheduler after an AgentNotifications wake-up.
 
 ## Service boundaries
 
@@ -44,9 +46,8 @@ exclusive handlers own decisions about:
 - the FIFO of input waiting for the next turn;
 - steering batches accepted by the active invocation;
 - persistent instructions, memories, and guardrails;
-- pending human approvals;
-- scheduled messages and delayed invocation IDs; and
-- revisioned notification subscriptions.
+- pending human approvals; and
+- source-attributed external-message routing.
 
 Agent never performs inference, executes a tool, or stores transcript chunks.
 When idle, it snapshots the profile and one-way sends
@@ -60,12 +61,31 @@ State logic is grouped into handler-scoped namespaces:
 - `agent/active-turn.ts` — active invocation, pending input, steering
   bookkeeping, and signal delivery;
 - `agent/profile.ts` — instructions, memories, and guardrails;
-- `agent/approval.ts` — pending approval records and decision signals;
-- `agent/schedules.ts` — schedule records and delayed invocation IDs; and
-- `agent/notifications.ts` — revision watermarks and awakeable subscriptions.
+- `agent/approval.ts` — pending approval records and decision signals.
 
 These modules use the current Restate handler context. They are not process
 services or dependency containers.
+
+### AgentNotifications Virtual Object
+
+`AgentNotifications`, keyed by `agentId`, is the invalidation plane. It owns a
+global revision, per-topic watermarks, caller awakeables, and subscriptions.
+It owns no conversation, profile, approval, or schedule data. Producers
+one-way publish `history`, `profile`, `approvals`, or `schedules`; consumers
+wake and re-read the authoritative owner.
+
+### AgentScheduler Virtual Object
+
+`AgentScheduler`, keyed by `agentId`, owns the bounded schedule registry,
+delayed invocation IDs, replacement, cancellation, and fixed-delay
+recurrence. It uses eager state because every operation reads the small
+schedule collection. A timer acts only when its invocation ID matches the
+stored record, advances state before delivery, and calls generic
+`Agent.deliver` with its message and busy-turn policy.
+
+Schedule tools and external clients call AgentScheduler directly. Once an
+upsert completes, the schedule is an independent durable side effect rather
+than active-turn state.
 
 ### AgentSession Virtual Object
 
@@ -118,9 +138,9 @@ VO stores only lifecycle state and the opaque provider reference.
 ### Evals service
 
 `Evals/all` is the evaluation harness. It spawns selected trials concurrently,
-uses a fresh `agentId` for every trial, calls the same Agent and AgentSession
-handlers as a real client, and applies code-based graders to the resulting
-conversation event log and state.
+uses a fresh `agentId` for every trial, calls the same Agent, AgentSession,
+AgentNotifications, and AgentScheduler handlers as a real client, and applies
+code-based graders to the resulting conversation event log and state.
 
 ## State ownership matrix
 
@@ -130,8 +150,8 @@ conversation event log and state.
 | Pending user/event entries | Agent | Lazy VO state | Exclusive Agent handlers |
 | Instructions, memories, guardrails | Agent | Lazy VO state | Shared profile read; snapshotted at turn start |
 | Pending approvals | Agent | Lazy VO state | Shared list; exclusive mutation |
-| Schedules and timer IDs | Agent | Lazy VO state | Shared list; exclusive mutation |
-| Notification revision, topic versions, subscriptions | Agent | Lazy VO state + caller awakeables | Notification handlers |
+| Schedules and timer IDs | AgentScheduler | Eager VO state | Shared list; exclusive mutation/timer delivery |
+| Notification revision, topic versions, subscriptions | AgentNotifications | Lazy VO state + caller awakeables | Notification handlers |
 | Transcript chunks and next sequence | AgentSession | VO state | Exclusive writer; shared history reader |
 | Conversation summary and compaction reservation | AgentSession | VO state | Turn start and compaction handlers |
 | Working model context | `doTurn` invocation | Journaled generator locals | Current turn only |
@@ -310,29 +330,29 @@ inclusive cursor and loads only the chunks needed for that page.
 
 The transcript contains user messages, terminal assistant outcomes, control
 boundaries, resolved approvals, semantic progress, concise activity, structured
-tool lifecycle, memory metadata, schedule delivery, and approval lifecycle.
+tool lifecycle, memory metadata, external delivery, and approval lifecycle.
 Exact tool arguments/results and private model reasoning remain in working
 context and Restate observability.
 
 Not every event is model context. `isDerivedConversationEvent` centrally
 filters approval request/cancellation, progress, activity, tools, memory, and
-schedule metadata. Control boundaries and delivered approval decisions remain
+delivery metadata. Control boundaries and delivered approval decisions remain
 model-relevant.
 
-Agent exposes a general invalidation protocol:
+AgentNotifications exposes a general invalidation protocol:
 
-- `notifications()` returns `{revision, versions}` for `history`, `profile`,
+- `snapshot()` returns `{revision, versions}` for `history`, `profile`,
   `approvals`, and `schedules`;
-- `watchNotifications({afterRevision, timeoutSeconds})` parks until a newer
+- `watch({afterRevision, timeoutSeconds})` parks until a newer
   revision or returns the current snapshot at timeout;
 - an internal subscribe handler re-checks the revision before registering a
   caller-owned awakeable, closing the read/watch race; and
 - a timed-out or cancelled watch removes its subscription.
 
-`AgentSession.history.append` one-way publishes the `history` topic to Agent.
-Profile, approval, and schedule mutations publish their own topics. The
-notification carries no state payload: clients compare topic versions and
-re-read the authoritative handler.
+Each AgentSession transcript append one-way publishes `history` to
+AgentNotifications. Agent publishes profile and approval changes, while
+AgentScheduler publishes schedule changes. Notifications carry no state
+payload: clients compare topic versions and re-read the authoritative owner.
 
 ## Profile and guardrails
 
@@ -370,8 +390,9 @@ A later turn receives the summary plus exact model-relevant entries after its
 
 ## Scheduled messages
 
-Schedules belong to Agent. Creating one journals a delayed self-send and
-returns immediately. A due message re-enters exclusive routing:
+Schedules belong to AgentScheduler. Creating one journals a delayed
+AgentScheduler self-send and returns immediately. A valid due timer advances
+schedule state and calls source-agnostic `Agent.deliver`, which routes:
 
 - idle → start a turn;
 - busy + `queue` → append to pending input;
@@ -381,16 +402,19 @@ returns immediately. A due message re-enters exclusive routing:
 
 One-shot state is removed before delivery. Repeating schedules install their
 next fixed-delay timer before routing the current message. Stored invocation
-IDs reject stale delayed sends. A `schedule` transcript event is appended with
-the delivered user entry when the message is activated.
+IDs reject stale delayed sends. A derived `delivery` transcript event records
+`source: "schedule"`, its source ID, policy, and selected route beside the
+delivered user entry.
 
 ## Why these boundaries matter
 
 Keeping the pending queue and active invocation on Agent lets controller calls
 remain serialized and fast. Keeping transcript state and execution together on
 AgentSession lets `doTurn` load once and append directly, while shared history
-reads remain available. Moving model/tool work into Agent would block its
-exclusive control plane. Moving controller state into the executing session
-would make queueing and external coordination contend with a long-running
-exclusive handler. Turning every built-in tool into an RPC would obscure local
-structured concurrency without adding durability.
+reads remain available. Separate notification and schedule objects give those
+independent lifecycles one clear state owner without burdening Agent. Moving
+model/tool work into Agent would block its exclusive control plane. Moving
+controller state into the executing session would make queueing and external
+coordination contend with a long-running exclusive handler. Turning every
+built-in tool into an RPC would obscure local structured concurrency without
+adding durability.
