@@ -11,8 +11,8 @@ import {
   AgentNotificationUnsubscribeSchema,
   AgentNotificationWatchRequestSchema,
   AgentProfileSchema,
-  AgentSessionRequestSchema,
   AgentTurnOutcomeSchema,
+  AgentTurnRequestSchema,
   ApprovalCancellationSchema,
   ApprovalRequestSchema,
   ApprovalResolutionSchema,
@@ -124,5 +124,5 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
     input: ConversationCompactionResultSchema,
     output: z.void(),
   }),
-  doTurn: iface.schemas({input: AgentSessionRequestSchema, output: z.void()}),
+  doTurn: iface.schemas({input: AgentTurnRequestSchema, output: z.void()}),
 });

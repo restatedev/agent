@@ -298,7 +298,7 @@ Stale `turnId` values are rejected or ignored as appropriate.
 Input:
 
 ```ts
-type AgentSessionRequest = {
+type AgentTurnRequest = {
   instructions?: string;
   memories: Array<{key: string; content: string}>;
   guardrails: Array<{id: string; rule: string}>;

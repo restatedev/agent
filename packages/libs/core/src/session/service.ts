@@ -24,8 +24,8 @@ import {
 } from "../gateway/index.js";
 import {
   AGENT_SESSION_SIGNALS,
-  type AgentSessionRequest,
   type AgentTurnOutcome,
+  type AgentTurnRequest,
 } from "../internal-types.js";
 import {raceBranches} from "../race.js";
 import {Sandbox} from "../sandbox/index.js";
@@ -109,7 +109,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
      * tools are stopped, an interrupted outcome is reported, and cancellation
      * is rethrown to preserve Restate semantics.
      */
-    *doTurn(req: AgentSessionRequest): restate.Operation<void> {
+    *doTurn(req: AgentTurnRequest): restate.Operation<void> {
       const agentId = sessionKey();
       const turnId = restate.handlerRequest().id;
       let state: AgentSessionState | undefined;

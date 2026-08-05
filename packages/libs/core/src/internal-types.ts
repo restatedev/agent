@@ -4,8 +4,8 @@
 import type {
   AgentNotificationSubscription,
   AgentNotificationTopic,
-  AgentSessionRequest,
   AgentTurnOutcome,
+  AgentTurnRequest,
   ApprovalCancellation,
   ConversationCompactionPlan,
   ConversationEntry,
@@ -16,8 +16,8 @@ import type {
 export type {
   AgentNotificationSubscription,
   AgentNotificationTopic,
-  AgentSessionRequest,
   AgentTurnOutcome,
+  AgentTurnRequest,
   ApprovalCancellation,
   MemoryUpdate,
   MemoryUpdateResult,

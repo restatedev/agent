@@ -6,9 +6,9 @@ import type {ConversationEntry} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {
   AGENT_SESSION_SIGNALS,
-  type AgentSessionRequest,
   type AgentSessionSteering,
   type AgentTurnOutcome,
+  type AgentTurnRequest,
 } from "../internal-types.js";
 import {AgentSession} from "../session/index.js";
 
@@ -51,7 +51,7 @@ export function* current(): restate.Operation<ActiveTurnState | undefined> {
  */
 export function* start(
   agentId: string,
-  request: AgentSessionRequest,
+  request: AgentTurnRequest,
 ): restate.Operation<string> {
   const started = yield* restate
     .sendClient(AgentSession, agentId)

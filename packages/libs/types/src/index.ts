@@ -471,10 +471,10 @@ export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
 });
 export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;
 
-export const AgentSessionRequestSchema = AgentProfileSchema.extend({
+export const AgentTurnRequestSchema = AgentProfileSchema.extend({
   entries: z.array(ConversationEntrySchema),
 });
-export type AgentSessionRequest = z.infer<typeof AgentSessionRequestSchema>;
+export type AgentTurnRequest = z.infer<typeof AgentTurnRequestSchema>;
 
 const AgentTurnOutcomeBaseSchema = z.object({
   turnId: z.string(),
