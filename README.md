@@ -66,7 +66,6 @@ chain-of-thought.
 | Persistent profile | User instructions, model-managed semantic memory, and user-defined guardrails are durable per Agent and snapshotted at turn start. |
 | General change notifications | Revisioned `history`, `profile`, `approvals`, and `schedules` watermarks wake clients, which then re-read authoritative state. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
-| Active-run context reduction | Large settled model/tool prefixes inside one turn are reduced without changing canonical history. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
 | Agent-owned schedules | Durable one-shot and fixed-interval messages route as `queue`, `steer`, or `interrupt` when busy. |
 | Inference admission control | Model calls use a Restate scope with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
@@ -131,9 +130,9 @@ the whole conversation.
 
 The running invocation owns working messages, the step bound, guardrail
 decisions, the steering inbox, pending operations, discovered tool snapshot,
-sandbox lease context, and context-reduction bookkeeping. Each iteration
-spawns one bounded `agentStep`, applies its returned delta, and decides whether
-to iterate, wait, finalize, or finish.
+sandbox lease context, and tool state. Each iteration spawns one bounded
+`agentStep`, applies its returned delta, and decides whether to iterate, wait,
+finalize, or finish.
 
 ## Control semantics
 
@@ -199,12 +198,6 @@ reservation is installed; transcript chunks remain intact.
 A later turn receives the summary plus exact model-relevant entries after its
 checkpoint. Derived status events are filtered by the exhaustive
 `isDerivedConversationEvent` classifier.
-
-Within one long turn, settled model/tool messages can grow much faster than
-conversation history. Once the current-turn portion exceeds 32,000 serialized
-characters, no operation is pending, and a prefix has already been observed by
-the model, a scoped reducer may replace that working prefix with a lossless
-record. The mutation is invocation-local and never affects later turns.
 
 ## Tools
 
@@ -310,8 +303,8 @@ notification revisions, and returns code-based assertions over transcript
 structure, ordering, IDs, profile state, and terminal outcomes.
 
 The current suite covers basic completion, steering, interruption, external
-cancellation, interruption with replacement input, active
-context reduction, memory, schedules, and six guardrail/approval flows.
+cancellation, interruption with replacement input, memory, schedules, and six
+guardrail/approval flows.
 
 ```sh
 curl localhost:8080/Evals/all \
@@ -412,16 +405,14 @@ curl localhost:8080/Agent/demo/resolveApproval \
 
 ## Model flow control
 
-Agent, guardrail, policy-review, and active-context calls go through the
-`openai` scope. Limit keys have the form `<model>/<agent-hash>`, so each call
+Agent, guardrail, and policy-review calls go through the `openai` scope. Limit
+keys have the form `<model>/<agent-hash>`, so each call
 draws from provider-wide, model-wide, and per-Agent budgets:
 
 ```sh
 restate rules set "openai" --concurrency 100
 restate rules set "openai/gpt-5.6-terra" --concurrency 20
 restate rules set "openai/gpt-5.6-terra/*" --concurrency 2
-restate rules set "openai/gpt-4o-mini" --concurrency 50
-restate rules set "openai/gpt-4o-mini/*" --concurrency 4
 ```
 
 The AI SDK's provider retries are disabled. Restate owns a bounded four-attempt

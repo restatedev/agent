@@ -78,8 +78,6 @@ const EVAL_CASES = [
   "interruption",
   "external-cancellation",
   "interruption-replacement",
-  "execution-limit",
-  "context-reduction",
   "memory",
   "scheduling",
   "guardrail-approval",

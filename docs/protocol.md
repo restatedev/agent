@@ -322,9 +322,9 @@ The handler has a one-hour inactivity timeout and fifteen-minute abort timeout.
 
 ## Other service handlers
 
-- `ModelGateway.complete`, `evaluateGuardrails`, and `reduceContext` are scoped
-  coordination handlers. Runtime code uses their companion functions so the
-  `openai` scope and limit keys are always applied.
+- `ModelGateway.complete` and `evaluateGuardrails` are scoped coordination
+  handlers. Runtime code uses their companion functions so the `openai` scope
+  and limit keys are always applied.
 - `Sandbox.borrow`, `release`, `suspend`, and `destroy` are resource lifecycle
   handlers used by built-in tools and turn cleanup.
 - `Evals.all` accepts optional isolation options and a subset of case IDs. See

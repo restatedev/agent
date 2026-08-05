@@ -90,8 +90,7 @@ The turn state machine owns:
 - steering consumption count and the signal inbox;
 - pending tool tasks;
 - the journaled dynamic-tool catalog snapshot;
-- sandbox lease context; and
-- active-context reduction bookkeeping.
+- sandbox lease context.
 
 `history` and `compact` are shared handlers. `applyCompaction` and `doTurn` are
 exclusive. The object uses normal eager state for the main turn because it
@@ -357,8 +356,7 @@ the active `turnId`. Steering resets request-scoped decisions.
 
 ## Conversation compaction
 
-Conversation compaction and active-turn context reduction are separate context
-engineering mechanisms.
+Conversation compaction is a derived model-context view over canonical history.
 
 After a terminal outcome, the session writer counts non-event messages since
 the current checkpoint. At 32 messages it reserves the visible prefix and
@@ -368,10 +366,7 @@ range, calls the cheap compaction model, and sends the result to exclusive
 remain unchanged.
 
 A later turn receives the summary plus exact model-relevant entries after its
-`through` cursor. Within one long turn, a separate reducer may replace an
-already-observed settled working prefix once current-turn messages exceed
-32,000 serialized characters and no operation is pending. That mutation exists
-only in invocation-local model context.
+`through` cursor.
 
 ## Scheduled messages
 

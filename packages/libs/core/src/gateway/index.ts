@@ -10,7 +10,6 @@ export type {
   ToolManifest,
 } from "./model.js";
 export {
-  callContextReducer,
   callGuardrailModel,
   callModel,
   ModelGateway,

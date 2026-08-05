@@ -38,9 +38,9 @@ The maintainer documentation starts at
   with `restate.dev/agent: <tool-name>` metadata. Discovery uses an
   endpoint-local read-through Admin API cache; each turn journals one stable
   catalog snapshot for both inference and execution.
-- **`ModelGateway`** places agent inference, guardrail evaluation, and active
-  context reduction behind Restate scopes, model/agent limit keys, retry
-  policy, and cancellation propagation.
+- **`ModelGateway`** places agent inference and guardrail evaluation behind
+  Restate scopes, model/agent limit keys, retry policy, and cancellation
+  propagation.
 - **`Sandbox`** is an Agent-scoped Virtual Object. A turn borrows it lazily,
   releases it on every exit path, and leaves the persistent workspace for
   later turns. The default provider is a local `/tmp` workspace; the optional
@@ -48,8 +48,7 @@ The maintainer documentation starts at
   Agent.
 - **Conversation compaction** runs on shared `AgentSession.compact`, installs
   checkpoints through exclusive `applyCompaction`, and never rewrites or
-  deletes transcript chunks. Active-turn context reduction is separate and
-  only changes invocation-local model context.
+  deletes transcript chunks.
 - **`Evals`** concurrently drives fresh agents through the same public protocol
   and returns deterministic structural assertions over the observed transcript
   and state.

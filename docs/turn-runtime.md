@@ -69,14 +69,6 @@ ordinary durable RPCs.
 - Reaching the step bound stops pending work and makes one tool-free final
   call. The outcome is `stopped` with `step_limit`, not a user interruption.
 
-The run also bounds its private working context. When messages added during
-the current run exceed 32,000 serialized characters, no operation is pending,
-and a settled prefix has already been observed by the agent model, a cheap
-scoped model may replace that prefix with a compact record. New results and
-steering remain exact until observed. Reduction failure keeps exact context
-and disables further reduction for that invocation. It never changes
-AgentSession history or its conversation summary.
-
 ## Guardrails
 
 - A guardrail is `{id, rule}` in the Agent profile; IDs are unique.

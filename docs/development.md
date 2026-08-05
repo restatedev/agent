@@ -139,14 +139,6 @@ curl localhost:8080/Evals/all \
   --json '{"cases":["steering","interruption"],"timeoutSeconds":180}'
 ```
 
-The `context-reduction` case uses one cheap-model request and avoids a full
-agent run:
-
-```sh
-curl localhost:8080/Evals/all \
-  --json '{"cases":["context-reduction"]}'
-```
-
 Evals use probabilistic live models. A failed language-quality grader may need
 careful event-log inspection or a repeated trial. Protocol ordering, correlation
 IDs, state, and handler decisions should remain deterministic.

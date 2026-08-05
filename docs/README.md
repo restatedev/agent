@@ -23,7 +23,7 @@ agent. The implementation keeps the important control flow visible:
 - parallel foreground tool batches and cross-step pending tools;
 - explicit queue, steer, interrupt, and selective-cancellation semantics;
 - user instructions, model-managed memory, runtime guardrails, and approvals;
-- non-destructive conversation and active-turn context reduction;
+- non-destructive conversation compaction;
 - agent-owned schedules and an agent-scoped sandbox;
 - annotation-driven discovery of Restate handlers as model tools; and
 - a durable black-box evaluation harness.

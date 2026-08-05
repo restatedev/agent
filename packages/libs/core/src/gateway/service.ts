@@ -1,6 +1,5 @@
-// Restate admission, retry, and cancellation boundary for agent, guardrail,
-// and Turn-context model calls. Provider-specific inference remains in
-// model.ts.
+// Restate admission, retry, and cancellation boundary for agent and guardrail
+// model calls. Provider-specific inference remains in model.ts.
 
 import {createHash} from "node:crypto";
 import {CancelledError, Opts} from "@restatedev/restate-sdk";
@@ -19,12 +18,6 @@ import {
   GuardrailEvaluationRequestSchema,
   type ModelResult,
   ModelResultSchema,
-  reduceTurnContext,
-  TURN_CONTEXT_MODEL,
-  type TurnContextReductionRequest,
-  TurnContextReductionRequestSchema,
-  type TurnContextReductionResult,
-  TurnContextReductionResultSchema,
 } from "./model.js";
 
 const MODEL_SCOPE = "openai";
@@ -75,21 +68,6 @@ export const ModelGateway = restate.service({
         return confirmed ? decision : {decision: "allow"};
       },
     ),
-
-    reduceContext: restate.schemas(
-      {
-        input: TurnContextReductionRequestSchema,
-        output: TurnContextReductionResultSchema,
-      },
-      function* (
-        request: TurnContextReductionRequest,
-      ): restate.Operation<TurnContextReductionResult> {
-        return yield* restate.run(
-          ({signal}) => reduceTurnContext(request, signal),
-          {name: "turn-context-model", retry: MODEL_RETRY},
-        );
-      },
-    ),
   },
 });
 
@@ -126,25 +104,6 @@ export function* callGuardrailModel(
         Opts.from({
           limitKey: agentLimitKey(GUARDRAIL_MODEL, agentId),
           name: "guardrail-model",
-        }),
-      ),
-  );
-}
-
-/** Calls transient Turn-context reduction through scoped model admission. */
-export function* callContextReducer(
-  request: TurnContextReductionRequest & {agentId: string},
-): restate.Operation<TurnContextReductionResult> {
-  const {agentId, ...reductionRequest} = request;
-  return yield* awaitCancellable(
-    restate
-      .scope(MODEL_SCOPE)
-      .client(ModelGateway)
-      .reduceContext(
-        reductionRequest,
-        Opts.from({
-          limitKey: agentLimitKey(TURN_CONTEXT_MODEL, agentId),
-          name: "turn-context-model",
         }),
       ),
   );

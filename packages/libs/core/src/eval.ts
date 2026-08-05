@@ -5,10 +5,8 @@
 
 import {type HistoryPage, HistoryPageSchema} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
-import type {ModelMessage} from "ai";
 import {z} from "zod";
 import {Agent} from "./agent/index.js";
-import {callContextReducer} from "./gateway/index.js";
 import {raceBranches} from "./race.js";
 import {AgentSession} from "./session/index.js";
 
@@ -18,7 +16,6 @@ const EvalCaseIdSchema = z.enum([
   "interruption",
   "external-cancellation",
   "interruption-replacement",
-  "context-reduction",
   "memory",
   "scheduling",
   "guardrail-approval",
@@ -673,59 +670,6 @@ function* interruptionReplacement({
     assertion(
       "a new turn answers the replacement request",
       secondResponse.includes("paris"),
-    ),
-  ];
-}
-
-// Exercise the lossy boundary directly with one cheap model call. A large
-// end-to-end Turn would spend several agent-model rounds merely to cross the
-// character threshold; Turn's deterministic prefix selection does not need
-// that repeated coverage.
-function* contextReduction({
-  agentId,
-}: EvalContext): restate.Operation<EvalAssertion[]> {
-  const completedMarker = "COMPLETED_BERLIN_7319";
-  const failedMarker = "FAILED_PARIS_8426";
-  const pendingMarker = "PENDING_SLEEP_9537";
-  const messages: ModelMessage[] = [
-    {
-      role: "user",
-      content:
-        "[Steering update] Get the weather in Berlin and Paris, then keep the existing sleep running.",
-    },
-    {
-      role: "user",
-      content: `[Runtime event] Pending tool getWeather (weather-berlin) completed successfully: 22°C, sunny in Berlin. Verification marker: ${completedMarker}`,
-    },
-    {
-      role: "user",
-      content: `[Runtime event] Pending tool getWeather (weather-paris) failed: provider unavailable. Verification marker: ${failedMarker}`,
-    },
-    {
-      role: "user",
-      content: `[Runtime event] Pending tool sleep (${pendingMarker}) is still running and unresolved.`,
-    },
-  ];
-
-  const {summary} = yield* callContextReducer({agentId, messages});
-  const normalized = summary.toLowerCase();
-  return [
-    assertion(
-      "completed tool results survive context reduction",
-      summary.includes(completedMarker) &&
-        normalized.includes("berlin") &&
-        normalized.includes("22"),
-    ),
-    assertion(
-      "failed tool results survive context reduction",
-      summary.includes(failedMarker) &&
-        normalized.includes("paris") &&
-        normalized.includes("fail"),
-    ),
-    assertion(
-      "unresolved work remains distinguishable after context reduction",
-      summary.includes(pendingMarker) &&
-        (normalized.includes("pending") || normalized.includes("unresolved")),
     ),
   ];
 }
@@ -1470,7 +1414,6 @@ const EVAL_CASES: ReadonlyArray<{
   {caseId: "interruption", scenario: interruption},
   {caseId: "external-cancellation", scenario: externalCancellation},
   {caseId: "interruption-replacement", scenario: interruptionReplacement},
-  {caseId: "context-reduction", scenario: contextReduction},
   {caseId: "memory", scenario: memory},
   {caseId: "scheduling", scenario: scheduling},
   {caseId: "guardrail-approval", scenario: guardrailApproval},

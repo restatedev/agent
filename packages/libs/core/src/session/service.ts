@@ -16,7 +16,6 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 import {Agent} from "../agent/index.js";
 import {
-  callContextReducer,
   callGuardrailModel,
   callModel,
   compactConversation,
@@ -27,7 +26,6 @@ import {
   type AgentTurnOutcome,
   type AgentTurnRequest,
 } from "../internal-types.js";
-import {raceBranches} from "../race.js";
 import {Sandbox} from "../sandbox/index.js";
 import {
   buildModelContext,
@@ -54,9 +52,6 @@ type AgentSessionState = {
   messages: ModelMessage[];
   guardrailInput?: ModelMessage;
   guardrailEvidenceFrom: number;
-  initialMessageCount: number;
-  modelSeenThrough: number;
-  contextReductionEnabled: boolean;
   interrupt: restate.Future<string>;
   steeringInbox: ReturnType<typeof createSteeringInbox>;
   consumedSteering: number;
@@ -66,7 +61,6 @@ type AgentSessionState = {
 };
 
 const MAX_STEPS = 50;
-const MAX_TURN_CONTEXT_CHARS = 32_000;
 
 /**
  * Durable per-Agent conversation transcript and active Turn execution boundary.
@@ -135,9 +129,6 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           messages: modelContext.messages,
           guardrailInput: modelContext.guardrailInput,
           guardrailEvidenceFrom: modelContext.guardrailEvidenceFrom,
-          initialMessageCount: modelContext.messages.length,
-          modelSeenThrough: modelContext.messages.length,
-          contextReductionEnabled: true,
           interrupt: restate.signal<string>(AGENT_SESSION_SIGNALS.interrupt),
           steeringInbox: createSteeringInbox(),
           consumedSteering: 0,
@@ -235,80 +226,8 @@ function* executeTurn(
     // model round. This is the stable hand-off boundary between rounds.
     yield* consumeSteering(state);
 
-    // Reduction is transient Turn maintenance. It never rewrites Agent
-    // history or touches pending operations. A reducer failure leaves the
-    // exact context in place and disables further reduction for this Turn.
-    const current = state.messages.slice(state.initialMessageCount);
-    const reductionEnd = state.modelSeenThrough;
-    if (
-      state.contextReductionEnabled &&
-      state.pending.size === 0 &&
-      JSON.stringify(current).length > MAX_TURN_CONTEXT_CHARS &&
-      reductionEnd > state.initialMessageCount
-    ) {
-      const reductionStart = state.initialMessageCount;
-      const task = restate.spawn(
-        callContextReducer({
-          agentId: state.context.agentId,
-          messages: state.messages.slice(reductionStart, reductionEnd),
-        }),
-      );
-      let reductionInterruption: string | undefined;
-      try {
-        const selected = yield* raceBranches({
-          interrupt: state.interrupt,
-          reduction: task,
-        });
-        if (selected.tag === "interrupt") {
-          reductionInterruption = selected.value;
-          task.interrupt(new restate.InterruptedError(reductionInterruption));
-          yield* restate.allSettled([task]);
-        } else {
-          state.messages.splice(reductionStart, reductionEnd - reductionStart, {
-            role: "user",
-            content: [
-              "[Earlier work in this turn]",
-              "This is a compacted record of settled model and tool activity from the current turn.",
-              "Use it as context, not as a new request.",
-              selected.value.summary,
-            ].join("\n"),
-          });
-          if (
-            state.guardrailEvidenceFrom > reductionStart &&
-            state.guardrailEvidenceFrom <= reductionEnd
-          ) {
-            // Keep exact user input as evidence; the mixed summary before it is
-            // context, not evidence about the latest request.
-            state.guardrailEvidenceFrom = reductionStart + 1;
-          } else if (state.guardrailEvidenceFrom > reductionEnd) {
-            state.guardrailEvidenceFrom += 1 - (reductionEnd - reductionStart);
-          }
-          // The reducer output and everything after it must be seen by the
-          // model before either becomes eligible for another reduction.
-          state.modelSeenThrough = state.initialMessageCount;
-        }
-      } catch (error) {
-        task.interrupt(error);
-        yield* restate.allSettled([task]);
-        if (
-          error instanceof restate.InterruptedError ||
-          error instanceof CancelledError
-        ) {
-          throw error;
-        }
-        state.contextReductionEnabled = false;
-      }
-      if (reductionInterruption) {
-        return yield* finalizeEarlyExit(state, {
-          status: "interrupted",
-          reason: reductionInterruption,
-        });
-      }
-    }
-
     yield* reportProgress(state, "thinking", "Thinking...");
 
-    const modelMessageCount = state.messages.length;
     const task = restate.spawn(
       agentStep({
         context: state.context,
@@ -356,7 +275,6 @@ function* executeTurn(
       });
     }
 
-    state.modelSeenThrough = modelMessageCount;
     const steering = state.steeringInbox.drain();
     state.steps += 1;
     if (steering.length === 0 || step.type === "tools") {

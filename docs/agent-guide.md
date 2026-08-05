@@ -69,8 +69,8 @@ Preserve these unless the requested change explicitly replaces them:
     protocol-complete in active-turn model context.
 12. Raw reasoning, tool arguments, and tool results do not enter the canonical
     transcript. Concise activity and structured call names/statuses may.
-13. Conversation compaction and turn-context reduction are derived views.
-    Neither deletes or mutates canonical history.
+13. Conversation compaction is a derived view. It neither deletes nor mutates
+    canonical history.
 14. Built-in tools execute inside `AgentSession.doTurn`; do not turn them into service RPCs
     merely to make them durable. Use Restate operations and `restate.run`
     inside the handler.
@@ -137,7 +137,7 @@ The detailed turn-runtime list lives in
 | Instructions, memories, guardrails | `agent/profile.ts` |
 | Pending approval state and decision signal | `agent/approval.ts` |
 | Durable scheduled-message state | `agent/schedules.ts` |
-| Cross-step loop, transcript append, step bound, finalization, context reduction | `session/service.ts` |
+| Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |
 | Pending tool tasks and cancellation races | `session/pending.ts` |

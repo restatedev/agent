@@ -119,17 +119,13 @@ races the watch against its durable case deadline.
    replacement request, then checks that the old turn finalizes before the
    successor session appends the queued replacement and adjacent dispatch
    boundary, and that a new turn answers it.
-6. `context-reduction` makes one small call to the cheap turn-context model
-   with synthetic completed, failed, and unresolved tool records. It verifies
-   that all three survive reduction without paying for enough full agent runs
-   to manufacture a 32 KB working context.
-7. `memory` asks the agent to remember a preference and checks the metadata-only
+6. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
-8. `scheduling` creates, lists, and cancels one delayed message without model
+7. `scheduling` creates, lists, and cancels one delayed message without model
    inference, then lets a one-shot schedule wake an idle Agent. It checks the
    firing route, adjacent user entry, terminal response, and one-shot state
    cleanup with one small agent run.
-9. Six isolated guardrail cases cover:
+8. Six isolated guardrail cases cover:
    - `guardrail-approval` verifies the configured guardrail through the
      authoritative profile, verifies the pending request as a structured
      history event, approves exactly one request, and checks that the decision
@@ -157,15 +153,6 @@ Invoke the complete suite through Restate ingress:
 curl localhost:8080/Evals/all \
   -H 'content-type: application/json' \
   -d '{}'
-```
-
-The focused context-reduction contract can be run by itself. It performs one
-small `gpt-4o-mini` call and no full agent inference:
-
-```sh
-curl localhost:8080/Evals/all \
-  -H 'content-type: application/json' \
-  -d '{"cases":["context-reduction"]}'
 ```
 
 The user-facing conversation event log records tool call IDs, names, and
