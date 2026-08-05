@@ -145,296 +145,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           pending: createPendingOperations(),
           discoveredTools: [],
         };
-        const turnState = state;
-        outcome = yield* restate.gen(function* () {
-          turnState.discoveredTools = yield* discoverAgentTools(
-            agentTools.names,
-          );
-
-          while (turnState.steps < MAX_STEPS) {
-            // Steering received after the previous step's drain belongs before this
-            // model round. This is the stable hand-off boundary between rounds.
-            yield* consumeSteering(turnState);
-
-            // Reduction is transient Turn maintenance. It never rewrites Agent
-            // history or touches pending operations. A reducer failure leaves the
-            // exact context in place and disables further reduction for this Turn.
-            const current = turnState.messages.slice(
-              turnState.initialMessageCount,
-            );
-            const reductionEnd = turnState.modelSeenThrough;
-            if (
-              turnState.contextReductionEnabled &&
-              turnState.pending.size === 0 &&
-              JSON.stringify(current).length > MAX_TURN_CONTEXT_CHARS &&
-              reductionEnd > turnState.initialMessageCount
-            ) {
-              const reductionStart = turnState.initialMessageCount;
-              const task = restate.spawn(
-                callContextReducer({
-                  agentId: turnState.context.agentId,
-                  messages: turnState.messages.slice(
-                    reductionStart,
-                    reductionEnd,
-                  ),
-                }),
-              );
-              let reductionInterruption: string | undefined;
-              try {
-                const selected = yield* raceBranches({
-                  interrupt: turnState.interrupt,
-                  reduction: task,
-                });
-                if (selected.tag === "interrupt") {
-                  reductionInterruption = selected.value;
-                  task.interrupt(
-                    new restate.InterruptedError(reductionInterruption),
-                  );
-                  yield* restate.allSettled([task]);
-                } else {
-                  turnState.messages.splice(
-                    reductionStart,
-                    reductionEnd - reductionStart,
-                    {
-                      role: "user",
-                      content: [
-                        "[Earlier work in this turn]",
-                        "This is a compacted record of settled model and tool activity from the current turn.",
-                        "Use it as context, not as a new request.",
-                        selected.value.summary,
-                      ].join("\n"),
-                    },
-                  );
-                  if (
-                    turnState.guardrailEvidenceFrom > reductionStart &&
-                    turnState.guardrailEvidenceFrom <= reductionEnd
-                  ) {
-                    // Keep exact user input as evidence; the mixed summary before it is
-                    // context, not evidence about the latest request.
-                    turnState.guardrailEvidenceFrom = reductionStart + 1;
-                  } else if (turnState.guardrailEvidenceFrom > reductionEnd) {
-                    turnState.guardrailEvidenceFrom +=
-                      1 - (reductionEnd - reductionStart);
-                  }
-                  // The reducer output and everything after it must be seen by the
-                  // model before either becomes eligible for another reduction.
-                  turnState.modelSeenThrough = turnState.initialMessageCount;
-                }
-              } catch (error) {
-                task.interrupt(error);
-                yield* restate.allSettled([task]);
-                if (
-                  error instanceof restate.InterruptedError ||
-                  error instanceof CancelledError
-                ) {
-                  throw error;
-                }
-                turnState.contextReductionEnabled = false;
-              }
-              if (reductionInterruption) {
-                return yield* finalizeEarlyExit(turnState, {
-                  status: "interrupted",
-                  reason: reductionInterruption,
-                });
-              }
-            }
-
-            yield* reportProgress(turnState, "thinking", "Thinking...");
-
-            const modelMessageCount = turnState.messages.length;
-            const task = restate.spawn(
-              agentStep({
-                context: turnState.context,
-                instructions: turnState.instructions,
-                messages: [...turnState.messages],
-                guardrailMessages: currentGuardrailContext(turnState),
-                guardrails: turnState.guardrails,
-                approvedActions: [...turnState.approvedActions],
-                rejectedGuardrails: [...turnState.rejectedGuardrails],
-                transcript: turnState.transcript,
-                stepNumber: turnState.steps + 1,
-                discoveredTools: turnState.discoveredTools,
-              }),
-            );
-            const step = yield* settleStep(task, turnState.interrupt);
-
-            if (step.type === "interrupted") {
-              if (step.tools) {
-                const toolStep = step.tools;
-                // Approvals the interrupted step obtained still cover the guardrail
-                // check on the finalization text; no approval message is pushed
-                // during shutdown.
-                turnState.approvedActions.push(...toolStep.approvedActions);
-                yield* appendToolTranscript(
-                  turnState,
-                  toolStep.outcomes,
-                  step.reason,
-                );
-                turnState.messages.push(
-                  toolStep.action.message,
-                  agentTools.toModelMessage(toolStep.outcomes),
-                  ...toolStep.outcomes.flatMap((outcome): ModelMessage[] =>
-                    outcome.status === "pending"
-                      ? [
-                          agentTools.toRuntimeMessage({
-                            step: toolStep.step,
-                            call: outcome.call,
-                            outcome: {status: "cancelled", reason: step.reason},
-                          }),
-                        ]
-                      : [],
-                  ),
-                );
-                yield* reportToolsFinished(
-                  turnState,
-                  toolStep,
-                  toolStep.outcomes,
-                  true,
-                );
-              }
-              return yield* finalizeEarlyExit(turnState, {
-                status: "interrupted",
-                reason: step.reason,
-              });
-            }
-
-            turnState.modelSeenThrough = modelMessageCount;
-            const steering = turnState.steeringInbox.drain();
-            turnState.steps += 1;
-            if (steering.length === 0 || step.type === "tools") {
-              turnState.approvedActions.push(...step.approvedActions);
-              turnState.messages.push(
-                ...step.approvedActions.map(
-                  ({guardrailId, question}): ModelMessage => ({
-                    role: "user",
-                    content: [
-                      "[Runtime guardrail]",
-                      `Human approval was granted for this proposal under guardrail ${JSON.stringify(guardrailId)}.`,
-                      `Approved scope: ${JSON.stringify(question)}`,
-                      "The runtime will evaluate later actions and reuse this approval only when they remain materially within that scope.",
-                    ].join("\n"),
-                  }),
-                ),
-              );
-              for (const guardrailId of step.rejectedGuardrails) {
-                turnState.rejectedGuardrails.add(guardrailId);
-              }
-            }
-
-            // Only a tool step has side effects worth retaining when steering arrived
-            // during the step. Every other proposal is stale and is replaced by a new
-            // model round over the steering update.
-            if (steering.length > 0 && step.type !== "tools") {
-              yield* consumeSteering(turnState, steering);
-              continue;
-            }
-
-            switch (step.type) {
-              case "error":
-                turnState.messages.push({
-                  role: "user",
-                  content: `Your last response could not be used (${step.message}). Try again with the available tools or give a final answer.`,
-                });
-                continue;
-
-              case "text": {
-                if (!step.content.trim()) {
-                  turnState.messages.push({
-                    role: "user",
-                    content:
-                      "Your last response was empty. Call a tool or give a final answer.",
-                  });
-                  continue;
-                }
-                if (turnState.pending.size === 0) {
-                  return {
-                    turnId: turnState.context.turnId,
-                    status: "completed",
-                    response: step.content,
-                    consumedSteering: turnState.consumedSteering,
-                  };
-                }
-
-                yield* reportProgress(
-                  turnState,
-                  "waiting",
-                  `Waiting for ${turnState.pending.size} pending operation(s): ${turnState.pending.describe()}`,
-                );
-                const next = yield* turnState.pending.next(
-                  turnState.steeringInbox.ready,
-                  turnState.interrupt,
-                );
-                if (next.type === "steering") {
-                  yield* consumeSteering(turnState);
-                  continue;
-                }
-                if (next.type === "completion") {
-                  yield* appendToolTranscript(turnState, [next.event]);
-                  turnState.messages.push(
-                    agentTools.toRuntimeMessage(next.event),
-                  );
-                  continue;
-                }
-
-                turnState.messages.push({
-                  role: "assistant",
-                  content: step.content,
-                });
-                return yield* finalizeEarlyExit(turnState, {
-                  status: "interrupted",
-                  reason: next.reason,
-                });
-              }
-
-              case "guardrail_blocked":
-                if (turnState.blockedGuardrails.has(step.guardrailId)) {
-                  return {
-                    turnId: turnState.context.turnId,
-                    status: "completed",
-                    response:
-                      "I can’t complete that request because it conflicts with a configured policy.",
-                    consumedSteering: turnState.consumedSteering,
-                  };
-                }
-                turnState.blockedGuardrails.add(step.guardrailId);
-                turnState.messages.push({
-                  role: "user",
-                  content: [
-                    "[Runtime guardrail]",
-                    `The proposed action was blocked by guardrail ${JSON.stringify(step.guardrailId)}.`,
-                    `Reason: ${step.reason}`,
-                    "Do not repeat the blocked action. Choose a clearly compliant alternative, or return a concise tool-free refusal.",
-                  ].join("\n"),
-                });
-                continue;
-
-              case "tools":
-                yield* appendToolTranscript(turnState, step.outcomes);
-                {
-                  const applied = yield* turnState.pending.apply(
-                    step.outcomes,
-                    turnState.context,
-                    step.step,
-                  );
-                  yield* appendToolTranscript(turnState, applied.events);
-                  turnState.messages.push(
-                    step.action.message,
-                    agentTools.toModelMessage(applied.outcomes),
-                    ...applied.events.map(agentTools.toRuntimeMessage),
-                  );
-                  yield* consumeSteering(turnState, steering);
-                  yield* reportToolsFinished(turnState, step, applied.outcomes);
-                }
-                continue;
-            }
-          }
-
-          return yield* finalizeEarlyExit(turnState, {
-            status: "stopped",
-            cause: "step_limit",
-            reason: `The agent reached its ${MAX_STEPS}-step limit.`,
-          });
-        });
+        outcome = yield* executeTurn(state);
       } catch (error) {
         if (error instanceof CancelledError) {
           outcome = {
@@ -507,6 +218,279 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
     },
   },
 });
+
+/**
+ * Runs the iterative model/tool state machine for one Turn.
+ *
+ * The caller retains the mutable state reference so partially completed work
+ * remains available for failure and cancellation cleanup.
+ */
+function* executeTurn(
+  state: AgentSessionState,
+): restate.Operation<AgentTurnOutcome> {
+  state.discoveredTools = yield* discoverAgentTools(agentTools.names);
+
+  while (state.steps < MAX_STEPS) {
+    // Steering received after the previous step's drain belongs before this
+    // model round. This is the stable hand-off boundary between rounds.
+    yield* consumeSteering(state);
+
+    // Reduction is transient Turn maintenance. It never rewrites Agent
+    // history or touches pending operations. A reducer failure leaves the
+    // exact context in place and disables further reduction for this Turn.
+    const current = state.messages.slice(state.initialMessageCount);
+    const reductionEnd = state.modelSeenThrough;
+    if (
+      state.contextReductionEnabled &&
+      state.pending.size === 0 &&
+      JSON.stringify(current).length > MAX_TURN_CONTEXT_CHARS &&
+      reductionEnd > state.initialMessageCount
+    ) {
+      const reductionStart = state.initialMessageCount;
+      const task = restate.spawn(
+        callContextReducer({
+          agentId: state.context.agentId,
+          messages: state.messages.slice(reductionStart, reductionEnd),
+        }),
+      );
+      let reductionInterruption: string | undefined;
+      try {
+        const selected = yield* raceBranches({
+          interrupt: state.interrupt,
+          reduction: task,
+        });
+        if (selected.tag === "interrupt") {
+          reductionInterruption = selected.value;
+          task.interrupt(new restate.InterruptedError(reductionInterruption));
+          yield* restate.allSettled([task]);
+        } else {
+          state.messages.splice(reductionStart, reductionEnd - reductionStart, {
+            role: "user",
+            content: [
+              "[Earlier work in this turn]",
+              "This is a compacted record of settled model and tool activity from the current turn.",
+              "Use it as context, not as a new request.",
+              selected.value.summary,
+            ].join("\n"),
+          });
+          if (
+            state.guardrailEvidenceFrom > reductionStart &&
+            state.guardrailEvidenceFrom <= reductionEnd
+          ) {
+            // Keep exact user input as evidence; the mixed summary before it is
+            // context, not evidence about the latest request.
+            state.guardrailEvidenceFrom = reductionStart + 1;
+          } else if (state.guardrailEvidenceFrom > reductionEnd) {
+            state.guardrailEvidenceFrom += 1 - (reductionEnd - reductionStart);
+          }
+          // The reducer output and everything after it must be seen by the
+          // model before either becomes eligible for another reduction.
+          state.modelSeenThrough = state.initialMessageCount;
+        }
+      } catch (error) {
+        task.interrupt(error);
+        yield* restate.allSettled([task]);
+        if (
+          error instanceof restate.InterruptedError ||
+          error instanceof CancelledError
+        ) {
+          throw error;
+        }
+        state.contextReductionEnabled = false;
+      }
+      if (reductionInterruption) {
+        return yield* finalizeEarlyExit(state, {
+          status: "interrupted",
+          reason: reductionInterruption,
+        });
+      }
+    }
+
+    yield* reportProgress(state, "thinking", "Thinking...");
+
+    const modelMessageCount = state.messages.length;
+    const task = restate.spawn(
+      agentStep({
+        context: state.context,
+        instructions: state.instructions,
+        messages: [...state.messages],
+        guardrailMessages: currentGuardrailContext(state),
+        guardrails: state.guardrails,
+        approvedActions: [...state.approvedActions],
+        rejectedGuardrails: [...state.rejectedGuardrails],
+        transcript: state.transcript,
+        stepNumber: state.steps + 1,
+        discoveredTools: state.discoveredTools,
+      }),
+    );
+    const step = yield* settleStep(task, state.interrupt);
+
+    if (step.type === "interrupted") {
+      if (step.tools) {
+        const toolStep = step.tools;
+        // Approvals the interrupted step obtained still cover the guardrail
+        // check on the finalization text; no approval message is pushed
+        // during shutdown.
+        state.approvedActions.push(...toolStep.approvedActions);
+        yield* appendToolTranscript(state, toolStep.outcomes, step.reason);
+        state.messages.push(
+          toolStep.action.message,
+          agentTools.toModelMessage(toolStep.outcomes),
+          ...toolStep.outcomes.flatMap((outcome): ModelMessage[] =>
+            outcome.status === "pending"
+              ? [
+                  agentTools.toRuntimeMessage({
+                    step: toolStep.step,
+                    call: outcome.call,
+                    outcome: {status: "cancelled", reason: step.reason},
+                  }),
+                ]
+              : [],
+          ),
+        );
+        yield* reportToolsFinished(state, toolStep, toolStep.outcomes, true);
+      }
+      return yield* finalizeEarlyExit(state, {
+        status: "interrupted",
+        reason: step.reason,
+      });
+    }
+
+    state.modelSeenThrough = modelMessageCount;
+    const steering = state.steeringInbox.drain();
+    state.steps += 1;
+    if (steering.length === 0 || step.type === "tools") {
+      state.approvedActions.push(...step.approvedActions);
+      state.messages.push(
+        ...step.approvedActions.map(
+          ({guardrailId, question}): ModelMessage => ({
+            role: "user",
+            content: [
+              "[Runtime guardrail]",
+              `Human approval was granted for this proposal under guardrail ${JSON.stringify(guardrailId)}.`,
+              `Approved scope: ${JSON.stringify(question)}`,
+              "The runtime will evaluate later actions and reuse this approval only when they remain materially within that scope.",
+            ].join("\n"),
+          }),
+        ),
+      );
+      for (const guardrailId of step.rejectedGuardrails) {
+        state.rejectedGuardrails.add(guardrailId);
+      }
+    }
+
+    // Only a tool step has side effects worth retaining when steering arrived
+    // during the step. Every other proposal is stale and is replaced by a new
+    // model round over the steering update.
+    if (steering.length > 0 && step.type !== "tools") {
+      yield* consumeSteering(state, steering);
+      continue;
+    }
+
+    switch (step.type) {
+      case "error":
+        state.messages.push({
+          role: "user",
+          content: `Your last response could not be used (${step.message}). Try again with the available tools or give a final answer.`,
+        });
+        continue;
+
+      case "text": {
+        if (!step.content.trim()) {
+          state.messages.push({
+            role: "user",
+            content:
+              "Your last response was empty. Call a tool or give a final answer.",
+          });
+          continue;
+        }
+        if (state.pending.size === 0) {
+          return {
+            turnId: state.context.turnId,
+            status: "completed",
+            response: step.content,
+            consumedSteering: state.consumedSteering,
+          };
+        }
+
+        yield* reportProgress(
+          state,
+          "waiting",
+          `Waiting for ${state.pending.size} pending operation(s): ${state.pending.describe()}`,
+        );
+        const next = yield* state.pending.next(
+          state.steeringInbox.ready,
+          state.interrupt,
+        );
+        if (next.type === "steering") {
+          yield* consumeSteering(state);
+          continue;
+        }
+        if (next.type === "completion") {
+          yield* appendToolTranscript(state, [next.event]);
+          state.messages.push(agentTools.toRuntimeMessage(next.event));
+          continue;
+        }
+
+        state.messages.push({
+          role: "assistant",
+          content: step.content,
+        });
+        return yield* finalizeEarlyExit(state, {
+          status: "interrupted",
+          reason: next.reason,
+        });
+      }
+
+      case "guardrail_blocked":
+        if (state.blockedGuardrails.has(step.guardrailId)) {
+          return {
+            turnId: state.context.turnId,
+            status: "completed",
+            response:
+              "I can’t complete that request because it conflicts with a configured policy.",
+            consumedSteering: state.consumedSteering,
+          };
+        }
+        state.blockedGuardrails.add(step.guardrailId);
+        state.messages.push({
+          role: "user",
+          content: [
+            "[Runtime guardrail]",
+            `The proposed action was blocked by guardrail ${JSON.stringify(step.guardrailId)}.`,
+            `Reason: ${step.reason}`,
+            "Do not repeat the blocked action. Choose a clearly compliant alternative, or return a concise tool-free refusal.",
+          ].join("\n"),
+        });
+        continue;
+
+      case "tools":
+        yield* appendToolTranscript(state, step.outcomes);
+        {
+          const applied = yield* state.pending.apply(
+            step.outcomes,
+            state.context,
+            step.step,
+          );
+          yield* appendToolTranscript(state, applied.events);
+          state.messages.push(
+            step.action.message,
+            agentTools.toModelMessage(applied.outcomes),
+            ...applied.events.map(agentTools.toRuntimeMessage),
+          );
+          yield* consumeSteering(state, steering);
+          yield* reportToolsFinished(state, step, applied.outcomes);
+        }
+        continue;
+    }
+  }
+
+  return yield* finalizeEarlyExit(state, {
+    status: "stopped",
+    cause: "step_limit",
+    reason: `The agent reached its ${MAX_STEPS}-step limit.`,
+  });
+}
 
 function sessionKey(): string {
   const key = restate.handlerRequest().key;
