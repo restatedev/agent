@@ -17,7 +17,7 @@ import type {
 
 const WORKDIR = "/workspace";
 const DEFAULT_APP = "restate-agent-sandboxes";
-const DEFAULT_IMAGE = "debian:bookworm-slim";
+const DEFAULT_IMAGE = "mcr.microsoft.com/devcontainers/universal:noble";
 const DEFAULT_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 
 type ModalRef = Extract<SandboxRef, {provider: "modal"}>;

@@ -200,7 +200,7 @@ Optional settings:
 ```text
 MODAL_APP_NAME=restate-agent-sandboxes
 MODAL_SANDBOX_NAMESPACE=<stable-resource-namespace>
-MODAL_SANDBOX_IMAGE=debian:bookworm-slim
+MODAL_SANDBOX_IMAGE=mcr.microsoft.com/devcontainers/universal:noble
 MODAL_SANDBOX_TIMEOUT_MS=86400000
 ```
 
