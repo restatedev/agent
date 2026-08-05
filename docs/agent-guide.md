@@ -148,6 +148,7 @@ The detailed turn-runtime list lives in
 | Restate model admission, limit keys, retries | `gateway/service.ts` |
 | Agent sandbox lifecycle | `sandbox/service.ts` |
 | Provider contract and provider selection | `sandbox/provider.ts` |
+| Local filesystem demo adapter | `sandbox/local-provider.ts` |
 | Modal-specific compute/storage | `sandbox/modal-provider.ts` |
 | Black-box protocol coverage | `eval.ts` |
 | External HTTP consumption | `packages/libs/client/src/index.ts` |
