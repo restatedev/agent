@@ -444,20 +444,15 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
             consumedSteering: state?.consumedSteering ?? 0,
           };
 
-          // Cancellation may reject every later parked operation. Record local
-          // state synchronously, never wait for already-cancelled child tasks,
-          // then emit durable one-way cleanup for the owning services.
+          // Record local state without waiting for already-cancelled child
+          // tasks, then append the cancellation boundary and emit durable
+          // one-way cleanup for the owning services.
           const stopped = state?.pending.cancelAll(error) ?? [];
           if (transcript) {
-            try {
-              yield* transcript.append(
-                ...(state ? toolTranscriptEntries(state, stopped) : []),
-                ...outcomeEntries(outcome),
-              );
-            } catch {
-              // State writes precede the notification wait; reconciliation
-              // below remains the authoritative controller cleanup.
-            }
+            yield* transcript.append(
+              ...(state ? toolTranscriptEntries(state, stopped) : []),
+              ...outcomeEntries(outcome),
+            );
           }
           yield* restate.sendClient(Sandbox, agentId).release({turnId});
           yield* restate.sendClient(Agent, agentId).onTurnEnd(outcome);
