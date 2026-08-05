@@ -29,11 +29,11 @@ import type {
   MemoryUpdateResult,
 } from "../internal-types.js";
 import {raceBranches} from "../race.js";
-import {activeTurn} from "./active-turn.js";
-import {approvals} from "./approval.js";
-import {notifications} from "./notifications.js";
-import {profile} from "./profile.js";
-import {schedules} from "./schedules.js";
+import * as activeTurn from "./active-turn.js";
+import * as approvals from "./approval.js";
+import * as notifications from "./notifications.js";
+import * as profile from "./profile.js";
+import * as schedules from "./schedules.js";
 
 // The agent id is this object's key. Object handlers always have one, but read
 // it through here so a missing key is a clear error, not a stray `!`.

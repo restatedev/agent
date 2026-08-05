@@ -36,7 +36,8 @@ import {
   steeringMessage,
 } from "./context.js";
 import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
-import {history, type TurnHistory} from "./history.js";
+import type {TurnHistory} from "./history.js";
+import * as history from "./history.js";
 import {createPendingOperations} from "./pending.js";
 import {createSteeringInbox} from "./steering.js";
 import {
@@ -45,13 +46,8 @@ import {
   settleStep,
   type ToolStep,
 } from "./step.js";
-import {
-  type AgentToolContext,
-  agentTools,
-  createAgentToolContext,
-  type PendingEvent,
-  type ToolOutcome,
-} from "./tools.js";
+import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
+import * as agentTools from "./tools.js";
 
 type AgentSessionState = {
   context: AgentToolContext;
@@ -101,7 +97,7 @@ function createSessionState(
     req.memories,
   );
   return {
-    context: createAgentToolContext(agentId, turnId),
+    context: agentTools.createAgentToolContext(agentId, turnId),
     transcript,
     instructions: req.instructions,
     guardrails: req.guardrails,

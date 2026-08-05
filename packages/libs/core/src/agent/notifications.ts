@@ -45,76 +45,75 @@ function storeSubscriptions(
   }
 }
 
-/** Handler-scoped access to Agent-owned notification state. */
-export const notifications = {
-  /** Returns the current invalidation watermark for every authoritative area. */
-  *read(): restate.Operation<AgentNotificationSnapshot> {
-    return (
-      (yield* restate.sharedState().get<AgentNotificationSnapshot>(SNAPSHOT)) ??
-      EMPTY_SNAPSHOT
-    );
-  },
+/** Returns the current invalidation watermark for every authoritative area. */
+export function* read(): restate.Operation<AgentNotificationSnapshot> {
+  return (
+    (yield* restate.sharedState().get<AgentNotificationSnapshot>(SNAPSHOT)) ??
+    EMPTY_SNAPSHOT
+  );
+}
 
-  /**
-   * Registers a caller-owned awakeable unless a notification already arrived.
-   *
-   * @returns The current snapshot when the caller should not wait, otherwise
-   * `null` after storing the subscription.
-   */
-  *subscribe(
-    subscription: AgentNotificationSubscription,
-  ): restate.Operation<AgentNotificationSnapshot | null> {
-    const snapshot = yield* notifications.read();
-    if (subscription.afterRevision < snapshot.revision) {
-      return snapshot;
-    }
+/**
+ * Registers a caller-owned awakeable unless a notification already arrived.
+ *
+ * @returns The current snapshot when the caller should not wait, otherwise
+ * `null` after storing the subscription.
+ */
+export function* subscribe(
+  subscription: AgentNotificationSubscription,
+): restate.Operation<AgentNotificationSnapshot | null> {
+  const snapshot = yield* read();
+  if (subscription.afterRevision < snapshot.revision) {
+    return snapshot;
+  }
 
-    const subscriptions = yield* readSubscriptions();
-    if (
-      !subscriptions.some(
-        ({awakeableId}) => awakeableId === subscription.awakeableId,
-      )
-    ) {
-      subscriptions.push(subscription);
-      restate.state().set(SUBSCRIPTIONS, subscriptions);
-    }
-    return null;
-  },
+  const subscriptions = yield* readSubscriptions();
+  if (
+    !subscriptions.some(
+      ({awakeableId}) => awakeableId === subscription.awakeableId,
+    )
+  ) {
+    subscriptions.push(subscription);
+    restate.state().set(SUBSCRIPTIONS, subscriptions);
+  }
+  return null;
+}
 
-  /** Publishes one invalidation and forwards the new snapshot to subscribers. */
-  *publish(topic: AgentNotificationTopic): restate.Operation<void> {
-    const current = yield* notifications.read();
-    const revision = current.revision + 1;
-    const snapshot: AgentNotificationSnapshot = {
-      revision,
-      versions: {...current.versions, [topic]: revision},
-    };
-    restate.state().set(SNAPSHOT, snapshot);
+/** Publishes one invalidation and forwards the new snapshot to subscribers. */
+export function* publish(
+  topic: AgentNotificationTopic,
+): restate.Operation<void> {
+  const current = yield* read();
+  const revision = current.revision + 1;
+  const snapshot: AgentNotificationSnapshot = {
+    revision,
+    versions: {...current.versions, [topic]: revision},
+  };
+  restate.state().set(SNAPSHOT, snapshot);
 
-    const subscriptions = yield* readSubscriptions();
-    const ready = subscriptions.filter(
-      ({afterRevision}) => afterRevision < revision,
-    );
-    if (ready.length === 0) {
-      return;
-    }
+  const subscriptions = yield* readSubscriptions();
+  const ready = subscriptions.filter(
+    ({afterRevision}) => afterRevision < revision,
+  );
+  if (ready.length === 0) {
+    return;
+  }
 
-    storeSubscriptions(
-      subscriptions.filter(({afterRevision}) => afterRevision >= revision),
-    );
-    for (const {awakeableId} of ready) {
-      restate.resolveAwakeable(awakeableId, snapshot);
-    }
-  },
+  storeSubscriptions(
+    subscriptions.filter(({afterRevision}) => afterRevision >= revision),
+  );
+  for (const {awakeableId} of ready) {
+    restate.resolveAwakeable(awakeableId, snapshot);
+  }
+}
 
-  /** Removes an abandoned subscription. Safe to repeat. */
-  *unsubscribe(awakeableId: string): restate.Operation<void> {
-    const subscriptions = yield* readSubscriptions();
-    const remaining = subscriptions.filter(
-      (subscription) => subscription.awakeableId !== awakeableId,
-    );
-    if (remaining.length !== subscriptions.length) {
-      storeSubscriptions(remaining);
-    }
-  },
-};
+/** Removes an abandoned subscription. Safe to repeat. */
+export function* unsubscribe(awakeableId: string): restate.Operation<void> {
+  const subscriptions = yield* readSubscriptions();
+  const remaining = subscriptions.filter(
+    (subscription) => subscription.awakeableId !== awakeableId,
+  );
+  if (remaining.length !== subscriptions.length) {
+    storeSubscriptions(remaining);
+  }
+}

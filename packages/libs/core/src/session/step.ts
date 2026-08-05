@@ -33,7 +33,8 @@ import {approvalSignalName} from "../internal-types.js";
 import {raceBranches} from "../race.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import type {TurnHistory} from "./history.js";
-import {type AgentToolContext, agentTools, type ToolOutcome} from "./tools.js";
+import type {AgentToolContext, ToolOutcome} from "./tools.js";
+import * as agentTools from "./tools.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
 

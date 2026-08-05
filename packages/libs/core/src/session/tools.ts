@@ -725,7 +725,7 @@ function toolResultValue(outcome: ToolOutcome): JSONValue {
   }
 }
 
-function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
+export function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
   return {
     role: "tool",
     content: outcomes.map((outcome): ToolModelMessage["content"][number] => ({
@@ -737,7 +737,7 @@ function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
   };
 }
 
-function toRuntimeMessage({call, outcome}: PendingEvent): ModelMessage {
+export function toRuntimeMessage({call, outcome}: PendingEvent): ModelMessage {
   const result =
     outcome.status === "succeeded"
       ? `completed successfully: ${outcome.result}`
@@ -750,7 +750,7 @@ function toRuntimeMessage({call, outcome}: PendingEvent): ModelMessage {
   };
 }
 
-function transcriptEntries(
+export function transcriptEntries(
   event: ToolOutcome | PendingEvent,
   context: AgentToolContext,
   interruptedPendingReason?: string,
@@ -775,84 +775,78 @@ function transcriptEntries(
   return entries;
 }
 
-export const agentTools = {
-  names: definitions.map(({name}) => name),
+export const names = definitions.map(({name}) => name);
 
-  manifests(discovered: DiscoveredAgentTool[]): ToolManifest[] {
-    return [...definitions.map(toManifest), ...discovered.map(dynamicManifest)];
-  },
+export function manifests(discovered: DiscoveredAgentTool[]): ToolManifest[] {
+  return [...definitions.map(toManifest), ...discovered.map(dynamicManifest)];
+}
 
-  summarize(call: ToolCall): string | undefined {
-    return findTool(call.toolName)?.summarize(call.input);
-  },
+export function summarize(call: ToolCall): string | undefined {
+  return findTool(call.toolName)?.summarize(call.input);
+}
 
-  *execute(
-    call: ToolCall,
-    context: AgentToolContext,
-    discovered: DiscoveredAgentTool[],
-  ): restate.Operation<ToolOutcome> {
-    const tool = findTool(call.toolName);
-    if (!tool) {
-      const dynamic = discovered.find(({name}) => name === call.toolName);
-      if (dynamic) {
-        return yield* executeDynamicTool(dynamic, call);
-      }
-      return {
-        call,
-        status: "failed",
-        error: `unknown tool: ${call.toolName}`,
-      };
+export function* execute(
+  call: ToolCall,
+  context: AgentToolContext,
+  discovered: DiscoveredAgentTool[],
+): restate.Operation<ToolOutcome> {
+  const tool = findTool(call.toolName);
+  if (!tool) {
+    const dynamic = discovered.find(({name}) => name === call.toolName);
+    if (dynamic) {
+      return yield* executeDynamicTool(dynamic, call);
     }
     return {
       call,
-      ...(yield* tool.execute(call.input, {
+      status: "failed",
+      error: `unknown tool: ${call.toolName}`,
+    };
+  }
+  return {
+    call,
+    ...(yield* tool.execute(call.input, {
+      ...context,
+      toolCallId: call.toolCallId,
+    })),
+  };
+}
+
+export function* complete(
+  call: ToolCall,
+  context: AgentToolContext,
+  step: number,
+): restate.Operation<PendingEvent> {
+  const tool = findTool(call.toolName);
+  if (!tool) {
+    return {
+      step,
+      call,
+      outcome: {status: "failed", error: `unknown tool: ${call.toolName}`},
+    };
+  }
+  try {
+    return {
+      step,
+      call,
+      outcome: yield* tool.complete(call.input, {
         ...context,
         toolCallId: call.toolCallId,
-      })),
+      }),
     };
-  },
-
-  *complete(
-    call: ToolCall,
-    context: AgentToolContext,
-    step: number,
-  ): restate.Operation<PendingEvent> {
-    const tool = findTool(call.toolName);
-    if (!tool) {
-      return {
-        step,
-        call,
-        outcome: {status: "failed", error: `unknown tool: ${call.toolName}`},
-      };
+  } catch (error) {
+    if (
+      error instanceof restate.InterruptedError ||
+      error instanceof CancelledError
+    ) {
+      throw error;
     }
-    try {
-      return {
-        step,
-        call,
-        outcome: yield* tool.complete(call.input, {
-          ...context,
-          toolCallId: call.toolCallId,
-        }),
-      };
-    } catch (error) {
-      if (
-        error instanceof restate.InterruptedError ||
-        error instanceof CancelledError
-      ) {
-        throw error;
-      }
-      return {
-        step,
-        call,
-        outcome: {
-          status: "failed",
-          error: `${call.toolName} failed while pending: ${errorMessage(error)}`,
-        },
-      };
-    }
-  },
-
-  toModelMessage,
-  toRuntimeMessage,
-  transcriptEntries,
-};
+    return {
+      step,
+      call,
+      outcome: {
+        status: "failed",
+        error: `${call.toolName} failed while pending: ${errorMessage(error)}`,
+      },
+    };
+  }
+}

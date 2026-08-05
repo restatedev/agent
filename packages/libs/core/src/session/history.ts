@@ -132,149 +132,149 @@ function readEntries(
 /**
  * Handler-scoped access to conversation history for the current AgentSession.
  *
- * These operations must run inside an AgentSession handler. The object is a
- * namespace over Restate's current context and holds no process-local state.
+ * These functions must run inside an AgentSession handler. They use Restate's
+ * current context and hold no process-local state.
  */
-export const history = {
-  *page(fromSequence: number, limit: number): restate.Operation<HistoryPage> {
-    const meta = yield* readMeta();
-    if (fromSequence >= meta.nextSequence) {
-      return {entries: [], nextSequence: fromSequence};
-    }
+export function* page(
+  fromSequence: number,
+  limit: number,
+): restate.Operation<HistoryPage> {
+  const meta = yield* readMeta();
+  if (fromSequence >= meta.nextSequence) {
+    return {entries: [], nextSequence: fromSequence};
+  }
 
-    const entries = yield* readEntries(meta, fromSequence).collect(limit);
-    const last = entries.at(-1);
-    return {
-      entries,
-      nextSequence: last ? last.sequence + 1 : fromSequence,
-    };
-  },
+  const entries = yield* readEntries(meta, fromSequence).collect(limit);
+  const last = entries.at(-1);
+  return {
+    entries,
+    nextSequence: last ? last.sequence + 1 : fromSequence,
+  };
+}
 
-  /**
-   * Loads the transcript state needed by one Turn exactly once.
-   *
-   * The returned writer owns an invocation-local cursor, tail chunk, and
-   * uncompacted prefix. Appending and checking compaction therefore only emit
-   * state writes for the remainder of the Turn.
-   */
-  *openTurn(): restate.Operation<TurnHistory> {
-    const meta = yield* readMeta();
-    const summary = yield* readSummary();
-    const uncompacted = yield* readEntries(
-      meta,
-      (summary?.through ?? 0) + 1,
-    ).collect();
-    let index = Math.floor((meta.nextSequence - 1) / CHUNK_SIZE);
-    let chunk: StoredEntry[] = [];
-    if ((meta.nextSequence - 1) % CHUNK_SIZE !== 0) {
-      chunk =
-        (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ??
-        [];
-    }
-    const agentId = restate.handlerRequest().key;
-    if (!agentId) {
-      throw new TerminalError("history writers require an AgentSession key");
-    }
+/**
+ * Loads the transcript state needed by one Turn exactly once.
+ *
+ * The returned writer owns an invocation-local cursor, tail chunk, and
+ * uncompacted prefix. Appending and checking compaction therefore only emit
+ * state writes for the remainder of the Turn.
+ */
+export function* openTurn(): restate.Operation<TurnHistory> {
+  const meta = yield* readMeta();
+  const summary = yield* readSummary();
+  const uncompacted = yield* readEntries(
+    meta,
+    (summary?.through ?? 0) + 1,
+  ).collect();
+  let index = Math.floor((meta.nextSequence - 1) / CHUNK_SIZE);
+  let chunk: StoredEntry[] = [];
+  if ((meta.nextSequence - 1) % CHUNK_SIZE !== 0) {
+    chunk =
+      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
+  }
+  const agentId = restate.handlerRequest().key;
+  if (!agentId) {
+    throw new TerminalError("history writers require an AgentSession key");
+  }
 
-    return {
-      context(): ConversationContext {
-        return {
-          summary: summary?.text,
-          entries: uncompacted.flatMap(({entry}): ConversationEntry[] =>
-            isDerivedConversationEvent(entry) ? [] : [entry],
-          ),
-        };
-      },
+  return {
+    context(): ConversationContext {
+      return {
+        summary: summary?.text,
+        entries: uncompacted.flatMap(({entry}): ConversationEntry[] =>
+          isDerivedConversationEvent(entry) ? [] : [entry],
+        ),
+      };
+    },
 
-      *append(...entries: ConversationEntry[]): restate.Operation<void> {
-        if (entries.length === 0) {
-          return;
+    *append(...entries: ConversationEntry[]): restate.Operation<void> {
+      if (entries.length === 0) {
+        return;
+      }
+
+      for (const entry of entries) {
+        if (chunk.length >= CHUNK_SIZE) {
+          restate.state().set(chunkKey(index), chunk);
+          index += 1;
+          chunk = [];
         }
+        const stored = {sequence: meta.nextSequence, entry};
+        chunk.push(stored);
+        uncompacted.push(stored);
+        meta.nextSequence += 1;
+      }
 
-        for (const entry of entries) {
-          if (chunk.length >= CHUNK_SIZE) {
-            restate.state().set(chunkKey(index), chunk);
-            index += 1;
-            chunk = [];
-          }
-          const stored = {sequence: meta.nextSequence, entry};
-          chunk.push(stored);
-          uncompacted.push(stored);
-          meta.nextSequence += 1;
-        }
+      restate.state().set(chunkKey(index), chunk);
+      restate.state().set(HISTORY_META, meta);
+      yield* restate.sendClient(Agent, agentId).notify("history");
+    },
 
-        restate.state().set(chunkKey(index), chunk);
-        restate.state().set(HISTORY_META, meta);
-        yield* restate.sendClient(Agent, agentId).notify("history");
-      },
+    *beginCompaction(): restate.Operation<
+      ConversationCompactionPlan | undefined
+    > {
+      if (
+        meta.compaction ||
+        uncompacted.filter(({entry}) => entry.role !== "event").length <
+          COMPACT_AFTER_MESSAGES
+      ) {
+        return undefined;
+      }
 
-      *beginCompaction(): restate.Operation<
-        ConversationCompactionPlan | undefined
-      > {
-        if (
-          meta.compaction ||
-          uncompacted.filter(({entry}) => entry.role !== "event").length <
-            COMPACT_AFTER_MESSAGES
-        ) {
-          return undefined;
-        }
+      meta.compaction = {
+        baseThrough: summary?.through ?? 0,
+        through: meta.nextSequence - 1,
+      };
+      restate.state().set(HISTORY_META, meta);
+      return meta.compaction;
+    },
+  };
+}
 
-        meta.compaction = {
-          baseThrough: summary?.through ?? 0,
-          through: meta.nextSequence - 1,
-        };
-        restate.state().set(HISTORY_META, meta);
-        return meta.compaction;
-      },
-    };
-  },
+// Resolve a reserved cursor range into model input from a shared AgentSession
+// handler. No state is mutated here.
+export function* readCompaction(
+  plan: ConversationCompactionPlan,
+): restate.Operation<ConversationCompactionInput | undefined> {
+  const meta = yield* readMeta();
+  if (!meta.compaction || !samePlan(meta.compaction, plan)) {
+    return undefined;
+  }
 
-  // Resolve a reserved cursor range into model input from a shared AgentSession
-  // handler. No state is mutated here.
-  *readCompaction(
-    plan: ConversationCompactionPlan,
-  ): restate.Operation<ConversationCompactionInput | undefined> {
-    const meta = yield* readMeta();
-    if (!meta.compaction || !samePlan(meta.compaction, plan)) {
-      return undefined;
-    }
+  const summary = yield* readSummary();
+  const entries = (yield* readEntries(
+    meta,
+    plan.baseThrough + 1,
+    plan.through,
+  ).collect()).map(({entry}) => entry);
+  return {
+    ...plan,
+    previousSummary: summary?.text,
+    entries,
+  };
+}
 
-    const summary = yield* readSummary();
-    const entries = (yield* readEntries(
-      meta,
-      plan.baseThrough + 1,
-      plan.through,
-    ).collect()).map(({entry}) => entry);
-    return {
-      ...plan,
-      previousSummary: summary?.text,
-      entries,
-    };
-  },
+// Apply only the result for the currently reserved finished-turn prefix.
+// Newer transcript entries do not invalidate that checkpoint.
+export function* finishCompaction(
+  result: ConversationCompactionResult,
+): restate.Operation<boolean> {
+  const meta = yield* readMeta();
+  const pending = meta.compaction;
+  if (!pending || !samePlan(pending, result)) {
+    return false;
+  }
 
-  // Apply only the result for the currently reserved finished-turn prefix.
-  // Newer transcript entries do not invalidate that checkpoint.
-  *finishCompaction(
-    result: ConversationCompactionResult,
-  ): restate.Operation<boolean> {
-    const meta = yield* readMeta();
-    const pending = meta.compaction;
-    if (!pending || !samePlan(pending, result)) {
-      return false;
-    }
+  delete meta.compaction;
+  restate.state().set(HISTORY_META, meta);
+  if (result.status === "failed") {
+    return false;
+  }
 
-    delete meta.compaction;
-    restate.state().set(HISTORY_META, meta);
-    if (result.status === "failed") {
-      return false;
-    }
-
-    // ConversationCompactionResultSchema already trims the summary and
-    // rejects an empty one at the applyCompaction handler boundary.
-    restate.state().set(HISTORY_SUMMARY, {
-      through: pending.through,
-      text: result.summary,
-    } satisfies ConversationSummary);
-    return true;
-  },
-};
+  // ConversationCompactionResultSchema already trims the summary and
+  // rejects an empty one at the applyCompaction handler boundary.
+  restate.state().set(HISTORY_SUMMARY, {
+    through: pending.through,
+    text: result.summary,
+  } satisfies ConversationSummary);
+  return true;
+}

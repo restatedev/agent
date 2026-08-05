@@ -47,49 +47,49 @@ function store(all: StoredSchedule[]): void {
  * the public schedule view; delayed invocation IDs remain an implementation
  * detail used to reject stale timer deliveries.
  */
-export const schedules = {
-  *list(): restate.Operation<ScheduledMessage[]> {
-    return (yield* readSchedules()).map(visible);
-  },
+export function* list(): restate.Operation<ScheduledMessage[]> {
+  return (yield* readSchedules()).map(visible);
+}
 
-  *get(scheduleId: string): restate.Operation<StoredSchedule | undefined> {
-    return (yield* readSchedules()).find(
-      (schedule) => schedule.scheduleId === scheduleId,
-    );
-  },
+export function* get(
+  scheduleId: string,
+): restate.Operation<StoredSchedule | undefined> {
+  return (yield* readSchedules()).find(
+    (schedule) => schedule.scheduleId === scheduleId,
+  );
+}
 
-  *set(
-    schedule: ScheduledMessage,
-    timerId: string,
-  ): restate.Operation<{replaced: boolean} | {error: string}> {
-    const all = yield* readSchedules();
-    const index = all.findIndex(
-      (candidate) => candidate.scheduleId === schedule.scheduleId,
-    );
-    if (index < 0 && all.length >= MAX_SCHEDULES) {
-      return {error: `schedules are limited to ${MAX_SCHEDULES} entries`};
-    }
+export function* set(
+  schedule: ScheduledMessage,
+  timerId: string,
+): restate.Operation<{replaced: boolean} | {error: string}> {
+  const all = yield* readSchedules();
+  const index = all.findIndex(
+    (candidate) => candidate.scheduleId === schedule.scheduleId,
+  );
+  if (index < 0 && all.length >= MAX_SCHEDULES) {
+    return {error: `schedules are limited to ${MAX_SCHEDULES} entries`};
+  }
 
-    const stored = {...schedule, timerId};
-    if (index < 0) {
-      all.push(stored);
-    } else {
-      all[index] = stored;
-    }
-    store(all);
-    return {replaced: index >= 0};
-  },
+  const stored = {...schedule, timerId};
+  if (index < 0) {
+    all.push(stored);
+  } else {
+    all[index] = stored;
+  }
+  store(all);
+  return {replaced: index >= 0};
+}
 
-  *remove(scheduleId: string): restate.Operation<StoredSchedule | undefined> {
-    const all = yield* readSchedules();
-    const index = all.findIndex(
-      (schedule) => schedule.scheduleId === scheduleId,
-    );
-    if (index < 0) {
-      return undefined;
-    }
-    const [removed] = all.splice(index, 1);
-    store(all);
-    return removed;
-  },
-};
+export function* remove(
+  scheduleId: string,
+): restate.Operation<StoredSchedule | undefined> {
+  const all = yield* readSchedules();
+  const index = all.findIndex((schedule) => schedule.scheduleId === scheduleId);
+  if (index < 0) {
+    return undefined;
+  }
+  const [removed] = all.splice(index, 1);
+  store(all);
+  return removed;
+}
