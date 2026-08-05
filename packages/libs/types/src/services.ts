@@ -11,8 +11,8 @@ import {
   AgentNotificationUnsubscribeSchema,
   AgentNotificationWatchRequestSchema,
   AgentProfileSchema,
-  AgentSessionOutcomeSchema,
   AgentSessionRequestSchema,
+  AgentTurnOutcomeSchema,
   ApprovalCancellationSchema,
   ApprovalRequestSchema,
   ApprovalResolutionSchema,
@@ -105,8 +105,8 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     output: z.boolean(),
   }),
   onTurnEnd: iface.schemas({
-    input: AgentSessionOutcomeSchema,
-    output: AgentSessionOutcomeSchema.nullable(),
+    input: AgentTurnOutcomeSchema,
+    output: AgentTurnOutcomeSchema.nullable(),
   }),
 });
 

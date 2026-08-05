@@ -24,8 +24,8 @@ import {
 } from "../gateway/index.js";
 import {
   AGENT_SESSION_SIGNALS,
-  type AgentSessionOutcome,
   type AgentSessionRequest,
+  type AgentTurnOutcome,
 } from "../internal-types.js";
 import {raceBranches} from "../race.js";
 import {Sandbox} from "../sandbox/index.js";
@@ -114,7 +114,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
       const turnId = restate.handlerRequest().id;
       let state: AgentSessionState | undefined;
       let transcript: TurnHistory | undefined;
-      let outcome: AgentSessionOutcome;
+      let outcome: AgentTurnOutcome;
       try {
         transcript = yield* history.openTurn();
         yield* transcript.append(...req.entries);
@@ -652,7 +652,7 @@ type EarlyExit =
 function* finalizeEarlyExit(
   state: AgentSessionState,
   exit: EarlyExit,
-): restate.Operation<AgentSessionOutcome> {
+): restate.Operation<AgentTurnOutcome> {
   yield* reportProgress(
     state,
     "finalizing",
@@ -768,7 +768,7 @@ function* consumeSteering(
   state.consumedSteering += steering.length;
 }
 
-function outcomeEntries(outcome: AgentSessionOutcome): ConversationEntry[] {
+function outcomeEntries(outcome: AgentTurnOutcome): ConversationEntry[] {
   switch (outcome.status) {
     case "completed":
       return [

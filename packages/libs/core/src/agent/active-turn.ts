@@ -6,9 +6,9 @@ import type {ConversationEntry} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {
   AGENT_SESSION_SIGNALS,
-  type AgentSessionOutcome,
   type AgentSessionRequest,
   type AgentSessionSteering,
+  type AgentTurnOutcome,
 } from "../internal-types.js";
 import {AgentSession} from "../session/index.js";
 
@@ -25,7 +25,7 @@ type ActiveTurnState = {
 /** Information returned when an active turn is successfully retired. */
 type FinishedTurn = {
   /** Final outcome after reconciling a late accepted interruption. */
-  outcome: AgentSessionOutcome;
+  outcome: AgentTurnOutcome;
   /** Transcript entries that must open the next turn, in original order. */
   queuedEntries: ConversationEntry[];
 };
@@ -144,7 +144,7 @@ export function* steer(
  * does not belong to the active turn.
  */
 export function* finish(
-  outcome: AgentSessionOutcome,
+  outcome: AgentTurnOutcome,
 ): restate.Operation<FinishedTurn | undefined> {
   const active = yield* current();
   if (active?.id !== outcome.turnId) {

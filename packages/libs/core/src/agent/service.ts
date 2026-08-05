@@ -24,7 +24,7 @@ import {AgentDefinition} from "@restate-agents/types/services";
 import {rpc, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {
-  AgentSessionOutcome,
+  AgentTurnOutcome,
   MemoryUpdate,
   MemoryUpdateResult,
 } from "../internal-types.js";
@@ -457,7 +457,7 @@ export const Agent = restate.implement(AgentDefinition, {
      * @returns The reconciled outcome AgentSession must append, or `null` for
      * a stale or duplicate outcome.
      */
-    *onTurnEnd(outcome): restate.Operation<AgentSessionOutcome | null> {
+    *onTurnEnd(outcome): restate.Operation<AgentTurnOutcome | null> {
       const finished = yield* activeTurn.finish(outcome);
       if (!finished) {
         return null;

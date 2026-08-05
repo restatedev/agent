@@ -311,7 +311,7 @@ from its own AgentSession state. It returns void to its one-way caller and
 reports one outcome to Agent:
 
 ```ts
-type AgentSessionOutcome =
+type AgentTurnOutcome =
   | {status: "completed"; turnId: string; response: string; consumedSteering: number}
   | {status: "interrupted"; turnId: string; reason: string; response?: string; consumedSteering: number}
   | {status: "stopped"; turnId: string; cause: "step_limit"; reason: string; response: string; consumedSteering: number}

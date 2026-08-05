@@ -476,33 +476,33 @@ export const AgentSessionRequestSchema = AgentProfileSchema.extend({
 });
 export type AgentSessionRequest = z.infer<typeof AgentSessionRequestSchema>;
 
-const AgentSessionOutcomeBaseSchema = z.object({
+const AgentTurnOutcomeBaseSchema = z.object({
   turnId: z.string(),
   consumedSteering: z.number().int().nonnegative(),
 });
 
-export const AgentSessionOutcomeSchema = z.discriminatedUnion("status", [
-  AgentSessionOutcomeBaseSchema.extend({
+export const AgentTurnOutcomeSchema = z.discriminatedUnion("status", [
+  AgentTurnOutcomeBaseSchema.extend({
     status: z.literal("completed"),
     response: z.string(),
   }),
-  AgentSessionOutcomeBaseSchema.extend({
+  AgentTurnOutcomeBaseSchema.extend({
     status: z.literal("interrupted"),
     reason: z.string(),
     response: z.string().optional(),
   }),
-  AgentSessionOutcomeBaseSchema.extend({
+  AgentTurnOutcomeBaseSchema.extend({
     status: z.literal("stopped"),
     cause: z.literal("step_limit"),
     reason: z.string(),
     response: z.string(),
   }),
-  AgentSessionOutcomeBaseSchema.extend({
+  AgentTurnOutcomeBaseSchema.extend({
     status: z.literal("failed"),
     error: z.string(),
   }),
 ]);
-export type AgentSessionOutcome = z.infer<typeof AgentSessionOutcomeSchema>;
+export type AgentTurnOutcome = z.infer<typeof AgentTurnOutcomeSchema>;
 
 const CompactionRangeShape = {
   baseThrough: z.number().int().nonnegative(),
