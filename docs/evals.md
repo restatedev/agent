@@ -119,23 +119,17 @@ races the watch against its durable case deadline.
    replacement request, then checks that the old turn finalizes before the
    successor session appends the queued replacement and adjacent dispatch
    boundary, and that a new turn answers it.
-6. `execution-limit` asks for more weather lookups than the 24-tool-call budget
-   allows, in small batches. It checks that the budget stops the turn through
-   the guarded finalization path — a `stopped` outcome with a `tool_limit`
-   boundary carrying completed work — rather than publishing an internal budget
-   error as a failed answer, and that every completed city result survives into
-   that answer.
-7. `context-reduction` makes one small call to the cheap turn-context model
+6. `context-reduction` makes one small call to the cheap turn-context model
    with synthetic completed, failed, and unresolved tool records. It verifies
    that all three survive reduction without paying for enough full agent runs
    to manufacture a 32 KB working context.
-8. `memory` asks the agent to remember a preference and checks the metadata-only
+7. `memory` asks the agent to remember a preference and checks the metadata-only
    memory event, its ordering, and the durable profile entry.
-9. `scheduling` creates, lists, and cancels one delayed message without model
+8. `scheduling` creates, lists, and cancels one delayed message without model
    inference, then lets a one-shot schedule wake an idle Agent. It checks the
    firing route, adjacent user entry, terminal response, and one-shot state
    cleanup with one small agent run.
-10. Six isolated guardrail cases cover:
+9. Six isolated guardrail cases cover:
    - `guardrail-approval` verifies the configured guardrail through the
      authoritative profile, verifies the pending request as a structured
      history event, approves exactly one request, and checks that the decision
@@ -165,15 +159,6 @@ curl localhost:8080/Evals/all \
   -d '{}'
 ```
 
-Pass `cases` to re-run a subset with identical isolation and assertions, which
-keeps a probabilistic case cheap to repeat:
-
-```sh
-curl localhost:8080/Evals/all \
-  -H 'content-type: application/json' \
-  -d '{"cases":["execution-limit"],"timeoutSeconds":300}'
-```
-
 The focused context-reduction contract can be run by itself. It performs one
 small `gpt-4o-mini` call and no full agent inference:
 
@@ -185,8 +170,8 @@ curl localhost:8080/Evals/all \
 
 The user-facing conversation event log records tool call IDs, names, and
 lifecycle statuses, but intentionally omits tool inputs and results. Protocol
-graders such as the steering timer-restart check and execution-budget check
-consume these structured events. Internal properties such as actual tool
+graders such as the steering timer-restart check consume these structured
+events. Internal properties such as actual tool
 parallelism still require a later journal/trace observation layer or a scripted
 model/tool mode; the event log proves intent and settlement order, not physical
 overlap.

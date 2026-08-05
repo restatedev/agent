@@ -311,7 +311,7 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
     role: z.literal("event"),
     type: z.literal("stop"),
     turnId: z.string(),
-    cause: z.enum(["step_limit", "tool_limit"]),
+    cause: z.literal("step_limit"),
     reason: z.string(),
   }),
   z.object({
@@ -493,7 +493,7 @@ export const AgentSessionOutcomeSchema = z.discriminatedUnion("status", [
   }),
   AgentSessionOutcomeBaseSchema.extend({
     status: z.literal("stopped"),
-    cause: z.enum(["step_limit", "tool_limit"]),
+    cause: z.literal("step_limit"),
     reason: z.string(),
     response: z.string(),
   }),

@@ -55,7 +55,6 @@ type AgentStepResult =
       guardrailId: string;
       reason: string;
     })
-  | (GuardrailDecisions & {type: "tool_budget_exceeded"})
   | {type: "interrupted"; reason: string; tools?: ToolStep};
 
 /**
@@ -74,7 +73,6 @@ export function* agentStep({
   approvedActions,
   rejectedGuardrails,
   stepNumber,
-  remainingToolCalls,
   discoveredTools,
 }: {
   context: AgentToolContext;
@@ -86,7 +84,6 @@ export function* agentStep({
   approvedActions: GuardrailApproval[];
   rejectedGuardrails: string[];
   stepNumber: number;
-  remainingToolCalls: number;
   discoveredTools: DiscoveredAgentTool[];
 }): Operation<AgentStepResult> {
   let activeTools:
@@ -106,16 +103,6 @@ export function* agentStep({
     });
     if (action.type === "error") {
       return {...action, approvedActions: [], rejectedGuardrails: []};
-    }
-    if (
-      action.type === "tool_calls" &&
-      action.calls.length > remainingToolCalls
-    ) {
-      return {
-        type: "tool_budget_exceeded",
-        approvedActions: [],
-        rejectedGuardrails: [],
-      };
     }
 
     const proposed: ProposedAction =

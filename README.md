@@ -129,7 +129,7 @@ input, builds model context, and then writes new entries through an
 invocation-local transcript writer. It does not repeatedly read/modify/write
 the whole conversation.
 
-The running invocation owns working messages, step/tool budgets, guardrail
+The running invocation owns working messages, the step bound, guardrail
 decisions, the steering inbox, pending operations, discovered tool snapshot,
 sandbox lease context, and context-reduction bookkeeping. Each iteration
 spawns one bounded `agentStep`, applies its returned delta, and decides whether
@@ -310,7 +310,7 @@ notification revisions, and returns code-based assertions over transcript
 structure, ordering, IDs, profile state, and terminal outcomes.
 
 The current suite covers basic completion, steering, interruption, external
-cancellation, interruption with replacement input, execution limits, active
+cancellation, interruption with replacement input, active
 context reduction, memory, schedules, and six guardrail/approval flows.
 
 ```sh

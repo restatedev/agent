@@ -18,7 +18,6 @@ const EvalCaseIdSchema = z.enum([
   "interruption",
   "external-cancellation",
   "interruption-replacement",
-  "execution-limit",
   "context-reduction",
   "memory",
   "scheduling",
@@ -674,108 +673,6 @@ function* interruptionReplacement({
     assertion(
       "a new turn answers the replacement request",
       secondResponse.includes("paris"),
-    ),
-  ];
-}
-
-// Reaching an execution budget must stop the Turn through the guarded,
-// tool-free finalization path rather than publishing an internal budget error
-// as a failed assistant answer.
-function* executionLimit({
-  agentId,
-  history,
-}: EvalContext): restate.Operation<EvalAssertion[]> {
-  // More cities than the 24-tool-call budget in turn.ts, requested in small
-  // batches so some weather work completes before the budget is refused.
-  const cities = [
-    "Lisbon",
-    "Madrid",
-    "Dublin",
-    "Oslo",
-    "Helsinki",
-    "Riga",
-    "Vilnius",
-    "Tallinn",
-    "Sofia",
-    "Bucharest",
-    "Zagreb",
-    "Ljubljana",
-    "Bratislava",
-    "Budapest",
-    "Valletta",
-    "Nicosia",
-    "Reykjavik",
-    "Bern",
-    "Vaduz",
-    "Monaco",
-    "Andorra la Vella",
-    "San Marino",
-    "Luxembourg",
-    "Brussels",
-    "Amsterdam",
-    "Copenhagen",
-    "Stockholm",
-    "Warsaw",
-  ];
-  const ask = yield* restate.client(Agent, agentId).ask({
-    message: `Report the current weather in each of these ${cities.length} cities: ${cities.join(", ")}. Call the weather tool for at most five cities per response.`,
-  });
-  requireStarted(ask);
-  const terminal = yield* waitForHistory(
-    history,
-    "the budget-limited turn to finish",
-    isTerminalFor(ask.turnId),
-  );
-  const response =
-    terminal.entry.role === "assistant"
-      ? terminal.entry.text.toLowerCase()
-      : "";
-  const limitBoundary = history.entries.find(
-    ({entry}) =>
-      entry.role === "event" &&
-      entry.type === "stop" &&
-      entry.turnId === ask.turnId &&
-      entry.cause === "tool_limit" &&
-      entry.reason.toLowerCase().includes("limit"),
-  );
-  const finalizing = history.entries.find(
-    ({entry}) =>
-      entry.role === "event" &&
-      entry.type === "progress" &&
-      entry.turnId === ask.turnId &&
-      entry.phase === "finalizing",
-  );
-  const weatherCalls = toolStartCount(history, ask.turnId, "getWeather");
-  const reportedCities = cities.filter((city) =>
-    response.includes(city.toLowerCase()),
-  ).length;
-
-  return [
-    assertion(
-      "the turn stops with a runtime-limit outcome rather than a failure",
-      terminal.entry.role === "assistant" &&
-        terminal.entry.status === "stopped",
-      terminal.entry.role === "assistant"
-        ? `status was ${terminal.entry.status}`
-        : "no terminal entry",
-    ),
-    assertion(
-      "the runtime records an execution-limit boundary",
-      limitBoundary !== undefined && limitBoundary.sequence < terminal.sequence,
-    ),
-    assertion(
-      "the Turn reports finalization before answering",
-      finalizing !== undefined && finalizing.sequence < terminal.sequence,
-    ),
-    assertion(
-      "the tool-call budget is enforced",
-      weatherCalls > 0 && weatherCalls <= 24,
-      `${weatherCalls} getWeather calls started`,
-    ),
-    assertion(
-      "every completed weather result survives into the final answer",
-      reportedCities >= weatherCalls,
-      `${reportedCities} cities reported for ${weatherCalls} completed calls`,
     ),
   ];
 }
@@ -1573,7 +1470,6 @@ const EVAL_CASES: ReadonlyArray<{
   {caseId: "interruption", scenario: interruption},
   {caseId: "external-cancellation", scenario: externalCancellation},
   {caseId: "interruption-replacement", scenario: interruptionReplacement},
-  {caseId: "execution-limit", scenario: executionLimit},
   {caseId: "context-reduction", scenario: contextReduction},
   {caseId: "memory", scenario: memory},
   {caseId: "scheduling", scenario: scheduling},

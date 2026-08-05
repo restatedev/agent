@@ -42,7 +42,7 @@ ordinary durable RPCs.
 - Invocation cancellation rejects a parked operation at the handler boundary.
   The catch path records local cancellation state, one-way releases the
   sandbox, one-way reconciles Agent, and rethrows `CancelledError`.
-- Graceful interruption and budget exhaustion share one guarded, tool-free
+- Graceful interruption and step-limit exhaustion share one guarded, tool-free
   finalization path over completed work.
 - The steering receiver runs alongside a step. Steering is drained only at
   defined boundaries after the step settles.
@@ -53,21 +53,21 @@ ordinary durable RPCs.
 
 ## Agent-loop iterations
 
-- A run performs at most 50 loop iterations and 24 total tool calls.
+- A run performs at most 50 loop iterations. The runtime does not impose a
+  separate limit on the number of tool calls proposed within or across steps.
 - Each step receives a copy of the complete live model context accumulated by
   the run.
 - Persistent memories are injected once as data before conversation context;
   user instructions are supplied to every agent-model call.
-- A normal iteration returns text, tool outcomes, a recoverable model error, a
-  guardrail block, or a tool-budget stop.
+- A normal iteration returns text, tool outcomes, a recoverable model error, or
+  a guardrail block.
 - Invalid or empty model output becomes corrective user feedback and another
-  step within the same budget.
+  step within the turn's step bound.
 - Provider or orchestration failures stop foreground and pending tasks.
   Interruption and cancellation errors propagate; other failures become a
   structured `failed` outcome.
-- Reaching a budget stops pending work and makes one tool-free final call. The
-  outcome is `stopped` with `step_limit` or `tool_limit`, not a user
-  interruption.
+- Reaching the step bound stops pending work and makes one tool-free final
+  call. The outcome is `stopped` with `step_limit`, not a user interruption.
 
 The run also bounds its private working context. When messages added during
 the current run exceed 32,000 serialized characters, no operation is pending,
@@ -176,7 +176,7 @@ write history.
 - If final generation fails, the interrupted outcome carries an explanatory
   fallback.
 
-Execution limits use the same cleanup/finalization mechanics but produce a
+The step limit uses the same cleanup/finalization mechanics but produces a
 `stopped` outcome and a `stop` transcript event. External cancellation skips
 model finalization and rethrows cancellation to Restate.
 
@@ -215,7 +215,7 @@ Any rewrite must preserve:
 8. Honest completion-versus-cancellation races.
 9. Tool-free interruption finalization using only retained work.
 10. Distinct `completed`, `interrupted`, `stopped`, and `failed` outcomes.
-11. The 50-step and 24-tool-call budgets.
+11. The 50-step turn bound, without a separate tool-call budget.
 12. Stable profile input for the lifetime of a turn.
 13. Guardrail evaluation before publishing text or spawning proposed tools.
 14. Durable approval before protected work and reevaluation after steering.

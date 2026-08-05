@@ -314,7 +314,7 @@ reports one outcome to Agent:
 type AgentSessionOutcome =
   | {status: "completed"; turnId: string; response: string; consumedSteering: number}
   | {status: "interrupted"; turnId: string; reason: string; response?: string; consumedSteering: number}
-  | {status: "stopped"; turnId: string; cause: "step_limit" | "tool_limit"; reason: string; response: string; consumedSteering: number}
+  | {status: "stopped"; turnId: string; cause: "step_limit"; reason: string; response: string; consumedSteering: number}
   | {status: "failed"; turnId: string; error: string; consumedSteering: number};
 ```
 

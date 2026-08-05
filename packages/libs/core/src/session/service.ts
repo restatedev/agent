@@ -1,6 +1,6 @@
 // AgentSession is a Virtual Object keyed by agent id. One doTurn invocation is
 // the durable agent-turn state machine and owns transient model context,
-// control-signal consumption, budgets, and pending tools. Each iteration
+// control-signal consumption, step bounds, and pending tools. Each iteration
 // spawns one bounded agent step and applies its returned data.
 
 import type {
@@ -61,13 +61,11 @@ type AgentSessionState = {
   steeringInbox: ReturnType<typeof createSteeringInbox>;
   consumedSteering: number;
   steps: number;
-  toolCalls: number;
   pending: ReturnType<typeof createPendingOperations>;
   discoveredTools: DiscoveredAgentTool[];
 };
 
 const MAX_STEPS = 50;
-const MAX_TOOL_CALLS = 24;
 const MAX_TURN_CONTEXT_CHARS = 32_000;
 
 /**
@@ -102,7 +100,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
     /**
      * Executes one complete durable conversation Turn.
      *
-     * The invocation owns transient model context, tool and step budgets,
+     * The invocation owns transient model context, the step bound,
      * steering consumption, interruption, pending operations, and the
      * agent-scoped sandbox lease. It releases the sandbox and reports exactly
      * one terminal outcome to the owning Agent on every handled exit.
@@ -144,7 +142,6 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           steeringInbox: createSteeringInbox(),
           consumedSteering: 0,
           steps: 0,
-          toolCalls: 0,
           pending: createPendingOperations(),
           discoveredTools: [],
         };
@@ -256,7 +253,6 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
                 rejectedGuardrails: [...turnState.rejectedGuardrails],
                 transcript: turnState.transcript,
                 stepNumber: turnState.steps + 1,
-                remainingToolCalls: MAX_TOOL_CALLS - turnState.toolCalls,
                 discoveredTools: turnState.discoveredTools,
               }),
             );
@@ -412,15 +408,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
                 });
                 continue;
 
-              case "tool_budget_exceeded":
-                return yield* finalizeEarlyExit(turnState, {
-                  status: "stopped",
-                  cause: "tool_limit",
-                  reason: `The agent reached its ${MAX_TOOL_CALLS}-tool-call limit.`,
-                });
-
               case "tools":
-                turnState.toolCalls += step.action.calls.length;
                 yield* appendToolTranscript(turnState, step.outcomes);
                 {
                   const applied = yield* turnState.pending.apply(
@@ -657,7 +645,7 @@ type EarlyExit =
   | {status: "interrupted"; reason: string}
   | {
       status: "stopped";
-      cause: "step_limit" | "tool_limit";
+      cause: "step_limit";
       reason: string;
     };
 

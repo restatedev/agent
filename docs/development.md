@@ -271,7 +271,7 @@ When changing `session/service.ts` or `session/step.ts`:
 4. never execute a guardrail-denied batch;
 5. keep pending tasks across steps;
 6. preserve completed results during finalization;
-7. retain both tool and step budgets.
+7. retain the 50-step turn bound.
 
 ### History
 

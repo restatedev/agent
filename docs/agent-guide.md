@@ -137,7 +137,7 @@ The detailed turn-runtime list lives in
 | Instructions, memories, guardrails | `agent/profile.ts` |
 | Pending approval state and decision signal | `agent/approval.ts` |
 | Durable scheduled-message state | `agent/schedules.ts` |
-| Cross-step loop, transcript append, budgets, finalization, context reduction | `session/service.ts` |
+| Cross-step loop, transcript append, step bound, finalization, context reduction | `session/service.ts` |
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |
 | Pending tool tasks and cancellation races | `session/pending.ts` |

@@ -85,7 +85,7 @@ local writer and emit state writes without rereading transcript state.
 The turn state machine owns:
 
 - model messages and the stable profile snapshot supplied by Agent;
-- step and tool-call budgets;
+- the 50-step execution bound;
 - guardrail approvals, rejections, and block tracking;
 - steering consumption count and the signal inbox;
 - pending tool tasks;
