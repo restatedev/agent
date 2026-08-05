@@ -4,6 +4,7 @@
     "lib": ["esnext"],
     "types": ["node"],
     "module": "nodenext",
+    "verbatimModuleSyntax": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,

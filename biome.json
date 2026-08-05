@@ -24,6 +24,10 @@
       "preset": "recommended",
       "correctness": {
         "useYield": "off"
+      },
+      "style": {
+        "useExportType": "error",
+        "useImportType": "error"
       }
     }
   },
