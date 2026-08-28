@@ -59,7 +59,6 @@ export type SnapshotPointer = {
 
 /** One Restate state value. Only the segment at meta.tailSegment is mutable. */
 export type HistorySegment = {
-  index: number;
   messages: StoredMessage[];
 };
 
@@ -104,11 +103,12 @@ export const ConversationHistory = restate.object({
       let tail = yield* readSegment(meta.tailSegment);
 
       if (tail.messages.length === MESSAGES_PER_SEGMENT) {
-        tail = {index: ++meta.tailSegment, messages: []};
+        meta.tailSegment += 1;
+        tail = {messages: []};
       }
       tail.messages.push({sequence: meta.nextSequence++, message});
 
-      restate.state().set(segmentKey(tail.index), tail);
+      restate.state().set(segmentKey(meta.tailSegment), tail);
       const plan = reservePrefix(meta, id);
       restate.state().set(META_KEY, meta);
       if (plan) {
@@ -239,7 +239,7 @@ function* readSegment(index: number): restate.Operation<HistorySegment> {
   return (
     (yield* restate
       .sharedState()
-      .get<HistorySegment>(segmentKey(index))) ?? {index, messages: []}
+      .get<HistorySegment>(segmentKey(index))) ?? {messages: []}
   );
 }
 
