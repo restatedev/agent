@@ -57,15 +57,6 @@ export type SnapshotPointer = {
   throughSequence: number;
 };
 
-/** Exact JSON represented by a SnapshotPointer. */
-export type SnapshotDocument = {
-  formatVersion: 1;
-  conversationId: string;
-  /** Previous cold block; null for the first offload. */
-  previous: SnapshotPointer | null;
-  messages: StoredMessage[];
-};
-
 /** One Restate state value. Only the segment at meta.tailSegment is mutable. */
 export type HistorySegment = {
   index: number;
@@ -173,14 +164,9 @@ export const ConversationHistory = restate.object({
         throw new TerminalError("offload plan does not match local history");
       }
 
-      const document: SnapshotDocument = {
-        formatVersion: 1,
-        conversationId: id,
-        previous: plan.previousSnapshot,
-        messages,
-      };
+      const blob = JSON.stringify({previous: plan.previousSnapshot, messages});
       const snapshot = yield* restate.run(
-        ({signal}) => putSnapshot(plan, document, signal),
+        ({signal}) => putSnapshot(plan, blob, signal),
         {name: "put-history-snapshot"},
       );
 
@@ -337,15 +323,14 @@ type PutObjectRequest = {
 
 async function putSnapshot(
   plan: OffloadPlan,
-  document: SnapshotDocument,
+  blob: string,
   signal: AbortSignal,
 ): Promise<SnapshotPointer> {
-  const body = JSON.stringify(document);
   const {etag} = await putObject(
     {
       bucket: plan.target.bucket,
       key: plan.target.key,
-      body,
+      body: blob,
       contentType: "application/json",
     },
     signal,
