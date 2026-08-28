@@ -1,95 +1,177 @@
 /**
  * Standalone example: lazy conversation history with cold-prefix offload.
  *
- * This Virtual Object is intentionally not registered by the application. It
- * demonstrates a storage protocol close to AgentSession without depending on
- * the rest of the agent runtime:
+ * ## What is stored
  *
- * - `append` adds messages to one mutable tail-segment key;
- * - every segment before the tail is immutable;
- * - shared `offloadPrefix` copies a reserved immutable prefix to an S3-shaped
- *   boundary inside `restate.run`; and
- * - exclusive `applyOffload` installs the returned pointer before clearing the
- *   corresponding local keys.
+ * Metadata and message segments are stored as independent values. `append`
+ * and `offloadPrefix` opt into lazy state because they touch only selected
+ * segments; `applyOffload` and `history` use eager state:
  *
- * With three hot segments retained, the state transition is:
+ * - `history/meta` holds `messageSequence`, `headSegment`, `tailSegment`, and
+ *   an optional `PendingOffload`. `messageSequence` is `0` for an empty
+ *   history and otherwise identifies the latest append.
+ * - `history/segment/<n>` holds one `{messages: string[]}` value. Only the tail
+ *   is mutable. Filling it advances `tailSegment`, making the full segment
+ *   immutable and eligible for offload.
+ * - `<archive prefix>/<zero-padded segment>.json` is one cold object containing
+ *   that segment's message array. The object body needs no pointer, sequence,
+ *   or segment metadata because its key supplies identity and ordering.
+ *
+ * The application owns the archive bucket and root prefix as process-level
+ * configuration. A conversation's full prefix is derived from its Virtual
+ * Object key, so no archive location is stored per conversation. The segment
+ * capacity is also an internal storage detail and is not part of the read
+ * contract.
+ *
+ * ## Offload protocol
  *
  * ```text
- * before: meta { head: s0, tail: s6, snapshot: null }
- *         state  s0 s1 s2 s3 s4 s5 s6
+ * append (exclusive)
+ *   ├─ append to the mutable tail
+ *   ├─ advance messageSequence
+ *   ├─ when full, advance the tail
+ *   └─ reserve an immutable range and send offloadPrefix
+ *                                      │
+ *                                      ▼
+ * offloadPrefix (shared)
+ *   ├─ derive the conversation archive prefix from the object key
+ *   ├─ read the reserved immutable segments
+ *   ├─ restate.run(upload one object per segment)
+ *   └─ send applyOffload
+ *                 │
+ *                 ▼
+ * applyOffload (exclusive)
+ *   ├─ advance the committed cold/hot boundary
+ *   └─ clear the archived local segment keys
+ * ```
  *
- * after:  meta { head: s4, tail: s6, snapshot: s0..s3 }
- *         state              s4 s5 s6
- *         S3     [s0 s1 s2 s3] <- snapshot pointer
+ * The upload runs in a shared handler, so exclusive appends can continue while
+ * it is in flight. `PendingOffload` reserves a stable, sealed range and prevents
+ * overlapping uploads. If several segments accumulate, one `restate.run`
+ * uploads multiple objects—still one object per segment. Deterministic keys
+ * make a partially completed batch safe to retry.
+ *
+ * The example's object-store boundary only logs the bucket, key, and complete
+ * JSON body. Replacing that log with an S3 `PutObject` call does not change the
+ * Restate protocol around it.
+ *
+ * ## Read contract
+ *
+ * `history()` does not download cold objects. It returns:
+ *
+ * - `archive: null` until the first offload commits, otherwise the derived
+ *   `{bucket, prefix}` plus `messageCount`, the number of committed archived
+ *   messages computed as `messageSequence - recent.length`; and
+ * - `recent`, the flattened suffix read from `headSegment..tailSegment` in
+ *   Restate state.
+ *
+ * To reconstruct the complete conversation, a reader lists and paginates the
+ * returned prefix, concatenates objects in key order until it has read
+ * `archive.messageCount` messages, and finally appends `recent`.
+ *
+ * A settled conversation with three archived and eight live segments looks
+ * like this:
+ *
+ * ```text
+ * archive  000000000000.json  000000000001.json  000000000002.json
+ *             segment 0           segment 1           segment 2
+ *
+ * Restate              segment 3 ... segment 10
+ * meta       { messageSequence: 321, head: 3, tail: 10, offload: null }
+ * response   { archive: { messageCount: 96 }, recent: messages 97..321 }
+ * ```
+ *
+ * ## Try it
+ *
+ * With a local Restate server already running, start this endpoint in one
+ * terminal:
+ *
+ * ```shell
+ * pnpm --filter @restate-agents/core example:conversation-history
+ * ```
+ *
+ * In a second terminal, register it and populate a fresh Virtual Object key:
+ *
+ * ```shell
+ * restate deployments register http://localhost:9080
+ *
+ * for i in {1..321}; do
+ *   curl -s http://localhost:8080/ConversationHistoryExample/archive-listing-demo/append \
+ *     -H 'content-type: application/json' \
+ *     -d "\"Berlin itinerary note $i\""
+ * done
+ *
+ * curl -s -X POST \
+ *   http://localhost:8080/ConversationHistoryExample/archive-listing-demo/history
+ * ```
+ *
+ * Abbreviated `history()` output:
+ *
+ * ```json
+ * {
+ *   "archive": {
+ *     "bucket": "example-history-bucket",
+ *     "prefix": "conversation-history/YXJjaGl2ZS1saXN0aW5nLWRlbW8/",
+ *     "messageCount": 96
+ *   },
+ *   "recent": ["Berlin itinerary note 97", "...", "Berlin itinerary note 321"]
+ * }
+ * ```
+ *
+ * The endpoint process logs three uploads. Each array is abbreviated below but
+ * contains 32 complete messages in the actual output:
+ *
+ * ```text
+ * uploading history segment example-history-bucket .../000000000000.json ["... note 1", ..., "... note 32"]
+ * uploading history segment example-history-bucket .../000000000001.json ["... note 33", ..., "... note 64"]
+ * uploading history segment example-history-bucket .../000000000002.json ["... note 65", ..., "... note 96"]
  * ```
  */
 
-import {createHash} from "node:crypto";
-import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
+import {serve} from "@restatedev/restate-sdk";
 
-// Deliberately tiny so the rollover is easy to observe in the Restate UI.
-const MESSAGES_PER_SEGMENT = 4;
-const LOCAL_SEGMENTS_TO_KEEP = 3;
+const MESSAGES_PER_SEGMENT = 32;
+const LOCAL_SEGMENTS_TO_KEEP = 8;
 const META_KEY = "history/meta";
+// Application-owned archive configuration; no location is stored in VO state.
+const ARCHIVE_BUCKET =
+  process.env.HISTORY_S3_BUCKET ?? "example-history-bucket";
+const ARCHIVE_ROOT = "conversation-history";
 
 // ---------------------------------------------------------------------------
 // Explicit wire and state types. The generator SDK's default JSON serde is
 // sufficient for this example, so these do not need runtime schemas.
 // ---------------------------------------------------------------------------
 
-export type ConversationMessage = {
-  role: "user" | "assistant";
-  content: string;
-};
-
-export type StoredMessage = {
-  sequence: number;
-  message: ConversationMessage;
-};
-
-/** Required pointer from the hot suffix to one immutable cold block. */
-export type SnapshotPointer = {
-  bucket: string;
-  key: string;
-  etag: string;
-  fromSequence: number;
-  throughSequence: number;
-};
-
-/** One Restate state value. Only the segment at meta.tailSegment is mutable. */
+/** One independently loaded conversation segment in Restate lazy state. */
 export type HistorySegment = {
-  messages: StoredMessage[];
+  messages: string[];
 };
 
-/** Stable prefix selected by an exclusive handler for one shared offload. */
-export type OffloadPlan = {
-  fromSegment: number;
-  throughSegment: number;
-  fromSequence: number;
-  throughSequence: number;
-  previousSnapshot: SnapshotPointer | null;
-  target: {bucket: string; key: string};
+/** Durable reservation for a range being copied to the cold archive. */
+export type PendingOffload = {
+  firstSegment: number;
+  lastSegment: number;
 };
 
-/** Small, always-read routing record stored separately from message data. */
+/** Small routing record; archive location is derived rather than persisted. */
 export type HistoryMeta = {
-  nextSequence: number;
+  /** Sequence assigned to the latest append, or zero before the first one. */
+  messageSequence: number;
   headSegment: number;
   tailSegment: number;
-  snapshot: SnapshotPointer | null;
-  offload: OffloadPlan | null;
+  offload: PendingOffload | null;
 };
 
-/** Hot history response. `snapshot` locates every message before `local`. */
+/** Derived archive location, committed message count, and recent suffix. */
 export type HistoryView = {
-  snapshot: SnapshotPointer | null;
-  local: StoredMessage[];
-};
-
-export type OffloadResult = {
-  plan: OffloadPlan;
-  snapshot: SnapshotPointer;
+  archive: {
+    bucket: string;
+    prefix: string;
+    messageCount: number;
+  } | null;
+  recent: string[];
 };
 
 /** Lazy, segmented conversation-history Virtual Object. */
@@ -97,145 +179,162 @@ export const ConversationHistory = restate.object({
   name: "ConversationHistoryExample",
   handlers: {
     /** Appends one message and starts an offload when the suffix is large. */
-    *append(message: ConversationMessage): restate.Operation<HistoryMeta> {
-      const id = conversationKey();
+    *append(message: string): restate.Operation<void> {
       const meta = yield* readMeta();
-      let tail = yield* readSegment(meta.tailSegment);
+      const tail = yield* readSegment(meta.tailSegment);
+      tail.messages.push(message);
+      meta.messageSequence += 1;
 
-      if (tail.messages.length === MESSAGES_PER_SEGMENT) {
-        meta.tailSegment += 1;
-        tail = {messages: []};
+      // Every append changes the tail and its conversation-wide sequence.
+      // Segment routing changes only on rollover.
+      writeSegment(meta.tailSegment, tail);
+      if (tail.messages.length < MESSAGES_PER_SEGMENT) {
+        restate.state().set(META_KEY, meta);
+        return;
       }
-      tail.messages.push({sequence: meta.nextSequence++, message});
 
-      restate.state().set(segmentKey(meta.tailSegment), tail);
-      const plan = reservePrefix(meta, id);
+      meta.tailSegment += 1;
+      if (!needsOffload(meta)) {
+        restate.state().set(META_KEY, meta);
+        return;
+      }
+      const id = conversationKey();
+      const offload = planOffload(meta);
+      // Persist the reservation before the shared offload handler can observe
+      // it.
+      meta.offload = offload;
       restate.state().set(META_KEY, meta);
-      if (plan) {
-        yield* sendOffload(id, plan);
-      }
-      return meta;
+      restate
+        .sendClient(ConversationHistory, id)
+        .offloadPrefix(offload);
     },
 
-    /** Returns the S3 pointer and the complete suffix still held by Restate. */
-    *history(): restate.Operation<HistoryView> {
+    /**
+     * Reads a sealed range and uploads one deterministic object per segment.
+     *
+     * This shared handler derives the same archive prefix as `history()` and
+     * cannot mutate VO state. After the external upload, it durably sends the
+     * reserved range to the exclusive commit handler.
+     */
+    *offloadPrefix(offload: PendingOffload): restate.Operation<void> {
+      const id = conversationKey();
       const meta = yield* readMeta();
-      const local: StoredMessage[] = [];
+      // A stale or superseded invocation must not upload another prefix.
+      if (!sameOffload(meta.offload, offload)) {
+        return;
+      }
+
+      const segments: string[][] = [];
+      // The reserved range excludes the mutable tail, so these values are
+      // stable.
+      for (
+        let index = offload.firstSegment;
+        index <= offload.lastSegment;
+        index += 1
+      ) {
+        const segment = yield* readSegment(index);
+        segments.push(segment.messages);
+      }
+
+      yield* restate.run(
+        ({signal}) =>
+          putArchivedSegments(
+            archivePrefix(id),
+            offload.firstSegment,
+            segments,
+            signal,
+          ),
+        {name: "put-history-segments"},
+      );
+
+      yield* restate
+        .sendClient(ConversationHistory, id)
+        .applyOffload(offload);
+    },
+
+    /** Commits an uploaded range and reclaims its local segment keys. */
+    *applyOffload(offload: PendingOffload): restate.Operation<void> {
+      const meta = yield* readMeta();
+      // Only the completion for the current durable reservation may reclaim
+      // data.
+      if (!sameOffload(meta.offload, offload)) {
+        return;
+      }
+
+      // This exclusive handler commits the new cold/hot boundary and local
+      // state reclamation together.
+      for (
+        let index = offload.firstSegment;
+        index <= offload.lastSegment;
+        index += 1
+      ) {
+        restate.state().clear(segmentKey(index));
+      }
+      meta.headSegment = offload.lastSegment + 1;
+      meta.offload = null;
+      restate.state().set(META_KEY, meta);
+    },
+
+    /** Returns committed archive metadata and the recent Restate-held suffix. */
+    *history(): restate.Operation<HistoryView> {
+      const id = conversationKey();
+      const meta = yield* readMeta();
+      const recent: string[] = [];
       for (
         let index = meta.headSegment;
         index <= meta.tailSegment;
         index += 1
       ) {
-        local.push(...(yield* readSegment(index)).messages);
-      }
-      return {snapshot: meta.snapshot, local};
-    },
-
-    /**
-     * Reads a sealed prefix and performs the slow external upload.
-     *
-     * This is a shared handler, so it cannot mutate VO state. Its only
-     * output is a durable one-way call to the exclusive commit handler.
-     */
-    *offloadPrefix(plan: OffloadPlan): restate.Operation<void> {
-      const id = conversationKey();
-      const meta = yield* readMeta();
-      if (!samePlan(meta.offload, plan)) {
-        return;
+        recent.push(...(yield* readSegment(index)).messages);
       }
 
-      const messages: StoredMessage[] = [];
-      for (
-        let index = plan.fromSegment;
-        index <= plan.throughSegment;
-        index += 1
-      ) {
-        const segment = yield* readSegment(index);
-        if (segment.messages.length !== MESSAGES_PER_SEGMENT) {
-          throw new TerminalError(`segment ${index} is not sealed`);
-        }
-        messages.push(...segment.messages);
-      }
-      if (
-        messages[0]?.sequence !== plan.fromSequence ||
-        messages.at(-1)?.sequence !== plan.throughSequence
-      ) {
-        throw new TerminalError("offload plan does not match local history");
-      }
-
-      const blob = JSON.stringify({previous: plan.previousSnapshot, messages});
-      const snapshot = yield* restate.run(
-        ({signal}) => putSnapshot(plan, blob, signal),
-        {name: "put-history-snapshot"},
-      );
-
-      yield* restate
-        .sendClient(ConversationHistory, id)
-        .applyOffload({plan, snapshot});
-    },
-
-    /** Installs a valid pointer, then reclaims its local segment keys. */
-    *applyOffload({plan, snapshot}: OffloadResult): restate.Operation<boolean> {
-      const id = conversationKey();
-      const meta = yield* readMeta();
-      if (!samePlan(meta.offload, plan)) {
-        return false;
-      }
-      if (
-        snapshot.bucket !== plan.target.bucket ||
-        snapshot.key !== plan.target.key ||
-        snapshot.fromSequence !== plan.fromSequence ||
-        snapshot.throughSequence !== plan.throughSequence
-      ) {
-        throw new TerminalError("snapshot does not match its offload plan");
-      }
-
-      for (
-        let index = plan.fromSegment;
-        index <= plan.throughSegment;
-        index += 1
-      ) {
-        restate.state().clear(segmentKey(index));
-      }
-      meta.headSegment = plan.throughSegment + 1;
-      meta.snapshot = snapshot;
-      meta.offload = null;
-
-      // Appends may have advanced the tail while the shared upload ran.
-      const next = reservePrefix(meta, id);
-      restate.state().set(META_KEY, meta);
-      if (next) {
-        yield* sendOffload(id, next);
-      }
-      return true;
+      // Uploaded objects can become visible before applyOffload runs. The
+      // exclusive commit advances headSegment only after every object in the
+      // range is durable. Subtracting the still-local recent suffix from the
+      // latest sequence therefore yields the committed archive size.
+      const archivedMessageCount = meta.messageSequence - recent.length;
+      const archive =
+        archivedMessageCount > 0
+          ? {
+              bucket: ARCHIVE_BUCKET,
+              prefix: archivePrefix(id),
+              messageCount: archivedMessageCount,
+            }
+          : null;
+      return {archive, recent};
     },
   },
   options: {
-    enableLazyState: true,
     handlers: {
+      append: {enableLazyState: true},
+      offloadPrefix: {shared: true, enableLazyState: true},
       history: {shared: true},
-      offloadPrefix: {shared: true},
     },
   },
 });
+
+// This example is its own deployable endpoint rather than part of the agent
+// runtime endpoint, so it can be launched and explored independently.
+serve({services: [ConversationHistory]});
 
 // ---------------------------------------------------------------------------
 // Lazy state mechanics
 // ---------------------------------------------------------------------------
 
 function* readMeta(): restate.Operation<HistoryMeta> {
+  // Lazy state has no physical metadata value before the first append.
   return (
     (yield* restate.sharedState().get<HistoryMeta>(META_KEY)) ?? {
-      nextSequence: 1,
+      messageSequence: 0,
       headSegment: 0,
       tailSegment: 0,
-      snapshot: null,
       offload: null,
     }
   );
 }
 
 function* readSegment(index: number): restate.Operation<HistorySegment> {
+  // A newly advanced tail is represented by an absent key until its first append.
   return (
     (yield* restate
       .sharedState()
@@ -243,128 +342,73 @@ function* readSegment(index: number): restate.Operation<HistorySegment> {
   );
 }
 
+function writeSegment(index: number, segment: HistorySegment): void {
+  restate.state().set(segmentKey(index), segment);
+}
+
 function segmentKey(index: number): string {
   return `history/segment/${index}`;
 }
 
-function segmentFirstSequence(index: number): number {
-  return index * MESSAGES_PER_SEGMENT + 1;
-}
-
-/** Reserves all excess sealed segments, but never the mutable tail. */
-function reservePrefix(
-  meta: HistoryMeta,
-  conversationId: string,
-): OffloadPlan | undefined {
+/** Whether another immutable range must be moved out of local state. */
+function needsOffload(meta: HistoryMeta): boolean {
   const localSegments = meta.tailSegment - meta.headSegment + 1;
-  if (meta.offload || localSegments <= LOCAL_SEGMENTS_TO_KEEP) {
-    return undefined;
-  }
+  return !meta.offload && localSegments > LOCAL_SEGMENTS_TO_KEEP;
+}
 
-  const throughSegment = meta.tailSegment - LOCAL_SEGMENTS_TO_KEEP;
-  const fromSequence = segmentFirstSequence(meta.headSegment);
-  const throughSequence = segmentFirstSequence(throughSegment + 1) - 1;
-  const bucket = process.env.HISTORY_S3_BUCKET ?? "example-history-bucket";
-  const plan: OffloadPlan = {
-    fromSegment: meta.headSegment,
-    throughSegment,
-    fromSequence,
-    throughSequence,
-    previousSnapshot: meta.snapshot,
-    target: {
-      bucket,
-      key: snapshotKey(conversationId, fromSequence, throughSequence),
-    },
+/** Plans an offload of all excess sealed segments, but never the mutable tail. */
+function planOffload(meta: HistoryMeta): PendingOffload {
+  const lastSegment = meta.tailSegment - LOCAL_SEGMENTS_TO_KEEP;
+  return {
+    firstSegment: meta.headSegment,
+    lastSegment,
   };
-  meta.offload = plan;
-  return plan;
 }
 
-function* sendOffload(
-  conversationId: string,
-  plan: OffloadPlan,
-): restate.Operation<void> {
-  yield* restate
-    .sendClient(ConversationHistory, conversationId)
-    .offloadPrefix(plan);
-}
-
-function samePlan(
-  current: OffloadPlan | null,
-  candidate: OffloadPlan,
+function sameOffload(
+  current: PendingOffload | null,
+  candidate: PendingOffload,
 ): boolean {
   return (
-    current?.fromSegment === candidate.fromSegment &&
-    current.throughSegment === candidate.throughSegment &&
-    current.target.bucket === candidate.target.bucket &&
-    current.target.key === candidate.target.key
+    current?.firstSegment === candidate.firstSegment &&
+    current.lastSegment === candidate.lastSegment
   );
 }
 
 // ---------------------------------------------------------------------------
-// Superficially realistic S3 boundary
+// Mock object-store boundary
 // ---------------------------------------------------------------------------
-
-type PutObjectRequest = {
-  bucket: string;
-  key: string;
-  body: string;
-  contentType: "application/json";
-};
-
-async function putSnapshot(
-  plan: OffloadPlan,
-  blob: string,
+async function putArchivedSegments(
+  prefix: string,
+  firstSegment: number,
+  segments: string[][],
   signal: AbortSignal,
-): Promise<SnapshotPointer> {
-  const {etag} = await putObject(
-    {
-      bucket: plan.target.bucket,
-      key: plan.target.key,
-      body: blob,
-      contentType: "application/json",
-    },
-    signal,
-  );
-  return {
-    ...plan.target,
-    etag,
-    fromSequence: plan.fromSequence,
-    throughSequence: plan.throughSequence,
-  };
+): Promise<void> {
+  for (const [offset, messages] of segments.entries()) {
+    signal.throwIfAborted();
+    const segment = firstSegment + offset;
+    const key = `${prefix}${segment.toString().padStart(12, "0")}.json`;
+    const blob = JSON.stringify(messages);
+    // await putObject(
+    //   {
+    //     bucket: ARCHIVE_BUCKET,
+    //     key,
+    //     body: blob,
+    //     contentType: "application/json",
+    //   },
+    //   signal,
+    // );
+    console.log("uploading history segment", ARCHIVE_BUCKET, key, blob);
+  }
 }
 
-/**
- * Replace this body with S3 `PutObject` in a real application.
- *
- * The surrounding durable run, deterministic key, pointer, and commit
- * protocol remain the same. This stub only produces an S3-like ETag.
- */
-async function putObject(
-  request: PutObjectRequest,
-  signal: AbortSignal,
-): Promise<{etag: string}> {
-  signal.throwIfAborted();
-  await Promise.resolve();
-  signal.throwIfAborted();
-  return {
-    etag: `"${createHash("md5").update(request.body).digest("hex")}"`,
-  };
-}
-
-function snapshotKey(
-  conversationId: string,
-  fromSequence: number,
-  throughSequence: number,
-): string {
+/** Reconstructs the stable archive prefix from application config and VO key. */
+function archivePrefix(conversationId: string): string {
   const id = Buffer.from(conversationId).toString("base64url");
-  return `conversation-history/${id}/${fromSequence}-${throughSequence}.json`;
+  return `${ARCHIVE_ROOT}/${id}/`;
 }
 
 function conversationKey(): string {
   const key = restate.handlerRequest().key;
-  if (!key) {
-    throw new TerminalError("conversation history requires an object key");
-  }
-  return key;
+  return key!;
 }
