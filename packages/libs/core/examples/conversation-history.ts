@@ -104,7 +104,6 @@ export const ConversationHistory = restate.object({
       let tail = yield* readSegment(meta.tailSegment);
 
       if (tail.messages.length === MESSAGES_PER_SEGMENT) {
-        writeSegment(tail);
         tail = emptySegment(++meta.tailSegment);
       }
       tail.messages.push({sequence: meta.nextSequence++, message});
