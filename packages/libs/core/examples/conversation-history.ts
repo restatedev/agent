@@ -104,11 +104,11 @@ export const ConversationHistory = restate.object({
       let tail = yield* readSegment(meta.tailSegment);
 
       if (tail.messages.length === MESSAGES_PER_SEGMENT) {
-        tail = emptySegment(++meta.tailSegment);
+        tail = {index: ++meta.tailSegment, messages: []};
       }
       tail.messages.push({sequence: meta.nextSequence++, message});
 
-      writeSegment(tail);
+      restate.state().set(segmentKey(tail.index), tail);
       const plan = reservePrefix(meta, id);
       restate.state().set(META_KEY, meta);
       if (plan) {
@@ -239,16 +239,8 @@ function* readSegment(index: number): restate.Operation<HistorySegment> {
   return (
     (yield* restate
       .sharedState()
-      .get<HistorySegment>(segmentKey(index))) ?? emptySegment(index)
+      .get<HistorySegment>(segmentKey(index))) ?? {index, messages: []}
   );
-}
-
-function writeSegment(segment: HistorySegment): void {
-  restate.state().set(segmentKey(segment.index), segment);
-}
-
-function emptySegment(index: number): HistorySegment {
-  return {index, messages: []};
 }
 
 function segmentKey(index: number): string {
