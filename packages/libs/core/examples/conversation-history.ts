@@ -5,7 +5,7 @@
  * demonstrates a storage protocol close to AgentSession without depending on
  * the rest of the agent runtime:
  *
- * - `append` batches messages into one mutable tail-segment key;
+ * - `append` adds messages to one mutable tail-segment key;
  * - every segment before the tail is immutable;
  * - shared `offloadPrefix` copies a reserved immutable prefix to an S3-shaped
  *   boundary inside `restate.run`; and
@@ -26,9 +26,7 @@
 
 import {createHash} from "node:crypto";
 import {TerminalError} from "@restatedev/restate-sdk";
-import {iface} from "@restatedev/restate-sdk-gen";
 import * as restate from "@restatedev/restate-sdk-gen";
-import {z} from "zod";
 
 // Deliberately tiny so the rollover is easy to observe in the Restate UI.
 const MESSAGES_PER_SEGMENT = 4;
@@ -36,30 +34,28 @@ const LOCAL_SEGMENTS_TO_KEEP = 3;
 const META_KEY = "history/meta";
 
 // ---------------------------------------------------------------------------
-// Explicit wire and state types
+// Explicit wire and state types. The generator SDK's default JSON serde is
+// sufficient for this example, so these do not need runtime schemas.
 // ---------------------------------------------------------------------------
 
-export const ConversationMessageSchema = z.object({
-  role: z.enum(["user", "assistant"]),
-  content: z.string(),
-});
-export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+export type ConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
 
-export const StoredMessageSchema = z.object({
-  sequence: z.number().int().positive(),
-  message: ConversationMessageSchema,
-});
-export type StoredMessage = z.infer<typeof StoredMessageSchema>;
+export type StoredMessage = {
+  sequence: number;
+  message: ConversationMessage;
+};
 
 /** Required pointer from the hot suffix to one immutable cold block. */
-export const SnapshotPointerSchema = z.object({
-  bucket: z.string(),
-  key: z.string(),
-  etag: z.string(),
-  fromSequence: z.number().int().positive(),
-  throughSequence: z.number().int().positive(),
-});
-export type SnapshotPointer = z.infer<typeof SnapshotPointerSchema>;
+export type SnapshotPointer = {
+  bucket: string;
+  key: string;
+  etag: string;
+  fromSequence: number;
+  throughSequence: number;
+};
 
 /** Exact JSON represented by a SnapshotPointer. */
 export type SnapshotDocument = {
@@ -71,198 +67,172 @@ export type SnapshotDocument = {
 };
 
 /** One Restate state value. Only the segment at meta.tailSegment is mutable. */
-export const HistorySegmentSchema = z.object({
-  index: z.number().int().nonnegative(),
-  messages: z.array(StoredMessageSchema),
-});
-export type HistorySegment = z.infer<typeof HistorySegmentSchema>;
+export type HistorySegment = {
+  index: number;
+  messages: StoredMessage[];
+};
 
 /** Stable prefix selected by an exclusive handler for one shared offload. */
-export const OffloadPlanSchema = z.object({
-  fromSegment: z.number().int().nonnegative(),
-  throughSegment: z.number().int().nonnegative(),
-  fromSequence: z.number().int().positive(),
-  throughSequence: z.number().int().positive(),
-  previousSnapshot: SnapshotPointerSchema.nullable(),
-  target: z.object({bucket: z.string(), key: z.string()}),
-});
-export type OffloadPlan = z.infer<typeof OffloadPlanSchema>;
+export type OffloadPlan = {
+  fromSegment: number;
+  throughSegment: number;
+  fromSequence: number;
+  throughSequence: number;
+  previousSnapshot: SnapshotPointer | null;
+  target: {bucket: string; key: string};
+};
 
 /** Small, always-read routing record stored separately from message data. */
-export const HistoryMetaSchema = z.object({
-  nextSequence: z.number().int().positive(),
-  headSegment: z.number().int().nonnegative(),
-  tailSegment: z.number().int().nonnegative(),
-  snapshot: SnapshotPointerSchema.nullable(),
-  offload: OffloadPlanSchema.nullable(),
-});
-export type HistoryMeta = z.infer<typeof HistoryMetaSchema>;
+export type HistoryMeta = {
+  nextSequence: number;
+  headSegment: number;
+  tailSegment: number;
+  snapshot: SnapshotPointer | null;
+  offload: OffloadPlan | null;
+};
 
 /** Hot history response. `snapshot` locates every message before `local`. */
-export const HistoryViewSchema = z.object({
-  snapshot: SnapshotPointerSchema.nullable(),
-  local: z.array(StoredMessageSchema),
-});
-export type HistoryView = z.infer<typeof HistoryViewSchema>;
+export type HistoryView = {
+  snapshot: SnapshotPointer | null;
+  local: StoredMessage[];
+};
 
-const OffloadResultSchema = z.object({
-  plan: OffloadPlanSchema,
-  snapshot: SnapshotPointerSchema,
-});
-type OffloadResult = z.infer<typeof OffloadResultSchema>;
-
-// The definition lives here so the example can be copied as one file.
-export const ConversationHistoryDefinition = iface.object(
-  "ConversationHistoryExample",
-  {
-    append: iface.schemas({
-      input: z.array(ConversationMessageSchema).min(1),
-      output: HistoryMetaSchema,
-    }),
-    history: iface.schemas({input: z.void(), output: HistoryViewSchema}),
-    offloadPrefix: iface.schemas({input: OffloadPlanSchema, output: z.void()}),
-    applyOffload: iface.schemas({
-      input: OffloadResultSchema,
-      output: z.boolean(),
-    }),
-  },
-);
+export type OffloadResult = {
+  plan: OffloadPlan;
+  snapshot: SnapshotPointer;
+};
 
 /** Lazy, segmented conversation-history Virtual Object. */
-export const ConversationHistory = restate.implement(
-  ConversationHistoryDefinition,
-  {
-    handlers: {
-      /** Appends messages and starts an offload when the hot suffix is large. */
-      *append(messages): restate.Operation<HistoryMeta> {
-        const id = conversationKey();
-        const meta = yield* readMeta();
-        let tail = yield* readSegment(meta.tailSegment);
+export const ConversationHistory = restate.object({
+  name: "ConversationHistoryExample",
+  handlers: {
+    /** Appends one message and starts an offload when the suffix is large. */
+    *append(message: ConversationMessage): restate.Operation<HistoryMeta> {
+      const id = conversationKey();
+      const meta = yield* readMeta();
+      let tail = yield* readSegment(meta.tailSegment);
 
-        for (const message of messages) {
-          if (tail.messages.length === MESSAGES_PER_SEGMENT) {
-            writeSegment(tail);
-            tail = emptySegment(++meta.tailSegment);
-          }
-          tail.messages.push({sequence: meta.nextSequence++, message});
-        }
-
+      if (tail.messages.length === MESSAGES_PER_SEGMENT) {
         writeSegment(tail);
-        const plan = reservePrefix(meta, id);
-        restate.state().set(META_KEY, meta);
-        if (plan) {
-          yield* sendOffload(id, plan);
-        }
-        return meta;
-      },
+        tail = emptySegment(++meta.tailSegment);
+      }
+      tail.messages.push({sequence: meta.nextSequence++, message});
 
-      /** Returns the S3 pointer and the complete suffix still held by Restate. */
-      *history(): restate.Operation<HistoryView> {
-        const meta = yield* readMeta();
-        const local: StoredMessage[] = [];
-        for (
-          let index = meta.headSegment;
-          index <= meta.tailSegment;
-          index += 1
-        ) {
-          local.push(...(yield* readSegment(index)).messages);
-        }
-        return {snapshot: meta.snapshot, local};
-      },
-
-      /**
-       * Reads a sealed prefix and performs the slow external upload.
-       *
-       * This is a shared handler, so it cannot mutate VO state. Its only
-       * output is a durable one-way call to the exclusive commit handler.
-       */
-      *offloadPrefix(plan): restate.Operation<void> {
-        const id = conversationKey();
-        const meta = yield* readMeta();
-        if (!samePlan(meta.offload, plan)) {
-          return;
-        }
-
-        const messages: StoredMessage[] = [];
-        for (
-          let index = plan.fromSegment;
-          index <= plan.throughSegment;
-          index += 1
-        ) {
-          const segment = yield* readSegment(index);
-          if (segment.messages.length !== MESSAGES_PER_SEGMENT) {
-            throw new TerminalError(`segment ${index} is not sealed`);
-          }
-          messages.push(...segment.messages);
-        }
-        if (
-          messages[0]?.sequence !== plan.fromSequence ||
-          messages.at(-1)?.sequence !== plan.throughSequence
-        ) {
-          throw new TerminalError("offload plan does not match local history");
-        }
-
-        const document: SnapshotDocument = {
-          formatVersion: 1,
-          conversationId: id,
-          previous: plan.previousSnapshot,
-          messages,
-        };
-        const snapshot = yield* restate.run(
-          ({signal}) => putSnapshot(plan, document, signal),
-          {name: "put-history-snapshot"},
-        );
-
-        yield* restate
-          .sendClient(ConversationHistory, id)
-          .applyOffload({plan, snapshot});
-      },
-
-      /** Installs a valid pointer, then reclaims its local segment keys. */
-      *applyOffload({plan, snapshot}: OffloadResult): restate.Operation<boolean> {
-        const id = conversationKey();
-        const meta = yield* readMeta();
-        if (!samePlan(meta.offload, plan)) {
-          return false;
-        }
-        if (
-          snapshot.bucket !== plan.target.bucket ||
-          snapshot.key !== plan.target.key ||
-          snapshot.fromSequence !== plan.fromSequence ||
-          snapshot.throughSequence !== plan.throughSequence
-        ) {
-          throw new TerminalError("snapshot does not match its offload plan");
-        }
-
-        for (
-          let index = plan.fromSegment;
-          index <= plan.throughSegment;
-          index += 1
-        ) {
-          restate.state().clear(segmentKey(index));
-        }
-        meta.headSegment = plan.throughSegment + 1;
-        meta.snapshot = snapshot;
-        meta.offload = null;
-
-        // Appends may have advanced the tail while the shared upload ran.
-        const next = reservePrefix(meta, id);
-        restate.state().set(META_KEY, meta);
-        if (next) {
-          yield* sendOffload(id, next);
-        }
-        return true;
-      },
+      writeSegment(tail);
+      const plan = reservePrefix(meta, id);
+      restate.state().set(META_KEY, meta);
+      if (plan) {
+        yield* sendOffload(id, plan);
+      }
+      return meta;
     },
-    options: {
-      enableLazyState: true,
-      handlers: {
-        history: {shared: true},
-        offloadPrefix: {shared: true},
-      },
+
+    /** Returns the S3 pointer and the complete suffix still held by Restate. */
+    *history(): restate.Operation<HistoryView> {
+      const meta = yield* readMeta();
+      const local: StoredMessage[] = [];
+      for (
+        let index = meta.headSegment;
+        index <= meta.tailSegment;
+        index += 1
+      ) {
+        local.push(...(yield* readSegment(index)).messages);
+      }
+      return {snapshot: meta.snapshot, local};
+    },
+
+    /**
+     * Reads a sealed prefix and performs the slow external upload.
+     *
+     * This is a shared handler, so it cannot mutate VO state. Its only
+     * output is a durable one-way call to the exclusive commit handler.
+     */
+    *offloadPrefix(plan: OffloadPlan): restate.Operation<void> {
+      const id = conversationKey();
+      const meta = yield* readMeta();
+      if (!samePlan(meta.offload, plan)) {
+        return;
+      }
+
+      const messages: StoredMessage[] = [];
+      for (
+        let index = plan.fromSegment;
+        index <= plan.throughSegment;
+        index += 1
+      ) {
+        const segment = yield* readSegment(index);
+        if (segment.messages.length !== MESSAGES_PER_SEGMENT) {
+          throw new TerminalError(`segment ${index} is not sealed`);
+        }
+        messages.push(...segment.messages);
+      }
+      if (
+        messages[0]?.sequence !== plan.fromSequence ||
+        messages.at(-1)?.sequence !== plan.throughSequence
+      ) {
+        throw new TerminalError("offload plan does not match local history");
+      }
+
+      const document: SnapshotDocument = {
+        formatVersion: 1,
+        conversationId: id,
+        previous: plan.previousSnapshot,
+        messages,
+      };
+      const snapshot = yield* restate.run(
+        ({signal}) => putSnapshot(plan, document, signal),
+        {name: "put-history-snapshot"},
+      );
+
+      yield* restate
+        .sendClient(ConversationHistory, id)
+        .applyOffload({plan, snapshot});
+    },
+
+    /** Installs a valid pointer, then reclaims its local segment keys. */
+    *applyOffload({plan, snapshot}: OffloadResult): restate.Operation<boolean> {
+      const id = conversationKey();
+      const meta = yield* readMeta();
+      if (!samePlan(meta.offload, plan)) {
+        return false;
+      }
+      if (
+        snapshot.bucket !== plan.target.bucket ||
+        snapshot.key !== plan.target.key ||
+        snapshot.fromSequence !== plan.fromSequence ||
+        snapshot.throughSequence !== plan.throughSequence
+      ) {
+        throw new TerminalError("snapshot does not match its offload plan");
+      }
+
+      for (
+        let index = plan.fromSegment;
+        index <= plan.throughSegment;
+        index += 1
+      ) {
+        restate.state().clear(segmentKey(index));
+      }
+      meta.headSegment = plan.throughSegment + 1;
+      meta.snapshot = snapshot;
+      meta.offload = null;
+
+      // Appends may have advanced the tail while the shared upload ran.
+      const next = reservePrefix(meta, id);
+      restate.state().set(META_KEY, meta);
+      if (next) {
+        yield* sendOffload(id, next);
+      }
+      return true;
     },
   },
-);
+  options: {
+    enableLazyState: true,
+    handlers: {
+      history: {shared: true},
+      offloadPrefix: {shared: true},
+    },
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Lazy state mechanics
