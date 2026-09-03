@@ -26,7 +26,8 @@ agent. The implementation keeps the important control flow visible:
 - user instructions, model-managed memory, runtime guardrails, and approvals;
 - non-destructive conversation compaction;
 - scheduler-owned durable messages and an agent-scoped sandbox;
-- annotation-driven discovery of Restate handlers as model tools; and
+- annotation-driven discovery of Restate handlers and configured stateless MCP
+  tools; and
 - a durable black-box evaluation harness.
 
 The seams are durable ownership boundaries, not framework extension points.
@@ -46,6 +47,7 @@ flowchart LR
   G --> O["OpenAI"]
   Step -->|"spawn built-ins in parallel"| B["Built-in tools\ninside doTurn"]
   Step -->|"durable restate.call"| D["Discovered Restate handlers"]
+  Step -->|"stateless tools/call"| M["Configured MCP servers"]
   B -->|"schedule RPC"| Q
   B -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
   X --> P["Local or Modal provider"]
@@ -140,14 +142,16 @@ therefore drains `AgentSession.history`, then parks on
 
 ## Supported extension surfaces
 
-There are three intended ways to add capability:
+There are four intended ways to add capability:
 
 1. Add a built-in tool in `session/tools.ts` when it needs active-turn context,
    pending-operation support, Agent state, or the shared sandbox lease.
 2. Annotate a separately deployed Restate JSON handler with
    `restate.dev/agent: <tool-name>` when it should remain an independent
    service.
-3. Add a `SandboxProvider` when the file/command contract stays fixed but the
+3. Configure a trusted MCP `2026-07-28` Streamable HTTP endpoint when its tools
+   should be discovered and invoked without a protocol-level session.
+4. Add a `SandboxProvider` when the file/command contract stays fixed but the
    compute vendor changes.
 
 Adding another service, Virtual Object, abstraction, or state store is not the

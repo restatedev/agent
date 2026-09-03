@@ -35,6 +35,7 @@ import {
 import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
 import type {TurnHistory} from "./history.js";
 import * as history from "./history.js";
+import {discoverMcpTools, type McpAgentTool} from "./mcp-tools.js";
 import {createPendingOperations} from "./pending.js";
 import {createSteeringInbox} from "./steering.js";
 import {agentStep, settleStep, type ToolStep} from "./step.js";
@@ -58,6 +59,7 @@ type AgentSessionState = {
   steps: number;
   pending: ReturnType<typeof createPendingOperations>;
   discoveredTools: DiscoveredAgentTool[];
+  mcpTools: McpAgentTool[];
 };
 
 const MAX_STEPS = 50;
@@ -135,6 +137,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           steps: 0,
           pending: createPendingOperations(),
           discoveredTools: [],
+          mcpTools: [],
         };
         outcome = yield* executeTurn(state);
       } catch (error) {
@@ -220,6 +223,10 @@ function* executeTurn(
   state: AgentSessionState,
 ): restate.Operation<AgentTurnOutcome> {
   state.discoveredTools = yield* discoverAgentTools(agentTools.names);
+  state.mcpTools = yield* discoverMcpTools([
+    ...agentTools.names,
+    ...state.discoveredTools.map(({name}) => name),
+  ]);
 
   while (state.steps < MAX_STEPS) {
     // Steering received after the previous step's drain belongs before this
@@ -240,6 +247,7 @@ function* executeTurn(
         transcript: state.transcript,
         stepNumber: state.steps + 1,
         discoveredTools: state.discoveredTools,
+        mcpTools: state.mcpTools,
       }),
     );
     const step = yield* settleStep(task, state.interrupt);

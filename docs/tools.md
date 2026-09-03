@@ -1,11 +1,12 @@
 # Tool system
 
-This project has two ways to make a capability available to the model:
+This project has three ways to make a capability available to the model:
 
 1. a built-in tool implemented inside `AgentSession.doTurn`; or
-2. an annotated Restate handler discovered at runtime.
+2. an annotated Restate handler discovered at runtime; or
+3. a tool from a configured stateless MCP server.
 
-Both become serializable `ToolManifest` values for model inference. Their
+All three become serializable `ToolManifest` values for model inference. Their
 execution boundaries are intentionally different.
 
 In standard agent terminology this is the **tool-use** or **function-calling**
@@ -396,6 +397,171 @@ Choose a built-in when execution needs access to turn-owned pending tasks,
 Agent profile mutations, or the shared sandbox context. Choose discovery when
 the capability is already a well-defined Restate handler and should be
 deployable independently.
+
+## Stateless MCP tools
+
+The runtime can also discover tools from deployment-configured MCP Streamable
+HTTP endpoints. This integration deliberately supports only protocol revision
+[`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28): the
+stateless revision with per-request metadata, no `initialize` handshake, and no
+`Mcp-Session-Id`. It does not fall back to initialize-era sessions or the
+legacy HTTP+SSE transport.
+
+MCP is a second external-tool backend, not a replacement for dynamic Restate
+handlers. Both produce serializable model manifests and both are snapshotted
+once per turn. Their execution remains distinct:
+
+- a dynamic Restate tool uses durable `restate.call`;
+- an MCP tool uses one stateless `tools/call` HTTP request inside
+  `restate.run`.
+
+### Configuration
+
+Set `MCP_SERVERS_JSON` to an array of trusted server definitions:
+
+```sh
+export GITHUB_MCP_TOKEN=...
+export MCP_SERVERS_JSON='[
+  {
+    "id": "github",
+    "url": "https://mcp.example.com/mcp",
+    "tokenEnv": "GITHUB_MCP_TOKEN",
+    "includeTools": ["search_issues", "create_issue"],
+    "timeoutMs": 60000
+  },
+  {
+    "id": "local",
+    "url": "http://127.0.0.1:3001/mcp",
+    "allowInsecure": true
+  }
+]'
+```
+
+Fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | yes | Stable 1-32 character server identifier used in model-facing names |
+| `url` | yes | MCP Streamable HTTP endpoint; HTTPS is required by default |
+| `tokenEnv` | no | Environment-variable name containing a bearer token |
+| `includeTools` | no | Exact remote tool-name allowlist; omitted exposes the validated catalog |
+| `timeoutMs` | no | Discovery and call timeout from 1 second to 10 minutes; default 60 seconds |
+| `allowInsecure` | no | Explicitly permits an HTTP endpoint, normally only for local development |
+
+Server IDs must be unique. Credentials embedded in URL authority are rejected,
+fragments are rejected, and redirects are not followed. Endpoint URLs and
+configuration are part of the journaled turn snapshot, so do not put secrets
+in URLs or other configuration fields. Bearer values are resolved only inside
+the outbound `restate.run` and are not returned in the catalog.
+
+An MCP endpoint is a trusted capability boundary. Its tool names,
+descriptions, and schemas enter the model action space, and its handlers run
+with the configured credential. `includeTools` is the deployment-level way to
+limit that authority. Conversation input must never choose an endpoint or
+credential.
+
+### Compatibility gate
+
+An endpoint fits this integration only when both of these conditions hold:
+
+- it implements the handshake-free MCP `2026-07-28` protocol, including
+  `server/discover`; and
+- it is anonymous or accepts a bearer token that can be provisioned through an
+  environment variable.
+
+Streamable HTTP alone is not sufficient. An initialize-era endpoint that uses
+`Mcp-Session-Id` is a different lifecycle, even though it uses the same HTTP
+transport name. An OAuth-only endpoint also needs a separate credential control
+plane for authorization, encrypted refresh-token storage, refresh coordination,
+revocation, and audit. An interactive OAuth flow does not belong inside a
+replayed Agent turn.
+
+### Discovery and names
+
+At turn start, `session/mcp-tools.ts` does the following for every configured
+server:
+
+1. Pins the official TypeScript MCP client to `2026-07-28` and calls
+   `server/discover`.
+2. Calls `tools/list`; the SDK walks pagination and validates MCP wire types and
+   `x-mcp-header` declarations.
+3. Applies `includeTools`, schema-size limits, deterministic sorting, and the
+   per-server tool-count limit.
+4. Returns the server discovery result and exact tool definitions through
+   `restate.run`.
+5. Adds that stable result to the same turn catalog used for inference and
+   execution.
+
+Model-facing names are qualified to avoid cross-server collisions:
+
+```text
+mcp__github__search_issues
+mcp__slack__send_message
+```
+
+Characters outside `[A-Za-z0-9_-]` become `_`. Names longer than 64 characters
+or colliding with a built-in or Restate-discovered tool are shortened with a
+stable identity hash. The snapshotted target retains the original MCP name;
+execution never tries to reverse the alias.
+
+The process-local cache is isolated by complete server configuration and a
+hash of the current bearer token. Its lifetime is the smaller TTL advertised
+by `server/discover` and `tools/list`, capped at five minutes; a missing,
+invalid, or zero TTL disables reuse for the next turn. Concurrent refreshes are
+coalesced. After a successful read, a refresh failure may use the
+last-known-good catalog and retry after 30 seconds. The process cache is only
+an optimization; the `restate.run` result is the durable turn snapshot.
+
+### Invocation and results
+
+MCP calls are foreground tools and participate in the existing parallel tool
+batch. Execution creates an ephemeral client, adopts the snapshotted modern
+discovery result without another probe, and calls `tools/call` with the exact
+snapshotted `Tool` definition. Supplying that definition lets the SDK perform
+`x-mcp-header` mirroring and validate `structuredContent` against the advertised
+output schema without re-listing the catalog.
+
+Interruption and external cancellation abort the request signal. Under
+stateless Streamable HTTP, closing a request-scoped SSE response is the MCP
+cancellation signal. Tool-level `isError` results become ordinary failed tool
+outcomes so the model can correct its action; protocol and transport failures
+are also projected as tool failures unless the enclosing Restate operation was
+interrupted or cancelled.
+
+The model observation contains MCP text, structured content, textual embedded
+resources, and resource-link metadata. Image, audio, and blob base64 payloads
+are omitted with their MIME type and encoded size retained. Rendered results
+are capped at 128,000 characters before entering model context. Raw results do
+not enter the canonical conversation transcript.
+
+### Delivery guarantees
+
+Each call carries:
+
+```text
+Idempotency-Key: <turnId>:<toolCallId>
+```
+
+This is a stable opt-in deduplication key for cooperating servers, not an MCP
+guarantee. MCP does not standardize idempotency, and an HTTP side effect may
+succeed before Restate records its response. Crash recovery can therefore
+repeat an uncommitted mutation. The runtime disables eager retry of the
+`tools/call` operation, but MCP tools must still be treated as potentially
+at-least-once. Prefer a Restate handler, or an MCP server that durably honors
+the key, for mutations that require deduplication.
+
+### Deliberate exclusions
+
+The MCP client advertises no elicitation, sampling, or roots capability and
+disables automatic multi-round-trip request fulfillment. A server that still
+returns `input_required` produces an actionable tool failure. Supporting form
+elicitation would require a new durable form-response protocol; the existing
+boolean approval state is not sufficient.
+
+This first implementation also excludes MCP prompts, resources, the Tasks
+extension, `subscriptions/listen`, stdio, OAuth browser flows, and legacy MCP
+sessions. Prompts and resources should not be flattened into model-controlled
+tools without first defining their context and trust semantics.
 
 ## Guardrails and tools
 

@@ -1,0 +1,657 @@
+// Stateless MCP 2026-07-28 tool discovery and invocation. MCP endpoints are
+// deployment-configured capabilities: their descriptions and schemas enter the
+// model prompt, and their handlers execute with this service's credentials.
+// Each Turn journals the selected catalog and later calls the exact snapshotted
+// remote tool definition, without relying on an MCP transport session.
+
+import {createHash} from "node:crypto";
+import {
+  type CallToolResult,
+  Client,
+  type DiscoverResult,
+  StreamableHTTPClientTransport,
+  type Tool,
+} from "@modelcontextprotocol/client";
+import {CancelledError} from "@restatedev/restate-sdk";
+import * as restate from "@restatedev/restate-sdk-gen";
+import {z} from "zod";
+
+const MCP_PROTOCOL_VERSION = "2026-07-28";
+const MCP_CLIENT = {name: "restate-agent-reference", version: "0.0.1"};
+const MCP_CONFIG_ENV = "MCP_SERVERS_JSON";
+const MAX_MODEL_TOOL_NAME = 64;
+const MAX_SERVERS = 16;
+const MAX_TOOLS_PER_SERVER = 128;
+const MAX_DESCRIPTION_CHARS = 4_000;
+const MAX_INPUT_SCHEMA_CHARS = 64_000;
+const MAX_RESULT_CHARS = 128_000;
+const MAX_CACHE_TTL_MS = 5 * 60 * 1_000;
+const REFRESH_RETRY_INTERVAL_MS = 30 * 1_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 60 * 1_000;
+
+const ServerConfigSchema = z
+  .object({
+    id: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/),
+    url: z.string().min(1),
+    tokenEnv: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+      .optional(),
+    includeTools: z
+      .array(z.string().min(1))
+      .max(MAX_TOOLS_PER_SERVER)
+      .optional(),
+    allowInsecure: z.boolean().default(false),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1_000)
+      .max(10 * 60 * 1_000)
+      .default(DEFAULT_REQUEST_TIMEOUT_MS),
+  })
+  .strict();
+
+const ServerConfigsSchema = z.array(ServerConfigSchema).max(MAX_SERVERS);
+
+type McpServerConfig = z.infer<typeof ServerConfigSchema>;
+
+type McpServerSnapshot = {
+  id: string;
+  endpoint: string;
+  tokenEnv?: string;
+  timeoutMs: number;
+};
+
+type McpServerCatalog = {
+  server: McpServerSnapshot;
+  discovery: DiscoverResult;
+  tools: Tool[];
+};
+
+type McpDiscoveryResult = {
+  catalog?: McpServerCatalog;
+  warnings: string[];
+};
+
+type CachedCatalog = {
+  catalog: McpServerCatalog;
+  refreshAfter: number;
+};
+
+/** A model-facing alias and its exact stateless MCP invocation target. */
+export type McpAgentTool = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  target: {
+    server: McpServerSnapshot;
+    remoteName: string;
+    definition: Tool;
+    discovery: DiscoverResult;
+  };
+};
+
+export type McpToolExecution =
+  | {status: "succeeded"; result: string}
+  | {status: "failed"; error: string};
+
+const cachedCatalogs = new Map<string, CachedCatalog>();
+const refreshes = new Map<string, Promise<McpDiscoveryResult>>();
+
+/**
+ * Discovers tools from every configured stateless MCP server.
+ *
+ * Configuration and each server result pass through Restate runs, so a replay
+ * observes the same endpoint set and tool catalog. Independent server reads run
+ * concurrently and fail independently.
+ */
+export function* discoverMcpTools(
+  reservedNames: string[],
+): restate.Operation<McpAgentTool[]> {
+  let configs: McpServerConfig[];
+  try {
+    configs = yield* restate.run(async () => parseServerConfigs(), {
+      name: "load-mcp-server-config",
+    });
+  } catch (error) {
+    if (isCancellation(error)) {
+      throw error;
+    }
+    restate
+      .logger()
+      .warn(
+        `MCP configuration unavailable; continuing without MCP tools: ${errorMessage(error)}`,
+      );
+    return [];
+  }
+
+  if (configs.length === 0) {
+    return [];
+  }
+
+  const tasks = configs.map((config) =>
+    restate.spawn(discoverMcpServer(config)),
+  );
+  const results = yield* restate.all(tasks);
+  for (const warning of results.flatMap(({warnings}) => warnings)) {
+    restate.logger().warn(`MCP tool discovery: ${warning}`);
+  }
+
+  const reserved = new Set(reservedNames);
+  const tools: McpAgentTool[] = [];
+  const catalogs = results
+    .flatMap(({catalog}) => (catalog ? [catalog] : []))
+    .sort((left, right) => left.server.id.localeCompare(right.server.id));
+
+  for (const catalog of catalogs) {
+    const remoteNames = new Set<string>();
+    const remoteTools = [...catalog.tools].sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
+    for (const tool of remoteTools) {
+      if (remoteNames.has(tool.name)) {
+        restate
+          .logger()
+          .warn(
+            `MCP tool discovery: ignored duplicate ${catalog.server.id}/${tool.name}`,
+          );
+        continue;
+      }
+      remoteNames.add(tool.name);
+
+      const schemaSize = JSON.stringify(tool.inputSchema).length;
+      if (schemaSize > MAX_INPUT_SCHEMA_CHARS) {
+        restate
+          .logger()
+          .warn(
+            `MCP tool discovery: ignored ${catalog.server.id}/${tool.name}: input schema exceeds ${MAX_INPUT_SCHEMA_CHARS} characters`,
+          );
+        continue;
+      }
+
+      const name = uniqueModelName(catalog.server.id, tool.name, reserved);
+      reserved.add(name);
+      tools.push({
+        name,
+        description: modelDescription(catalog.server.id, tool),
+        inputSchema: tool.inputSchema as Record<string, unknown>,
+        target: {
+          server: catalog.server,
+          remoteName: tool.name,
+          definition: tool,
+          discovery: catalog.discovery,
+        },
+      });
+    }
+  }
+  return tools;
+}
+
+/** Invokes one snapshotted tool through stateless MCP Streamable HTTP. */
+export function* executeMcpTool(
+  input: Record<string, unknown>,
+  context: {turnId: string; toolCallId: string},
+  tool: McpAgentTool,
+): restate.Operation<McpToolExecution> {
+  try {
+    const result = yield* restate.run(
+      async ({signal}) => {
+        const token = resolveToken(tool.target.server);
+        const client = createClient(token, tool.target.server.timeoutMs);
+        const transport = createTransport(tool.target.server, token);
+        try {
+          await client.connect(transport, {
+            prior: {kind: "modern", discover: tool.target.discovery},
+            signal,
+            timeout: tool.target.server.timeoutMs,
+          });
+          return await client.callTool(
+            {name: tool.target.remoteName, arguments: input},
+            {
+              signal,
+              timeout: tool.target.server.timeoutMs,
+              maxTotalTimeout: tool.target.server.timeoutMs,
+              toolDefinition: tool.target.definition,
+              headers: {
+                "Idempotency-Key": `${context.turnId}:${context.toolCallId}`,
+              },
+            },
+          );
+        } finally {
+          await client.close();
+        }
+      },
+      {
+        name: `mcp-tool-${tool.name}`,
+        // MCP does not standardize idempotency. Avoid eager network retries;
+        // crash recovery can still repeat an uncommitted remote side effect.
+        retry: {maxAttempts: 1},
+      },
+    );
+    const rendered = renderToolResult(result);
+    return result.isError
+      ? {status: "failed", error: rendered}
+      : {status: "succeeded", result: rendered};
+  } catch (error) {
+    if (isCancellation(error)) {
+      throw error;
+    }
+    return {
+      status: "failed",
+      error: `${tool.name} failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
+function* discoverMcpServer(
+  config: McpServerConfig,
+): restate.Operation<McpDiscoveryResult> {
+  try {
+    return yield* restate.run(
+      async ({signal}) => discoverCached(config, signal),
+      {
+        name: `discover-mcp-${config.id}`,
+        retry: {
+          maxAttempts: 3,
+          initialInterval: 200,
+          maxInterval: 2_000,
+          exponentiationFactor: 2,
+        },
+      },
+    );
+  } catch (error) {
+    if (isCancellation(error)) {
+      throw error;
+    }
+    return {
+      warnings: [`${config.id}: discovery failed: ${errorMessage(error)}`],
+    };
+  }
+}
+
+async function discoverCached(
+  config: McpServerConfig,
+  signal: AbortSignal,
+): Promise<McpDiscoveryResult> {
+  const server = serverSnapshot(config);
+  const token = resolveToken(server);
+  const cacheKey = catalogCacheKey(config, token);
+  const cached = cachedCatalogs.get(cacheKey);
+  if (cached && Date.now() < cached.refreshAfter) {
+    return {catalog: cached.catalog, warnings: []};
+  }
+
+  const inFlight = refreshes.get(cacheKey);
+  if (inFlight) {
+    if (cached) {
+      return {catalog: cached.catalog, warnings: []};
+    }
+    return waitForRefresh(inFlight, signal);
+  }
+
+  const refresh = fetchCatalog(config, server, token)
+    .then(({catalog, ttlMs, warnings}) => {
+      cachedCatalogs.set(cacheKey, {
+        catalog,
+        refreshAfter: Date.now() + Math.min(ttlMs, MAX_CACHE_TTL_MS),
+      });
+      return {catalog, warnings};
+    })
+    .catch((error: unknown): McpDiscoveryResult => {
+      if (!cached) {
+        throw error;
+      }
+      cached.refreshAfter = Date.now() + REFRESH_RETRY_INTERVAL_MS;
+      return {
+        catalog: cached.catalog,
+        warnings: [
+          `${config.id}: refresh failed; using the last known catalog: ${errorMessage(error)}`,
+        ],
+      };
+    })
+    .finally(() => {
+      refreshes.delete(cacheKey);
+    });
+  refreshes.set(cacheKey, refresh);
+  return waitForRefresh(refresh, signal);
+}
+
+async function fetchCatalog(
+  config: McpServerConfig,
+  server: McpServerSnapshot,
+  token: string | undefined,
+): Promise<{
+  catalog: McpServerCatalog;
+  ttlMs: number;
+  warnings: string[];
+}> {
+  const signal = AbortSignal.timeout(config.timeoutMs);
+  const client = createClient(token, config.timeoutMs);
+  const transport = createTransport(server, token);
+  try {
+    await client.connect(transport, {
+      signal,
+      timeout: config.timeoutMs,
+    });
+    const listed = await client.listTools(undefined, {
+      cacheMode: "refresh",
+      signal,
+      timeout: config.timeoutMs,
+    });
+    const discovery = client.getDiscoverResult();
+    if (!discovery) {
+      throw new Error("server did not return a modern discovery result");
+    }
+
+    const included = config.includeTools
+      ? new Set(config.includeTools)
+      : undefined;
+    const availableNames = new Set(listed.tools.map(({name}) => name));
+    const tools = listed.tools.filter(
+      (tool) => included?.has(tool.name) ?? true,
+    );
+    const warnings =
+      config.includeTools
+        ?.filter((name) => !availableNames.has(name))
+        .map(
+          (name) => `${config.id}: configured tool ${name} was not advertised`,
+        ) ?? [];
+    if (tools.length > MAX_TOOLS_PER_SERVER) {
+      warnings.push(
+        `${config.id}: exposed the first ${MAX_TOOLS_PER_SERVER} tools from a larger catalog`,
+      );
+    }
+    const catalog = {
+      server,
+      discovery,
+      tools: tools
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .slice(0, MAX_TOOLS_PER_SERVER),
+    };
+    return {
+      catalog,
+      ttlMs: cacheTtl(listed, discovery),
+      warnings,
+    };
+  } finally {
+    await client.close();
+  }
+}
+
+function createClient(token: string | undefined, timeoutMs: number): Client {
+  return new Client(MCP_CLIENT, {
+    capabilities: {},
+    inputRequired: {autoFulfill: false},
+    versionNegotiation: {
+      mode: {pin: MCP_PROTOCOL_VERSION},
+      probe: {timeoutMs, maxRetries: 0},
+    },
+    cachePartition: token ? tokenFingerprint(token) : "anonymous",
+    listMaxPages: 64,
+  });
+}
+
+function createTransport(
+  server: McpServerSnapshot,
+  token: string | undefined,
+): StreamableHTTPClientTransport {
+  return new StreamableHTTPClientTransport(new URL(server.endpoint), {
+    ...(token ? {authProvider: {token: async () => token}} : {}),
+    fetch: noRedirectFetch,
+    onInsufficientScope: "throw",
+  });
+}
+
+function noRedirectFetch(
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
+  return fetch(input, {...init, redirect: "error"});
+}
+
+function parseServerConfigs(): McpServerConfig[] {
+  const raw = process.env[MCP_CONFIG_ENV]?.trim();
+  if (!raw) {
+    return [];
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error(`${MCP_CONFIG_ENV} must contain valid JSON`);
+  }
+  const parsed = ServerConfigsSchema.safeParse(value);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map(({path, message}) => `${path.join(".") || "root"}: ${message}`)
+      .join("; ");
+    throw new Error(`${MCP_CONFIG_ENV} is invalid: ${issues}`);
+  }
+
+  const ids = new Set<string>();
+  return parsed.data.map((config) => {
+    if (ids.has(config.id)) {
+      throw new Error(`${MCP_CONFIG_ENV} contains duplicate id ${config.id}`);
+    }
+    ids.add(config.id);
+    const endpoint = new URL(config.url);
+    if (endpoint.username || endpoint.password) {
+      throw new Error(
+        `${config.id}: credentials must not be embedded in the MCP URL`,
+      );
+    }
+    if (endpoint.hash) {
+      throw new Error(`${config.id}: MCP URLs must not contain fragments`);
+    }
+    if (
+      endpoint.protocol !== "https:" &&
+      !(config.allowInsecure && endpoint.protocol === "http:")
+    ) {
+      throw new Error(
+        `${config.id}: MCP URL must use HTTPS, or explicitly set allowInsecure for HTTP`,
+      );
+    }
+    return {
+      ...config,
+      url: endpoint.toString(),
+      ...(config.includeTools
+        ? {includeTools: [...new Set(config.includeTools)].sort()}
+        : {}),
+    };
+  });
+}
+
+function serverSnapshot(config: McpServerConfig): McpServerSnapshot {
+  return {
+    id: config.id,
+    endpoint: config.url,
+    ...(config.tokenEnv ? {tokenEnv: config.tokenEnv} : {}),
+    timeoutMs: config.timeoutMs,
+  };
+}
+
+function resolveToken(server: McpServerSnapshot): string | undefined {
+  if (!server.tokenEnv) {
+    return undefined;
+  }
+  const token = process.env[server.tokenEnv];
+  if (!token) {
+    throw new Error(
+      `credential environment variable ${server.tokenEnv} is not set`,
+    );
+  }
+  return token;
+}
+
+function catalogCacheKey(
+  config: McpServerConfig,
+  token: string | undefined,
+): string {
+  return JSON.stringify([
+    config.id,
+    config.url,
+    config.tokenEnv ?? null,
+    config.includeTools ?? null,
+    config.timeoutMs,
+    config.allowInsecure,
+    token ? tokenFingerprint(token) : "anonymous",
+  ]);
+}
+
+function tokenFingerprint(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function uniqueModelName(
+  serverId: string,
+  remoteName: string,
+  reserved: Set<string>,
+): string {
+  const normalized = `mcp__${serverId}__${remoteName}`.replace(
+    /[^A-Za-z0-9_-]/g,
+    "_",
+  );
+  if (normalized.length <= MAX_MODEL_TOOL_NAME && !reserved.has(normalized)) {
+    return normalized;
+  }
+
+  const suffix = `__${createHash("sha256")
+    .update(`${serverId}\0${remoteName}`)
+    .digest("hex")
+    .slice(0, 8)}`;
+  const shortened = `${normalized.slice(0, MAX_MODEL_TOOL_NAME - suffix.length)}${suffix}`;
+  if (!reserved.has(shortened)) {
+    return shortened;
+  }
+
+  // The remote identity hash makes this practically unreachable, but retain a
+  // deterministic collision path rather than letting one tool replace another.
+  let attempt = 2;
+  while (true) {
+    const attemptSuffix = `_${attempt}`;
+    const candidate = `${shortened.slice(0, MAX_MODEL_TOOL_NAME - attemptSuffix.length)}${attemptSuffix}`;
+    if (!reserved.has(candidate)) {
+      return candidate;
+    }
+    attempt += 1;
+  }
+}
+
+function modelDescription(serverId: string, tool: Tool): string {
+  const description =
+    tool.description?.trim() ||
+    tool.title?.trim() ||
+    `Invoke ${tool.name} on the ${serverId} MCP server.`;
+  const qualified = `${description}\n\nProvided by configured MCP server ${serverId}.`;
+  return qualified.length <= MAX_DESCRIPTION_CHARS
+    ? qualified
+    : `${qualified.slice(0, MAX_DESCRIPTION_CHARS - 16)}… [truncated]`;
+}
+
+function cacheTtl(listed: unknown, discovery: DiscoverResult): number {
+  const listTtl = readTtl(listed);
+  const discoveryTtl = readTtl(discovery);
+  return Math.min(listTtl, discoveryTtl);
+}
+
+function readTtl(value: unknown): number {
+  if (typeof value !== "object" || value === null || !("ttlMs" in value)) {
+    return 0;
+  }
+  const ttl = (value as {ttlMs?: unknown}).ttlMs;
+  return typeof ttl === "number" && Number.isFinite(ttl) && ttl > 0
+    ? Math.floor(ttl)
+    : 0;
+}
+
+function renderToolResult(result: CallToolResult): string {
+  const content = result.content.map((block) => {
+    switch (block.type) {
+      case "text":
+        return block;
+      case "image":
+      case "audio":
+        return {
+          type: block.type,
+          mimeType: block.mimeType,
+          omittedBase64Characters: block.data.length,
+          ...(block.annotations ? {annotations: block.annotations} : {}),
+        };
+      case "resource":
+        return "blob" in block.resource
+          ? {
+              type: block.type,
+              resource: {
+                uri: block.resource.uri,
+                ...(block.resource.mimeType
+                  ? {mimeType: block.resource.mimeType}
+                  : {}),
+                omittedBase64Characters: block.resource.blob.length,
+                ...(block.annotations ? {annotations: block.annotations} : {}),
+              },
+            }
+          : block;
+      case "resource_link":
+        return block;
+      default:
+        return {type: "unsupported"};
+    }
+  });
+  const rendered = JSON.stringify({
+    ...(result.structuredContent !== undefined
+      ? {structuredContent: result.structuredContent}
+      : {}),
+    content,
+  });
+  if (rendered.length <= MAX_RESULT_CHARS) {
+    return rendered;
+  }
+  return JSON.stringify({
+    truncated: true,
+    originalCharacters: rendered.length,
+    preview: rendered.slice(0, MAX_RESULT_CHARS - 100),
+  });
+}
+
+function waitForRefresh(
+  refresh: Promise<McpDiscoveryResult>,
+  signal: AbortSignal,
+): Promise<McpDiscoveryResult> {
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason ??
+        new DOMException("The operation was aborted", "AbortError"),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(
+        signal.reason ??
+          new DOMException("The operation was aborted", "AbortError"),
+      );
+    };
+    signal.addEventListener("abort", onAbort, {once: true});
+    refresh.then(
+      (result) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function isCancellation(error: unknown): boolean {
+  return (
+    error instanceof restate.InterruptedError || error instanceof CancelledError
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

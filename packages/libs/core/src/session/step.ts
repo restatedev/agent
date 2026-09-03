@@ -28,6 +28,7 @@ import {approvalSignalName} from "../internal-types.js";
 import {raceBranches} from "../race.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import type {TurnHistory} from "./history.js";
+import type {McpAgentTool} from "./mcp-tools.js";
 import type {AgentToolContext, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
 
@@ -74,6 +75,7 @@ export function* agentStep({
   rejectedGuardrails,
   stepNumber,
   discoveredTools,
+  mcpTools,
 }: {
   context: AgentToolContext;
   transcript: TurnHistory;
@@ -85,6 +87,7 @@ export function* agentStep({
   rejectedGuardrails: string[];
   stepNumber: number;
   discoveredTools: DiscoveredAgentTool[];
+  mcpTools: McpAgentTool[];
 }): Operation<AgentStepResult> {
   let activeTools:
     | {
@@ -99,7 +102,7 @@ export function* agentStep({
       agentId: context.agentId,
       instructions,
       messages,
-      tools: agentTools.manifests(discoveredTools),
+      tools: agentTools.manifests(discoveredTools, mcpTools),
     });
     if (action.type === "error") {
       return {...action, approvedActions: [], rejectedGuardrails: []};
@@ -289,7 +292,7 @@ export function* agentStep({
     );
     tasks.push(
       ...action.calls.map((call) =>
-        spawn(agentTools.execute(call, context, discoveredTools)),
+        spawn(agentTools.execute(call, context, discoveredTools, mcpTools)),
       ),
     );
     return {

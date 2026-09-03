@@ -16,6 +16,8 @@
 #   MODAL_TOKEN_ID/SECRET credentials for the modal sandbox provider
 #   RESTATE_ADMIN_URL     admin API for dynamic tool discovery (default
 #                         http://localhost:9070) and RESTATE_ADMIN_TOKEN
+#   MCP_SERVERS_JSON      optional trusted stateless MCP server configuration;
+#                         bearer values are read from each entry's tokenEnv
 #   PORT                  listen port (default 9080)
 
 # syntax=docker/dockerfile:1

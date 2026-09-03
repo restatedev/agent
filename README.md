@@ -73,6 +73,7 @@ chain-of-thought.
 | Inference admission control | Model calls use a Restate scope with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Agent-scoped sandbox | A `Sandbox` Virtual Object lazily provisions/resumes a local or Modal workspace, lends it to one turn, and suspends it after idle release. |
 | Restate-native dynamic tools | A deployed JSON handler can opt in through `restate.dev/agent` metadata; one journaled catalog snapshot drives both inference and execution. |
+| Stateless MCP tools | Trusted, configured MCP 2026-07-28 Streamable HTTP endpoints contribute tools to the same per-turn catalog snapshot. |
 | Durable evaluation harness | Concurrent isolated trials drive the public protocol and return code-based assertions plus the observed transcript. |
 
 ## Architecture
@@ -90,6 +91,7 @@ flowchart LR
   G --> M["Agent and policy models"]
   Step -->|"parallel built-ins"| T["Local tools"]
   Step -->|"durable RPC"| D["Discovered Restate tools"]
+  Step -->|"stateless tools/call"| MCP["Configured MCP servers"]
   T -->|"Agent state"| A
   T -->|"schedule RPC"| Q
   T -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
@@ -272,6 +274,47 @@ RESTATE_ADMIN_URL=http://localhost:9070
 RESTATE_ADMIN_TOKEN=<optional bearer token>
 ```
 
+### Stateless MCP tools
+
+Configured MCP servers contribute tools through the stateless Streamable HTTP
+transport from MCP revision `2026-07-28`. The runtime pins that revision and
+does not fall back to an initialize-based session or the legacy HTTP+SSE
+transport.
+
+```sh
+export GITHUB_MCP_TOKEN=...
+export MCP_SERVERS_JSON='[
+  {
+    "id": "github",
+    "url": "https://mcp.example.com/mcp",
+    "tokenEnv": "GITHUB_MCP_TOKEN",
+    "includeTools": ["search_issues", "create_issue"]
+  },
+  {
+    "id": "local",
+    "url": "http://127.0.0.1:3001/mcp",
+    "allowInsecure": true
+  }
+]'
+```
+
+Each server is probed with `server/discover`, then read through `tools/list`.
+The runtime respects the server's cache TTL up to five minutes, journals the
+selected catalog once per turn, and invokes the exact snapshotted definition.
+Model-facing names are qualified as `mcp__<server-id>__<tool-name>` and safely
+shortened when necessary.
+
+Bearer values are resolved only inside outbound operations; the catalog keeps
+the environment-variable name, not the secret. MCP calls send a stable
+`Idempotency-Key` derived from the turn and tool-call IDs, but MCP does not
+standardize deduplication, so mutating tools remain potentially at-least-once.
+The first implementation supports foreground tools and text/structured
+results. It intentionally does not advertise MRTR client capabilities or
+expose prompts, resources, Tasks, stdio, OAuth authorization or refresh flows,
+or legacy MCP sessions. Streamable HTTP endpoints that still use `initialize` and
+`Mcp-Session-Id` are not compatible. For example, Lovable currently documents
+OAuth-only MCP `2025-06-18`, so it does not fit this stateless adapter yet.
+
 See [`docs/tools.md`](docs/tools.md) for the definition and discovery contracts.
 
 ## Guardrails and human approval
@@ -350,7 +393,7 @@ Requirements:
 - pnpm;
 - Restate Server and CLI;
 - `OPENAI_API_KEY`; and
-- optionally Modal credentials.
+- optionally Modal credentials and configured MCP endpoint credentials.
 
 Scope-based model flow control currently needs the experimental Restate
 protocol features enabled on a fresh local server:

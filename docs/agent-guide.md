@@ -17,7 +17,8 @@ guide are relative to `packages/libs/core`.
    - controller or transcript: [architecture](architecture.md) and
      [protocol](protocol.md);
    - turn behavior: [turn runtime](turn-runtime.md);
-   - built-in or discovered tools: [tools](tools.md);
+   - built-in, discovered Restate, or stateless MCP tools:
+     [tools](tools.md);
    - sandbox lifecycle: [sandboxes](sandboxes.md);
    - validation or evals: [development](development.md) and [evals](evals.md).
 5. State the behavior you intend to preserve before refactoring control flow.
@@ -80,14 +81,17 @@ Preserve these unless the requested change explicitly replaces them:
     lease and always releases it at its terminal boundary.
 16. A discovered Restate handler is a foreground dynamic tool. The catalog
     snapshot used for model inference is the same snapshot used for execution.
-17. Keep the layers distinct in prose and code comments: `Agent` is the
+17. A configured MCP endpoint contributes foreground tools through stateless
+    MCP `2026-07-28` only. The exact server, remote name, and tool definition
+    used for inference are retained in the turn snapshot used for invocation.
+18. Keep the layers distinct in prose and code comments: `Agent` is the
     deterministic controller, `AgentSession` owns session history and turn
     execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
     iteration, and the model plus harness/runtime is the operational agent.
-18. `AgentNotifications` carries invalidation only. `AgentSession`, `Agent`,
+19. `AgentNotifications` carries invalidation only. `AgentSession`, `Agent`,
     and `AgentScheduler` remain authoritative for history, profile/approvals,
     and schedules respectively.
-19. `AgentScheduler` owns schedule state and timers. Once `upsert` completes,
+20. `AgentScheduler` owns schedule state and timers. Once `upsert` completes,
     that durable side effect outlives the originating turn; due messages enter
     conversation control only through source-agnostic `Agent.deliver`.
 
@@ -113,7 +117,8 @@ The detailed turn-runtime list lives in
   explicit model-selected pending tool.
 - Resolved approval events are model-relevant. Approval-request and
   cancellation events are derived client status and are not model context.
-- Process-local caches (`session/dynamic-tools.ts`, provider clients) are
+- Process-local caches (`session/dynamic-tools.ts`, `session/mcp-tools.ts`,
+  provider clients) are
   optimizations, never durable sources of truth.
 - A sandbox reference carries its provider. Changing `SANDBOX_PROVIDER` does
   not migrate an already-provisioned Agent sandbox.
@@ -122,6 +127,10 @@ The detailed turn-runtime list lives in
 - Dynamic handler annotations are a trusted cluster capability boundary:
   documentation enters the model prompt and the handler can be invoked with
   the agent service's authority.
+- MCP endpoint configuration is also a trusted capability boundary. Endpoint
+  URLs are deployment-owned, tool descriptions and schemas enter the model
+  prompt, bearer values stay outside journaled snapshots, and HTTP calls may be
+  repeated unless the remote server honors the stable idempotency key.
 - AgentSession history is the public conversation event log, not the complete
   agent trajectory or Restate execution trace. The `transcript` wire name is
   retained in evaluation results.
@@ -152,6 +161,7 @@ The detailed turn-runtime list lives in
 | Built-in tool schema, execution, result projection | `session/tools.ts` |
 | Transcript-to-model projection | `session/context.ts` |
 | Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
+| Stateless MCP tool discovery and invocation | `session/mcp-tools.ts` |
 | AI SDK provider behavior and model contracts | `gateway/model.ts` |
 | Restate model admission, limit keys, retries | `gateway/service.ts` |
 | Agent sandbox lifecycle | `sandbox/service.ts` |
@@ -180,6 +190,13 @@ Do not link it into this package. Annotate its deployed handler with
 `restate.dev/agent`, provide accurate handler documentation and JSON schemas,
 and ensure JSON-compatible serialization. Read the security and collision rules
 in [tools.md](tools.md).
+
+### Stateless MCP tool
+
+Configure the trusted endpoint through `MCP_SERVERS_JSON`. Do not accept MCP
+URLs or credential values from conversation input. Keep secrets behind
+`tokenEnv`, retain the exact tool definition in the per-turn snapshot, and
+read [tools.md](tools.md) for transport, retry, and result constraints.
 
 ### New Agent handler
 

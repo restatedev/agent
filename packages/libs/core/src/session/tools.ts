@@ -27,6 +27,7 @@ import {
   sandboxProvider,
 } from "../sandbox/index.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
+import {executeMcpTool, type McpAgentTool} from "./mcp-tools.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
 
@@ -179,7 +180,10 @@ export function transcriptEntries(
 }
 
 /** Builds the complete static and dynamically discovered model tool catalog. */
-export function manifests(discovered: DiscoveredAgentTool[]): ToolManifest[] {
+export function manifests(
+  discovered: DiscoveredAgentTool[],
+  mcpTools: McpAgentTool[],
+): ToolManifest[] {
   return [
     ...definitions.map(
       (tool): ToolManifest => ({
@@ -199,6 +203,14 @@ export function manifests(discovered: DiscoveredAgentTool[]): ToolManifest[] {
         strict: false,
       }),
     ),
+    ...mcpTools.map(
+      (tool): ToolManifest => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        strict: false,
+      }),
+    ),
   ];
 }
 
@@ -212,6 +224,7 @@ export function* execute(
   call: ToolCall,
   context: AgentToolContext,
   discovered: DiscoveredAgentTool[],
+  mcpTools: McpAgentTool[],
 ): restate.Operation<ToolOutcome> {
   const tool = findTool(call.toolName);
   if (tool) {
@@ -225,7 +238,8 @@ export function* execute(
   }
 
   const dynamic = discovered.find(({name}) => name === call.toolName);
-  if (!dynamic) {
+  const mcp = mcpTools.find(({name}) => name === call.toolName);
+  if (!dynamic && !mcp) {
     return {
       call,
       status: "failed",
@@ -240,10 +254,26 @@ export function* execute(
     return {
       call,
       status: "failed",
-      error: "dynamic tool input must be an object",
+      error: "external tool input must be an object",
     };
   }
   const fields = call.input as Record<string, unknown>;
+  if (mcp) {
+    return {
+      call,
+      ...(yield* executeMcpTool(
+        fields,
+        {turnId: context.turnId, toolCallId: call.toolCallId},
+        mcp,
+      )),
+    };
+  }
+
+  // The lookup above establishes that one backend exists. This assertion keeps
+  // the backend-specific path explicit without merging MCP and Restate inputs.
+  if (!dynamic) {
+    throw new Error(`missing external tool backend for ${call.toolName}`);
+  }
   let key: string | undefined;
   if (dynamic.target.keyed) {
     if (typeof fields.key !== "string" || fields.key.length === 0) {

@@ -40,7 +40,9 @@ The maintainer documentation starts at
   `session/tools.ts`. Independent Restate handlers can opt in as dynamic tools
   with `restate.dev/agent: <tool-name>` metadata. Discovery uses an
   endpoint-local read-through Admin API cache; each turn journals one stable
-  catalog snapshot for both inference and execution.
+  catalog snapshot for both inference and execution. Trusted MCP `2026-07-28`
+  Streamable HTTP endpoints configured through `MCP_SERVERS_JSON` contribute
+  stateless foreground tools to the same snapshot.
 - **`ModelGateway`** places agent inference and guardrail evaluation behind
   Restate scopes, model/agent limit keys, retry policy, and cancellation
   propagation.
@@ -64,7 +66,8 @@ client → Agent/{agentId}              controller + profile + approvals
                     │
                     ├─ agentStep → ModelGateway → model
                     ├─ built-in tools → Agent / Sandbox
-                    └─ dynamic tools → Restate handlers
+                    ├─ dynamic tools → Restate handlers
+                    └─ MCP tools → configured HTTP endpoints
 ```
 
 ## Why Restate is useful here
@@ -96,7 +99,7 @@ Restate supplies:
 - `src/notifications/` — invalidation revisions, awakeables, and long-polls
 - `src/scheduler/` — schedule state, durable timers, and delivery
 - `src/session/` — transcript owner and turn state machine plus context, tools,
-  steering, pending work, and dynamic discovery
+  steering, pending work, Restate discovery, and stateless MCP discovery
 - `src/gateway/` — provider-specific inference, model contracts, admission,
   limit keys, retry policy, and conversation compaction
 - `src/sandbox/` — Agent-scoped lifecycle, provider contract, and Modal adapter
