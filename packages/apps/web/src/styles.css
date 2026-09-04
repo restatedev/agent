@@ -1411,6 +1411,7 @@ svg {
 
 .guardrail-editor,
 .schedule-list,
+.mcp-server-list,
 .memory-list {
   display: flex;
   flex-direction: column;
@@ -1509,7 +1510,12 @@ svg {
   font-size: 8px;
 }
 
-.schedule-form {
+.mcp-server-card span {
+  overflow-wrap: anywhere;
+}
+
+.schedule-form,
+.mcp-server-form {
   display: flex;
   flex-direction: column;
   gap: 6px;

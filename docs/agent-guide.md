@@ -45,16 +45,18 @@ Preserve these unless the requested change explicitly replaces them:
 
 1. `Agent` is the only durable conversation controller for an `agentId`. Its
    exclusive handlers serialize the active invocation, pending input,
-   profile, approvals, and externally delivered messages. It does not own
-   conversation history, notifications, or schedules.
+   profile, approvals, MCP OAuth state and authorization actions, and
+   externally delivered messages. It does not own conversation history,
+   notifications, or schedules.
 2. `AgentSession`, keyed by the same `agentId`, owns the canonical transcript
    and summary checkpoint. The transcript is append-only; never rewrite an
    existing user entry to explain later routing.
 3. At most one `AgentSession.doTurn` invocation is active for an Agent. Its
    Restate invocation ID is the stable `turnId` and signal target.
-4. A turn receives a stable profile snapshot. Instructions, memories, and
-   guardrails changed during that turn affect the next turn. The session loads
-   its conversation context once at the beginning of `doTurn`.
+4. A turn receives a stable profile snapshot. Instructions, memories,
+   guardrails, and MCP servers changed during that turn affect the next turn.
+   The session loads its conversation context once at the beginning of
+   `doTurn`.
 5. Steering does not cancel the current model/tool step or existing pending
    operations. It is consumed after the current step settles.
 6. Interruption ends the turn gracefully: stop and join unfinished work,
@@ -84,6 +86,8 @@ Preserve these unless the requested change explicitly replaces them:
 17. A configured MCP endpoint contributes foreground tools through stateless
     MCP `2026-07-28` only. The exact server, remote name, and tool definition
     used for inference are retained in the turn snapshot used for invocation.
+    OAuth credentials are private Agent state; authorization completion stores
+    them before signaling the waiting Turn.
 18. Keep the layers distinct in prose and code comments: `Agent` is the
     deterministic controller, `AgentSession` owns session history and turn
     execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
@@ -127,16 +131,17 @@ The detailed turn-runtime list lives in
 - Dynamic handler annotations are a trusted cluster capability boundary:
   documentation enters the model prompt and the handler can be invoked with
   the agent service's authority.
-- MCP endpoint configuration is also a trusted capability boundary. Endpoint
-  URLs are deployment-owned, tool descriptions and schemas enter the model
-  prompt, bearer values stay outside journaled snapshots, and HTTP calls may be
-  repeated unless the remote server honors the stable idempotency key.
+- MCP endpoint configuration is also a trusted capability boundary. Tool
+  descriptions and schemas enter the model prompt, credentials live in
+  private Agent state rather than the profile, and HTTP calls may be repeated
+  unless the remote server honors the stable idempotency key.
 - AgentSession history is the public conversation event log, not the complete
   agent trajectory or Restate execution trace. The `transcript` wire name is
   retained in evaluation results.
 - History is not the invalidation mechanism for every current-state area.
   Drain `AgentSession.history`, then use AgentNotifications versions to decide
-  whether to re-read history, profile, approvals, or schedules.
+  whether to re-read history, profile, approvals, MCP authorization actions,
+  or schedules.
 - `activity` and `progress` are status communication, not chain-of-thought or
   model reasoning.
 - The per-Agent `memories` collection is persistent semantic/profile memory.
@@ -193,10 +198,11 @@ in [tools.md](tools.md).
 
 ### Stateless MCP tool
 
-Configure the trusted endpoint through `MCP_SERVERS_JSON`. Do not accept MCP
-URLs or credential values from conversation input. Keep secrets behind
-`tokenEnv`, retain the exact tool definition in the per-turn snapshot, and
-read [tools.md](tools.md) for transport, retry, and result constraints.
+Add the endpoint to the Agent profile through the structured MCP server API.
+Do not accept MCP URLs or credential values from conversation input. Keep full
+OAuth state private to the Agent/BFF boundary, pass only an access token into a
+Turn, retain the exact tool definition in the per-turn snapshot, and read
+[tools.md](tools.md) for transport, auth, retry, and result constraints.
 
 ### New Agent handler
 

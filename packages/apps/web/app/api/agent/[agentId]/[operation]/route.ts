@@ -1,5 +1,10 @@
 import type {ScheduleSpecInput} from "@restate-agents/client";
-import type {ApprovalResolution, Guardrail} from "@restate-agents/types";
+import type {
+  ApprovalResolution,
+  Guardrail,
+  McpServer,
+} from "@restate-agents/types";
+import {startMcpOAuth} from "../../../../../src/server/mcp-oauth";
 import {
   agentClient,
   BffError,
@@ -67,6 +72,8 @@ export async function GET(request: Request, context: RouteContext) {
         return Response.json(await client.profile());
       case "approvals":
         return Response.json(await client.approvals());
+      case "mcp-authorizations":
+        return Response.json(await client.mcpAuthorizations());
       case "schedules":
         return Response.json(await client.schedules());
       default:
@@ -104,6 +111,20 @@ export async function POST(request: Request, context: RouteContext) {
         const body = await input<{guardrails: Guardrail[]}>(request);
         await client.setGuardrails(body.guardrails);
         return Response.json(null);
+      }
+      case "mcp-server":
+        return Response.json(
+          await client.upsertMcpServer(await input<McpServer>(request)),
+        );
+      case "remove-mcp-server": {
+        const body = await input<{id: string}>(request);
+        return Response.json(await client.removeMcpServer(body.id));
+      }
+      case "start-mcp-authorization": {
+        const body = await input<{authRequestId: string}>(request);
+        return Response.json(
+          await startMcpOAuth(request, agentId, body.authRequestId),
+        );
       }
       case "resolve-approval":
         return Response.json(

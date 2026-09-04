@@ -29,9 +29,9 @@ map.
 | Term | Meaning in this repository |
 | --- | --- |
 | Agent | The model and harness operating together for one `agentId` |
-| `Agent` Virtual Object | The deterministic controller for active work, queued input, profile, approvals, and externally delivered messages |
+| `Agent` Virtual Object | The deterministic controller for active work, queued input, profile, approvals, MCP authorization, and externally delivered messages |
 | `AgentSession` Virtual Object | The transcript owner and durable turn executor for the same `agentId` |
-| `AgentNotifications` Virtual Object | The per-Agent invalidation stream for history, profile, approvals, and schedules |
+| `AgentNotifications` Virtual Object | The per-Agent invalidation stream for history, profile, approvals, MCP authorization actions, and schedules |
 | `AgentScheduler` Virtual Object | The per-Agent owner of durable schedules, delayed invocations, and recurrence |
 | Agent run | One `AgentSession.doTurn` invocation; its invocation ID is the `turnId` |
 | Agent loop | The repeated model-action-observation cycle inside that run |
@@ -65,15 +65,15 @@ chain-of-thought.
 | Selective cancellation | The model can cancel one pending operation by stable ID without stopping unrelated work. |
 | Runtime guardrails | A separate policy pass gates the exact proposed text or complete tool batch before it runs. Non-allow decisions receive an independent confirmation pass. |
 | Human-in-the-loop approval | Policy gates and the explicit approval tool register durable Agent state and resume through turn-scoped signals. |
-| Persistent profile | User instructions, model-managed semantic memory, and user-defined guardrails are durable per Agent and snapshotted at turn start. |
-| General change notifications | `AgentNotifications/{agentId}` maintains revisioned `history`, `profile`, `approvals`, and `schedules` watermarks that wake clients to re-read authoritative state. |
+| Persistent profile | User instructions, model-managed semantic memory, user-defined guardrails, and structured MCP server definitions are durable per Agent and snapshotted at turn start. |
+| General change notifications | `AgentNotifications/{agentId}` maintains revisioned `history`, `profile`, `approvals`, `mcpAuth`, and `schedules` watermarks that wake clients to re-read authoritative state. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
 | Durable schedules | `AgentScheduler/{agentId}` owns durable one-shot and fixed-interval messages and delivers them through the Agent's generic `queue`, `steer`, or `interrupt` router. |
 | Inference admission control | Model calls use a Restate scope with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Agent-scoped sandbox | A `Sandbox` Virtual Object lazily provisions/resumes a local or Modal workspace, lends it to one turn, and suspends it after idle release. |
 | Restate-native dynamic tools | A deployed JSON handler can opt in through `restate.dev/agent` metadata; one journaled catalog snapshot drives both inference and execution. |
-| Stateless MCP tools | Trusted, configured MCP 2026-07-28 Streamable HTTP endpoints contribute tools to the same per-turn catalog snapshot. |
+| Stateless MCP tools | Agent-configured MCP 2026-07-28 Streamable HTTP endpoints contribute tools to the same per-turn catalog snapshot, with durable OAuth waits when required. |
 | Durable evaluation harness | Concurrent isolated trials drive the public protocol and return code-based assertions plus the observed transcript. |
 
 ## Architecture
@@ -85,7 +85,7 @@ flowchart LR
   C -->|"notification long-poll"| N["AgentNotifications VO\nkey = agentId"]
   C -->|"schedule API"| Q["AgentScheduler VO\nkey = agentId"]
   A -->|"one-way doTurn"| S
-  A -.->|"control and approval signals"| S
+  A -.->|"control, approval, and MCP auth signals"| S
   S -->|"spawn one iteration"| Step["agentStep"]
   Step -->|"scoped calls"| G["ModelGateway"]
   G --> M["Agent and policy models"]
@@ -97,7 +97,7 @@ flowchart LR
   T -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
   X --> P["Local or Modal provider"]
   S -->|"history invalidation"| N
-  A -->|"profile / approval invalidation"| N
+  A -->|"profile / approval / MCP auth invalidation"| N
   Q -->|"schedule invalidation"| N
   Q -->|"deliver(source=schedule)"| A
   S -->|"terminal outcome"| A
@@ -111,25 +111,28 @@ Agent owns only the state that must remain responsive while a run is active:
 
 - active `doTurn` invocation ID and accepted interrupt reason;
 - pending user/event entries and steering reconciliation batches;
-- instructions, memories, and guardrails;
+- instructions, memories, guardrails, and structured MCP server definitions;
+- private MCP OAuth state and pending authorization requests;
 - pending approvals; and
 - routing of external deliveries according to their busy-turn policy.
 
-An idle `ask` snapshots the profile and one-way sends
-`AgentSession.doTurn({entries, ...profile})`. A busy `ask` stores a queued user
-entry in Agent state. `steer` drains that queue into one durable signal;
+An idle `ask` snapshots the profile plus a minimal MCP credential for each
+server (`serverId` and `accessToken`) and one-way sends
+`AgentSession.doTurn`. A busy `ask` stores a queued user entry in Agent state.
+`steer` drains that queue into one durable signal;
 `interrupt` signals the active invocation and optionally stores a replacement
 request for the next turn. `onTurnEnd` retires exactly the matching invocation,
-recovers missed steering, clears abandoned approvals, and dispatches queued
-work.
+recovers missed steering, clears abandoned approvals and MCP authorization
+actions, and dispatches queued work.
 
 ### `AgentNotifications`: invalidation plane
 
 AgentNotifications is keyed by `agentId`. It owns only revision watermarks,
 caller awakeables, and subscriptions. History remains authoritative on
-AgentSession; profile and approvals remain authoritative on Agent; schedules
-remain authoritative on AgentScheduler. Producers publish topic invalidations,
-and consumers wake before re-reading the corresponding owner.
+AgentSession; profile, approvals, and MCP authorization state remain
+authoritative on Agent; schedules remain authoritative on AgentScheduler.
+Producers publish topic invalidations, and consumers wake before re-reading the
+corresponding owner.
 
 ### `AgentScheduler`: durable message scheduling
 
@@ -195,6 +198,7 @@ type AgentNotificationSnapshot = {
     history: number;
     profile: number;
     approvals: number;
+    mcpAuth: number;
     schedules: number;
   };
 };
@@ -204,9 +208,10 @@ The client-facing `watchNotifications` method targets
 `AgentNotifications.watch` and parks on a caller-owned awakeable until any
 version changes or its bounded wait expires. The notification contains no
 domain data.
-Clients drain history and re-read profile, approvals, or schedules when their
-watermark advances. The internal registration re-check closes the read/watch
-race, and timeout/cancellation withdraws abandoned subscriptions.
+Clients drain history and re-read profile, approvals, MCP authorization
+actions, or schedules when their watermark advances. The internal registration
+re-check closes the read/watch race, and timeout/cancellation withdraws
+abandoned subscriptions.
 
 History contains user/assistant messages, control boundaries, resolved
 approvals, progress, concise activity, tool lifecycle, memory metadata,
@@ -276,26 +281,18 @@ RESTATE_ADMIN_TOKEN=<optional bearer token>
 
 ### Stateless MCP tools
 
-Configured MCP servers contribute tools through the stateless Streamable HTTP
+Agent-configured MCP servers contribute tools through the stateless Streamable HTTP
 transport from MCP revision `2026-07-28`. The runtime pins that revision and
 does not fall back to an initialize-based session or the legacy HTTP+SSE
 transport.
 
-```sh
-export GITHUB_MCP_TOKEN=...
-export MCP_SERVERS_JSON='[
-  {
-    "id": "github",
-    "url": "https://mcp.example.com/mcp",
-    "tokenEnv": "GITHUB_MCP_TOKEN",
-    "includeTools": ["search_issues", "create_issue"]
-  },
-  {
-    "id": "local",
-    "url": "http://127.0.0.1:3001/mcp",
-    "allowInsecure": true
-  }
-]'
+```json
+{
+  "id": "notion",
+  "type": "http",
+  "url": "https://mcp.notion.com/mcp",
+  "auth": {"type": "oauth"}
+}
 ```
 
 Each server is probed with `server/discover`, then read through `tools/list`.
@@ -304,16 +301,22 @@ selected catalog once per turn, and invokes the exact snapshotted definition.
 Model-facing names are qualified as `mcp__<server-id>__<tool-name>` and safely
 shortened when necessary.
 
-Bearer values are resolved only inside outbound operations; the catalog keeps
-the environment-variable name, not the secret. MCP calls send a stable
-`Idempotency-Key` derived from the turn and tool-call IDs, but MCP does not
-standardize deduplication, so mutating tools remain potentially at-least-once.
-The first implementation supports foreground tools and text/structured
-results. It intentionally does not advertise MRTR client capabilities or
-expose prompts, resources, Tasks, stdio, OAuth authorization or refresh flows,
-or legacy MCP sessions. Streamable HTTP endpoints that still use `initialize` and
-`Mcp-Session-Id` are not compatible. For example, Lovable currently documents
-OAuth-only MCP `2025-06-18`, so it does not fit this stateless adapter yet.
+OAuth state lives in private Agent VO state, outside `AgentProfile`. A new Turn
+receives its configured server definitions plus only each server's current
+access token. Refresh tokens, redirect details, client registration, and OAuth
+discovery state remain on the private Agent/BFF boundary. If discovery or
+invocation needs authorization, the Turn registers a pending Agent action and
+waits durably. The web UI starts MCP OAuth discovery, dynamic client
+registration, and PKCE; the callback stores the resulting private OAuth state
+and signals the same Turn with a replacement access token to retry.
+
+MCP calls send a stable `Idempotency-Key` derived from the turn and tool-call
+IDs, but MCP does not standardize deduplication, so mutating tools remain
+potentially at-least-once. The implementation supports foreground tools and
+text/structured results. It intentionally does not advertise MRTR client
+capabilities or expose prompts, resources, Tasks, stdio, or legacy MCP
+sessions. Streamable HTTP endpoints that still use `initialize` and
+`Mcp-Session-Id` are not compatible.
 
 See [`docs/tools.md`](docs/tools.md) for the definition and discovery contracts.
 
@@ -393,7 +396,7 @@ Requirements:
 - pnpm;
 - Restate Server and CLI;
 - `OPENAI_API_KEY`; and
-- optionally Modal credentials and configured MCP endpoint credentials.
+- optionally Modal credentials.
 
 Scope-based model flow control currently needs the experimental Restate
 protocol features enabled on a fresh local server:

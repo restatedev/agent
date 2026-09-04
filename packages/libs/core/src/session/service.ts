@@ -9,6 +9,8 @@ import type {
   ConversationEntry,
   Guardrail,
   HistoryPage,
+  McpServer,
+  McpTurnCredential,
 } from "@restate-agents/types";
 import {AgentSessionDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
@@ -60,6 +62,8 @@ type AgentSessionState = {
   pending: ReturnType<typeof createPendingOperations>;
   discoveredTools: DiscoveredAgentTool[];
   mcpTools: McpAgentTool[];
+  mcpServers: McpServer[];
+  mcpCredentials: McpTurnCredential[];
 };
 
 const MAX_STEPS = 50;
@@ -138,6 +142,8 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           pending: createPendingOperations(),
           discoveredTools: [],
           mcpTools: [],
+          mcpServers: req.mcpServers,
+          mcpCredentials: req.mcpCredentials,
         };
         outcome = yield* executeTurn(state);
       } catch (error) {
@@ -223,10 +229,12 @@ function* executeTurn(
   state: AgentSessionState,
 ): restate.Operation<AgentTurnOutcome> {
   state.discoveredTools = yield* discoverAgentTools(agentTools.names);
-  state.mcpTools = yield* discoverMcpTools([
-    ...agentTools.names,
-    ...state.discoveredTools.map(({name}) => name),
-  ]);
+  state.mcpTools = yield* discoverMcpTools(
+    state.mcpServers,
+    state.mcpCredentials,
+    {agentId: state.context.agentId, turnId: state.context.turnId},
+    [...agentTools.names, ...state.discoveredTools.map(({name}) => name)],
+  );
 
   while (state.steps < MAX_STEPS) {
     // Steering received after the previous step's drain belongs before this

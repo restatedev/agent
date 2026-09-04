@@ -45,7 +45,9 @@ exclusive handlers own decisions about:
 - the active `AgentSession.doTurn` invocation ID;
 - the FIFO of input waiting for the next turn;
 - steering batches accepted by the active invocation;
-- persistent instructions, memories, and guardrails;
+- persistent instructions, memories, guardrails, and MCP server definitions;
+- private MCP OAuth state, redirect state, and pending authorization
+  actions;
 - pending human approvals; and
 - source-attributed external-message routing.
 
@@ -53,14 +55,16 @@ Agent never performs inference, executes a tool, or stores transcript chunks.
 When idle, it snapshots the profile and one-way sends
 `AgentSession.doTurn`. When busy, it either queues input or signals that active
 invocation. `Agent.onTurnEnd` retires exactly the matching invocation,
-reconciles unconsumed steering, clears abandoned approvals, and dispatches any
-queued work.
+reconciles unconsumed steering, clears abandoned approvals and authorization
+actions, and dispatches any queued work.
 
 State logic is grouped into handler-scoped namespaces:
 
 - `agent/active-turn.ts` — active invocation, pending input, steering
   bookkeeping, and signal delivery;
-- `agent/profile.ts` — instructions, memories, and guardrails;
+- `agent/profile.ts` — instructions, memories, guardrails, and MCP servers;
+- `agent/mcp-authorization.ts` — private OAuth state, redirect state,
+  pending actions, and Turn signals;
 - `agent/approval.ts` — pending approval records and decision signals.
 
 These modules use the current Restate handler context. They are not process
@@ -70,9 +74,9 @@ services or dependency containers.
 
 `AgentNotifications`, keyed by `agentId`, is the invalidation plane. It owns a
 global revision, per-topic watermarks, caller awakeables, and subscriptions.
-It owns no conversation, profile, approval, or schedule data. Producers
-one-way publish `history`, `profile`, `approvals`, or `schedules`; consumers
-wake and re-read the authoritative owner.
+It owns no conversation, profile, approval, authorization, or schedule data.
+Producers one-way publish `history`, `profile`, `approvals`, `mcpAuth`, or
+`schedules`; consumers wake and re-read the authoritative owner.
 
 ### AgentScheduler Virtual Object
 
@@ -350,18 +354,30 @@ AgentNotifications exposes a general invalidation protocol:
 - a timed-out or cancelled watch removes its subscription.
 
 Each AgentSession transcript append one-way publishes `history` to
-AgentNotifications. Agent publishes profile and approval changes, while
-AgentScheduler publishes schedule changes. Notifications carry no state
-payload: clients compare topic versions and re-read the authoritative owner.
+AgentNotifications. Agent publishes profile, approval, and MCP authorization
+changes, while AgentScheduler publishes schedule changes. Notifications carry
+no state payload: clients compare topic versions and re-read the authoritative
+owner.
 
 ## Profile and guardrails
 
-Instructions, memories, and guardrails belong to Agent:
+Instructions, memories, guardrails, and MCP server definitions belong to Agent:
 
 - instructions are user-managed and appended to model instructions;
 - memories are a model-managed keyed collection of at most 32 facts or
   preferences, injected as data rather than instructions; and
-- guardrails are user-managed natural-language policies with stable IDs.
+- guardrails are user-managed natural-language policies with stable IDs; and
+- MCP servers are user-managed structured endpoint and authentication
+  definitions.
+
+Full OAuth state and pending authorization actions also belong to Agent, but
+not to `AgentProfile`. A new Turn receives only `{serverId, accessToken}` next
+to its profile snapshot. When MCP discovery or invocation receives an auth
+challenge, the Turn registers a pending action and waits on its own invocation
+signal. The BFF persists discovery, dynamic-client-registration, state, and
+PKCE data in the Agent across the browser redirect; successful completion
+atomically stores that full state, retires the action, and resolves the Turn
+with a minimal replacement credential.
 
 Each turn receives one profile snapshot. Profile mutations publish a `profile`
 notification; they are not themselves transcript entries. A successful

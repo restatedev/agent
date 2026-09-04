@@ -400,8 +400,8 @@ deployable independently.
 
 ## Stateless MCP tools
 
-The runtime can also discover tools from deployment-configured MCP Streamable
-HTTP endpoints. This integration deliberately supports only protocol revision
+The runtime can also discover tools from Agent-configured MCP Streamable HTTP
+endpoints. This integration deliberately supports only protocol revision
 [`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28): the
 stateless revision with per-request metadata, no `initialize` handshake, and no
 `Mcp-Session-Id`. It does not fall back to initialize-era sessions or the
@@ -417,48 +417,39 @@ once per turn. Their execution remains distinct:
 
 ### Configuration
 
-Set `MCP_SERVERS_JSON` to an array of trusted server definitions:
+Add each trusted server to the Agent profile through the Web UI or
+`Agent.upsertMcpServer`:
 
-```sh
-export GITHUB_MCP_TOKEN=...
-export MCP_SERVERS_JSON='[
-  {
-    "id": "github",
-    "url": "https://mcp.example.com/mcp",
-    "tokenEnv": "GITHUB_MCP_TOKEN",
-    "includeTools": ["search_issues", "create_issue"],
-    "timeoutMs": 60000
-  },
-  {
-    "id": "local",
-    "url": "http://127.0.0.1:3001/mcp",
-    "allowInsecure": true
-  }
-]'
+```json
+{
+  "id": "notion",
+  "type": "http",
+  "url": "https://mcp.notion.com/mcp",
+  "auth": {"type": "oauth"}
+}
 ```
 
 Fields:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `id` | yes | Stable 1-32 character server identifier used in model-facing names |
-| `url` | yes | MCP Streamable HTTP endpoint; HTTPS is required by default |
-| `tokenEnv` | no | Environment-variable name containing a bearer token |
-| `includeTools` | no | Exact remote tool-name allowlist; omitted exposes the validated catalog |
-| `timeoutMs` | no | Discovery and call timeout from 1 second to 10 minutes; default 60 seconds |
-| `allowInsecure` | no | Explicitly permits an HTTP endpoint, normally only for local development |
+| `id` | yes | Stable 1-64 character server identifier used in model-facing names |
+| `type` | yes | `http` for stateless Streamable HTTP |
+| `url` | yes | MCP Streamable HTTP endpoint |
+| `auth.type` | yes | `none` or `oauth` |
 
-Server IDs must be unique. Credentials embedded in URL authority are rejected,
-fragments are rejected, and redirects are not followed. Endpoint URLs and
-configuration are part of the journaled turn snapshot, so do not put secrets
-in URLs or other configuration fields. Bearer values are resolved only inside
-the outbound `restate.run` and are not returned in the catalog.
+Server IDs must be unique. The server definition is part of `AgentProfile` and
+the journaled Turn snapshot, so do not put secrets in its fields. Full OAuth
+state is separate private Agent VO state and is serialized without
+application-level encryption in this reference implementation. A Turn receives
+only `{serverId, accessToken}`; refresh tokens, redirect details, dynamic-client
+registration, and discovery metadata remain on the private Agent/BFF boundary.
+Neither form is returned by `Agent.profile` or the pending-authorization API.
 
 An MCP endpoint is a trusted capability boundary. Its tool names,
 descriptions, and schemas enter the model action space, and its handlers run
-with the configured credential. `includeTools` is the deployment-level way to
-limit that authority. Conversation input must never choose an endpoint or
-credential.
+with the Agent's credential. Conversation input must never choose an endpoint
+or credential.
 
 ### Compatibility gate
 
@@ -466,15 +457,39 @@ An endpoint fits this integration only when both of these conditions hold:
 
 - it implements the handshake-free MCP `2026-07-28` protocol, including
   `server/discover`; and
-- it is anonymous or accepts a bearer token that can be provisioned through an
-  environment variable.
+- it is anonymous or uses the MCP OAuth authorization-code flow supported by
+  the official client SDK.
 
 Streamable HTTP alone is not sufficient. An initialize-era endpoint that uses
 `Mcp-Session-Id` is a different lifecycle, even though it uses the same HTTP
-transport name. An OAuth-only endpoint also needs a separate credential control
-plane for authorization, encrypted refresh-token storage, refresh coordination,
-revocation, and audit. An interactive OAuth flow does not belong inside a
-replayed Agent turn.
+transport name.
+
+### OAuth lifecycle
+
+MCP OAuth is coordinated by Agent state but split across the Turn and BFF:
+
+1. Agent projects each stored OAuth state to `{serverId, accessToken}` and
+   snapshots those minimal credentials into a new Turn.
+2. An OAuth server with no credential, or a discovery/invocation 401 or
+   insufficient-scope challenge, calls `Agent.requestMcpAuthorization`.
+3. Agent verifies the active Turn, coalesces requests for the same server,
+   stores the pending action, and publishes `mcpAuth` invalidation.
+4. The Turn waits on a named signal belonging to its own invocation.
+5. The Web UI re-reads `Agent.mcpAuthorizations` and presents an Authorize
+   action. The BFF performs OAuth discovery, refresh when possible, dynamic
+   client registration, and authorization-code plus PKCE flow.
+6. Agent durably stores discovery, registered-client, OAuth state, and PKCE
+   material across the browser redirect. Those private values never enter the
+   profile, Turn, or browser response.
+7. The callback validates OAuth state, exchanges the code, and calls
+   `Agent.completeMcpAuthorization` with the resulting full OAuth state.
+8. Agent stores the OAuth state, removes the pending flow, publishes `mcpAuth`,
+   and signals the waiting Turn with only `{serverId, accessToken}`. The Turn
+   retries the failed operation once.
+
+Completion is rejected for a stale, terminal, or interrupting Turn. Changing
+or removing a server clears its credential and cancels related waiters. Turn
+cleanup removes abandoned authorization actions and redirect state.
 
 ### Discovery and names
 
@@ -485,8 +500,8 @@ server:
    `server/discover`.
 2. Calls `tools/list`; the SDK walks pagination and validates MCP wire types and
    `x-mcp-header` declarations.
-3. Applies `includeTools`, schema-size limits, deterministic sorting, and the
-   per-server tool-count limit.
+3. Applies schema-size limits, deterministic sorting, and the per-server
+   tool-count limit.
 4. Returns the server discovery result and exact tool definitions through
    `restate.run`.
 5. Adds that stable result to the same turn catalog used for inference and
@@ -504,8 +519,8 @@ or colliding with a built-in or Restate-discovered tool are shortened with a
 stable identity hash. The snapshotted target retains the original MCP name;
 execution never tries to reverse the alias.
 
-The process-local cache is isolated by complete server configuration and a
-hash of the current bearer token. Its lifetime is the smaller TTL advertised
+The process-local cache is isolated by server configuration and a hash of the
+current access token. Its lifetime is the smaller TTL advertised
 by `server/discover` and `tools/list`, capped at five minutes; a missing,
 invalid, or zero TTL disables reuse for the next turn. Concurrent refreshes are
 coalesced. After a successful read, a refresh failure may use the
@@ -558,10 +573,11 @@ returns `input_required` produces an actionable tool failure. Supporting form
 elicitation would require a new durable form-response protocol; the existing
 boolean approval state is not sufficient.
 
-This first implementation also excludes MCP prompts, resources, the Tasks
-extension, `subscriptions/listen`, stdio, OAuth browser flows, and legacy MCP
-sessions. Prompts and resources should not be flattened into model-controlled
-tools without first defining their context and trust semantics.
+This implementation also excludes MCP prompts, resources, the Tasks extension,
+`subscriptions/listen`, stdio, explicit disconnect/revocation controls, and
+legacy MCP sessions. Prompts and resources should not be flattened into
+model-controlled tools without first defining their context and trust
+semantics.
 
 ## Guardrails and tools
 

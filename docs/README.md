@@ -136,8 +136,8 @@ lifecycle.
 
 History reads and turn execution share the same `AgentSession/{agentId}` state.
 AgentNotifications is only the invalidation broker: AgentSession owns history,
-Agent owns profile and approvals, and AgentScheduler owns schedules. A client
-therefore drains `AgentSession.history`, then parks on
+Agent owns profile, approvals, and MCP authorization state, and AgentScheduler
+owns schedules. A client therefore drains `AgentSession.history`, then parks on
 `AgentNotifications.watch`, and re-reads whichever area has a newer version.
 
 ## Supported extension surfaces

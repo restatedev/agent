@@ -1,26 +1,32 @@
-// Stateless MCP 2026-07-28 tool discovery and invocation. MCP endpoints are
-// deployment-configured capabilities: their descriptions and schemas enter the
-// model prompt, and their handlers execute with this service's credentials.
-// Each Turn journals the selected catalog and later calls the exact snapshotted
-// remote tool definition, without relying on an MCP transport session.
+// Stateless MCP 2026-07-28 tool discovery and invocation. MCP endpoints come
+// from the Agent profile while OAuth credentials arrive through the private
+// Turn snapshot or a durable Agent signal. Each Turn journals the selected
+// catalog and later calls the exact snapshotted remote tool definition without
+// relying on an MCP transport session.
 
 import {createHash} from "node:crypto";
 import {
   type CallToolResult,
   Client,
   type DiscoverResult,
+  InsufficientScopeError,
   StreamableHTTPClientTransport,
   type Tool,
+  UnauthorizedError,
 } from "@modelcontextprotocol/client";
+import type {
+  McpAuthorizationResolution,
+  McpServer,
+  McpTurnCredential,
+} from "@restate-agents/types";
 import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import {z} from "zod";
+import {Agent} from "../agent/index.js";
+import {mcpAuthorizationSignalName} from "../internal-types.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
 const MCP_CLIENT = {name: "restate-agent-reference", version: "0.0.1"};
-const MCP_CONFIG_ENV = "MCP_SERVERS_JSON";
 const MAX_MODEL_TOOL_NAME = 64;
-const MAX_SERVERS = 16;
 const MAX_TOOLS_PER_SERVER = 128;
 const MAX_DESCRIPTION_CHARS = 4_000;
 const MAX_INPUT_SCHEMA_CHARS = 64_000;
@@ -29,36 +35,16 @@ const MAX_CACHE_TTL_MS = 5 * 60 * 1_000;
 const REFRESH_RETRY_INTERVAL_MS = 30 * 1_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60 * 1_000;
 
-const ServerConfigSchema = z
-  .object({
-    id: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/),
-    url: z.string().min(1),
-    tokenEnv: z
-      .string()
-      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
-      .optional(),
-    includeTools: z
-      .array(z.string().min(1))
-      .max(MAX_TOOLS_PER_SERVER)
-      .optional(),
-    allowInsecure: z.boolean().default(false),
-    timeoutMs: z
-      .number()
-      .int()
-      .min(1_000)
-      .max(10 * 60 * 1_000)
-      .default(DEFAULT_REQUEST_TIMEOUT_MS),
-  })
-  .strict();
-
-const ServerConfigsSchema = z.array(ServerConfigSchema).max(MAX_SERVERS);
-
-type McpServerConfig = z.infer<typeof ServerConfigSchema>;
+type McpAuthorizationReason =
+  | "missing_credentials"
+  | "unauthorized"
+  | "insufficient_scope";
 
 type McpServerSnapshot = {
   id: string;
   endpoint: string;
-  tokenEnv?: string;
+  auth: McpServer["auth"]["type"];
+  credential?: McpTurnCredential;
   timeoutMs: number;
 };
 
@@ -72,6 +58,15 @@ type McpDiscoveryResult = {
   catalog?: McpServerCatalog;
   warnings: string[];
 };
+
+export type McpAuthChallenge = {
+  reason: McpAuthorizationReason;
+  requestedScope?: string;
+};
+
+type McpAttempt<T> =
+  | {status: "succeeded"; value: T}
+  | ({status: "authorization_required"} & McpAuthChallenge);
 
 type CachedCatalog = {
   catalog: McpServerCatalog;
@@ -106,31 +101,23 @@ const refreshes = new Map<string, Promise<McpDiscoveryResult>>();
  * concurrently and fail independently.
  */
 export function* discoverMcpTools(
+  servers: McpServer[],
+  credentials: McpTurnCredential[],
+  context: {agentId: string; turnId: string},
   reservedNames: string[],
 ): restate.Operation<McpAgentTool[]> {
-  let configs: McpServerConfig[];
-  try {
-    configs = yield* restate.run(async () => parseServerConfigs(), {
-      name: "load-mcp-server-config",
-    });
-  } catch (error) {
-    if (isCancellation(error)) {
-      throw error;
-    }
-    restate
-      .logger()
-      .warn(
-        `MCP configuration unavailable; continuing without MCP tools: ${errorMessage(error)}`,
-      );
+  if (servers.length === 0) {
     return [];
   }
 
-  if (configs.length === 0) {
-    return [];
-  }
-
-  const tasks = configs.map((config) =>
-    restate.spawn(discoverMcpServer(config)),
+  const tasks = servers.map((server) =>
+    restate.spawn(
+      discoverMcpServer(
+        server,
+        credentials.find(({serverId}) => serverId === server.id),
+        context,
+      ),
+    ),
   );
   const results = yield* restate.all(tasks);
   for (const warning of results.flatMap(({warnings}) => warnings)) {
@@ -190,44 +177,41 @@ export function* discoverMcpTools(
 /** Invokes one snapshotted tool through stateless MCP Streamable HTTP. */
 export function* executeMcpTool(
   input: Record<string, unknown>,
-  context: {turnId: string; toolCallId: string},
+  context: {
+    turnId: string;
+    toolCallId: string;
+    authorize(
+      serverId: string,
+      causeId: string,
+      challenge: McpAuthChallenge,
+    ): restate.Operation<McpTurnCredential>;
+  },
   tool: McpAgentTool,
 ): restate.Operation<McpToolExecution> {
   try {
-    const result = yield* restate.run(
-      async ({signal}) => {
-        const token = resolveToken(tool.target.server);
-        const client = createClient(token, tool.target.server.timeoutMs);
-        const transport = createTransport(tool.target.server, token);
-        try {
-          await client.connect(transport, {
-            prior: {kind: "modern", discover: tool.target.discovery},
-            signal,
-            timeout: tool.target.server.timeoutMs,
-          });
-          return await client.callTool(
-            {name: tool.target.remoteName, arguments: input},
-            {
-              signal,
-              timeout: tool.target.server.timeoutMs,
-              maxTotalTimeout: tool.target.server.timeoutMs,
-              toolDefinition: tool.target.definition,
-              headers: {
-                "Idempotency-Key": `${context.turnId}:${context.toolCallId}`,
-              },
-            },
-          );
-        } finally {
-          await client.close();
-        }
-      },
-      {
-        name: `mcp-tool-${tool.name}`,
-        // MCP does not standardize idempotency. Avoid eager network retries;
-        // crash recovery can still repeat an uncommitted remote side effect.
-        retry: {maxAttempts: 1},
-      },
-    );
+    let attempt = yield* callMcpTool(input, context, tool, "initial");
+    if (attempt.status === "authorization_required") {
+      if (tool.target.server.auth !== "oauth") {
+        return {
+          status: "failed",
+          error: `${tool.name} requires authorization but its configured auth type is none`,
+        };
+      }
+      tool.target.server.credential = yield* context.authorize(
+        tool.target.server.id,
+        context.toolCallId,
+        attempt,
+      );
+      attempt = yield* callMcpTool(input, context, tool, "authorized");
+      if (attempt.status === "authorization_required") {
+        return {
+          status: "failed",
+          error: `${tool.name} remained unauthorized after OAuth completed`,
+        };
+      }
+    }
+
+    const result = attempt.value;
     const rendered = renderToolResult(result);
     return result.isError
       ? {status: "failed", error: rendered}
@@ -243,22 +227,98 @@ export function* executeMcpTool(
   }
 }
 
+function* callMcpTool(
+  input: Record<string, unknown>,
+  context: {turnId: string; toolCallId: string},
+  tool: McpAgentTool,
+  phase: "initial" | "authorized",
+): restate.Operation<McpAttempt<CallToolResult>> {
+  return yield* restate.run(
+    async ({signal}) => {
+      try {
+        const token = resolveToken(tool.target.server);
+        const client = createClient(token, tool.target.server.timeoutMs);
+        const transport = createTransport(tool.target.server, token);
+        try {
+          await client.connect(transport, {
+            prior: {kind: "modern", discover: tool.target.discovery},
+            signal,
+            timeout: tool.target.server.timeoutMs,
+          });
+          const value = await client.callTool(
+            {name: tool.target.remoteName, arguments: input},
+            {
+              signal,
+              timeout: tool.target.server.timeoutMs,
+              maxTotalTimeout: tool.target.server.timeoutMs,
+              toolDefinition: tool.target.definition,
+              headers: {
+                "Idempotency-Key": `${context.turnId}:${context.toolCallId}`,
+              },
+            },
+          );
+          return {status: "succeeded" as const, value};
+        } finally {
+          await client.close();
+        }
+      } catch (error) {
+        const challenge = authChallenge(error);
+        if (challenge) {
+          return {status: "authorization_required" as const, ...challenge};
+        }
+        throw error;
+      }
+    },
+    {
+      name: `mcp-tool-${tool.name}-${phase}`,
+      // MCP does not standardize idempotency. Avoid eager network retries;
+      // crash recovery can still repeat an uncommitted remote side effect.
+      retry: {maxAttempts: 1},
+    },
+  );
+}
+
 function* discoverMcpServer(
-  config: McpServerConfig,
+  config: McpServer,
+  credential: McpTurnCredential | undefined,
+  context: {agentId: string; turnId: string},
 ): restate.Operation<McpDiscoveryResult> {
   try {
-    return yield* restate.run(
-      async ({signal}) => discoverCached(config, signal),
-      {
-        name: `discover-mcp-${config.id}`,
-        retry: {
-          maxAttempts: 3,
-          initialInterval: 200,
-          maxInterval: 2_000,
-          exponentiationFactor: 2,
-        },
-      },
-    );
+    const server = serverSnapshot(config, credential);
+    if (server.auth === "oauth" && !server.credential) {
+      server.credential = yield* requestMcpAuthorization(
+        server.id,
+        context,
+        `discovery-${server.id}`,
+        {reason: "missing_credentials"},
+      );
+    }
+
+    let attempt = yield* discoverMcpServerAttempt(config, server, "initial");
+    if (attempt.status === "authorization_required") {
+      if (server.auth !== "oauth") {
+        return {
+          warnings: [
+            `${config.id}: server requires authorization but its configured auth type is none`,
+          ],
+        };
+      }
+      server.credential = yield* requestMcpAuthorization(
+        server.id,
+        context,
+        `discovery-${server.id}`,
+        attempt,
+      );
+      attempt = yield* discoverMcpServerAttempt(config, server, "authorized");
+      if (attempt.status === "authorization_required") {
+        return {
+          warnings: [
+            `${config.id}: server remained unauthorized after OAuth completed`,
+          ],
+        };
+      }
+    }
+    return attempt.value;
   } catch (error) {
     if (isCancellation(error)) {
       throw error;
@@ -269,11 +329,41 @@ function* discoverMcpServer(
   }
 }
 
+function* discoverMcpServerAttempt(
+  config: McpServer,
+  server: McpServerSnapshot,
+  phase: "initial" | "authorized",
+): restate.Operation<McpAttempt<McpDiscoveryResult>> {
+  return yield* restate.run(
+    async ({signal}) => {
+      try {
+        const value = await discoverCached(config, server, signal);
+        return {status: "succeeded" as const, value};
+      } catch (error) {
+        const challenge = authChallenge(error);
+        if (challenge) {
+          return {status: "authorization_required" as const, ...challenge};
+        }
+        throw error;
+      }
+    },
+    {
+      name: `discover-mcp-${config.id}-${phase}`,
+      retry: {
+        maxAttempts: 3,
+        initialInterval: 200,
+        maxInterval: 2_000,
+        exponentiationFactor: 2,
+      },
+    },
+  );
+}
+
 async function discoverCached(
-  config: McpServerConfig,
+  config: McpServer,
+  server: McpServerSnapshot,
   signal: AbortSignal,
 ): Promise<McpDiscoveryResult> {
-  const server = serverSnapshot(config);
   const token = resolveToken(server);
   const cacheKey = catalogCacheKey(config, token);
   const cached = cachedCatalogs.get(cacheKey);
@@ -317,7 +407,7 @@ async function discoverCached(
 }
 
 async function fetchCatalog(
-  config: McpServerConfig,
+  config: McpServer,
   server: McpServerSnapshot,
   token: string | undefined,
 ): Promise<{
@@ -325,37 +415,26 @@ async function fetchCatalog(
   ttlMs: number;
   warnings: string[];
 }> {
-  const signal = AbortSignal.timeout(config.timeoutMs);
-  const client = createClient(token, config.timeoutMs);
+  const signal = AbortSignal.timeout(server.timeoutMs);
+  const client = createClient(token, server.timeoutMs);
   const transport = createTransport(server, token);
   try {
     await client.connect(transport, {
       signal,
-      timeout: config.timeoutMs,
+      timeout: server.timeoutMs,
     });
     const listed = await client.listTools(undefined, {
       cacheMode: "refresh",
       signal,
-      timeout: config.timeoutMs,
+      timeout: server.timeoutMs,
     });
     const discovery = client.getDiscoverResult();
     if (!discovery) {
       throw new Error("server did not return a modern discovery result");
     }
 
-    const included = config.includeTools
-      ? new Set(config.includeTools)
-      : undefined;
-    const availableNames = new Set(listed.tools.map(({name}) => name));
-    const tools = listed.tools.filter(
-      (tool) => included?.has(tool.name) ?? true,
-    );
-    const warnings =
-      config.includeTools
-        ?.filter((name) => !availableNames.has(name))
-        .map(
-          (name) => `${config.id}: configured tool ${name} was not advertised`,
-        ) ?? [];
+    const tools = listed.tools;
+    const warnings: string[] = [];
     if (tools.length > MAX_TOOLS_PER_SERVER) {
       warnings.push(
         `${config.id}: exposed the first ${MAX_TOOLS_PER_SERVER} tools from a larger catalog`,
@@ -409,94 +488,83 @@ function noRedirectFetch(
   return fetch(input, {...init, redirect: "error"});
 }
 
-function parseServerConfigs(): McpServerConfig[] {
-  const raw = process.env[MCP_CONFIG_ENV]?.trim();
-  if (!raw) {
-    return [];
-  }
-
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    throw new Error(`${MCP_CONFIG_ENV} must contain valid JSON`);
-  }
-  const parsed = ServerConfigsSchema.safeParse(value);
-  if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map(({path, message}) => `${path.join(".") || "root"}: ${message}`)
-      .join("; ");
-    throw new Error(`${MCP_CONFIG_ENV} is invalid: ${issues}`);
-  }
-
-  const ids = new Set<string>();
-  return parsed.data.map((config) => {
-    if (ids.has(config.id)) {
-      throw new Error(`${MCP_CONFIG_ENV} contains duplicate id ${config.id}`);
-    }
-    ids.add(config.id);
-    const endpoint = new URL(config.url);
-    if (endpoint.username || endpoint.password) {
-      throw new Error(
-        `${config.id}: credentials must not be embedded in the MCP URL`,
-      );
-    }
-    if (endpoint.hash) {
-      throw new Error(`${config.id}: MCP URLs must not contain fragments`);
-    }
-    if (
-      endpoint.protocol !== "https:" &&
-      !(config.allowInsecure && endpoint.protocol === "http:")
-    ) {
-      throw new Error(
-        `${config.id}: MCP URL must use HTTPS, or explicitly set allowInsecure for HTTP`,
-      );
-    }
-    return {
-      ...config,
-      url: endpoint.toString(),
-      ...(config.includeTools
-        ? {includeTools: [...new Set(config.includeTools)].sort()}
-        : {}),
-    };
-  });
-}
-
-function serverSnapshot(config: McpServerConfig): McpServerSnapshot {
+function serverSnapshot(
+  config: McpServer,
+  credential: McpTurnCredential | undefined,
+): McpServerSnapshot {
   return {
     id: config.id,
     endpoint: config.url,
-    ...(config.tokenEnv ? {tokenEnv: config.tokenEnv} : {}),
-    timeoutMs: config.timeoutMs,
+    auth: config.auth.type,
+    ...(credential ? {credential} : {}),
+    timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
   };
 }
 
 function resolveToken(server: McpServerSnapshot): string | undefined {
-  if (!server.tokenEnv) {
-    return undefined;
-  }
-  const token = process.env[server.tokenEnv];
-  if (!token) {
-    throw new Error(
-      `credential environment variable ${server.tokenEnv} is not set`,
-    );
-  }
-  return token;
+  return server.credential?.accessToken;
 }
 
-function catalogCacheKey(
-  config: McpServerConfig,
-  token: string | undefined,
-): string {
+function catalogCacheKey(config: McpServer, token: string | undefined): string {
   return JSON.stringify([
     config.id,
     config.url,
-    config.tokenEnv ?? null,
-    config.includeTools ?? null,
-    config.timeoutMs,
-    config.allowInsecure,
+    config.auth.type,
     token ? tokenFingerprint(token) : "anonymous",
   ]);
+}
+
+export function* requestMcpAuthorization(
+  serverId: string,
+  context: {agentId: string; turnId: string},
+  causeId: string,
+  challenge: McpAuthChallenge,
+): restate.Operation<McpTurnCredential> {
+  const request = yield* restate
+    .client(Agent, context.agentId)
+    .requestMcpAuthorization({
+      authRequestId: `${causeId}:${serverId}`,
+      serverId,
+      turnId: context.turnId,
+      reason: challenge.reason,
+      ...(challenge.requestedScope
+        ? {requestedScope: challenge.requestedScope}
+        : {}),
+    });
+  if (!request) {
+    throw new Error(
+      `${serverId}: OAuth authorization request was rejected because the Turn or server is no longer eligible`,
+    );
+  }
+
+  try {
+    const resolution = yield* restate.signal<McpAuthorizationResolution>(
+      mcpAuthorizationSignalName(request.authRequestId),
+    );
+    if (resolution.status === "cancelled") {
+      throw new Error(`${serverId}: ${resolution.reason}`);
+    }
+    return resolution.credential;
+  } catch (error) {
+    yield* restate.sendClient(Agent, context.agentId).cancelMcpAuthorization({
+      authRequestId: request.authRequestId,
+      turnId: context.turnId,
+    });
+    throw error;
+  }
+}
+
+function authChallenge(error: unknown): McpAuthChallenge | undefined {
+  if (UnauthorizedError.isInstance(error)) {
+    return {reason: "unauthorized"};
+  }
+  if (InsufficientScopeError.isInstance(error)) {
+    return {
+      reason: "insufficient_scope",
+      ...(error.requiredScope ? {requestedScope: error.requiredScope} : {}),
+    };
+  }
+  return undefined;
 }
 
 function tokenFingerprint(token: string): string {

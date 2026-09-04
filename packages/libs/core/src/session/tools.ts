@@ -8,6 +8,7 @@ import {setTimeout} from "node:timers/promises";
 import {
   type ApprovalDecision,
   type ConversationEntry,
+  type McpTurnCredential,
   type MemoryChange,
   ScheduleIdRequestSchema,
   ScheduleSpecSchema,
@@ -27,7 +28,12 @@ import {
   sandboxProvider,
 } from "../sandbox/index.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
-import {executeMcpTool, type McpAgentTool} from "./mcp-tools.js";
+import {
+  executeMcpTool,
+  type McpAgentTool,
+  type McpAuthChallenge,
+  requestMcpAuthorization,
+} from "./mcp-tools.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
 
@@ -62,6 +68,13 @@ export type AgentToolContext = {
   sandbox: {
     client(): restate.Operation<SandboxClient>;
   };
+  mcpAuthorization: {
+    authorize(
+      serverId: string,
+      causeId: string,
+      challenge: McpAuthChallenge,
+    ): restate.Operation<McpTurnCredential>;
+  };
 };
 
 type ToolCallContext = AgentToolContext & {
@@ -93,6 +106,7 @@ export function createAgentToolContext(
 ): AgentToolContext {
   let borrow: restate.Future<SandboxRef> | undefined;
   let ref: SandboxRef | undefined;
+  const authorizations = new Map<string, restate.Task<McpTurnCredential>>();
   return {
     agentId,
     turnId,
@@ -101,6 +115,33 @@ export function createAgentToolContext(
         borrow ??= restate.client(Sandbox, agentId).borrow({turnId});
         ref ??= yield* borrow;
         return sandboxProvider.connect(ref);
+      },
+    },
+    mcpAuthorization: {
+      *authorize(
+        serverId: string,
+        causeId: string,
+        challenge: McpAuthChallenge,
+      ): restate.Operation<McpTurnCredential> {
+        let task = authorizations.get(serverId);
+        if (!task) {
+          task = restate.spawn(
+            requestMcpAuthorization(
+              serverId,
+              {agentId, turnId},
+              causeId,
+              challenge,
+            ),
+          );
+          authorizations.set(serverId, task);
+        }
+        try {
+          return yield* task;
+        } finally {
+          if (authorizations.get(serverId) === task) {
+            authorizations.delete(serverId);
+          }
+        }
       },
     },
   };
@@ -263,7 +304,11 @@ export function* execute(
       call,
       ...(yield* executeMcpTool(
         fields,
-        {turnId: context.turnId, toolCallId: call.toolCallId},
+        {
+          turnId: context.turnId,
+          toolCallId: call.toolCallId,
+          authorize: context.mcpAuthorization.authorize,
+        },
         mcp,
       )),
     };

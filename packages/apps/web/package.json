@@ -12,6 +12,7 @@
   "dependencies": {
     "@restate-agents/client": "workspace:*",
     "@restate-agents/types": "workspace:*",
+    "@modelcontextprotocol/client": "^2.0.0",
     "@shadcn/react": "^0.2.1",
     "lucide-react": "^1.28.0",
     "next": "^16.2.12",

@@ -24,6 +24,17 @@ import {
   HistoryPageSchema,
   HistoryRequestSchema,
   InterruptRequestSchema,
+  McpAuthorizationCancellationSchema,
+  McpAuthorizationCompletionSchema,
+  McpAuthorizationContextRequestSchema,
+  McpAuthorizationContextSchema,
+  McpAuthorizationFlowUpdateSchema,
+  McpAuthorizationRequestInputSchema,
+  McpAuthorizationRequestSchema,
+  McpServerIdRequestSchema,
+  McpServerMutationResultSchema,
+  McpServerRemovalResultSchema,
+  McpServerSchema,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
   MessageSchema,
@@ -57,6 +68,38 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     output: z.void(),
   }),
   setGuardrails: iface.schemas({input: SetGuardrailsSchema, output: z.void()}),
+  upsertMcpServer: iface.schemas({
+    input: McpServerSchema,
+    output: McpServerMutationResultSchema,
+  }),
+  removeMcpServer: iface.schemas({
+    input: McpServerIdRequestSchema,
+    output: McpServerRemovalResultSchema,
+  }),
+  requestMcpAuthorization: iface.schemas({
+    input: McpAuthorizationRequestInputSchema,
+    output: McpAuthorizationRequestSchema.nullable(),
+  }),
+  cancelMcpAuthorization: iface.schemas({
+    input: McpAuthorizationCancellationSchema,
+    output: z.void(),
+  }),
+  mcpAuthorizations: iface.schemas({
+    input: z.void(),
+    output: z.array(McpAuthorizationRequestSchema),
+  }),
+  mcpAuthorizationContext: iface.schemas({
+    input: McpAuthorizationContextRequestSchema,
+    output: McpAuthorizationContextSchema,
+  }),
+  saveMcpAuthorizationFlow: iface.schemas({
+    input: McpAuthorizationFlowUpdateSchema,
+    output: z.boolean(),
+  }),
+  completeMcpAuthorization: iface.schemas({
+    input: McpAuthorizationCompletionSchema,
+    output: z.boolean(),
+  }),
   updateMemory: iface.schemas({
     input: MemoryUpdateSchema,
     output: MemoryUpdateResultSchema,

@@ -29,6 +29,182 @@ export const SetInstructionsSchema = z.object({
   instructions: z.string().nullable(),
 });
 
+const McpServerIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .describe(
+    "A stable identifier for one MCP server. Reusing it replaces the existing server.",
+  );
+
+export const McpServerAuthSchema = z.discriminatedUnion("type", [
+  z.object({type: z.literal("none")}),
+  z.object({type: z.literal("oauth")}),
+]);
+export type McpServerAuth = z.infer<typeof McpServerAuthSchema>;
+
+export const McpServerSchema = z.object({
+  id: McpServerIdSchema,
+  type: z.literal("http"),
+  url: z.string().trim().min(1),
+  auth: McpServerAuthSchema,
+});
+export type McpServer = z.infer<typeof McpServerSchema>;
+
+export const McpServerIdRequestSchema = McpServerSchema.pick({id: true});
+
+// Private OAuth material owned by the Agent VO. These values deliberately do
+// not appear in AgentProfile and only cross the private Agent/BFF boundary.
+export const McpOAuthTokensSchema = z
+  .object({
+    access_token: z.string().min(1),
+    token_type: z.string().min(1),
+    expires_in: z.number().optional(),
+    refresh_token: z.string().optional(),
+    scope: z.string().optional(),
+    id_token: z.string().optional(),
+    issuer: z.string().optional(),
+  })
+  .loose();
+export type McpOAuthTokens = z.infer<typeof McpOAuthTokensSchema>;
+
+export const McpOAuthClientInformationSchema = z
+  .object({
+    client_id: z.string().min(1),
+    client_secret: z.string().optional(),
+    client_id_issued_at: z.number().optional(),
+    client_secret_expires_at: z.number().optional(),
+    issuer: z.string().optional(),
+  })
+  .loose();
+export type McpOAuthClientInformation = z.infer<
+  typeof McpOAuthClientInformationSchema
+>;
+
+export const McpOAuthDiscoveryStateSchema = z
+  .object({
+    authorizationServerUrl: z.string().min(1),
+    authorizationServerMetadata: z.record(z.string(), z.unknown()).optional(),
+    resourceMetadata: z.record(z.string(), z.unknown()).optional(),
+    resourceMetadataUrl: z.string().optional(),
+  })
+  .loose();
+export type McpOAuthDiscoveryState = z.infer<
+  typeof McpOAuthDiscoveryStateSchema
+>;
+
+export const McpOAuthStateSchema = z.object({
+  serverId: McpServerIdSchema,
+  redirectUrl: z.string().optional(),
+  tokens: McpOAuthTokensSchema,
+  clientInformation: McpOAuthClientInformationSchema.optional(),
+  discoveryState: McpOAuthDiscoveryStateSchema.optional(),
+});
+export type McpOAuthState = z.infer<typeof McpOAuthStateSchema>;
+
+// The deliberately minimal credential projected into a Turn. Refresh tokens
+// and OAuth protocol state remain private to the Agent/BFF boundary.
+export const McpTurnCredentialSchema = z.object({
+  serverId: McpServerIdSchema,
+  accessToken: z.string().min(1),
+});
+export type McpTurnCredential = z.infer<typeof McpTurnCredentialSchema>;
+
+export const McpAuthorizationReasonSchema = z.enum([
+  "missing_credentials",
+  "unauthorized",
+  "insufficient_scope",
+]);
+
+export const McpAuthorizationRequestSchema = z.object({
+  authRequestId: z.string().min(1),
+  serverId: McpServerIdSchema,
+  turnId: z.string().min(1),
+  reason: McpAuthorizationReasonSchema,
+  requestedScope: z.string().optional(),
+});
+export type McpAuthorizationRequest = z.infer<
+  typeof McpAuthorizationRequestSchema
+>;
+
+export const McpAuthorizationRequestInputSchema = McpAuthorizationRequestSchema;
+
+export const McpAuthorizationCancellationSchema =
+  McpAuthorizationRequestSchema.pick({
+    authRequestId: true,
+    turnId: true,
+  });
+
+export const McpOAuthFlowSchema = z.object({
+  redirectUrl: z.string().min(1),
+  state: z.string().min(1),
+  codeVerifier: z.string().min(1),
+  tokens: McpOAuthTokensSchema.optional(),
+  clientInformation: McpOAuthClientInformationSchema.optional(),
+  discoveryState: McpOAuthDiscoveryStateSchema.optional(),
+});
+export type McpOAuthFlow = z.infer<typeof McpOAuthFlowSchema>;
+
+export const McpAuthorizationFlowUpdateSchema = z.object({
+  authRequestId: z.string().min(1),
+  flow: McpOAuthFlowSchema,
+});
+
+export const McpAuthorizationContextRequestSchema = z.object({
+  authRequestId: z.string().min(1),
+});
+
+export const McpAuthorizationContextSchema = z
+  .object({
+    request: McpAuthorizationRequestSchema,
+    server: McpServerSchema,
+    oauthState: McpOAuthStateSchema.optional(),
+    flow: McpOAuthFlowSchema.optional(),
+  })
+  .nullable();
+export type McpAuthorizationContext = z.infer<
+  typeof McpAuthorizationContextSchema
+>;
+
+export const McpAuthorizationCompletionSchema = z.object({
+  authRequestId: z.string().min(1),
+  oauthState: McpOAuthStateSchema,
+});
+
+export const McpAuthorizationResolutionSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("authorized"),
+    credential: McpTurnCredentialSchema,
+  }),
+  z.object({status: z.literal("cancelled"), reason: z.string().min(1)}),
+]);
+export type McpAuthorizationResolution = z.infer<
+  typeof McpAuthorizationResolutionSchema
+>;
+
+export const McpServerMutationResultSchema = z.discriminatedUnion("accepted", [
+  z.object({
+    accepted: z.literal(true),
+    replaced: z.boolean(),
+    server: McpServerSchema,
+  }),
+  z.object({
+    accepted: z.literal(false),
+    error: z.string(),
+  }),
+]);
+export type McpServerMutationResult = z.infer<
+  typeof McpServerMutationResultSchema
+>;
+
+export const McpServerRemovalResultSchema = z.object({
+  removed: z.boolean(),
+});
+export type McpServerRemovalResult = z.infer<
+  typeof McpServerRemovalResultSchema
+>;
+
 const AskStatsSchema = z.object({
   pendingMessages: z.number().int().nonnegative(),
 });
@@ -277,6 +453,7 @@ export const AgentProfileSchema = z.object({
   instructions: z.string().optional(),
   memories: z.array(MemoryEntrySchema),
   guardrails: z.array(GuardrailSchema),
+  mcpServers: z.array(McpServerSchema),
 });
 export type AgentProfile = z.infer<typeof AgentProfileSchema>;
 
@@ -399,6 +576,7 @@ const AgentNotificationVersionsSchema = z.object({
   history: z.number().int().nonnegative(),
   profile: z.number().int().nonnegative(),
   approvals: z.number().int().nonnegative(),
+  mcpAuth: z.number().int().nonnegative(),
   schedules: z.number().int().nonnegative(),
 });
 
@@ -427,6 +605,7 @@ export const AgentNotificationTopicSchema = z.enum([
   "history",
   "profile",
   "approvals",
+  "mcpAuth",
   "schedules",
 ]);
 export type AgentNotificationTopic = z.infer<
@@ -479,6 +658,7 @@ export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
 export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;
 
 export const AgentTurnRequestSchema = AgentProfileSchema.extend({
+  mcpCredentials: z.array(McpTurnCredentialSchema),
   entries: z.array(ConversationEntrySchema),
 });
 export type AgentTurnRequest = z.infer<typeof AgentTurnRequestSchema>;

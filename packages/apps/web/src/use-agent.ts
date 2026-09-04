@@ -9,6 +9,9 @@ export type AgentProfile = Awaited<ReturnType<AgentClient["profile"]>>;
 export type ApprovalRequest = Awaited<
   ReturnType<AgentClient["approvals"]>
 >[number];
+export type McpAuthorizationRequest = Awaited<
+  ReturnType<AgentClient["mcpAuthorizations"]>
+>[number];
 export type ScheduledMessage = Awaited<
   ReturnType<AgentClient["schedules"]>
 >[number];
@@ -39,6 +42,9 @@ export function useAgent(connection: AgentConnection) {
   const [entries, setEntries] = useState<SequencedEntry[]>([]);
   const [profile, setProfile] = useState<AgentProfile>();
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const [mcpAuthorizations, setMcpAuthorizations] = useState<
+    McpAuthorizationRequest[]
+  >([]);
   const [schedules, setSchedules] = useState<ScheduledMessage[]>([]);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string>();
@@ -55,6 +61,12 @@ export function useAgent(connection: AgentConnection) {
     return next;
   }, [client]);
 
+  const refreshMcpAuthorizations = useCallback(async () => {
+    const next = await client.mcpAuthorizations();
+    setMcpAuthorizations(next);
+    return next;
+  }, [client]);
+
   const refreshSchedules = useCallback(async () => {
     const next = await client.schedules();
     setSchedules(next);
@@ -67,6 +79,7 @@ export function useAgent(connection: AgentConnection) {
     setEntries([]);
     setProfile(undefined);
     setApprovals([]);
+    setMcpAuthorizations([]);
     setSchedules([]);
     setConnected(false);
     setConnectionError(undefined);
@@ -84,6 +97,7 @@ export function useAgent(connection: AgentConnection) {
             await Promise.all([
               refreshProfile(),
               refreshApprovals(),
+              refreshMcpAuthorizations(),
               refreshSchedules(),
             ]);
             notification = initialNotification;
@@ -112,6 +126,9 @@ export function useAgent(connection: AgentConnection) {
           if (next.versions.approvals > notification.versions.approvals) {
             refreshes.push(refreshApprovals());
           }
+          if (next.versions.mcpAuth > notification.versions.mcpAuth) {
+            refreshes.push(refreshMcpAuthorizations());
+          }
           if (next.versions.schedules > notification.versions.schedules) {
             refreshes.push(refreshSchedules());
           }
@@ -131,18 +148,26 @@ export function useAgent(connection: AgentConnection) {
 
     void poll();
     return () => abort.abort();
-  }, [client, refreshApprovals, refreshProfile, refreshSchedules]);
+  }, [
+    client,
+    refreshApprovals,
+    refreshMcpAuthorizations,
+    refreshProfile,
+    refreshSchedules,
+  ]);
 
   return {
     client,
     entries,
     profile,
     approvals,
+    mcpAuthorizations,
     schedules,
     connected,
     connectionError,
     refreshProfile,
     refreshApprovals,
+    refreshMcpAuthorizations,
     refreshSchedules,
   };
 }

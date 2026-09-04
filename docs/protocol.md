@@ -144,6 +144,7 @@ type AgentNotificationSnapshot = {
     history: number;
     profile: number;
     approvals: number;
+    mcpAuth: number;
     schedules: number;
   };
 };
@@ -179,6 +180,12 @@ type AgentProfile = {
   instructions?: string;
   memories: Array<{key: string; content: string}>;
   guardrails: Array<{id: string; rule: string}>;
+  mcpServers: Array<{
+    id: string;
+    type: "http";
+    url: string;
+    auth: {type: "none"} | {type: "oauth"};
+  }>;
 };
 ```
 
@@ -202,6 +209,57 @@ Input:
 The list completely replaces policy for future turns. IDs must be unique and
 non-empty; an empty list clears guardrails. The handler publishes a `profile`
 notification.
+
+### `Agent.upsertMcpServer`
+
+Input is one structured MCP server definition:
+
+```ts
+{
+  id: string;
+  type: "http";
+  url: string;
+  auth: {type: "none"} | {type: "oauth"};
+}
+```
+
+The stable `id` creates or replaces one entry. A successful mutation publishes
+a `profile` notification and returns the stored entry plus whether it replaced
+an existing server.
+
+### `Agent.removeMcpServer`
+
+Input is `{id: string}`. It removes the matching entry when present, publishes
+a `profile` notification for an effective removal, and returns
+`{removed: boolean}`.
+
+## MCP authorization
+
+OAuth credentials and redirect-round-trip state are durable Agent VO state,
+but are not fields of `AgentProfile`. `Agent.mcpAuthorizations` is the
+user-facing read and returns only pending actions:
+
+```ts
+type McpAuthorizationRequest = {
+  authRequestId: string;
+  serverId: string;
+  turnId: string;
+  reason: "missing_credentials" | "unauthorized" | "insufficient_scope";
+  requestedScope?: string;
+};
+```
+
+Discovery or invocation registers one request per server and active Turn, then
+waits on a Turn-scoped signal. Agent publishes an `mcpAuth` notification when
+the pending list changes. The trusted BFF reads the private authorization
+context, persists OAuth discovery, dynamic-client-registration, state, and
+PKCE material across the browser redirect, then calls
+`completeMcpAuthorization`. Agent stores the tokens and resolves the waiting
+Turn only if the request still belongs to the active, non-interrupting Turn.
+
+Changing or removing a server invalidates credentials bound to that server and
+cancels its pending authorization. Terminal Turn reconciliation clears any
+abandoned requests.
 
 ## Human approvals
 
@@ -304,6 +362,11 @@ These are ingress-visible for inspection but are not normal client operations.
 | `updateMemory` | `manageMemory` tool | Apply one active-turn memory batch |
 | `requestApproval` | tool or policy gate | Register a pending request for the active turn |
 | `cancelApproval` | interrupted waiter | Remove abandoned approval state |
+| `requestMcpAuthorization` | MCP discovery or tool invocation | Register or coalesce a pending OAuth action |
+| `cancelMcpAuthorization` | interrupted MCP waiter | Remove abandoned OAuth action and redirect state |
+| `mcpAuthorizationContext` | trusted BFF | Read private server, OAuth, and redirect state |
+| `saveMcpAuthorizationFlow` | trusted BFF | Persist discovery, client registration, state, and PKCE material |
+| `completeMcpAuthorization` | trusted BFF | Store private OAuth state and signal the waiting Turn with an access token |
 | `onTurnEnd` | AgentSession | Retire the matching turn, recover missed steering, and dispatch queued work |
 
 ### AgentNotifications
@@ -339,6 +402,8 @@ type AgentTurnRequest = {
   instructions?: string;
   memories: Array<{key: string; content: string}>;
   guardrails: Array<{id: string; rule: string}>;
+  mcpServers: McpServer[];
+  mcpCredentials: Array<{serverId: string; accessToken: string}>; // private Agent-to-Turn field
   entries: ConversationEntry[];
 };
 ```
@@ -442,7 +507,8 @@ context and conversation compaction by the exhaustive
 ## Following state correctly
 
 For history alone, use `createAgentClient(...).follow()`. A complete client
-that also maintains profile, approvals, and schedules follows this pattern:
+that also maintains profile, approvals, MCP authorization actions, and
+schedules follows this pattern:
 
 ```ts
 let cursor = 1;
@@ -461,6 +527,7 @@ while (!stopped) {
   });
   if (next.versions.profile > snapshot.versions.profile) await refreshProfile();
   if (next.versions.approvals > snapshot.versions.approvals) await refreshApprovals();
+  if (next.versions.mcpAuth > snapshot.versions.mcpAuth) await refreshMcpAuthorizations();
   if (next.versions.schedules > snapshot.versions.schedules) await refreshSchedules();
   snapshot = next;
 }

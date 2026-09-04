@@ -224,23 +224,23 @@ journaled snapshot.
 
 Check:
 
-1. `MCP_SERVERS_JSON` is valid JSON with a unique, model-safe server `id`;
+1. the Agent profile contains the expected structured MCP server entry;
 2. the endpoint speaks stateless MCP revision `2026-07-28`;
-3. HTTP endpoints explicitly set `allowInsecure: true`;
-4. `tokenEnv`, when present, names a populated environment variable;
-5. `includeTools`, when present, contains the exact remote tool name;
-6. the endpoint is reachable without an HTTP redirect;
-7. logs contain no MCP configuration or discovery warning; and
-8. you started a new turn after the catalog cache expired.
+3. `auth.type` correctly says `none` or `oauth`;
+4. an OAuth server has no pending authorization action in the Approvals tab;
+5. the endpoint is reachable without an HTTP redirect;
+6. logs contain no MCP discovery warning; and
+7. you started a new turn after the catalog cache expired.
 
 The runtime does not fall back to initialize-era MCP sessions. A successful
 catalog is cached only for the server-advertised TTL, capped at five minutes;
 existing turns retain their journaled snapshot.
 
-An OAuth challenge is not a token configuration error. This first adapter does
-not run authorization-code flows or refresh OAuth credentials. A server that
-only supports OAuth, or that still advertises MCP `2025-06-18` sessions, needs a
-different adapter or a stateless compatibility gateway.
+An OAuth challenge creates private Agent state and a user-visible authorization
+action. The Turn remains durably waiting until the Web UI completes the flow,
+the server configuration changes, or the Turn is interrupted. An endpoint that
+still advertises MCP `2025-06-18` sessions needs a different adapter or a
+stateless compatibility gateway.
 
 ### An Agent remains busy
 

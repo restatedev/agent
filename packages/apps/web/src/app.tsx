@@ -11,6 +11,7 @@ import {
   CircleCheck,
   FlaskConical,
   GitBranch,
+  KeyRound,
   MemoryStick,
   MessageSquareText,
   Plus,
@@ -26,6 +27,7 @@ import {
 import {
   type FormEvent,
   type KeyboardEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -41,6 +43,7 @@ import {
   type AgentConnection,
   type AgentProfile,
   type ApprovalRequest,
+  type McpAuthorizationRequest,
   type ScheduledMessage,
   useAgent,
 } from "./use-agent";
@@ -48,6 +51,8 @@ import {
 type Mode = "ask" | "steer" | "interrupt";
 type Tab = "approvals" | "profile" | "evals";
 type Guardrail = AgentProfile["guardrails"][number];
+type McpServer = AgentProfile["mcpServers"][number];
+type McpAuthType = McpServer["auth"]["type"];
 
 type Toast = {
   id: number;
@@ -399,28 +404,79 @@ function Composer({
 
 function ApprovalsPanel({
   approvals,
+  mcpAuthorizations,
   client,
   notify,
 }: {
   approvals: ApprovalRequest[];
+  mcpAuthorizations: McpAuthorizationRequest[];
   client: AgentClient;
   notify: (message: string, error?: boolean) => void;
 }) {
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [resolving, setResolving] = useState<string>();
-  if (approvals.length === 0) {
+  if (approvals.length === 0 && mcpAuthorizations.length === 0) {
     return (
       <div className="panel-empty">
         <ShieldCheck />
         <strong>No pending approvals</strong>
         <span>
-          Human decisions requested by tools or guardrails appear here.
+          Human decisions and account connections requested by tools appear
+          here.
         </span>
       </div>
     );
   }
   return (
     <div className="card-list">
+      {mcpAuthorizations.map((authorization) => (
+        <article
+          className="approval-card"
+          key={`mcp-${authorization.authRequestId}`}
+        >
+          <div className="card-kicker">
+            <KeyRound /> MCP authorization
+          </div>
+          <h3>Connect {authorization.serverId}</h3>
+          <p className="card-meta">
+            turn {shortTurn(authorization.turnId)} · {authorization.reason}
+            {authorization.requestedScope
+              ? ` · scope ${authorization.requestedScope}`
+              : ""}
+          </p>
+          <div className="card-actions">
+            <button
+              className="button approve"
+              disabled={resolving === authorization.authRequestId}
+              onClick={async () => {
+                setResolving(authorization.authRequestId);
+                try {
+                  const result = await client.startMcpAuthorization(
+                    authorization.authRequestId,
+                  );
+                  if (result.status === "redirect") {
+                    window.location.assign(result.authorizationUrl);
+                    return;
+                  }
+                  notify(`Connected ${authorization.serverId}`);
+                } catch (error) {
+                  notify(errorMessage(error), true);
+                } finally {
+                  setResolving(undefined);
+                }
+              }}
+              type="button"
+            >
+              {resolving === authorization.authRequestId ? (
+                <RefreshCw className="spin" />
+              ) : (
+                <KeyRound />
+              )}
+              Authorize
+            </button>
+          </div>
+        </article>
+      ))}
       {approvals.map((approval) => (
         <article className="approval-card" key={approval.approvalId}>
           <div className="card-kicker">
@@ -603,6 +659,58 @@ function ScheduleList({
   );
 }
 
+function McpServerList({
+  servers,
+  client,
+  notify,
+  refresh,
+}: {
+  servers: McpServer[];
+  client: AgentClient;
+  notify: (message: string, error?: boolean) => void;
+  refresh: () => Promise<unknown>;
+}) {
+  if (servers.length === 0) {
+    return <p className="empty-copy">No MCP servers configured.</p>;
+  }
+  return (
+    <div className="mcp-server-list">
+      {[...servers]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((server) => (
+          <article className="compact-card mcp-server-card" key={server.id}>
+            <div>
+              <strong>{server.id}</strong>
+              <span>
+                {server.type} · {server.auth.type} · {server.url}
+              </span>
+            </div>
+            <button
+              aria-label={`Remove MCP server ${server.id}`}
+              className="icon-button danger"
+              onClick={async () => {
+                try {
+                  const result = await client.removeMcpServer(server.id);
+                  notify(
+                    result.removed
+                      ? `Removed MCP server ${server.id}`
+                      : "MCP server was already gone",
+                  );
+                  await refresh();
+                } catch (error) {
+                  notify(errorMessage(error), true);
+                }
+              }}
+              type="button"
+            >
+              <Trash2 />
+            </button>
+          </article>
+        ))}
+    </div>
+  );
+}
+
 function ProfilePanel({
   client,
   profile,
@@ -628,6 +736,12 @@ function ProfilePanel({
     delaySeconds: "",
     repeatEverySeconds: "",
     whenBusy: "queue" as ScheduleSpecInput["whenBusy"],
+  });
+  const [mcpServer, setMcpServer] = useState({
+    id: "",
+    type: "http" as const,
+    url: "",
+    authType: "oauth" as McpAuthType,
   });
 
   useEffect(() => {
@@ -764,6 +878,98 @@ function ProfilePanel({
         ) : (
           <p className="empty-copy">No memories stored by the model.</p>
         )}
+      </section>
+
+      <section className="settings-section">
+        <div className="section-heading">
+          <div>
+            <Bot />
+            <span>
+              <strong>MCP servers</strong>
+              <small>Agent-owned tool configuration</small>
+            </span>
+          </div>
+        </div>
+        <McpServerList
+          client={client}
+          notify={notify}
+          refresh={refreshProfile}
+          servers={profile?.mcpServers ?? []}
+        />
+        <form
+          className="mcp-server-form"
+          onSubmit={async (event: FormEvent) => {
+            event.preventDefault();
+            const id = mcpServer.id.trim();
+            const url = mcpServer.url.trim();
+            if (!id || !url) {
+              notify("MCP server id and URL are required", true);
+              return;
+            }
+            try {
+              const result = await client.upsertMcpServer({
+                id,
+                type: mcpServer.type,
+                url,
+                auth: {type: mcpServer.authType},
+              });
+              if (!result.accepted) {
+                notify(result.error, true);
+                return;
+              }
+              notify(
+                result.replaced
+                  ? `Updated MCP server ${result.server.id}`
+                  : `Added MCP server ${result.server.id}`,
+              );
+              setMcpServer({
+                id: "",
+                type: "http",
+                url: "",
+                authType: "oauth",
+              });
+              await refreshProfile();
+            } catch (error) {
+              notify(errorMessage(error), true);
+            }
+          }}
+        >
+          <div className="form-grid two">
+            <input
+              onChange={(event) =>
+                setMcpServer({...mcpServer, id: event.target.value})
+              }
+              placeholder="Server id"
+              value={mcpServer.id}
+            />
+            <select aria-label="MCP transport" disabled value={mcpServer.type}>
+              <option value="http">HTTP</option>
+            </select>
+          </div>
+          <input
+            onChange={(event) =>
+              setMcpServer({...mcpServer, url: event.target.value})
+            }
+            placeholder="https://mcp.example.com/mcp"
+            value={mcpServer.url}
+          />
+          <select
+            aria-label="MCP authentication type"
+            onChange={(event) =>
+              setMcpServer({
+                ...mcpServer,
+                authType: event.target.value as McpAuthType,
+              })
+            }
+            value={mcpServer.authType}
+          >
+            <option value="oauth">OAuth</option>
+            <option value="none">No authentication</option>
+          </select>
+          <button className="button secondary small" type="submit">
+            <Plus /> Add or update server
+          </button>
+        </form>
       </section>
 
       <section className="settings-section">
@@ -1029,6 +1235,7 @@ function Inspector({
   tab,
   setTab,
   approvals,
+  mcpAuthorizations,
   profile,
   schedules,
   client,
@@ -1039,6 +1246,7 @@ function Inspector({
   tab: Tab;
   setTab: (tab: Tab) => void;
   approvals: ApprovalRequest[];
+  mcpAuthorizations: McpAuthorizationRequest[];
   profile?: AgentProfile;
   schedules: ScheduledMessage[];
   client: AgentClient;
@@ -1064,9 +1272,10 @@ function Inspector({
             type="button"
           >
             <Icon /> {label}
-            {id === "approvals" && approvals.length > 0 && (
-              <span>{approvals.length}</span>
-            )}
+            {id === "approvals" &&
+              approvals.length + mcpAuthorizations.length > 0 && (
+                <span>{approvals.length + mcpAuthorizations.length}</span>
+              )}
           </button>
         ))}
       </div>
@@ -1075,6 +1284,7 @@ function Inspector({
           <ApprovalsPanel
             approvals={approvals}
             client={client}
+            mcpAuthorizations={mcpAuthorizations}
             notify={notify}
           />
         )}
@@ -1108,6 +1318,14 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     () => activeTurn(agent.entries, provisionalTurn),
     [agent.entries, provisionalTurn],
   );
+  const notify = useCallback((message: string, error = false) => {
+    const id = ++toastId.current;
+    setToasts((current) => [...current, {id, message, error}]);
+    window.setTimeout(
+      () => setToasts((current) => current.filter((toast) => toast.id !== id)),
+      error ? 6_000 : 3_200,
+    );
+  }, []);
 
   useEffect(() => {
     if (!turn) setProvisionalTurn(undefined);
@@ -1115,15 +1333,19 @@ export function App({initialAgentId}: {initialAgentId: string}) {
   useEffect(() => {
     document.title = `Restate Agent · ${connection.agentId}`;
   }, [connection.agentId]);
-
-  function notify(message: string, error = false) {
-    const id = ++toastId.current;
-    setToasts((current) => [...current, {id, message, error}]);
-    window.setTimeout(
-      () => setToasts((current) => current.filter((toast) => toast.id !== id)),
-      error ? 6_000 : 3_200,
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const oauthResult = url.searchParams.get("mcpAuth");
+    if (!oauthResult) return;
+    notify(
+      oauthResult === "completed"
+        ? "MCP authorization completed"
+        : "MCP authorization failed",
+      oauthResult !== "completed",
     );
-  }
+    url.searchParams.delete("mcpAuth");
+    window.history.replaceState(null, "", url);
+  }, [notify]);
 
   function connect(agentId: string) {
     const nextAgent = agentId.trim() || "demo";
@@ -1207,6 +1429,7 @@ export function App({initialAgentId}: {initialAgentId: string}) {
         <Inspector
           approvals={agent.approvals}
           client={agent.client}
+          mcpAuthorizations={agent.mcpAuthorizations}
           notify={notify}
           profile={agent.profile}
           refreshProfile={agent.refreshProfile}

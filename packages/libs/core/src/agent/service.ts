@@ -1,6 +1,7 @@
 // Agent is the durable conversation controller. It is a Virtual Object keyed
 // by agent id, so its exclusive handlers serialize every decision about the
-// active turn, queued messages, persistent profile, and approvals.
+// active turn, queued messages, persistent profile, approvals, and private MCP
+// authorization state.
 //
 // It never runs turn execution itself. `ask` starts or queues work,
 // `interrupt` and `steer` resolve signals on the active AgentSession
@@ -9,6 +10,7 @@
 
 import type {
   AgentDelivery,
+  AgentNotificationTopic,
   AgentProfile,
   ApprovalRequest,
   AskResult,
@@ -27,13 +29,14 @@ import type {
 } from "../internal-types.js";
 import * as activeTurn from "./active-turn.js";
 import * as approvals from "./approval.js";
+import * as mcpAuthorization from "./mcp-authorization.js";
 import * as profile from "./profile.js";
 
 // Internal coordination handlers are high-volume and their completed
 // invocations carry no information worth retaining.
 const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 
-/** Durable per-Agent controller for turns, routing, profile, and approvals. */
+/** Durable per-Agent controller for turns, routing, profile, and user actions. */
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
     /**
@@ -165,8 +168,8 @@ export const Agent = restate.implement(AgentDefinition, {
     },
 
     /**
-     * Returns the durable instructions, memories, and guardrails that the next
-     * Turn will snapshot.
+     * Returns the durable instructions, memories, guardrails, and MCP servers
+     * that the next Turn will snapshot.
      */
     *profile(): restate.Operation<AgentProfile> {
       return yield* profile.read();
@@ -192,6 +195,126 @@ export const Agent = restate.implement(AgentDefinition, {
     *setGuardrails({guardrails}): restate.Operation<void> {
       profile.setGuardrails(guardrails);
       yield* publishNotification("profile");
+    },
+
+    /** Creates or replaces one MCP server in the Agent profile. */
+    *upsertMcpServer(server) {
+      const previous = (yield* profile.read()).mcpServers.find(
+        ({id}) => id === server.id,
+      );
+      const result = yield* profile.upsertMcpServer(server);
+      if (result.accepted) {
+        if (previous && JSON.stringify(previous) !== JSON.stringify(server)) {
+          const invalidated = yield* mcpAuthorization.invalidateServer(
+            server.id,
+            "MCP server configuration changed",
+          );
+          if (invalidated) {
+            yield* publishNotification("mcpAuth");
+          }
+        }
+        yield* publishNotification("profile");
+      }
+      return result;
+    },
+
+    /** Removes one MCP server from the Agent profile. */
+    *removeMcpServer({id}) {
+      const removed = yield* profile.removeMcpServer(id);
+      if (removed) {
+        const invalidated = yield* mcpAuthorization.invalidateServer(
+          id,
+          "MCP server was removed",
+        );
+        if (invalidated) {
+          yield* publishNotification("mcpAuth");
+        }
+        yield* publishNotification("profile");
+      }
+      return {removed};
+    },
+
+    /** Registers a user authorization action requested by the active Turn. */
+    *requestMcpAuthorization(request) {
+      const current = yield* activeTurn.current();
+      if (
+        current?.id !== request.turnId ||
+        current.interruptReason !== undefined
+      ) {
+        return null;
+      }
+      const server = (yield* profile.read()).mcpServers.find(
+        ({id}) => id === request.serverId,
+      );
+      if (server?.auth.type !== "oauth") {
+        return null;
+      }
+
+      const existing = (yield* mcpAuthorization.requests()).find(
+        ({turnId, serverId}) =>
+          turnId === request.turnId && serverId === request.serverId,
+      );
+      const registered = yield* mcpAuthorization.register(request);
+      if (registered && !existing) {
+        yield* publishNotification("mcpAuth");
+      }
+      return registered ?? null;
+    },
+
+    /** Removes an authorization wait abandoned by Turn cancellation. */
+    *cancelMcpAuthorization(request): restate.Operation<void> {
+      if (yield* mcpAuthorization.cancel(request)) {
+        yield* publishNotification("mcpAuth");
+      }
+    },
+
+    /** Returns user-visible pending MCP authorization actions. */
+    *mcpAuthorizations() {
+      return yield* mcpAuthorization.requests();
+    },
+
+    /** Returns private OAuth context to the trusted BFF. */
+    *mcpAuthorizationContext({authRequestId}) {
+      const request = (yield* mcpAuthorization.requests()).find(
+        (candidate) => candidate.authRequestId === authRequestId,
+      );
+      const server = request
+        ? (yield* profile.read()).mcpServers.find(
+            ({id}) => id === request.serverId,
+          )
+        : undefined;
+      return yield* mcpAuthorization.context(authRequestId, server);
+    },
+
+    /** Persists PKCE and discovery state across the OAuth redirect. */
+    *saveMcpAuthorizationFlow({authRequestId, flow}) {
+      const current = yield* activeTurn.current();
+      const request = (yield* mcpAuthorization.requests()).find(
+        (candidate) => candidate.authRequestId === authRequestId,
+      );
+      if (
+        !request ||
+        current?.id !== request.turnId ||
+        current.interruptReason !== undefined
+      ) {
+        return false;
+      }
+      return yield* mcpAuthorization.saveFlow(authRequestId, flow);
+    },
+
+    /** Stores private OAuth state and resumes the Turn with an access token. */
+    *completeMcpAuthorization({authRequestId, oauthState}) {
+      const current = yield* activeTurn.current();
+      const completed = yield* mcpAuthorization.complete(
+        authRequestId,
+        oauthState,
+        current?.interruptReason === undefined ? current?.id : undefined,
+      );
+      if (!completed) {
+        return false;
+      }
+      yield* publishNotification("mcpAuth");
+      return true;
     },
 
     /**
@@ -302,6 +425,12 @@ export const Agent = restate.implement(AgentDefinition, {
       if (cancelledApprovals.length > 0) {
         yield* publishNotification("approvals");
       }
+      const cancelledAuthorizations = yield* mcpAuthorization.clearTurn(
+        finished.outcome.turnId,
+      );
+      if (cancelledAuthorizations.length > 0) {
+        yield* publishNotification("mcpAuth");
+      }
 
       const queuedMessages = finished.queuedEntries.filter(
         ({role}) => role === "user",
@@ -325,6 +454,14 @@ export const Agent = restate.implement(AgentDefinition, {
       // High-volume coordination paths keep no completed-invocation state.
       onTurnEnd: noRetention,
       updateMemory: noRetention,
+      upsertMcpServer: noRetention,
+      removeMcpServer: noRetention,
+      requestMcpAuthorization: noRetention,
+      cancelMcpAuthorization: noRetention,
+      mcpAuthorizations: {shared: true, ...noRetention},
+      mcpAuthorizationContext: {shared: true, ...noRetention},
+      saveMcpAuthorizationFlow: noRetention,
+      completeMcpAuthorization: noRetention,
       deliver: noRetention,
       requestApproval: noRetention,
       cancelApproval: noRetention,
@@ -341,11 +478,18 @@ function* startTurn(
   entries: ConversationEntry[],
 ): restate.Operation<string> {
   const agentProfile = yield* profile.read();
-  return yield* activeTurn.start(agentId, {...agentProfile, entries});
+  const mcpCredentials = (yield* mcpAuthorization.oauthStates()).map(
+    ({serverId, tokens}) => ({serverId, accessToken: tokens.access_token}),
+  );
+  return yield* activeTurn.start(agentId, {
+    ...agentProfile,
+    mcpCredentials,
+    entries,
+  });
 }
 
 function* publishNotification(
-  topic: "profile" | "approvals",
+  topic: AgentNotificationTopic,
 ): restate.Operation<void> {
   yield* restate
     .sendClient(AgentNotificationsDefinition, agentKey())

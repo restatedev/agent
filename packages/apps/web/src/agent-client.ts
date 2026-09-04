@@ -6,6 +6,10 @@ import type {
   AskResult,
   Guardrail,
   HistoryPage,
+  McpAuthorizationRequest,
+  McpServer,
+  McpServerMutationResult,
+  McpServerRemovalResult,
   ScheduleCancellationResult,
   ScheduledMessage,
   ScheduleMutationResult,
@@ -116,6 +120,22 @@ export function createAgentClient(agentId: string) {
     },
     async setGuardrails(guardrails: Guardrail[]): Promise<void> {
       await write("guardrails", {guardrails});
+    },
+    async upsertMcpServer(server: McpServer): Promise<McpServerMutationResult> {
+      return write("mcp-server", server);
+    },
+    async removeMcpServer(id: string): Promise<McpServerRemovalResult> {
+      return write("remove-mcp-server", {id});
+    },
+    async mcpAuthorizations(): Promise<McpAuthorizationRequest[]> {
+      return read("mcp-authorizations");
+    },
+    async startMcpAuthorization(
+      authRequestId: string,
+    ): Promise<
+      {status: "redirect"; authorizationUrl: string} | {status: "completed"}
+    > {
+      return write("start-mcp-authorization", {authRequestId});
     },
     async approvals(): Promise<ApprovalRequest[]> {
       return read("approvals");

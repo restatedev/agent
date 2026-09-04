@@ -26,6 +26,13 @@ import type {
   AskResult,
   Guardrail,
   HistoryPage,
+  McpAuthorizationContext,
+  McpAuthorizationRequest,
+  McpOAuthFlow,
+  McpOAuthState,
+  McpServer,
+  McpServerMutationResult,
+  McpServerRemovalResult,
   ScheduleCancellationResult,
   ScheduledMessage,
   ScheduleMutationResult,
@@ -256,6 +263,52 @@ export function createAgentClient({
     /** Replaces the complete guardrail list; an empty list clears it. */
     async setGuardrails(guardrails: Guardrail[]): Promise<void> {
       return invoke(agent.setGuardrails({guardrails}));
+    },
+
+    /** Creates or replaces one MCP server in the Agent profile. */
+    async upsertMcpServer(server: McpServer): Promise<McpServerMutationResult> {
+      return invoke(agent.upsertMcpServer(server));
+    },
+
+    /** Removes one MCP server from the Agent profile. */
+    async removeMcpServer(id: string): Promise<McpServerRemovalResult> {
+      return invoke(agent.removeMcpServer({id}));
+    },
+
+    // ---- MCP authorization ----
+
+    /** Returns pending MCP OAuth actions without exposing stored credentials. */
+    async mcpAuthorizations(): Promise<McpAuthorizationRequest[]> {
+      return invoke(
+        agent.mcpAuthorizations(
+          rpc.opts<void, McpAuthorizationRequest[]>({input: serde.empty}),
+        ),
+      );
+    },
+
+    /** Returns private OAuth state for use by a trusted server-side BFF. */
+    async mcpAuthorizationContext(
+      authRequestId: string,
+    ): Promise<McpAuthorizationContext> {
+      return invoke(agent.mcpAuthorizationContext({authRequestId}));
+    },
+
+    /** Persists the redirect-round-trip state prepared by the BFF. */
+    async saveMcpAuthorizationFlow(
+      authRequestId: string,
+      flow: McpOAuthFlow,
+    ): Promise<boolean> {
+      return invoke(agent.saveMcpAuthorizationFlow({authRequestId, flow}));
+    },
+
+    /** Stores private OAuth state and resumes the waiting Turn. */
+    async completeMcpAuthorization(
+      authRequestId: string,
+      oauthState: McpOAuthState,
+    ): Promise<boolean> {
+      return invoke(
+        agent.completeMcpAuthorization({authRequestId, oauthState}),
+      );
     },
 
     // ---- human approvals ----
