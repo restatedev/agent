@@ -5,13 +5,18 @@ import {
   AlarmClock,
   Ban,
   Bot,
+  Bug,
   Check,
   ChevronRight,
   CircleAlert,
   CircleCheck,
+  FileText,
   FlaskConical,
   GitBranch,
+  HardDrive,
   KeyRound,
+  Layers,
+  ListTodo,
   MemoryStick,
   MessageSquareText,
   Plus,
@@ -19,6 +24,7 @@ import {
   Save,
   Send,
   Settings2,
+  Shapes,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -108,6 +114,81 @@ const MODE_COPY: Record<Mode, {label: string; description: string}> = {
     description: "Stops unfinished work and asks the turn for a final summary.",
   },
 };
+
+const MCP_SERVER_PRESETS = [
+  {
+    id: "slack",
+    label: "Slack",
+    url: "https://mcp.slack.com/mcp",
+    authType: "oauth",
+    setup: "OAuth app required",
+    icon: MessageSquareText,
+  },
+  {
+    id: "notion",
+    label: "Notion",
+    url: "https://mcp.notion.com/mcp",
+    authType: "oauth",
+    setup: "One-click OAuth",
+    icon: FileText,
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    url: "https://api.githubcopilot.com/mcp/",
+    authType: "oauth",
+    setup: "One-click OAuth",
+    icon: GitBranch,
+  },
+  {
+    id: "google-drive",
+    label: "Google Drive",
+    url: "https://drivemcp.googleapis.com/mcp/v1",
+    authType: "oauth",
+    setup: "OAuth app required",
+    icon: HardDrive,
+  },
+  {
+    id: "linear",
+    label: "Linear",
+    url: "https://mcp.linear.app/mcp",
+    authType: "oauth",
+    setup: "One-click OAuth",
+    icon: ListTodo,
+  },
+  {
+    id: "figma",
+    label: "Figma",
+    url: "https://mcp.figma.com/mcp",
+    authType: "oauth",
+    setup: "One-click OAuth",
+    icon: Shapes,
+  },
+  {
+    id: "atlassian",
+    label: "Atlassian",
+    url: "https://mcp.atlassian.com/v2/mcp",
+    authType: "oauth",
+    setup: "One-click OAuth",
+    icon: Layers,
+  },
+  {
+    id: "sentry",
+    label: "Sentry",
+    url: "https://mcp.sentry.dev/mcp",
+    authType: "oauth",
+    setup: "One-click OAuth",
+    icon: Bug,
+  },
+  {
+    id: "lovable",
+    label: "Lovable",
+    url: "https://mcp.lovable.dev",
+    authType: "oauth",
+    setup: "One-click OAuth",
+    icon: Sparkles,
+  },
+] as const;
 
 function shortTurn(turnId: string) {
   return turnId.length > 14 ? `${turnId.slice(0, 14)}…` : turnId;
@@ -896,6 +977,47 @@ function ProfilePanel({
           refresh={refreshProfile}
           servers={profile?.mcpServers ?? []}
         />
+        <div className="mcp-presets">
+          <span className="mcp-presets-label">Popular presets</span>
+          <div className="mcp-preset-list">
+            {MCP_SERVER_PRESETS.map((preset) => {
+              const Icon = preset.icon;
+              const configured = profile?.mcpServers.some(
+                ({id}) => id === preset.id,
+              );
+              return (
+                <button
+                  aria-label={`Use ${preset.label} MCP preset`}
+                  className="mcp-preset-button"
+                  data-configured={configured}
+                  key={preset.id}
+                  onClick={() =>
+                    setMcpServer({
+                      id: preset.id,
+                      type: "http",
+                      url: preset.url,
+                      authType: preset.authType,
+                    })
+                  }
+                  title={`${preset.label}: ${preset.url}`}
+                  type="button"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="mcp-preset-icon"
+                    data-provider={preset.id}
+                  >
+                    <Icon />
+                  </span>
+                  <span>
+                    <strong>{preset.label}</strong>
+                    <small>{configured ? "Configured" : preset.setup}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <form
           className="mcp-server-form"
           onSubmit={async (event: FormEvent) => {
