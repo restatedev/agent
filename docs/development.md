@@ -225,23 +225,31 @@ journaled snapshot.
 Check:
 
 1. the Agent profile contains the expected structured MCP server entry;
-2. the endpoint speaks stateless MCP revision `2026-07-28`;
-3. `auth.type` correctly says `none` or `oauth`;
-4. an OAuth server has no pending authorization action in the Approvals tab;
+2. the entry's `protocol` matches the endpoint: `stateless` for MCP revision
+   `2026-07-28`, or `stateful` for the 2025-era initialize handshake;
+3. `auth.type` correctly says `none`, `oauth`, or `bearer`;
+4. an authenticated server has no pending authorization action in the
+   Approvals tab;
 5. the endpoint is reachable without an HTTP redirect;
 6. logs contain no MCP discovery warning; and
 7. you started a new turn after the catalog cache expired.
 
-The runtime does not fall back to initialize-era MCP sessions. A successful
-credential-free catalog is cached only for the server-advertised TTL, capped at
-five minutes, in a process cache capped at 256 entries; existing turns retain
-their journaled snapshot.
+The runtime does not fall back between protocol modes. A successful stateless
+catalog is cached only for the server-advertised TTL, capped at five minutes,
+in a process cache capped at 256 entries; stateful catalogs are not reused
+across turns, and existing turns retain their journaled snapshot.
 
-An OAuth challenge creates private Agent state and a user-visible authorization
-action. The Turn remains durably waiting until the Web UI completes the flow,
-the server configuration changes, or the Turn is interrupted. An endpoint that
-still advertises MCP `2025-06-18` sessions needs a different adapter or a
-stateless compatibility gateway.
+An OAuth or bearer challenge creates a user-visible authorization action backed
+by private Agent state. It appears in both the conversation and Approvals tab.
+The Turn remains durably waiting until the Web UI
+completes the flow, the server configuration changes, or the Turn is
+interrupted. An endpoint that still advertises an MCP `2025-06-18` session must
+be configured as `stateful`.
+
+Discovery records availability for every configured server. The model receives
+that per-turn runtime status separately from the public tool catalog, so it can
+say that a server is configured but unavailable instead of incorrectly saying
+that the server was never configured.
 
 ### An Agent remains busy
 

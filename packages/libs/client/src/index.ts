@@ -311,6 +311,16 @@ export function createAgentClient({
       );
     },
 
+    /** Stores a private bearer token and resumes the waiting Turn. */
+    async completeMcpBearerAuthorization(
+      authRequestId: string,
+      accessToken: string,
+    ): Promise<boolean> {
+      return invoke(
+        agent.completeMcpBearerAuthorization({authRequestId, accessToken}),
+      );
+    },
+
     // ---- human approvals ----
 
     async approvals(): Promise<ApprovalRequest[]> {

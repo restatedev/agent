@@ -37,7 +37,13 @@ import {
 import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
 import type {TurnHistory} from "./history.js";
 import * as history from "./history.js";
-import {discoverMcpTools, type McpAgentTool} from "./mcp-tools.js";
+import {
+  discoverMcpTools,
+  type McpAgentTool,
+  type McpServerAvailability,
+  releaseMcpSessions,
+  releaseMcpSessionsAfterCancellation,
+} from "./mcp-tools.js";
 import {createPendingOperations} from "./pending.js";
 import {createSteeringInbox} from "./steering.js";
 import {agentStep, settleStep, type ToolStep} from "./step.js";
@@ -148,6 +154,9 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
         outcome = yield* executeTurn(state);
       } catch (error) {
         if (error instanceof CancelledError) {
+          if (state?.mcpServers.some(({protocol}) => protocol === "stateful")) {
+            releaseMcpSessionsAfterCancellation(turnId);
+          }
           outcome = {
             turnId,
             status: "interrupted",
@@ -182,6 +191,9 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
         };
       }
 
+      if (state?.mcpServers.some(({protocol}) => protocol === "stateful")) {
+        yield* releaseMcpSessions(turnId);
+      }
       yield* restate.client(Sandbox, agentId).release({turnId});
       const reconciled = yield* restate
         .client(Agent, agentId)
@@ -229,12 +241,16 @@ function* executeTurn(
   state: AgentSessionState,
 ): restate.Operation<AgentTurnOutcome> {
   state.discoveredTools = yield* discoverAgentTools(agentTools.names);
-  state.mcpTools = yield* discoverMcpTools(
+  const mcpDiscovery = yield* discoverMcpTools(
     state.mcpServers,
     state.mcpCredentials,
     {agentId: state.context.agentId, turnId: state.context.turnId},
     [...agentTools.names, ...state.discoveredTools.map(({name}) => name)],
   );
+  state.mcpTools = mcpDiscovery.tools;
+  if (mcpDiscovery.servers.length > 0) {
+    state.messages.push(mcpAvailabilityMessage(mcpDiscovery.servers));
+  }
 
   while (state.steps < MAX_STEPS) {
     // Steering received after the previous step's drain belongs before this
@@ -424,6 +440,30 @@ function* executeTurn(
     cause: "step_limit",
     reason: `The agent reached its ${MAX_STEPS}-step limit.`,
   });
+}
+
+function mcpAvailabilityMessage(
+  servers: McpServerAvailability[],
+): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      "[Configured MCP server availability for this turn]",
+      ...servers.map((server) => {
+        if (server.status === "available") {
+          return `- ${JSON.stringify(server.serverId)}: available (${server.toolCount} tools)`;
+        }
+        const detail =
+          server.warnings.length > 0
+            ? server.warnings.join("; ")
+            : "tool discovery returned no catalog";
+        return `- ${JSON.stringify(server.serverId)}: configured but unavailable (${detail})`;
+      }),
+      "This is runtime status, not a user request.",
+      "A configured-but-unavailable server is still configured. Do not claim it is absent or unconfigured.",
+      "When the user's request needs an unavailable server, explain its exact availability problem and ask them to reconnect or correct its configuration.",
+    ].join("\n"),
+  };
 }
 
 function sessionKey(): string {

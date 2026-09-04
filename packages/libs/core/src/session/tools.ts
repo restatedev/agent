@@ -8,6 +8,7 @@ import {setTimeout} from "node:timers/promises";
 import {
   type ApprovalDecision,
   type ConversationEntry,
+  type McpServer,
   type MemoryChange,
   ScheduleIdRequestSchema,
   ScheduleSpecSchema,
@@ -71,6 +72,7 @@ export type AgentToolContext = {
   mcpAuthorization: {
     authorize(
       serverId: string,
+      authType: Exclude<McpServer["auth"]["type"], "none">,
       causeId: string,
       challenge: McpAuthChallenge,
     ): restate.Operation<McpAuthorizationGrant>;
@@ -120,6 +122,7 @@ export function createAgentToolContext(
     mcpAuthorization: {
       *authorize(
         serverId: string,
+        authType: Exclude<McpServer["auth"]["type"], "none">,
         causeId: string,
         challenge: McpAuthChallenge,
       ): restate.Operation<McpAuthorizationGrant> {
@@ -129,6 +132,7 @@ export function createAgentToolContext(
             requestMcpAuthorizationGrant(
               serverId,
               {agentId, turnId},
+              authType,
               causeId,
               challenge,
             ),
@@ -150,12 +154,14 @@ export function createAgentToolContext(
 function* requestMcpAuthorizationGrant(
   serverId: string,
   context: {agentId: string; turnId: string},
+  authType: Exclude<McpServer["auth"]["type"], "none">,
   causeId: string,
   challenge: McpAuthChallenge,
 ): restate.Operation<McpAuthorizationGrant> {
   const credential = yield* requestMcpAuthorization(
     serverId,
     context,
+    authType,
     causeId,
     challenge,
   );

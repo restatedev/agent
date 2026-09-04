@@ -31,6 +31,7 @@ import {
   McpAuthorizationFlowUpdateSchema,
   McpAuthorizationRequestInputSchema,
   McpAuthorizationRequestSchema,
+  McpBearerAuthorizationCompletionSchema,
   McpServerIdRequestSchema,
   McpServerMutationResultSchema,
   McpServerRemovalResultSchema,
@@ -98,6 +99,10 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
   }),
   completeMcpAuthorization: iface.schemas({
     input: McpAuthorizationCompletionSchema,
+    output: z.boolean(),
+  }),
+  completeMcpBearerAuthorization: iface.schemas({
+    input: McpBearerAuthorizationCompletionSchema,
     output: z.boolean(),
   }),
   updateMemory: iface.schemas({

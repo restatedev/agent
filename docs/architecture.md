@@ -46,8 +46,8 @@ exclusive handlers own decisions about:
 - the FIFO of input waiting for the next turn;
 - steering batches accepted by the active invocation;
 - persistent instructions, memories, guardrails, and MCP server definitions;
-- private MCP OAuth state, redirect state, and pending authorization
-  actions;
+- private MCP OAuth/bearer credentials, redirect state, and pending
+  authorization actions;
 - pending human approvals; and
 - source-attributed external-message routing.
 
@@ -63,7 +63,7 @@ State logic is grouped into handler-scoped namespaces:
 - `agent/active-turn.ts` — active invocation, pending input, steering
   bookkeeping, and signal delivery;
 - `agent/profile.ts` — instructions, memories, guardrails, and MCP servers;
-- `agent/mcp-authorization.ts` — private OAuth state, redirect state,
+- `agent/mcp-authorization.ts` — private OAuth/bearer state, redirect state,
   pending actions, and Turn signals;
 - `agent/approval.ts` — pending approval records and decision signals.
 
@@ -370,14 +370,15 @@ Instructions, memories, guardrails, and MCP server definitions belong to Agent:
 - MCP servers are user-managed structured endpoint and authentication
   definitions.
 
-Full OAuth state and pending authorization actions also belong to Agent, but
-not to `AgentProfile`. A new Turn receives only `{serverId, accessToken}` next
-to its profile snapshot. When MCP discovery or invocation receives an auth
-challenge, the Turn registers a pending action and waits on its own invocation
-signal. The BFF persists discovery, dynamic-client-registration, state, and
-PKCE data in the Agent across the browser redirect; successful completion
-atomically stores that full state, retires the action, and resolves the Turn
-with a minimal replacement credential.
+Full OAuth state, bearer tokens, and pending authorization actions also belong
+to Agent, but not to `AgentProfile`. A new Turn receives only
+`{serverId, accessToken}` next to its profile snapshot. When MCP discovery or
+invocation receives an auth challenge, the Turn registers a pending action and
+waits on its own invocation signal. For OAuth, the BFF persists discovery,
+dynamic-client-registration, state, and PKCE data across the browser redirect.
+For bearer authentication, it submits the user-provided token directly.
+Successful completion atomically stores the private credential, retires the
+action, and resolves the Turn with a minimal replacement credential.
 
 Each turn receives one profile snapshot. Profile mutations publish a `profile`
 notification; they are not themselves transcript entries. A successful

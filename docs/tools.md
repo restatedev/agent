@@ -4,7 +4,7 @@ This project has three ways to make a capability available to the model:
 
 1. a built-in tool implemented inside `AgentSession.doTurn`; or
 2. an annotated Restate handler discovered at runtime; or
-3. a tool from a configured stateless MCP server.
+3. a tool from a configured MCP server.
 
 All three become serializable `ToolManifest` values for model inference. Their
 execution boundaries are intentionally different.
@@ -398,22 +398,21 @@ Agent profile mutations, or the shared sandbox context. Choose discovery when
 the capability is already a well-defined Restate handler and should be
 deployable independently.
 
-## Stateless MCP tools
+## MCP tools
 
 The runtime can also discover tools from Agent-configured MCP Streamable HTTP
-endpoints. This integration deliberately supports only protocol revision
-[`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28): the
-stateless revision with per-request metadata, no `initialize` handshake, and no
-`Mcp-Session-Id`. It does not fall back to initialize-era sessions or the
-legacy HTTP+SSE transport.
+endpoints. Every entry declares one protocol mode: `stateless` pins revision
+[`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28) and
+uses `server/discover`; `stateful` uses the 2025-era `initialize` handshake.
+The runtime does not guess or silently fall back between these modes.
 
 MCP is a second external-tool backend, not a replacement for dynamic Restate
 handlers. Both produce serializable model manifests and both are snapshotted
 once per turn. Their execution remains distinct:
 
 - a dynamic Restate tool uses durable `restate.call`;
-- an MCP tool uses one stateless `tools/call` HTTP request inside
-  `restate.run`.
+- an MCP tool uses Streamable HTTP inside `restate.run`, either as an
+  independent stateless request or on a turn-scoped stateful connection.
 
 ### Configuration
 
@@ -425,6 +424,7 @@ Add each trusted server to the Agent profile through the Web UI or
   "id": "notion",
   "type": "http",
   "url": "https://mcp.notion.com/mcp",
+  "protocol": "stateless",
   "auth": {"type": "oauth"}
 }
 ```
@@ -434,17 +434,19 @@ Fields:
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `id` | yes | Stable 1-64 character server identifier used in model-facing names |
-| `type` | yes | `http` for stateless Streamable HTTP |
+| `type` | yes | `http` for Streamable HTTP |
 | `url` | yes | MCP Streamable HTTP endpoint |
-| `auth.type` | yes | `none` or `oauth` |
+| `protocol` | yes | `stateless` for 2026-07-28 discovery, or `stateful` for the 2025-era initialize protocol |
+| `auth.type` | yes | `none`, `oauth`, or `bearer` for a user-supplied access token |
 
 Server IDs must be unique. The server definition is part of `AgentProfile` and
 the journaled Turn snapshot, so do not put secrets in its fields. Full OAuth
-state is separate private Agent VO state and is serialized without
-application-level encryption in this reference implementation. A Turn receives
-only `{serverId, accessToken}`; refresh tokens, redirect details, dynamic-client
-registration, and discovery metadata remain on the private Agent/BFF boundary.
-Neither form is returned by `Agent.profile` or the pending-authorization API.
+OAuth state and bearer tokens are separate private Agent VO state and are
+serialized without application-level encryption in this reference
+implementation. A Turn receives only `{serverId, accessToken}`; refresh tokens,
+redirect details, dynamic-client registration, and discovery metadata remain
+on the private Agent/BFF boundary. No credential is returned by `Agent.profile`
+or the pending-authorization API.
 
 An MCP endpoint is a trusted capability boundary. Its tool names,
 descriptions, and schemas enter the model action space, and its handlers run
@@ -453,16 +455,19 @@ or credential.
 
 ### Compatibility gate
 
-An endpoint fits this integration only when both of these conditions hold:
+An endpoint fits this integration when all of these conditions hold:
 
-- it implements the handshake-free MCP `2026-07-28` protocol, including
-  `server/discover`; and
-- it is anonymous or uses the MCP OAuth authorization-code flow supported by
-  the official client SDK.
+- it uses Streamable HTTP rather than stdio or the deprecated standalone
+  HTTP+SSE transport;
+- its profile entry selects the matching protocol mode: handshake-free MCP
+  `2026-07-28` with `server/discover` for `stateless`, or the 2025-era
+  `initialize` handshake for `stateful`; and
+- it is anonymous, uses the MCP OAuth authorization-code flow supported by the
+  official client SDK, or accepts a configured bearer token.
 
-Streamable HTTP alone is not sufficient. An initialize-era endpoint that uses
-`Mcp-Session-Id` is a different lifecycle, even though it uses the same HTTP
-transport name.
+The runtime deliberately does not auto-detect or fall back between protocol
+modes. A mismatched entry fails discovery so configuration errors remain
+visible.
 
 ### OAuth lifecycle
 
@@ -485,26 +490,51 @@ MCP OAuth is coordinated by Agent state but split across the Turn and BFF:
    `Agent.completeMcpAuthorization` with the resulting full OAuth state.
 8. Agent stores the OAuth state, removes the pending flow, publishes `mcpAuth`,
    and signals the waiting Turn with only `{serverId, accessToken}`. The Turn
-   retries the failed operation. A repeated identical challenge fails; a
-   different scope challenge may start another authorization round, bounded to
-   four rounds per tool call.
+   retries the failed operation. A rejected replacement credential creates
+   another visible authorization action, bounded to four rounds per tool call.
 
 Completion is rejected for a stale, terminal, or interrupting Turn. Changing
 or removing a server clears its credential and cancels related waiters. Turn
 cleanup removes abandoned authorization actions and redirect state.
+
+### Bearer-token lifecycle
+
+Bearer authentication uses the same durable authorization wait without an
+OAuth redirect:
+
+1. A server with no token, or one that returns 401/insufficient scope, creates
+   an authorization action tagged `bearer` and the Turn waits on its signal.
+2. The Web UI accepts the token in a password input and sends it through the
+   same-origin BFF to `Agent.completeMcpBearerAuthorization`.
+3. Agent stores the token in private VO state, removes the pending action,
+   publishes `mcpAuth`, and signals the waiting Turn with the minimal
+   `{serverId, accessToken}` credential.
+4. The Turn retries discovery or invocation. Repeated authorization failures
+   keep asking for a replacement token with an explicit rejected-credential
+   explanation, bounded by the same four-round limit.
+
+Bearer tokens have no automatic refresh. Expiration, revocation, or missing
+permissions require the user to provide a replacement. They never enter the
+profile, transcript, model context, or authorization read response.
+
+Saving a token means only that the credential was submitted. The remote MCP
+server validates it on the retry, so the UI does not claim the server is
+connected at submission time. Likewise, a preset marked `Configured` describes
+profile state, not successful authentication.
 
 ### Discovery and names
 
 At turn start, `session/mcp-tools.ts` does the following for every configured
 server:
 
-1. Pins the official TypeScript MCP client to `2026-07-28` and calls
-   `server/discover`.
+1. For `stateless`, pins the official TypeScript MCP client to `2026-07-28`
+   and calls `server/discover`. For `stateful`, performs the 2025-era
+   `initialize` handshake and retains the connection for that turn.
 2. Calls `tools/list`; the SDK walks pagination and validates MCP wire types and
    `x-mcp-header` declarations.
 3. Applies schema-size limits, deterministic sorting, and the per-server
    tool-count limit.
-4. Returns the server discovery result and exact tool definitions through
+4. Returns the selected protocol verdict and exact tool definitions through
    `restate.run`.
 5. Adds that stable result to the same turn catalog used for inference and
    execution.
@@ -521,27 +551,31 @@ or colliding with a built-in or Restate-discovered tool are shortened with a
 stable identity hash. The snapshotted target retains the original MCP name;
 execution never tries to reverse the alias.
 
-The process-local cache is isolated by server configuration and a hash of the
-current access token, but stores only discovery and tool definitions—not the
-token itself. It is capped at 256 least-recently-used entries. Each entry's
-lifetime is the smaller TTL advertised by `server/discover` and `tools/list`,
-capped at five minutes; a missing, invalid, or zero TTL disables reuse for the
-next turn. Concurrent refreshes are coalesced. After a successful read, a
-refresh failure may use the last-known-good catalog and retry after 30 seconds.
-The process cache is only an optimization; the `restate.run` result is the
-durable turn snapshot.
+The process-local catalog cache is isolated by server configuration, protocol,
+and a hash of the current access token, but stores only protocol verdicts and
+tool definitions—not the token itself. It is capped at 256 least-recently-used
+entries. Stateless entries live for the smaller TTL advertised by
+`server/discover` and `tools/list`, capped at five minutes; a missing, invalid,
+or zero TTL disables reuse for the next turn. Stateful entries are immediately
+stale so a new turn always establishes its own session. Concurrent refreshes
+are coalesced. After a successful stateless read, a refresh failure may use the
+last-known-good catalog and retry after 30 seconds. The process cache is only an
+optimization; the `restate.run` result is the durable turn snapshot.
 
 ### Invocation and results
 
 MCP calls are foreground tools and participate in the existing parallel tool
-batch. Execution creates an ephemeral client, adopts the snapshotted modern
-discovery result without another probe, and calls `tools/call` with the exact
-snapshotted `Tool` definition. Supplying that definition lets the SDK perform
-`x-mcp-header` mirroring and validate `structuredContent` against the advertised
-output schema without re-listing the catalog.
+batch. Stateless execution creates an ephemeral client and adopts the
+snapshotted discovery result without another probe. Stateful execution lazily
+reuses the connection initialized during discovery for subsequent calls in the
+same turn; process loss or a broken connection causes a safe re-initialization.
+Both modes call `tools/call` with the exact snapshotted `Tool` definition.
+Supplying that definition lets the SDK perform `x-mcp-header` mirroring and
+validate `structuredContent` against the advertised output schema without
+re-listing the catalog.
 
 Interruption and external cancellation abort the request signal. Under
-stateless Streamable HTTP, closing a request-scoped SSE response is the MCP
+Streamable HTTP, closing a request-scoped SSE response is the MCP
 cancellation signal. Tool-level `isError` results become ordinary failed tool
 outcomes so the model can correct its action; protocol and transport failures
 are also projected as tool failures unless the enclosing Restate operation was
@@ -578,10 +612,10 @@ elicitation would require a new durable form-response protocol; the existing
 boolean approval state is not sufficient.
 
 This implementation also excludes MCP prompts, resources, the Tasks extension,
-`subscriptions/listen`, stdio, explicit disconnect/revocation controls, and
-legacy MCP sessions. Prompts and resources should not be flattened into
-model-controlled tools without first defining their context and trust
-semantics.
+`subscriptions/listen`, stdio, the deprecated standalone HTTP+SSE transport,
+explicit user-facing disconnect/revocation controls, and cross-turn session
+continuity. Prompts and resources should not be flattened into model-controlled
+tools without first defining their context and trust semantics.
 
 ## Guardrails and tools
 

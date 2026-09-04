@@ -2,6 +2,7 @@ import {
   finishMcpOAuth,
   mcpOAuthCallbackTarget,
 } from "../../../../src/server/mcp-oauth";
+import {publicUrl} from "../../../../src/server/public-url";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,19 +16,19 @@ export async function GET(request: Request) {
     if (result.status === "redirect") {
       return Response.redirect(result.authorizationUrl);
     }
-    return Response.redirect(returnUrl(request.url, agentId, "completed"));
+    return Response.redirect(returnUrl(request, agentId, "completed"));
   } catch (error) {
     console.error("MCP OAuth callback failed", error);
-    return Response.redirect(returnUrl(request.url, agentId, "failed"));
+    return Response.redirect(returnUrl(request, agentId, "failed"));
   }
 }
 
 function returnUrl(
-  requestUrl: string,
+  request: Request,
   agentId: string | undefined,
   result: "completed" | "failed",
 ): URL {
-  const url = new URL("/", requestUrl);
+  const url = publicUrl(request, "/");
   if (agentId) {
     url.searchParams.set("agent", agentId);
   }

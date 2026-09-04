@@ -26,8 +26,8 @@ agent. The implementation keeps the important control flow visible:
 - user instructions, model-managed memory, runtime guardrails, and approvals;
 - non-destructive conversation compaction;
 - scheduler-owned durable messages and an agent-scoped sandbox;
-- annotation-driven discovery of Restate handlers and configured stateless MCP
-  tools; and
+- annotation-driven discovery of Restate handlers and configured stateless or
+  stateful MCP tools; and
 - a durable black-box evaluation harness.
 
 The seams are durable ownership boundaries, not framework extension points.
@@ -47,7 +47,7 @@ flowchart LR
   G --> O["OpenAI"]
   Step -->|"spawn built-ins in parallel"| B["Built-in tools\ninside doTurn"]
   Step -->|"durable restate.call"| D["Discovered Restate handlers"]
-  Step -->|"stateless tools/call"| M["Configured MCP servers"]
+  Step -->|"tools/call"| M["Configured MCP servers"]
   B -->|"schedule RPC"| Q
   B -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
   X --> P["Local or Modal provider"]
@@ -149,8 +149,8 @@ There are four intended ways to add capability:
 2. Annotate a separately deployed Restate JSON handler with
    `restate.dev/agent: <tool-name>` when it should remain an independent
    service.
-3. Configure a trusted MCP `2026-07-28` Streamable HTTP endpoint when its tools
-   should be discovered and invoked without a protocol-level session.
+3. Configure a trusted MCP Streamable HTTP endpoint with the explicit
+   `stateless` or `stateful` mode that matches its protocol generation.
 4. Add a `SandboxProvider` when the file/command contract stays fixed but the
    compute vendor changes.
 

@@ -126,6 +126,18 @@ export async function POST(request: Request, context: RouteContext) {
           await startMcpOAuth(request, agentId, body.authRequestId),
         );
       }
+      case "complete-mcp-bearer-authorization": {
+        const body = await input<{
+          authRequestId: string;
+          accessToken: string;
+        }>(request);
+        return Response.json(
+          await client.completeMcpBearerAuthorization(
+            body.authRequestId,
+            body.accessToken,
+          ),
+        );
+      }
       case "resolve-approval":
         return Response.json(
           await client.resolveApproval(

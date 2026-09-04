@@ -137,6 +137,15 @@ export function createAgentClient(agentId: string) {
     > {
       return write("start-mcp-authorization", {authRequestId});
     },
+    async completeMcpBearerAuthorization(
+      authRequestId: string,
+      accessToken: string,
+    ): Promise<boolean> {
+      return write("complete-mcp-bearer-authorization", {
+        authRequestId,
+        accessToken,
+      });
+    },
     async approvals(): Promise<ApprovalRequest[]> {
       return read("approvals");
     },

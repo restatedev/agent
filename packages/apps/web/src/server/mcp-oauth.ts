@@ -17,6 +17,7 @@ import type {
   McpOAuthFlow,
   McpOAuthState,
 } from "@restate-agents/types";
+import {publicUrl} from "./public-url";
 import {agentClient, BffError} from "./restate";
 
 export type McpOAuthStartResult =
@@ -33,11 +34,11 @@ export async function startMcpOAuth(
 ): Promise<McpOAuthStartResult> {
   const client = agentClient(agentId);
   const context = await requiredContext(client, authRequestId);
-  const redirectUrl = callbackUrl(request.url);
+  const redirectUrl = callbackUrl(request);
   const provider = OAuthProvider.start(
     context,
     redirectUrl,
-    clientMetadataUrl(request.url),
+    clientMetadataUrl(request),
     callbackState(agentId, authRequestId),
   );
   const scope = authorizationScope(context);
@@ -79,7 +80,7 @@ export async function finishMcpOAuth(
 
   const provider = OAuthProvider.resume(
     context.flow,
-    clientMetadataUrl(request.url),
+    clientMetadataUrl(request),
   );
   const scope = authorizationScope(context);
   const result = await auth(provider, {
@@ -185,12 +186,13 @@ async function finishOrPersist(
   return {status: "redirect", authorizationUrl};
 }
 
-function callbackUrl(requestUrl: string): string {
-  return new URL("/api/mcp-oauth/callback", requestUrl).toString();
+function callbackUrl(request: Request): string {
+  return publicUrl(request, "/api/mcp-oauth/callback").toString();
 }
 
-function clientMetadataUrl(requestUrl: string): string {
-  return new URL("/api/mcp-oauth/client-metadata", requestUrl).toString();
+function clientMetadataUrl(request: Request): string | undefined {
+  const url = publicUrl(request, "/api/mcp-oauth/client-metadata");
+  return url.protocol === "https:" ? url.toString() : undefined;
 }
 
 function callbackState(agentId: string, authRequestId: string): string {
@@ -218,14 +220,14 @@ class OAuthProvider implements OAuthClientProvider {
 
   private constructor(
     readonly redirectUrl: string,
-    readonly clientMetadataUrl: string,
+    readonly clientMetadataUrl: string | undefined,
     private readonly stateValue: string,
   ) {}
 
   static start(
     context: NonNullable<McpAuthorizationContext>,
     redirectUrl: string,
-    metadataUrl: string,
+    metadataUrl: string | undefined,
     state: string,
   ): OAuthProvider {
     const provider = new OAuthProvider(redirectUrl, metadataUrl, state);
@@ -241,7 +243,10 @@ class OAuthProvider implements OAuthClientProvider {
     return provider;
   }
 
-  static resume(flow: McpOAuthFlow, metadataUrl: string): OAuthProvider {
+  static resume(
+    flow: McpOAuthFlow,
+    metadataUrl: string | undefined,
+  ): OAuthProvider {
     const provider = new OAuthProvider(
       flow.redirectUrl,
       metadataUrl,

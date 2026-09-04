@@ -20,7 +20,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import {useEffect, useMemo, useState} from "react";
+import {type ReactNode, useEffect, useMemo, useState} from "react";
 import type {SequencedEntry} from "./agent-client";
 import {Bubble, BubbleContent} from "./components/ui/bubble";
 import {Marker, MarkerContent, MarkerIcon} from "./components/ui/marker";
@@ -462,9 +462,11 @@ function isAnchor(row: TranscriptRow) {
 export function Transcript({
   entries,
   busy,
+  pendingAction,
 }: {
   entries: SequencedEntry[];
   busy: boolean;
+  pendingAction?: ReactNode;
 }) {
   const rows = useMemo(() => transcriptRows(entries), [entries]);
   return (
@@ -476,7 +478,7 @@ export function Transcript({
       <MessageScroller>
         <MessageScrollerViewport>
           <MessageScrollerContent aria-busy={busy}>
-            {rows.length === 0 && (
+            {rows.length === 0 && !pendingAction && (
               <div className="empty-conversation">
                 <div className="empty-orbit">
                   <Sparkles />
@@ -511,6 +513,15 @@ export function Transcript({
                 )}
               </MessageScrollerItem>
             ))}
+            {pendingAction && (
+              <MessageScrollerItem
+                className="pending-action-item"
+                messageId="pending-action"
+                scrollAnchor
+              >
+                {pendingAction}
+              </MessageScrollerItem>
+            )}
           </MessageScrollerContent>
         </MessageScrollerViewport>
         <MessageScrollerButton />

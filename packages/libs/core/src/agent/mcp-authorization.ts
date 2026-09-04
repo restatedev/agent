@@ -1,11 +1,12 @@
-// Private MCP OAuth state and pending user-interaction requests for one Agent
-// virtual object. This state is durable, but is intentionally not part of the
-// public Agent profile.
+// Private MCP OAuth/bearer state and pending user-interaction requests for one
+// Agent virtual object. This state is durable, but is intentionally not part
+// of the public Agent profile.
 
 import type {
   McpAuthorizationContext,
   McpAuthorizationRequest,
   McpAuthorizationResolution,
+  McpBearerCredential,
   McpOAuthFlow,
   McpOAuthState,
   McpServer,
@@ -15,6 +16,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import {mcpAuthorizationSignalName} from "../internal-types.js";
 
 const OAUTH_STATES = "mcp/oauth-states";
+const BEARER_CREDENTIALS = "mcp/bearer-credentials";
 const REQUESTS = "mcp/authorization-requests";
 const FLOWS = "mcp/oauth-flows";
 
@@ -24,6 +26,15 @@ type StoredFlow = {authRequestId: string; flow: McpOAuthFlow};
 export function* oauthStates(): restate.Operation<McpOAuthState[]> {
   return (
     (yield* restate.sharedState().get<McpOAuthState[]>(OAUTH_STATES)) ?? []
+  );
+}
+
+/** Returns user-supplied bearer credentials owned privately by this Agent. */
+export function* bearerCredentials(): restate.Operation<McpBearerCredential[]> {
+  return (
+    (yield* restate
+      .sharedState()
+      .get<McpBearerCredential[]>(BEARER_CREDENTIALS)) ?? []
   );
 }
 
@@ -138,10 +149,18 @@ export function* invalidateServer(
   const changed = retainedStates.length !== storedStates.length;
   storeOAuthStates(retainedStates);
 
+  const storedBearerCredentials = yield* bearerCredentials();
+  const retainedBearerCredentials = storedBearerCredentials.filter(
+    (credential) => credential.serverId !== serverId,
+  );
+  const bearerChanged =
+    retainedBearerCredentials.length !== storedBearerCredentials.length;
+  storeBearerCredentials(retainedBearerCredentials);
+
   const pending = yield* requests();
   const removed = pending.filter((request) => request.serverId === serverId);
   if (removed.length === 0) {
-    return changed;
+    return changed || bearerChanged;
   }
 
   storeRequests(pending.filter((request) => request.serverId !== serverId));
@@ -227,7 +246,7 @@ export function* complete(
     (candidate) => candidate.authRequestId === authRequestId,
   );
   if (
-    !request ||
+    request?.authType !== "oauth" ||
     request.turnId !== activeTurnId ||
     request.serverId !== oauthState.serverId
   ) {
@@ -262,6 +281,51 @@ export function* complete(
   return request;
 }
 
+/**
+ * Stores a user-supplied bearer token and resumes its waiting Turn without
+ * exposing that token through profile or authorization reads.
+ */
+export function* completeBearer(
+  authRequestId: string,
+  accessToken: string,
+  activeTurnId?: string,
+): restate.Operation<McpAuthorizationRequest | undefined> {
+  const pending = yield* requests();
+  const request = pending.find(
+    (candidate) => candidate.authRequestId === authRequestId,
+  );
+  if (request?.authType !== "bearer" || request.turnId !== activeTurnId) {
+    return undefined;
+  }
+
+  const credentials = yield* bearerCredentials();
+  const credential: McpBearerCredential = {
+    serverId: request.serverId,
+    accessToken,
+  };
+  const index = credentials.findIndex(
+    (candidate) => candidate.serverId === request.serverId,
+  );
+  if (index < 0) {
+    credentials.push(credential);
+  } else {
+    credentials[index] = credential;
+  }
+  storeBearerCredentials(credentials);
+  storeRequests(
+    pending.filter((candidate) => candidate.authRequestId !== authRequestId),
+  );
+  yield* removeFlow(authRequestId);
+
+  restate
+    .invocation(request.turnId)
+    .signal<McpAuthorizationResolution>(
+      mcpAuthorizationSignalName(authRequestId),
+    )
+    .resolve({status: "authorized", credential});
+  return request;
+}
+
 function* readFlows(): restate.Operation<StoredFlow[]> {
   return (yield* restate.sharedState().get<StoredFlow[]>(FLOWS)) ?? [];
 }
@@ -281,6 +345,14 @@ function storeOAuthStates(oauthStates: McpOAuthState[]): void {
     restate.state().clear(OAUTH_STATES);
   } else {
     restate.state().set(OAUTH_STATES, oauthStates);
+  }
+}
+
+function storeBearerCredentials(credentials: McpBearerCredential[]): void {
+  if (credentials.length === 0) {
+    restate.state().clear(BEARER_CREDENTIALS);
+  } else {
+    restate.state().set(BEARER_CREDENTIALS, credentials);
   }
 }
 

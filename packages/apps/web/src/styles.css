@@ -164,9 +164,12 @@ svg {
     inset 0 1px rgba(255, 255, 255, 0.38),
     0 5px 16px rgba(98, 86, 225, 0.24);
   isolation: isolate;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
   animation: restate-tile-breathe 2.8s ease-in-out infinite;
   transition: background 220ms ease, border-color 220ms ease,
     filter 220ms ease;
+  will-change: transform, box-shadow;
 }
 
 .brand-mark::after {
@@ -183,6 +186,8 @@ svg {
   display: block;
   width: 100%;
   height: 100%;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
   border-radius: 9px;
 }
 
@@ -1451,6 +1456,63 @@ svg {
   padding: 13px;
 }
 
+.pending-action-item {
+  width: min(100%, 760px);
+  align-self: center;
+}
+
+.conversation-authorization-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 0 3px;
+}
+
+.conversation-authorization-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.conversation-authorization-heading strong {
+  color: var(--warning);
+  font-size: 12px;
+}
+
+.conversation-authorization-heading span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.conversation-authorization-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--warning);
+}
+
+.conversation-authorization-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.conversation-authorization .mcp-authorization-card {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--warning) 6%, var(--surface-raised)),
+      var(--surface-raised)
+    );
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.13);
+}
+
 .card-kicker {
   display: flex;
   align-items: center;
@@ -1478,6 +1540,11 @@ svg {
 
 .approval-card input {
   font-size: 11px;
+}
+
+.mcp-bearer-form {
+  display: flex;
+  flex-direction: column;
 }
 
 .card-actions {

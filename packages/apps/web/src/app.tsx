@@ -59,6 +59,7 @@ type Tab = "approvals" | "profile" | "evals";
 type Guardrail = AgentProfile["guardrails"][number];
 type McpServer = AgentProfile["mcpServers"][number];
 type McpAuthType = McpServer["auth"]["type"];
+type McpProtocol = McpServer["protocol"];
 type TurnTerminalStatus = Extract<
   SequencedEntry["entry"],
   {role: "assistant"}
@@ -136,6 +137,7 @@ const MCP_SERVER_PRESETS = [
     id: "slack",
     label: "Slack",
     url: "https://mcp.slack.com/mcp",
+    protocol: "stateful",
     authType: "oauth",
     setup: "OAuth app required",
     icon: MessageSquareText,
@@ -144,6 +146,7 @@ const MCP_SERVER_PRESETS = [
     id: "notion",
     label: "Notion",
     url: "https://mcp.notion.com/mcp",
+    protocol: "stateless",
     authType: "oauth",
     setup: "One-click OAuth",
     icon: FileText,
@@ -152,14 +155,16 @@ const MCP_SERVER_PRESETS = [
     id: "github",
     label: "GitHub",
     url: "https://api.githubcopilot.com/mcp/",
-    authType: "oauth",
-    setup: "One-click OAuth",
+    protocol: "stateful",
+    authType: "bearer",
+    setup: "Personal access token",
     icon: GitBranch,
   },
   {
     id: "google-drive",
     label: "Google Drive",
     url: "https://drivemcp.googleapis.com/mcp/v1",
+    protocol: "stateless",
     authType: "oauth",
     setup: "OAuth app required",
     icon: HardDrive,
@@ -168,6 +173,7 @@ const MCP_SERVER_PRESETS = [
     id: "linear",
     label: "Linear",
     url: "https://mcp.linear.app/mcp",
+    protocol: "stateful",
     authType: "oauth",
     setup: "One-click OAuth",
     icon: ListTodo,
@@ -176,6 +182,7 @@ const MCP_SERVER_PRESETS = [
     id: "figma",
     label: "Figma",
     url: "https://mcp.figma.com/mcp",
+    protocol: "stateful",
     authType: "oauth",
     setup: "One-click OAuth",
     icon: Shapes,
@@ -184,6 +191,7 @@ const MCP_SERVER_PRESETS = [
     id: "atlassian",
     label: "Atlassian",
     url: "https://mcp.atlassian.com/v2/mcp",
+    protocol: "stateful",
     authType: "oauth",
     setup: "One-click OAuth",
     icon: Layers,
@@ -192,6 +200,7 @@ const MCP_SERVER_PRESETS = [
     id: "sentry",
     label: "Sentry",
     url: "https://mcp.sentry.dev/mcp",
+    protocol: "stateful",
     authType: "oauth",
     setup: "One-click OAuth",
     icon: Bug,
@@ -200,6 +209,7 @@ const MCP_SERVER_PRESETS = [
     id: "lovable",
     label: "Lovable",
     url: "https://mcp.lovable.dev",
+    protocol: "stateful",
     authType: "oauth",
     setup: "One-click OAuth",
     icon: Sparkles,
@@ -237,13 +247,18 @@ function nextRunLabel(epochMs: number) {
   return deltaMs <= 0 ? "due now" : `in ${formatDuration(deltaMs / 1_000)}`;
 }
 
-function activeTurn(entries: SequencedEntry[], provisional?: string) {
+function activeTurn(
+  entries: SequencedEntry[],
+  provisional?: string,
+  pendingTurnId?: string,
+) {
   const turns = new Map<
     string,
     {terminal: boolean; phase?: string; message?: string}
   >();
-  let active = provisional;
+  let active = pendingTurnId ?? provisional;
   if (provisional) turns.set(provisional, {terminal: false});
+  if (pendingTurnId) turns.set(pendingTurnId, {terminal: false});
 
   for (const {entry} of entries) {
     if (entry.role === "assistant") {
@@ -279,6 +294,13 @@ function activeTurn(entries: SequencedEntry[], provisional?: string) {
     }
     if (!turn.terminal) active = turnId;
     turns.set(turnId, turn);
+  }
+
+  for (const turnId of [pendingTurnId, provisional]) {
+    if (turnId && !turns.get(turnId)?.terminal) {
+      active = turnId;
+      break;
+    }
   }
   return active ? {turnId: active, ...turns.get(active)} : undefined;
 }
@@ -333,11 +355,6 @@ function Toasts({toasts}: {toasts: Toast[]}) {
 
 function RestateMark({state}: {state: AgentMarkState}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef = useRef(state);
-
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -428,9 +445,13 @@ function RestateMark({state}: {state: AgentMarkState}) {
       "M11.737 7.368a.86.86 0 0 0 .2 1.199l4.432 3.191a.416.416 0 0 1 .011.669l-3.671 2.836a.857.857 0 0 0-.169 1.195.87.87 0 0 0 1.224.175l4.381-3.356c.37-.283.586-.723.586-1.188 0-.482-.232-.935-.623-1.216l-5.162-3.708a.86.86 0 0 0-1.209.203Z",
     );
     let animationFrame = 0;
+    let disposed = false;
+    let lastFrameAt = window.performance.now();
 
     const draw = (time: number) => {
-      const currentState = stateRef.current;
+      if (disposed) return;
+      lastFrameAt = window.performance.now();
+      const currentState = state;
       const palette = palettes[currentState];
       const seconds = time / 1_000;
       const phase = seconds * palette.speed;
@@ -444,8 +465,9 @@ function RestateMark({state}: {state: AgentMarkState}) {
       context.fillRect(0, 0, size, size);
 
       context.save();
-      context.globalCompositeOperation = "screen";
-      context.filter = "blur(4px)";
+      // Radial gradients already provide the blur. Avoid context.filter here:
+      // it takes a fragile accelerated-canvas path in Safari.
+      context.globalCompositeOperation = "lighter";
       for (let index = 0; index < 3; index += 1) {
         const angle = phase + index * ((Math.PI * 2) / 3);
         const orbit = currentState === "waiting" ? 5 : 8;
@@ -541,12 +563,46 @@ function RestateMark({state}: {state: AgentMarkState}) {
       context.fill();
       context.stroke();
 
-      animationFrame = window.requestAnimationFrame(draw);
+      if (!document.hidden) {
+        animationFrame = window.requestAnimationFrame(draw);
+      }
     };
 
-    animationFrame = window.requestAnimationFrame(draw);
-    return () => window.cancelAnimationFrame(animationFrame);
-  }, []);
+    const restart = () => {
+      if (disposed || document.hidden) return;
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(draw);
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        window.cancelAnimationFrame(animationFrame);
+      } else {
+        restart();
+      }
+    };
+    const watchdog = window.setInterval(() => {
+      if (
+        !disposed &&
+        !document.hidden &&
+        window.performance.now() - lastFrameAt > 1_500
+      ) {
+        restart();
+      }
+    }, 2_000);
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", restart);
+    window.addEventListener("pageshow", restart);
+    restart();
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(animationFrame);
+      window.clearInterval(watchdog);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", restart);
+      window.removeEventListener("pageshow", restart);
+    };
+  }, [state]);
 
   return (
     <canvas
@@ -590,6 +646,7 @@ function ConnectionHeader({
         <div
           className="brand-mark"
           data-state={activity}
+          key={activity}
           title={`Agent status: ${activity}`}
         >
           <RestateMark state={activity} />
@@ -781,6 +838,139 @@ function Composer({
   );
 }
 
+function McpAuthorizationCard({
+  authorization,
+  client,
+  notify,
+}: {
+  authorization: McpAuthorizationRequest;
+  client: AgentClient;
+  notify: (message: string, error?: boolean) => void;
+}) {
+  const [bearerToken, setBearerToken] = useState("");
+  const [resolving, setResolving] = useState(false);
+  const heading =
+    authorization.reason === "missing_credentials"
+      ? `Connect ${authorization.serverId}`
+      : authorization.reason === "insufficient_scope"
+        ? `Expand access to ${authorization.serverId}`
+        : `Reconnect ${authorization.serverId}`;
+  const reason =
+    authorization.reason === "missing_credentials"
+      ? "A credential is required before this server can expose its tools."
+      : authorization.reason === "insufficient_scope"
+        ? "The current credential does not grant the access this tool needs."
+        : "The server rejected the previous credential. Check it and try again.";
+
+  return (
+    <article className="approval-card mcp-authorization-card">
+      <div className="card-kicker">
+        <KeyRound /> MCP authorization
+      </div>
+      <h3>{heading}</h3>
+      <p className="card-meta">
+        turn {shortTurn(authorization.turnId)} · {authorization.authType} ·{" "}
+        {authorization.reason}
+        {authorization.requestedScope
+          ? ` · scope ${authorization.requestedScope}`
+          : ""}
+      </p>
+      <p>{reason}</p>
+      {authorization.authType === "bearer" ? (
+        <form
+          className="mcp-bearer-form"
+          onSubmit={async (event: FormEvent) => {
+            event.preventDefault();
+            const accessToken = bearerToken
+              .trim()
+              .replace(/^Bearer\s+/i, "")
+              .trim();
+            if (!accessToken) return;
+            setResolving(true);
+            try {
+              const completed = await client.completeMcpBearerAuthorization(
+                authorization.authRequestId,
+                accessToken,
+              );
+              if (!completed) {
+                notify(
+                  "The waiting turn no longer accepts this credential",
+                  true,
+                );
+                return;
+              }
+              setBearerToken("");
+              notify(`Credential submitted for ${authorization.serverId}`);
+            } catch (error) {
+              notify(errorMessage(error), true);
+            } finally {
+              setResolving(false);
+            }
+          }}
+        >
+          <input
+            aria-label={`${authorization.serverId} bearer token`}
+            autoComplete="off"
+            onChange={(event) => setBearerToken(event.target.value)}
+            placeholder={
+              authorization.serverId === "github"
+                ? "GitHub personal access token"
+                : "Bearer access token"
+            }
+            spellCheck={false}
+            type="password"
+            value={bearerToken}
+          />
+          {authorization.serverId === "github" ? (
+            <p className="field-hint">
+              Paste the token itself. A leading “Bearer” is accepted and removed
+              automatically.
+            </p>
+          ) : null}
+          <div className="card-actions">
+            <button
+              className="button approve"
+              disabled={resolving || !bearerToken.trim()}
+              type="submit"
+            >
+              {resolving ? <RefreshCw className="spin" /> : <KeyRound />}
+              Save token
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="card-actions">
+          <button
+            className="button approve"
+            disabled={resolving}
+            onClick={async () => {
+              setResolving(true);
+              try {
+                const result = await client.startMcpAuthorization(
+                  authorization.authRequestId,
+                );
+                if (result.status === "redirect") {
+                  window.location.assign(result.authorizationUrl);
+                  return;
+                }
+                notify(`Authorization completed for ${authorization.serverId}`);
+              } catch (error) {
+                notify(errorMessage(error), true);
+              } finally {
+                setResolving(false);
+              }
+            }}
+            type="button"
+          >
+            {resolving ? <RefreshCw className="spin" /> : <KeyRound />}
+            Authorize
+          </button>
+        </div>
+      )}
+    </article>
+  );
+}
+
 function ApprovalsPanel({
   approvals,
   mcpAuthorizations,
@@ -809,52 +999,12 @@ function ApprovalsPanel({
   return (
     <div className="card-list">
       {mcpAuthorizations.map((authorization) => (
-        <article
-          className="approval-card"
+        <McpAuthorizationCard
+          authorization={authorization}
+          client={client}
           key={`mcp-${authorization.authRequestId}`}
-        >
-          <div className="card-kicker">
-            <KeyRound /> MCP authorization
-          </div>
-          <h3>Connect {authorization.serverId}</h3>
-          <p className="card-meta">
-            turn {shortTurn(authorization.turnId)} · {authorization.reason}
-            {authorization.requestedScope
-              ? ` · scope ${authorization.requestedScope}`
-              : ""}
-          </p>
-          <div className="card-actions">
-            <button
-              className="button approve"
-              disabled={resolving === authorization.authRequestId}
-              onClick={async () => {
-                setResolving(authorization.authRequestId);
-                try {
-                  const result = await client.startMcpAuthorization(
-                    authorization.authRequestId,
-                  );
-                  if (result.status === "redirect") {
-                    window.location.assign(result.authorizationUrl);
-                    return;
-                  }
-                  notify(`Connected ${authorization.serverId}`);
-                } catch (error) {
-                  notify(errorMessage(error), true);
-                } finally {
-                  setResolving(undefined);
-                }
-              }}
-              type="button"
-            >
-              {resolving === authorization.authRequestId ? (
-                <RefreshCw className="spin" />
-              ) : (
-                <KeyRound />
-              )}
-              Authorize
-            </button>
-          </div>
-        </article>
+          notify={notify}
+        />
       ))}
       {approvals.map((approval) => (
         <article className="approval-card" key={approval.approvalId}>
@@ -1061,7 +1211,8 @@ function McpServerList({
             <div>
               <strong>{server.id}</strong>
               <span>
-                {server.type} · {server.auth.type} · {server.url}
+                {server.type} · {server.protocol} · {server.auth.type} ·{" "}
+                {server.url}
               </span>
             </div>
             <button
@@ -1120,6 +1271,7 @@ function ProfilePanel({
     id: "",
     type: "http" as const,
     url: "",
+    protocol: "stateless" as McpProtocol,
     authType: "oauth" as McpAuthType,
   });
   const [addingMcpPresetId, setAddingMcpPresetId] = useState<string | null>(
@@ -1144,13 +1296,14 @@ function ProfilePanel({
         id: preset.id,
         type: "http",
         url: preset.url,
+        protocol: preset.protocol,
         auth: {type: preset.authType},
       });
       if (!result.accepted) {
         notify(result.error, true);
         return;
       }
-      notify(`Added ${preset.label} MCP server`);
+      notify(`Configured ${preset.label} MCP server`);
       await refreshProfile();
     } catch (error) {
       notify(errorMessage(error), true);
@@ -1305,23 +1458,29 @@ function ProfilePanel({
           <div className="mcp-preset-list">
             {MCP_SERVER_PRESETS.map((preset) => {
               const Icon = preset.icon;
-              const added = profile?.mcpServers.some(
+              const configured = profile?.mcpServers.find(
                 ({id}) => id === preset.id,
               );
+              const added =
+                configured?.url === preset.url &&
+                configured.protocol === preset.protocol &&
+                configured.auth.type === preset.authType;
               const adding = addingMcpPresetId === preset.id;
               return (
                 <button
                   aria-label={
                     added
-                      ? `${preset.label} MCP server added`
-                      : `Add ${preset.label} MCP server`
+                      ? `${preset.label} MCP server configured`
+                      : configured
+                        ? `Update ${preset.label} MCP server`
+                        : `Add ${preset.label} MCP server`
                   }
                   className="mcp-preset-button"
                   data-added={added}
                   disabled={Boolean(added || addingMcpPresetId)}
                   key={preset.id}
                   onClick={() => addMcpPreset(preset)}
-                  title={`${preset.label}: ${preset.url}`}
+                  title={`${preset.label}: ${preset.protocol} · ${preset.url}`}
                   type="button"
                 >
                   <span
@@ -1339,7 +1498,13 @@ function ProfilePanel({
                   <span>
                     <strong>{preset.label}</strong>
                     <small>
-                      {adding ? "Adding…" : added ? "Added" : preset.setup}
+                      {adding
+                        ? "Adding…"
+                        : added
+                          ? `Configured · ${preset.protocol}`
+                          : configured
+                            ? `Update · ${preset.protocol}`
+                            : `${preset.setup} · ${preset.protocol}`}
                     </small>
                   </span>
                 </button>
@@ -1362,6 +1527,7 @@ function ProfilePanel({
                 id,
                 type: mcpServer.type,
                 url,
+                protocol: mcpServer.protocol,
                 auth: {type: mcpServer.authType},
               });
               if (!result.accepted) {
@@ -1371,12 +1537,13 @@ function ProfilePanel({
               notify(
                 result.replaced
                   ? `Updated MCP server ${result.server.id}`
-                  : `Added MCP server ${result.server.id}`,
+                  : `Configured MCP server ${result.server.id}`,
               );
               setMcpServer({
                 id: "",
                 type: "http",
                 url: "",
+                protocol: "stateless",
                 authType: "oauth",
               });
               await refreshProfile();
@@ -1404,19 +1571,35 @@ function ProfilePanel({
             placeholder="https://mcp.example.com/mcp"
             value={mcpServer.url}
           />
-          <select
-            aria-label="MCP authentication type"
-            onChange={(event) =>
-              setMcpServer({
-                ...mcpServer,
-                authType: event.target.value as McpAuthType,
-              })
-            }
-            value={mcpServer.authType}
-          >
-            <option value="oauth">OAuth</option>
-            <option value="none">No authentication</option>
-          </select>
+          <div className="form-grid two">
+            <select
+              aria-label="MCP protocol mode"
+              onChange={(event) =>
+                setMcpServer({
+                  ...mcpServer,
+                  protocol: event.target.value as McpProtocol,
+                })
+              }
+              value={mcpServer.protocol}
+            >
+              <option value="stateless">Stateless</option>
+              <option value="stateful">Stateful</option>
+            </select>
+            <select
+              aria-label="MCP authentication type"
+              onChange={(event) =>
+                setMcpServer({
+                  ...mcpServer,
+                  authType: event.target.value as McpAuthType,
+                })
+              }
+              value={mcpServer.authType}
+            >
+              <option value="oauth">OAuth</option>
+              <option value="bearer">Bearer token</option>
+              <option value="none">No authentication</option>
+            </select>
+          </div>
           <button className="button secondary small" type="submit">
             <Plus /> Add or update server
           </button>
@@ -1765,9 +1948,11 @@ export function App({initialAgentId}: {initialAgentId: string}) {
   const [provisionalTurn, setProvisionalTurn] = useState<string>();
   const toastId = useRef(0);
   const agent = useAgent(connection);
+  const pendingTurnId =
+    agent.mcpAuthorizations[0]?.turnId ?? agent.approvals[0]?.turnId;
   const turn = useMemo(
-    () => activeTurn(agent.entries, provisionalTurn),
-    [agent.entries, provisionalTurn],
+    () => activeTurn(agent.entries, provisionalTurn, pendingTurnId),
+    [agent.entries, pendingTurnId, provisionalTurn],
   );
   const terminalStatus = useMemo(
     () => latestTurnOutcome(agent.entries),
@@ -1880,6 +2065,37 @@ export function App({initialAgentId}: {initialAgentId: string}) {
             <Transcript
               entries={agent.entries}
               busy={Boolean(turn && !turn.terminal)}
+              pendingAction={
+                agent.mcpAuthorizations.length > 0 ? (
+                  <section
+                    aria-label="MCP authorization required"
+                    className="conversation-authorization"
+                    role="alert"
+                  >
+                    <div className="conversation-authorization-heading">
+                      <span className="conversation-authorization-icon">
+                        <KeyRound />
+                      </span>
+                      <div>
+                        <strong>Connection required</strong>
+                        <span>
+                          This turn is waiting for you to connect an account.
+                        </span>
+                      </div>
+                    </div>
+                    <div className="card-list">
+                      {agent.mcpAuthorizations.map((authorization) => (
+                        <McpAuthorizationCard
+                          authorization={authorization}
+                          client={agent.client}
+                          key={`conversation-mcp-${authorization.authRequestId}`}
+                          notify={notify}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                ) : undefined
+              }
             />
           </div>
           <StatusStrip turn={turn} />

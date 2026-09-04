@@ -17,7 +17,7 @@ guide are relative to `packages/libs/core`.
    - controller or transcript: [architecture](architecture.md) and
      [protocol](protocol.md);
    - turn behavior: [turn runtime](turn-runtime.md);
-   - built-in, discovered Restate, or stateless MCP tools:
+   - built-in, discovered Restate, or MCP tools:
      [tools](tools.md);
    - sandbox lifecycle: [sandboxes](sandboxes.md);
    - validation or evals: [development](development.md) and [evals](evals.md).
@@ -45,7 +45,7 @@ Preserve these unless the requested change explicitly replaces them:
 
 1. `Agent` is the only durable conversation controller for an `agentId`. Its
    exclusive handlers serialize the active invocation, pending input,
-   profile, approvals, MCP OAuth state and authorization actions, and
+   profile, approvals, MCP OAuth/bearer state and authorization actions, and
    externally delivered messages. It does not own conversation history,
    notifications, or schedules.
 2. `AgentSession`, keyed by the same `agentId`, owns the canonical transcript
@@ -83,11 +83,12 @@ Preserve these unless the requested change explicitly replaces them:
     lease and always releases it at its terminal boundary.
 16. A discovered Restate handler is a foreground dynamic tool. The catalog
     snapshot used for model inference is the same snapshot used for execution.
-17. A configured MCP endpoint contributes foreground tools through stateless
-    MCP `2026-07-28` only. The exact server, remote name, and tool definition
-    used for inference are retained in the turn snapshot used for invocation.
-    OAuth credentials are private Agent state; authorization completion stores
-    them before signaling the waiting Turn.
+17. A configured MCP endpoint contributes foreground tools through its
+    explicitly selected stateless `2026-07-28` or stateful 2025-era protocol.
+    The exact server, protocol verdict, remote name, and tool definition used
+    for inference are retained in the turn snapshot used for invocation.
+    OAuth and bearer credentials are private Agent state; authorization
+    completion stores them before signaling the waiting Turn.
 18. Keep the layers distinct in prose and code comments: `Agent` is the
     deterministic controller, `AgentSession` owns session history and turn
     execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
@@ -166,7 +167,7 @@ The detailed turn-runtime list lives in
 | Built-in tool schema, execution, result projection | `session/tools.ts` |
 | Transcript-to-model projection | `session/context.ts` |
 | Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
-| Stateless MCP tool discovery and invocation | `session/mcp-tools.ts` |
+| MCP tool discovery and invocation | `session/mcp-tools.ts` |
 | AI SDK provider behavior and model contracts | `gateway/model.ts` |
 | Restate model admission, limit keys, retries | `gateway/service.ts` |
 | Agent sandbox lifecycle | `sandbox/service.ts` |
@@ -196,13 +197,15 @@ Do not link it into this package. Annotate its deployed handler with
 and ensure JSON-compatible serialization. Read the security and collision rules
 in [tools.md](tools.md).
 
-### Stateless MCP tool
+### MCP tool
 
 Add the endpoint to the Agent profile through the structured MCP server API.
+Select `stateless` for handshake-free `2026-07-28` servers and `stateful` for
+servers that use the 2025-era `initialize` handshake.
 Do not accept MCP URLs or credential values from conversation input. Keep full
-OAuth state private to the Agent/BFF boundary, pass only an access token into a
-Turn, retain the exact tool definition in the per-turn snapshot, and read
-[tools.md](tools.md) for transport, auth, retry, and result constraints.
+OAuth and bearer state private to the Agent/BFF boundary, pass only an access
+token into a Turn, retain the exact tool definition in the per-turn snapshot,
+and read [tools.md](tools.md) for transport, auth, retry, and result constraints.
 
 ### New Agent handler
 

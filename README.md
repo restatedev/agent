@@ -73,7 +73,7 @@ chain-of-thought.
 | Inference admission control | Model calls use a Restate scope with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Agent-scoped sandbox | A `Sandbox` Virtual Object lazily provisions/resumes a local or Modal workspace, lends it to one turn, and suspends it after idle release. |
 | Restate-native dynamic tools | A deployed JSON handler can opt in through `restate.dev/agent` metadata; one journaled catalog snapshot drives both inference and execution. |
-| Stateless MCP tools | Agent-configured MCP 2026-07-28 Streamable HTTP endpoints contribute tools to the same per-turn catalog snapshot, with durable OAuth waits when required. |
+| MCP tools | Agent-configured stateless 2026-07-28 or stateful 2025-era Streamable HTTP endpoints contribute tools to the same per-turn catalog snapshot, with durable OAuth waits when required. |
 | Durable evaluation harness | Concurrent isolated trials drive the public protocol and return code-based assertions plus the observed transcript. |
 
 ## Architecture
@@ -91,7 +91,7 @@ flowchart LR
   G --> M["Agent and policy models"]
   Step -->|"parallel built-ins"| T["Local tools"]
   Step -->|"durable RPC"| D["Discovered Restate tools"]
-  Step -->|"stateless tools/call"| MCP["Configured MCP servers"]
+  Step -->|"tools/call"| MCP["Configured MCP servers"]
   T -->|"Agent state"| A
   T -->|"schedule RPC"| Q
   T -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
@@ -112,7 +112,7 @@ Agent owns only the state that must remain responsive while a run is active:
 - active `doTurn` invocation ID and accepted interrupt reason;
 - pending user/event entries and steering reconciliation batches;
 - instructions, memories, guardrails, and structured MCP server definitions;
-- private MCP OAuth state and pending authorization requests;
+- private MCP OAuth and bearer credentials plus pending authorization requests;
 - pending approvals; and
 - routing of external deliveries according to their busy-turn policy.
 
@@ -279,44 +279,46 @@ RESTATE_ADMIN_URL=http://localhost:9070
 RESTATE_ADMIN_TOKEN=<optional bearer token>
 ```
 
-### Stateless MCP tools
+### MCP tools
 
-Agent-configured MCP servers contribute tools through the stateless Streamable HTTP
-transport from MCP revision `2026-07-28`. The runtime pins that revision and
-does not fall back to an initialize-based session or the legacy HTTP+SSE
-transport.
+Agent-configured MCP servers contribute tools through Streamable HTTP. Each
+profile entry explicitly selects either stateless MCP revision `2026-07-28` or
+the stateful 2025-era `initialize` protocol; the runtime does not guess or
+silently fall back between them.
 
 ```json
 {
   "id": "notion",
   "type": "http",
   "url": "https://mcp.notion.com/mcp",
+  "protocol": "stateless",
   "auth": {"type": "oauth"}
 }
 ```
 
-Each server is probed with `server/discover`, then read through `tools/list`.
-The runtime respects the server's cache TTL up to five minutes, journals the
-selected catalog once per turn, and invokes the exact snapshotted definition.
+Stateless servers are probed with `server/discover`; stateful servers use the
+legacy `initialize` handshake. Both are then read through `tools/list`. The
+runtime respects stateless cache TTLs up to five minutes, journals the selected
+catalog and protocol verdict once per turn, and invokes the exact snapshotted definition.
 Model-facing names are qualified as `mcp__<server-id>__<tool-name>` and safely
 shortened when necessary.
 
-OAuth state lives in private Agent VO state, outside `AgentProfile`. A new Turn
-receives its configured server definitions plus only each server's current
-access token. Refresh tokens, redirect details, client registration, and OAuth
-discovery state remain on the private Agent/BFF boundary. If discovery or
-invocation needs authorization, the Turn registers a pending Agent action and
-waits durably. The web UI starts MCP OAuth discovery, dynamic client
-registration, and PKCE; the callback stores the resulting private OAuth state
-and signals the same Turn with a replacement access token to retry.
+OAuth state and user-supplied bearer tokens live in private Agent VO state,
+outside `AgentProfile`. A new Turn receives its configured server definitions
+plus only each server's current access token. Refresh tokens, redirect details,
+client registration, and OAuth discovery state remain on the private Agent/BFF
+boundary. If discovery or invocation needs authorization, the Turn registers a
+pending Agent action and waits durably. OAuth actions use browser discovery,
+registration, and PKCE. Bearer actions accept a token through the same-origin
+BFF. Either path stores private state before signaling the same Turn with a
+replacement access token to retry.
 
 MCP calls send a stable `Idempotency-Key` derived from the turn and tool-call
 IDs, but MCP does not standardize deduplication, so mutating tools remain
 potentially at-least-once. The implementation supports foreground tools and
 text/structured results. It intentionally does not advertise MRTR client
-capabilities or expose prompts, resources, Tasks, stdio, or legacy MCP
-sessions. Streamable HTTP endpoints that still use `initialize` and
-`Mcp-Session-Id` are not compatible.
+capabilities or expose prompts, resources, Tasks, stdio, or the deprecated
+standalone HTTP+SSE transport.
 
 See [`docs/tools.md`](docs/tools.md) for the definition and discovery contracts.
 

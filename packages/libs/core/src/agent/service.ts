@@ -255,7 +255,10 @@ export const Agent = restate.implement(AgentDefinition, {
       const server = (yield* profile.read()).mcpServers.find(
         ({id}) => id === request.serverId,
       );
-      if (server?.auth.type !== "oauth") {
+      if (
+        server?.auth.type === "none" ||
+        server?.auth.type !== request.authType
+      ) {
         return null;
       }
 
@@ -317,6 +320,21 @@ export const Agent = restate.implement(AgentDefinition, {
       const completed = yield* mcpAuthorization.complete(
         authRequestId,
         oauthState,
+        current?.interruptReason === undefined ? current?.id : undefined,
+      );
+      if (!completed) {
+        return false;
+      }
+      yield* publishNotification("mcpAuth");
+      return true;
+    },
+
+    /** Stores a private bearer token and resumes its waiting Turn. */
+    *completeMcpBearerAuthorization({authRequestId, accessToken}) {
+      const current = yield* activeTurn.current();
+      const completed = yield* mcpAuthorization.completeBearer(
+        authRequestId,
+        accessToken,
         current?.interruptReason === undefined ? current?.id : undefined,
       );
       if (!completed) {
@@ -471,6 +489,7 @@ export const Agent = restate.implement(AgentDefinition, {
       mcpAuthorizationContext: {shared: true, ...noRetention},
       saveMcpAuthorizationFlow: noRetention,
       completeMcpAuthorization: noRetention,
+      completeMcpBearerAuthorization: noRetention,
       deliver: noRetention,
       requestApproval: noRetention,
       cancelApproval: noRetention,
@@ -487,9 +506,23 @@ function* startTurn(
   entries: ConversationEntry[],
 ): restate.Operation<string> {
   const agentProfile = yield* profile.read();
-  const mcpCredentials = (yield* mcpAuthorization.oauthStates()).map(
-    ({serverId, tokens}) => ({serverId, accessToken: tokens.access_token}),
-  );
+  const oauthStates = yield* mcpAuthorization.oauthStates();
+  const bearerCredentials = yield* mcpAuthorization.bearerCredentials();
+  const mcpCredentials = agentProfile.mcpServers.flatMap((server) => {
+    if (server.auth.type === "oauth") {
+      const state = oauthStates.find(({serverId}) => serverId === server.id);
+      return state
+        ? [{serverId: server.id, accessToken: state.tokens.access_token}]
+        : [];
+    }
+    if (server.auth.type === "bearer") {
+      const credential = bearerCredentials.find(
+        ({serverId}) => serverId === server.id,
+      );
+      return credential ? [credential] : [];
+    }
+    return [];
+  });
   return yield* activeTurn.start(agentId, {
     ...agentProfile,
     mcpCredentials,

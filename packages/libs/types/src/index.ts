@@ -41,13 +41,18 @@ const McpServerIdSchema = z
 export const McpServerAuthSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("none")}),
   z.object({type: z.literal("oauth")}),
+  z.object({type: z.literal("bearer")}),
 ]);
 export type McpServerAuth = z.infer<typeof McpServerAuthSchema>;
+
+export const McpProtocolSchema = z.enum(["stateless", "stateful"]);
+export type McpProtocol = z.infer<typeof McpProtocolSchema>;
 
 export const McpServerSchema = z.object({
   id: McpServerIdSchema,
   type: z.literal("http"),
   url: z.string().trim().min(1),
+  protocol: McpProtocolSchema,
   auth: McpServerAuthSchema,
 });
 export type McpServer = z.infer<typeof McpServerSchema>;
@@ -111,6 +116,11 @@ export const McpTurnCredentialSchema = z.object({
 });
 export type McpTurnCredential = z.infer<typeof McpTurnCredentialSchema>;
 
+// A user-supplied bearer token is durable private Agent state. It shares the
+// minimal Turn projection shape but is stored separately from OAuth state.
+export const McpBearerCredentialSchema = McpTurnCredentialSchema;
+export type McpBearerCredential = z.infer<typeof McpBearerCredentialSchema>;
+
 export const McpAuthorizationReasonSchema = z.enum([
   "missing_credentials",
   "unauthorized",
@@ -121,6 +131,7 @@ export const McpAuthorizationRequestSchema = z.object({
   authRequestId: z.string().min(1),
   serverId: McpServerIdSchema,
   turnId: z.string().min(1),
+  authType: z.enum(["oauth", "bearer"]),
   reason: McpAuthorizationReasonSchema,
   requestedScope: z.string().optional(),
 });
@@ -170,6 +181,11 @@ export type McpAuthorizationContext = z.infer<
 export const McpAuthorizationCompletionSchema = z.object({
   authRequestId: z.string().min(1),
   oauthState: McpOAuthStateSchema,
+});
+
+export const McpBearerAuthorizationCompletionSchema = z.object({
+  authRequestId: z.string().min(1),
+  accessToken: z.string().trim().min(1),
 });
 
 export const McpAuthorizationResolutionSchema = z.discriminatedUnion("status", [

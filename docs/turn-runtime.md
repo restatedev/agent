@@ -11,8 +11,8 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 ## Ownership
 
 - `Agent` owns the active invocation ID, queued input, profile, approvals,
-  private MCP OAuth state and authorization actions, and external-message
-  routing.
+  private MCP OAuth/bearer state and authorization actions, and
+  external-message routing.
 - `AgentNotifications` owns invalidation revisions and subscriptions;
   `AgentScheduler` owns schedules and durable timers.
 - `AgentSession`, keyed by the same `agentId`, owns the append-only transcript
@@ -107,22 +107,24 @@ decision is deterministic runtime control flow.
 ## MCP authorization
 
 - Agent-configured MCP servers and their auth type are profile state. OAuth
-  credentials are separate private Agent state and never appear in
-  `Agent.profile`.
-- A new Turn receives only each OAuth server's `serverId` and current access
-  token with its profile snapshot.
-- An OAuth server without credentials pauses during tool discovery. A 401 or
-  insufficient-scope response during discovery or invocation does the same.
+  credentials and bearer tokens are separate private Agent state and never
+  appear in `Agent.profile`.
+- A new Turn receives only each authenticated server's `serverId` and current
+  access token with its profile snapshot.
+- An OAuth or bearer server without credentials pauses during tool discovery.
+  A 401 or insufficient-scope response during discovery or invocation does the
+  same.
 - The Turn registers or joins one pending authorization action per server and
   active Turn, then waits on a named signal. Parallel callers therefore share
   the same browser action.
 - The BFF performs OAuth discovery, dynamic client registration, refresh when
   possible, and authorization-code plus PKCE flow. Redirect-round-trip state is
-  stored durably by Agent.
+  stored durably by Agent. Bearer actions instead submit a user-provided token
+  directly to private Agent state.
 - Completion is accepted only for the active, non-interrupting Turn. Agent
-  stores the returned OAuth state before signaling the waiter with a minimal
-  credential. Distinct follow-up scope challenges may open another bounded
-  authorization round.
+  stores the returned OAuth or bearer state before signaling the waiter with a
+  minimal credential. Distinct follow-up scope challenges may open another
+  bounded authorization round.
 - Interruption resolves pending authorization waiters as cancelled. Terminal
   reconciliation and material MCP server changes also clear abandoned
   authorization state.
