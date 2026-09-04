@@ -106,6 +106,23 @@ export function* clearTurn(
   return removed;
 }
 
+/** Cancels every authorization waiter belonging to an interrupted Turn. */
+export function* cancelTurn(
+  turnId: string,
+  reason: string,
+): restate.Operation<McpAuthorizationRequest[]> {
+  const removed = yield* clearTurn(turnId);
+  for (const request of removed) {
+    restate
+      .invocation(request.turnId)
+      .signal<McpAuthorizationResolution>(
+        mcpAuthorizationSignalName(request.authRequestId),
+      )
+      .resolve({status: "cancelled", reason});
+  }
+  return removed;
+}
+
 /**
  * Clears credentials and pending flows bound to a removed or materially
  * changed server. Active waiters receive a cancellation signal.

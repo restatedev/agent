@@ -8,7 +8,6 @@ import {setTimeout} from "node:timers/promises";
 import {
   type ApprovalDecision,
   type ConversationEntry,
-  type McpTurnCredential,
   type MemoryChange,
   ScheduleIdRequestSchema,
   ScheduleSpecSchema,
@@ -32,6 +31,7 @@ import {
   executeMcpTool,
   type McpAgentTool,
   type McpAuthChallenge,
+  type McpAuthorizationGrant,
   requestMcpAuthorization,
 } from "./mcp-tools.js";
 
@@ -73,7 +73,7 @@ export type AgentToolContext = {
       serverId: string,
       causeId: string,
       challenge: McpAuthChallenge,
-    ): restate.Operation<McpTurnCredential>;
+    ): restate.Operation<McpAuthorizationGrant>;
   };
 };
 
@@ -106,7 +106,7 @@ export function createAgentToolContext(
 ): AgentToolContext {
   let borrow: restate.Future<SandboxRef> | undefined;
   let ref: SandboxRef | undefined;
-  const authorizations = new Map<string, restate.Task<McpTurnCredential>>();
+  const authorizations = new Map<string, restate.Task<McpAuthorizationGrant>>();
   return {
     agentId,
     turnId,
@@ -122,11 +122,11 @@ export function createAgentToolContext(
         serverId: string,
         causeId: string,
         challenge: McpAuthChallenge,
-      ): restate.Operation<McpTurnCredential> {
+      ): restate.Operation<McpAuthorizationGrant> {
         let task = authorizations.get(serverId);
         if (!task) {
           task = restate.spawn(
-            requestMcpAuthorization(
+            requestMcpAuthorizationGrant(
               serverId,
               {agentId, turnId},
               causeId,
@@ -145,6 +145,21 @@ export function createAgentToolContext(
       },
     },
   };
+}
+
+function* requestMcpAuthorizationGrant(
+  serverId: string,
+  context: {agentId: string; turnId: string},
+  causeId: string,
+  challenge: McpAuthChallenge,
+): restate.Operation<McpAuthorizationGrant> {
+  const credential = yield* requestMcpAuthorization(
+    serverId,
+    context,
+    causeId,
+    challenge,
+  );
+  return {credential, challenge};
 }
 
 /** Converts one foreground tool batch into the model's tool-result message. */

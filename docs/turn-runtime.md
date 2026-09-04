@@ -109,8 +109,8 @@ decision is deterministic runtime control flow.
 - Agent-configured MCP servers and their auth type are profile state. OAuth
   credentials are separate private Agent state and never appear in
   `Agent.profile`.
-- A new Turn receives the current private credentials with its profile
-  snapshot.
+- A new Turn receives only each OAuth server's `serverId` and current access
+  token with its profile snapshot.
 - An OAuth server without credentials pauses during tool discovery. A 401 or
   insufficient-scope response during discovery or invocation does the same.
 - The Turn registers or joins one pending authorization action per server and
@@ -120,9 +120,12 @@ decision is deterministic runtime control flow.
   possible, and authorization-code plus PKCE flow. Redirect-round-trip state is
   stored durably by Agent.
 - Completion is accepted only for the active, non-interrupting Turn. Agent
-  stores the returned credential before signaling the waiter to retry once.
-- Interruption, terminal reconciliation, and material MCP server changes clear
-  abandoned authorization state.
+  stores the returned OAuth state before signaling the waiter with a minimal
+  credential. Distinct follow-up scope challenges may open another bounded
+  authorization round.
+- Interruption resolves pending authorization waiters as cancelled. Terminal
+  reconciliation and material MCP server changes also clear abandoned
+  authorization state.
 
 ## Steering
 

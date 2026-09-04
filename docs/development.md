@@ -233,8 +233,9 @@ Check:
 7. you started a new turn after the catalog cache expired.
 
 The runtime does not fall back to initialize-era MCP sessions. A successful
-catalog is cached only for the server-advertised TTL, capped at five minutes;
-existing turns retain their journaled snapshot.
+credential-free catalog is cached only for the server-advertised TTL, capped at
+five minutes, in a process cache capped at 256 entries; existing turns retain
+their journaled snapshot.
 
 An OAuth challenge creates private Agent state and a user-visible authorization
 action. The Turn remains durably waiting until the Web UI completes the flow,

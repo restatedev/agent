@@ -162,7 +162,7 @@ code-based graders to the resulting conversation event log and state.
 | Pending tool tasks | `doTurn` invocation | Restate Tasks | Current turn only |
 | Steering FIFO | `doTurn` invocation | Durable signal source + transient inbox | Current turn only |
 | Dynamic tool catalog for a turn | `doTurn` invocation | Journaled `restate.run` result | Model and executor in that turn |
-| Dynamic discovery cache | Endpoint process | Memory, five-minute TTL | Optimization only |
+| Dynamic discovery cache | Endpoint process | Bounded memory, five-minute TTL | Credential-free optimization only |
 | Sandbox lease/status/reference | Sandbox | VO state | Sandbox handlers |
 | Local files or Modal Volume | Provider | External store | Sandbox client |
 | OpenAI and Modal SDK clients | Endpoint process | Memory | Optimization only |

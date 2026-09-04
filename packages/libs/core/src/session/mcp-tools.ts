@@ -32,6 +32,8 @@ const MAX_DESCRIPTION_CHARS = 4_000;
 const MAX_INPUT_SCHEMA_CHARS = 64_000;
 const MAX_RESULT_CHARS = 128_000;
 const MAX_CACHE_TTL_MS = 5 * 60 * 1_000;
+const MAX_CACHED_CATALOGS = 256;
+const MAX_AUTHORIZATION_ROUNDS = 4;
 const REFRESH_RETRY_INTERVAL_MS = 30 * 1_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60 * 1_000;
 
@@ -54,8 +56,15 @@ type McpServerCatalog = {
   tools: Tool[];
 };
 
+type McpCatalogDefinition = Omit<McpServerCatalog, "server">;
+
 type McpDiscoveryResult = {
   catalog?: McpServerCatalog;
+  warnings: string[];
+};
+
+type McpCachedDiscoveryResult = {
+  catalog?: McpCatalogDefinition;
   warnings: string[];
 };
 
@@ -64,13 +73,19 @@ export type McpAuthChallenge = {
   requestedScope?: string;
 };
 
+export type McpAuthorizationGrant = {
+  credential: McpTurnCredential;
+  challenge: McpAuthChallenge;
+};
+
 type McpAttempt<T> =
   | {status: "succeeded"; value: T}
   | ({status: "authorization_required"} & McpAuthChallenge);
 
 type CachedCatalog = {
-  catalog: McpServerCatalog;
+  catalog: McpCatalogDefinition;
   refreshAfter: number;
+  lastAccessedAt: number;
 };
 
 /** A model-facing alias and its exact stateless MCP invocation target. */
@@ -91,7 +106,7 @@ export type McpToolExecution =
   | {status: "failed"; error: string};
 
 const cachedCatalogs = new Map<string, CachedCatalog>();
-const refreshes = new Map<string, Promise<McpDiscoveryResult>>();
+const refreshes = new Map<string, Promise<McpCachedDiscoveryResult>>();
 
 /**
  * Discovers tools from every configured stateless MCP server.
@@ -184,29 +199,47 @@ export function* executeMcpTool(
       serverId: string,
       causeId: string,
       challenge: McpAuthChallenge,
-    ): restate.Operation<McpTurnCredential>;
+    ): restate.Operation<McpAuthorizationGrant>;
   },
   tool: McpAgentTool,
 ): restate.Operation<McpToolExecution> {
   try {
     let attempt = yield* callMcpTool(input, context, tool, "initial");
-    if (attempt.status === "authorization_required") {
+    let authorizationRound = 0;
+    while (attempt.status === "authorization_required") {
       if (tool.target.server.auth !== "oauth") {
         return {
           status: "failed",
           error: `${tool.name} requires authorization but its configured auth type is none`,
         };
       }
-      tool.target.server.credential = yield* context.authorize(
-        tool.target.server.id,
-        context.toolCallId,
-        attempt,
-      );
-      attempt = yield* callMcpTool(input, context, tool, "authorized");
-      if (attempt.status === "authorization_required") {
+      if (authorizationRound >= MAX_AUTHORIZATION_ROUNDS) {
         return {
           status: "failed",
-          error: `${tool.name} remained unauthorized after OAuth completed`,
+          error: `${tool.name} exceeded ${MAX_AUTHORIZATION_ROUNDS} OAuth authorization rounds`,
+        };
+      }
+      const nextRound = authorizationRound + 1;
+      const grant = yield* context.authorize(
+        tool.target.server.id,
+        `${context.toolCallId}-oauth-${nextRound}`,
+        attempt,
+      );
+      tool.target.server.credential = grant.credential;
+      authorizationRound = nextRound;
+      attempt = yield* callMcpTool(
+        input,
+        context,
+        tool,
+        `authorized-${authorizationRound}`,
+      );
+      if (
+        attempt.status === "authorization_required" &&
+        sameAuthChallenge(attempt, grant.challenge)
+      ) {
+        return {
+          status: "failed",
+          error: `${tool.name} still requires the same authorization after OAuth completed`,
         };
       }
     }
@@ -231,7 +264,7 @@ function* callMcpTool(
   input: Record<string, unknown>,
   context: {turnId: string; toolCallId: string},
   tool: McpAgentTool,
-  phase: "initial" | "authorized",
+  phase: string,
 ): restate.Operation<McpAttempt<CallToolResult>> {
   return yield* restate.run(
     async ({signal}) => {
@@ -285,17 +318,20 @@ function* discoverMcpServer(
 ): restate.Operation<McpDiscoveryResult> {
   try {
     const server = serverSnapshot(config, credential);
+    let authorizationRound = 0;
     if (server.auth === "oauth" && !server.credential) {
+      const nextRound = authorizationRound + 1;
       server.credential = yield* requestMcpAuthorization(
         server.id,
         context,
-        `discovery-${server.id}`,
+        `discovery-${server.id}-oauth-${nextRound}`,
         {reason: "missing_credentials"},
       );
+      authorizationRound = nextRound;
     }
 
     let attempt = yield* discoverMcpServerAttempt(config, server, "initial");
-    if (attempt.status === "authorization_required") {
+    while (attempt.status === "authorization_required") {
       if (server.auth !== "oauth") {
         return {
           warnings: [
@@ -303,17 +339,34 @@ function* discoverMcpServer(
           ],
         };
       }
+      if (authorizationRound >= MAX_AUTHORIZATION_ROUNDS) {
+        return {
+          warnings: [
+            `${config.id}: discovery exceeded ${MAX_AUTHORIZATION_ROUNDS} OAuth authorization rounds`,
+          ],
+        };
+      }
+      const challenge = attempt;
+      const nextRound = authorizationRound + 1;
       server.credential = yield* requestMcpAuthorization(
         server.id,
         context,
-        `discovery-${server.id}`,
-        attempt,
+        `discovery-${server.id}-oauth-${nextRound}`,
+        challenge,
       );
-      attempt = yield* discoverMcpServerAttempt(config, server, "authorized");
-      if (attempt.status === "authorization_required") {
+      authorizationRound = nextRound;
+      attempt = yield* discoverMcpServerAttempt(
+        config,
+        server,
+        `authorized-${authorizationRound}`,
+      );
+      if (
+        attempt.status === "authorization_required" &&
+        sameAuthChallenge(attempt, challenge)
+      ) {
         return {
           warnings: [
-            `${config.id}: server remained unauthorized after OAuth completed`,
+            `${config.id}: discovery still requires the same authorization after OAuth completed`,
           ],
         };
       }
@@ -332,9 +385,9 @@ function* discoverMcpServer(
 function* discoverMcpServerAttempt(
   config: McpServer,
   server: McpServerSnapshot,
-  phase: "initial" | "authorized",
+  phase: string,
 ): restate.Operation<McpAttempt<McpDiscoveryResult>> {
-  return yield* restate.run(
+  const attempt = yield* restate.run(
     async ({signal}) => {
       try {
         const value = await discoverCached(config, server, signal);
@@ -357,17 +410,33 @@ function* discoverMcpServerAttempt(
       },
     },
   );
+  if (attempt.status === "authorization_required") {
+    return attempt;
+  }
+  return {
+    status: "succeeded",
+    value: {
+      warnings: attempt.value.warnings,
+      ...(attempt.value.catalog
+        ? {catalog: {...attempt.value.catalog, server}}
+        : {}),
+    },
+  };
 }
 
 async function discoverCached(
   config: McpServer,
   server: McpServerSnapshot,
   signal: AbortSignal,
-): Promise<McpDiscoveryResult> {
+): Promise<McpCachedDiscoveryResult> {
+  const now = Date.now();
   const token = resolveToken(server);
   const cacheKey = catalogCacheKey(config, token);
   const cached = cachedCatalogs.get(cacheKey);
-  if (cached && Date.now() < cached.refreshAfter) {
+  if (cached) {
+    cached.lastAccessedAt = now;
+  }
+  if (cached && now < cached.refreshAfter) {
     return {catalog: cached.catalog, warnings: []};
   }
 
@@ -381,17 +450,19 @@ async function discoverCached(
 
   const refresh = fetchCatalog(config, server, token)
     .then(({catalog, ttlMs, warnings}) => {
-      cachedCatalogs.set(cacheKey, {
+      storeCachedCatalog(cacheKey, {
         catalog,
         refreshAfter: Date.now() + Math.min(ttlMs, MAX_CACHE_TTL_MS),
+        lastAccessedAt: Date.now(),
       });
       return {catalog, warnings};
     })
-    .catch((error: unknown): McpDiscoveryResult => {
+    .catch((error: unknown): McpCachedDiscoveryResult => {
       if (!cached) {
         throw error;
       }
       cached.refreshAfter = Date.now() + REFRESH_RETRY_INTERVAL_MS;
+      cached.lastAccessedAt = Date.now();
       return {
         catalog: cached.catalog,
         warnings: [
@@ -411,7 +482,7 @@ async function fetchCatalog(
   server: McpServerSnapshot,
   token: string | undefined,
 ): Promise<{
-  catalog: McpServerCatalog;
+  catalog: McpCatalogDefinition;
   ttlMs: number;
   warnings: string[];
 }> {
@@ -441,7 +512,6 @@ async function fetchCatalog(
       );
     }
     const catalog = {
-      server,
       discovery,
       tools: tools
         .sort((left, right) => left.name.localeCompare(right.name))
@@ -454,6 +524,25 @@ async function fetchCatalog(
     };
   } finally {
     await client.close();
+  }
+}
+
+function storeCachedCatalog(cacheKey: string, cached: CachedCatalog): void {
+  cachedCatalogs.set(cacheKey, cached);
+  if (cachedCatalogs.size <= MAX_CACHED_CATALOGS) {
+    return;
+  }
+
+  let oldestKey: string | undefined;
+  let oldestAccess = Number.POSITIVE_INFINITY;
+  for (const [candidateKey, candidate] of cachedCatalogs) {
+    if (candidateKey !== cacheKey && candidate.lastAccessedAt < oldestAccess) {
+      oldestKey = candidateKey;
+      oldestAccess = candidate.lastAccessedAt;
+    }
+  }
+  if (oldestKey) {
+    cachedCatalogs.delete(oldestKey);
   }
 }
 
@@ -565,6 +654,25 @@ function authChallenge(error: unknown): McpAuthChallenge | undefined {
     };
   }
   return undefined;
+}
+
+function sameAuthChallenge(
+  left: McpAuthChallenge,
+  right: McpAuthChallenge,
+): boolean {
+  if (left.reason !== right.reason) {
+    return false;
+  }
+  return (
+    normalizedScopes(left.requestedScope) ===
+    normalizedScopes(right.requestedScope)
+  );
+}
+
+function normalizedScopes(scope: string | undefined): string {
+  return [...new Set(scope?.split(/\s+/).filter(Boolean) ?? [])]
+    .sort()
+    .join(" ");
 }
 
 function tokenFingerprint(token: string): string {
@@ -683,9 +791,9 @@ function renderToolResult(result: CallToolResult): string {
 }
 
 function waitForRefresh(
-  refresh: Promise<McpDiscoveryResult>,
+  refresh: Promise<McpCachedDiscoveryResult>,
   signal: AbortSignal,
-): Promise<McpDiscoveryResult> {
+): Promise<McpCachedDiscoveryResult> {
   if (signal.aborted) {
     return Promise.reject(
       signal.reason ??

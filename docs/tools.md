@@ -485,7 +485,9 @@ MCP OAuth is coordinated by Agent state but split across the Turn and BFF:
    `Agent.completeMcpAuthorization` with the resulting full OAuth state.
 8. Agent stores the OAuth state, removes the pending flow, publishes `mcpAuth`,
    and signals the waiting Turn with only `{serverId, accessToken}`. The Turn
-   retries the failed operation once.
+   retries the failed operation. A repeated identical challenge fails; a
+   different scope challenge may start another authorization round, bounded to
+   four rounds per tool call.
 
 Completion is rejected for a stale, terminal, or interrupting Turn. Changing
 or removing a server clears its credential and cancels related waiters. Turn
@@ -520,12 +522,14 @@ stable identity hash. The snapshotted target retains the original MCP name;
 execution never tries to reverse the alias.
 
 The process-local cache is isolated by server configuration and a hash of the
-current access token. Its lifetime is the smaller TTL advertised
-by `server/discover` and `tools/list`, capped at five minutes; a missing,
-invalid, or zero TTL disables reuse for the next turn. Concurrent refreshes are
-coalesced. After a successful read, a refresh failure may use the
-last-known-good catalog and retry after 30 seconds. The process cache is only
-an optimization; the `restate.run` result is the durable turn snapshot.
+current access token, but stores only discovery and tool definitions—not the
+token itself. It is capped at 256 least-recently-used entries. Each entry's
+lifetime is the smaller TTL advertised by `server/discover` and `tools/list`,
+capped at five minutes; a missing, invalid, or zero TTL disables reuse for the
+next turn. Concurrent refreshes are coalesced. After a successful read, a
+refresh failure may use the last-known-good catalog and retry after 30 seconds.
+The process cache is only an optimization; the `restate.run` result is the
+durable turn snapshot.
 
 ### Invocation and results
 

@@ -83,8 +83,9 @@ export const Agent = restate.implement(AgentDefinition, {
      * @returns Whether an interruption or replacement message was accepted.
      */
     *interrupt({reason, message}): restate.Operation<boolean> {
+      const current = yield* activeTurn.current();
       const requested = yield* activeTurn.interrupt(reason);
-      if (requested === undefined) {
+      if (requested === undefined || current === undefined) {
         return false;
       }
 
@@ -97,6 +98,14 @@ export const Agent = restate.implement(AgentDefinition, {
       }
       if (!requested) {
         return message !== undefined;
+      }
+
+      const cancelledAuthorizations = yield* mcpAuthorization.cancelTurn(
+        current.id,
+        "Turn interrupted",
+      );
+      if (cancelledAuthorizations.length > 0) {
+        yield* publishNotification("mcpAuth");
       }
 
       return true;
