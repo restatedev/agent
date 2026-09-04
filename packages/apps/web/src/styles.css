@@ -220,6 +220,18 @@ svg {
   animation: restate-done-shell 1.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
+.brand-mark[data-state="interrupted"] {
+  border-color: rgba(232, 137, 63, 0.76);
+}
+
+.brand-mark[data-state="stopped"] {
+  border-color: rgba(154, 164, 180, 0.68);
+}
+
+.brand-mark[data-state="failed"] {
+  border-color: rgba(216, 84, 104, 0.78);
+}
+
 @keyframes restate-tile-breathe {
   0%,
   100% {

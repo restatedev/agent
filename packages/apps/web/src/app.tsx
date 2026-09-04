@@ -59,6 +59,10 @@ type Tab = "approvals" | "profile" | "evals";
 type Guardrail = AgentProfile["guardrails"][number];
 type McpServer = AgentProfile["mcpServers"][number];
 type McpAuthType = McpServer["auth"]["type"];
+type TurnTerminalStatus = Extract<
+  SequencedEntry["entry"],
+  {role: "assistant"}
+>["status"];
 type AgentMarkState =
   | "offline"
   | "idle"
@@ -66,7 +70,10 @@ type AgentMarkState =
   | "working"
   | "waiting"
   | "finalizing"
-  | "done";
+  | "done"
+  | "interrupted"
+  | "stopped"
+  | "failed";
 
 type Toast = {
   id: number;
@@ -258,10 +265,16 @@ function activeTurn(entries: SequencedEntry[], provisional?: string) {
       turn.phase = "thinking";
       turn.message = entry.message;
     } else if (entry.type === "tools") {
-      turn.phase = "tools";
+      turn.phase = entry.phase === "started" ? "tools" : "thinking";
       turn.message = `${entry.phase === "started" ? "Running" : "Finished"} ${entry.calls
         .map((call) => call.summary ?? call.name)
         .join(", ")}`;
+    } else if (entry.type === "interrupt") {
+      turn.phase = "finalizing";
+      turn.message = "Finalizing the interrupted turn";
+    } else if (entry.type === "stop") {
+      turn.phase = "finalizing";
+      turn.message = "Finalizing the stopped turn";
     }
     if (!turn.terminal) active = turnId;
     turns.set(turnId, turn);
@@ -269,13 +282,38 @@ function activeTurn(entries: SequencedEntry[], provisional?: string) {
   return active ? {turnId: active, ...turns.get(active)} : undefined;
 }
 
-function latestTurnCompleted(entries: SequencedEntry[]) {
+function latestTurnOutcome(
+  entries: SequencedEntry[],
+): TurnTerminalStatus | undefined {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]?.entry;
-    if (entry?.role === "assistant") return entry.status === "completed";
-    if (entry?.role === "user") return false;
+    if (entry?.role === "assistant") return entry.status;
+    if (entry?.role === "user") return undefined;
   }
-  return false;
+  return undefined;
+}
+
+function deriveAgentMarkState({
+  connected,
+  hasPendingInput,
+  terminalStatus,
+  turn,
+}: {
+  connected: boolean;
+  hasPendingInput: boolean;
+  terminalStatus?: TurnTerminalStatus;
+  turn: ReturnType<typeof activeTurn>;
+}): AgentMarkState {
+  if (!connected) return "offline";
+  if (turn?.phase === "finalizing") return "finalizing";
+  if (turn?.phase === "waiting" || hasPendingInput) return "waiting";
+  if (turn?.phase === "tools") return "working";
+  if (turn) return "thinking";
+  if (terminalStatus === "completed") return "done";
+  if (terminalStatus === "interrupted") return "interrupted";
+  if (terminalStatus === "stopped") return "stopped";
+  if (terminalStatus === "failed") return "failed";
+  return "idle";
 }
 
 function Toasts({toasts}: {toasts: Toast[]}) {
@@ -293,6 +331,11 @@ function Toasts({toasts}: {toasts: Toast[]}) {
 
 function RestateMark({state}: {state: AgentMarkState}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stateRef = useRef(state);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -351,8 +394,25 @@ function RestateMark({state}: {state: AgentMarkState}) {
         accent: "#a7ffd0",
         speed: 0.75,
       },
+      interrupted: {
+        base: "#6c3c18",
+        glow: "#e8893f",
+        accent: "#ffd39a",
+        speed: 0.5,
+      },
+      stopped: {
+        base: "#3d4350",
+        glow: "#7b8494",
+        accent: "#c3cad5",
+        speed: 0.32,
+      },
+      failed: {
+        base: "#6c2731",
+        glow: "#d85468",
+        accent: "#ffc1ca",
+        speed: 0.58,
+      },
     };
-    const palette = palettes[state];
     const chevronOne = new Path2D(
       "M6.248 7.691A1.43 1.43 0 0 0 6 8.498v8.16c0 .277.313.439.539.278l.824-.585c.228-.162.363-.424.363-.703V9.976c0-.338.381-.536.658-.341l3.245 2.286a.274.274 0 0 1-.004.453l-1.088.737a.866.866 0 0 0-.219 1.207.855.855 0 0 0 1.19.209l1.779-1.234c.381-.264.608-.699.608-1.163 0-.454-.219-.882-.588-1.147L8.039 7.184a1.297 1.297 0 0 0-1.695.366l-.096.141Z",
     );
@@ -362,6 +422,8 @@ function RestateMark({state}: {state: AgentMarkState}) {
     let animationFrame = 0;
 
     const draw = (time: number) => {
+      const currentState = stateRef.current;
+      const palette = palettes[currentState];
       const seconds = time / 1_000;
       const phase = seconds * palette.speed;
       context.clearRect(0, 0, size, size);
@@ -378,14 +440,14 @@ function RestateMark({state}: {state: AgentMarkState}) {
       context.filter = "blur(4px)";
       for (let index = 0; index < 3; index += 1) {
         const angle = phase + index * ((Math.PI * 2) / 3);
-        const orbit = state === "waiting" ? 5 : 8;
+        const orbit = currentState === "waiting" ? 5 : 8;
         const x = 18 + Math.cos(angle) * orbit;
         const y = 18 + Math.sin(angle * 1.17) * orbit;
         const radius = 7 + Math.sin(phase * 1.4 + index) * 2;
         const glow = context.createRadialGradient(x, y, 0, x, y, radius);
         glow.addColorStop(0, index === 1 ? palette.accent : palette.glow);
         glow.addColorStop(1, "transparent");
-        context.globalAlpha = state === "offline" ? 0.18 : 0.62;
+        context.globalAlpha = currentState === "offline" ? 0.18 : 0.62;
         context.fillStyle = glow;
         context.beginPath();
         context.arc(x, y, radius, 0, Math.PI * 2);
@@ -393,7 +455,7 @@ function RestateMark({state}: {state: AgentMarkState}) {
       }
       context.restore();
 
-      if (state === "thinking" || state === "finalizing") {
+      if (currentState === "thinking" || currentState === "finalizing") {
         context.save();
         context.translate(18, 18);
         context.rotate(phase * 1.5);
@@ -407,7 +469,7 @@ function RestateMark({state}: {state: AgentMarkState}) {
         context.restore();
       }
 
-      if (state === "working") {
+      if (currentState === "working") {
         context.save();
         context.strokeStyle = palette.accent;
         context.lineWidth = 1.2;
@@ -422,7 +484,11 @@ function RestateMark({state}: {state: AgentMarkState}) {
         context.restore();
       }
 
-      if (state === "done") {
+      if (
+        currentState === "done" ||
+        currentState === "interrupted" ||
+        currentState === "failed"
+      ) {
         const progress = (seconds % 2.4) / 2.4;
         context.save();
         context.strokeStyle = palette.accent;
@@ -435,7 +501,7 @@ function RestateMark({state}: {state: AgentMarkState}) {
       }
 
       const logoShift =
-        state === "thinking" || state === "working"
+        currentState === "thinking" || currentState === "working"
           ? Math.sin(phase * 4) * 0.7
           : 0;
       context.save();
@@ -466,7 +532,7 @@ function RestateMark({state}: {state: AgentMarkState}) {
 
     animationFrame = window.requestAnimationFrame(draw);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [state]);
+  }, []);
 
   return (
     <canvas
@@ -509,7 +575,6 @@ function ConnectionHeader({
         <div
           className="brand-mark"
           data-state={activity}
-          key={activity}
           title={`Agent status: ${activity}`}
         >
           <RestateMark state={activity} />
@@ -604,7 +669,9 @@ function Composer({
   const textarea = useRef<HTMLTextAreaElement>(null);
 
   async function submit() {
-    const next = message.trim();
+    const next =
+      message.trim() ||
+      (mode === "interrupt" ? "Interrupted by the user." : "");
     if (!next || sending) return;
     setSending(true);
     try {
@@ -660,7 +727,7 @@ function Composer({
               ? "Ask the agent to do something…"
               : mode === "steer"
                 ? "Guide the active turn…"
-                : "Explain why the active turn should stop…"
+                : "Optional: explain why the active turn should stop…"
           }
           ref={textarea}
           rows={2}
@@ -669,7 +736,7 @@ function Composer({
         <button
           aria-label={MODE_COPY[mode].label}
           className="send-button"
-          disabled={!message.trim() || sending}
+          disabled={sending || (mode === "interrupt" ? !busy : !message.trim())}
           onClick={() => void submit()}
           type="button"
         >
@@ -1687,8 +1754,8 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     () => activeTurn(agent.entries, provisionalTurn),
     [agent.entries, provisionalTurn],
   );
-  const completed = useMemo(
-    () => latestTurnCompleted(agent.entries),
+  const terminalStatus = useMemo(
+    () => latestTurnOutcome(agent.entries),
     [agent.entries],
   );
   const notify = useCallback((message: string, error = false) => {
@@ -1762,21 +1829,13 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     }
   }
 
-  const markState: AgentMarkState = !agent.connected
-    ? "offline"
-    : turn?.phase === "waiting" ||
-        agent.approvals.length > 0 ||
-        agent.mcpAuthorizations.length > 0
-      ? "waiting"
-      : turn?.phase === "tools"
-        ? "working"
-        : turn?.phase === "finalizing"
-          ? "finalizing"
-          : turn
-            ? "thinking"
-            : completed
-              ? "done"
-              : "idle";
+  const markState = deriveAgentMarkState({
+    connected: agent.connected,
+    hasPendingInput:
+      agent.approvals.length > 0 || agent.mcpAuthorizations.length > 0,
+    terminalStatus,
+    turn,
+  });
 
   return (
     <div className="app-shell">
