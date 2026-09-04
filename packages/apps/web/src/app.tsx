@@ -154,10 +154,10 @@ const MCP_SERVER_PRESETS = [
   {
     id: "github",
     label: "GitHub",
-    url: "https://api.githubcopilot.com/mcp/",
+    url: "https://api.githubcopilot.com/mcp/x/all",
     protocol: "stateful",
     authType: "bearer",
-    setup: "Personal access token",
+    setup: "All toolsets · personal token",
     icon: GitBranch,
   },
   {
@@ -883,7 +883,8 @@ function McpAuthorizationCard({
             event.preventDefault();
             const accessToken = bearerToken
               .trim()
-              .replace(/^Bearer\s+/i, "")
+              .replace(/^Authorization\s*:\s*/i, "")
+              .replace(/^(?:Bearer\s+)+/i, "")
               .trim();
             if (!accessToken) return;
             setResolving(true);

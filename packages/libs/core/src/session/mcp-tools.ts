@@ -737,7 +737,28 @@ export function releaseMcpSessionsAfterCancellation(turnId: string): void {
 }
 
 function resolveToken(server: McpServerSnapshot): string | undefined {
-  return server.credential?.accessToken;
+  const accessToken = server.credential?.accessToken;
+  if (!accessToken) return undefined;
+
+  let normalized = unwrapQuotedToken(accessToken.trim());
+  normalized = normalized.replace(/^Authorization\s*:\s*/i, "").trim();
+  normalized = unwrapQuotedToken(normalized);
+  while (/^Bearer(?:\s+|$)/i.test(normalized)) {
+    normalized = normalized.replace(/^Bearer(?:\s+|$)/i, "").trim();
+  }
+  normalized = unwrapQuotedToken(normalized);
+  return normalized || undefined;
+}
+
+function unwrapQuotedToken(value: string): string {
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    return value.slice(1, -1).trim();
+  }
+  return value;
 }
 
 function catalogCacheKey(config: McpServer, token: string | undefined): string {

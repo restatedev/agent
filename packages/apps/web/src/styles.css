@@ -1049,6 +1049,37 @@ svg {
   transform: rotate(90deg);
 }
 
+.turn-continuation {
+  align-items: flex-start;
+}
+
+.turn-continuation-flow {
+  display: flex;
+  width: min(82%, 760px);
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.turn-continuation-copy {
+  padding: 3px;
+  color: var(--text);
+  line-height: 1.62;
+  overflow-wrap: break-word;
+}
+
+.turn-continuation-copy code {
+  border-radius: 5px;
+  background: var(--surface-soft);
+  padding: 1px 4px;
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.turn-continuation .turn-detail {
+  margin-left: 3px;
+}
+
 .turn-body {
   display: flex;
   flex-direction: column;

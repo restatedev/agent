@@ -59,6 +59,7 @@ type TurnRow = {
   sequence: number;
   turnId: string;
   entries: DetailEntry[];
+  continuation: boolean;
   terminal?: AssistantEntry["status"];
 };
 
@@ -85,7 +86,8 @@ function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
   }
 
   const rows: TranscriptRow[] = [];
-  const turns = new Map<string, TurnRow>();
+  const seenTurns = new Set<string>();
+  let currentTurn: TurnRow | undefined;
   for (const item of entries) {
     const {entry} = item;
     if (
@@ -96,24 +98,29 @@ function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
       const turnId = entry.turnId;
       if (!turnId) {
         rows.push({kind: "entry", item});
+        currentTurn = undefined;
         continue;
       }
-      let row = turns.get(turnId);
-      if (!row) {
-        row = {
+      if (!currentTurn || currentTurn.turnId !== turnId) {
+        currentTurn = {
           kind: "turn",
           sequence: item.sequence,
           turnId,
           entries: [],
+          continuation: seenTurns.has(turnId),
           terminal: terminalByTurn.get(turnId),
         };
-        turns.set(turnId, row);
-        rows.push(row);
+        seenTurns.add(turnId);
+        rows.push(currentTurn);
       }
-      row.entries.push(entry as DetailEntry);
+      currentTurn.entries.push(entry as DetailEntry);
       continue;
     }
     rows.push({kind: "entry", item});
+    // A user steering message or lifecycle marker is a chronological boundary.
+    // Later activity from the same Turn must render after it, not be folded
+    // back into the Turn card that appeared before the message.
+    currentTurn = undefined;
   }
   return rows;
 }
@@ -286,6 +293,39 @@ function TurnCard({row}: {row: TurnRow}) {
   );
 }
 
+function TurnContinuation({row}: {row: TurnRow}) {
+  return (
+    <Message className="turn-continuation">
+      <MessageAvatar>
+        <Bot />
+      </MessageAvatar>
+      <MessageContent>
+        <MessageHeader>Agent</MessageHeader>
+        <div className="turn-continuation-flow">
+          {row.entries.map((entry, index) =>
+            entry.type === "activity" ? (
+              <div
+                className="turn-continuation-copy"
+                // The renderer escapes every source character before adding formatting tags.
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized model output
+                dangerouslySetInnerHTML={{__html: renderInline(entry.message)}}
+                // Turn details form an append-only sequence, so their position is stable.
+                // biome-ignore lint/suspicious/noArrayIndexKey: see above
+                key={`${entry.type}-${index}`}
+              />
+            ) : entry.type === "progress" &&
+              entry.phase === "thinking" ? null : (
+              // Turn details form an append-only sequence, so their position is stable.
+              // biome-ignore lint/suspicious/noArrayIndexKey: see above
+              <TurnDetail entry={entry} key={`${entry.type}-${index}`} />
+            ),
+          )}
+        </div>
+      </MessageContent>
+    </Message>
+  );
+}
+
 function Badge({children, tone}: {children: string; tone?: string}) {
   return (
     <span className="message-badge" data-tone={tone}>
@@ -454,7 +494,7 @@ function isAnchor(row: TranscriptRow) {
   if (row.kind === "turn") return false;
   const {entry} = row.item;
   return (
-    (entry.role === "user" && entry.delivery === "turn") ||
+    (entry.role === "user" && entry.delivery !== "queued") ||
     (entry.role === "event" && entry.type === "dispatch")
   );
 }
@@ -496,18 +536,22 @@ export function Transcript({
               <MessageScrollerItem
                 key={
                   row.kind === "turn"
-                    ? `turn-${row.turnId}`
+                    ? `turn-${row.turnId}-${row.sequence}`
                     : `entry-${row.item.sequence}`
                 }
                 messageId={
                   row.kind === "turn"
-                    ? `turn-${row.turnId}`
+                    ? `turn-${row.turnId}-${row.sequence}`
                     : `entry-${row.item.sequence}`
                 }
                 scrollAnchor={isAnchor(row)}
               >
                 {row.kind === "turn" ? (
-                  <TurnCard row={row} />
+                  row.continuation ? (
+                    <TurnContinuation row={row} />
+                  ) : (
+                    <TurnCard row={row} />
+                  )
                 ) : (
                   <Entry item={row.item} />
                 )}
