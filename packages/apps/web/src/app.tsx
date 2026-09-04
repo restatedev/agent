@@ -65,6 +65,7 @@ type TurnTerminalStatus = Extract<
 >["status"];
 type AgentMarkState =
   | "offline"
+  | "connecting"
   | "idle"
   | "thinking"
   | "working"
@@ -294,17 +295,18 @@ function latestTurnOutcome(
 }
 
 function deriveAgentMarkState({
-  connected,
+  connectionStatus,
   hasPendingInput,
   terminalStatus,
   turn,
 }: {
-  connected: boolean;
+  connectionStatus: "connecting" | "connected" | "failed";
   hasPendingInput: boolean;
   terminalStatus?: TurnTerminalStatus;
   turn: ReturnType<typeof activeTurn>;
 }): AgentMarkState {
-  if (!connected) return "offline";
+  if (connectionStatus === "connecting") return "connecting";
+  if (connectionStatus === "failed") return "offline";
   if (turn?.phase === "finalizing") return "finalizing";
   if (turn?.phase === "waiting" || hasPendingInput) return "waiting";
   if (turn?.phase === "tools") return "working";
@@ -357,6 +359,12 @@ function RestateMark({state}: {state: AgentMarkState}) {
         glow: "#626b78",
         accent: "#8a93a1",
         speed: 0.15,
+      },
+      connecting: {
+        base: "#2537ba",
+        glow: "#755ff0",
+        accent: "#6ee7ff",
+        speed: 1.8,
       },
       idle: {
         base: "#303dcc",
@@ -455,7 +463,11 @@ function RestateMark({state}: {state: AgentMarkState}) {
       }
       context.restore();
 
-      if (currentState === "thinking" || currentState === "finalizing") {
+      if (
+        currentState === "connecting" ||
+        currentState === "thinking" ||
+        currentState === "finalizing"
+      ) {
         context.save();
         context.translate(18, 18);
         context.rotate(phase * 1.5);
@@ -501,7 +513,9 @@ function RestateMark({state}: {state: AgentMarkState}) {
       }
 
       const logoShift =
-        currentState === "thinking" || currentState === "working"
+        currentState === "connecting" ||
+        currentState === "thinking" ||
+        currentState === "working"
           ? Math.sin(phase * 4) * 0.7
           : 0;
       context.save();
@@ -568,6 +582,7 @@ function ConnectionHeader({
   useEffect(() => {
     setAgentId(connection.agentId);
   }, [connection.agentId]);
+  const connectionLabel = connected ? "Live" : error ? "Offline" : "Connecting";
 
   return (
     <header className="topbar">
@@ -614,7 +629,7 @@ function ConnectionHeader({
           }
         >
           <span className="connection-dot" />
-          {connected ? "Live" : "Connecting"}
+          {connectionLabel}
         </span>
         <button
           className="button ghost compact"
@@ -1830,7 +1845,7 @@ export function App({initialAgentId}: {initialAgentId: string}) {
   }
 
   const markState = deriveAgentMarkState({
-    connected: agent.connected,
+    connectionStatus: agent.connectionStatus,
     hasPendingInput:
       agent.approvals.length > 0 || agent.mcpAuthorizations.length > 0,
     terminalStatus,

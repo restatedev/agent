@@ -193,6 +193,12 @@ svg {
   animation: none;
 }
 
+.brand-mark[data-state="connecting"] {
+  border-color: rgba(110, 231, 255, 0.72);
+  background: linear-gradient(145deg, #2537ba, #755ff0 52%, #278fc8);
+  animation: restate-thinking-shell 0.85s ease-in-out infinite;
+}
+
 .brand-mark[data-state="thinking"] {
   background: linear-gradient(145deg, #4431d1, #8a52ea 52%, #3d8ae8);
   animation: restate-thinking-shell 1.15s ease-in-out infinite;

@@ -46,8 +46,11 @@ export function useAgent(connection: AgentConnection) {
     McpAuthorizationRequest[]
   >([]);
   const [schedules, setSchedules] = useState<ScheduledMessage[]>([]);
-  const [connected, setConnected] = useState(false);
-  const [connectionError, setConnectionError] = useState<string>();
+  const [connectionState, setConnectionState] = useState<{
+    agentId: string;
+    status: "connecting" | "connected" | "failed";
+    error?: string;
+  }>({agentId: connection.agentId, status: "connecting"});
 
   const refreshProfile = useCallback(async () => {
     const next = await client.profile();
@@ -81,8 +84,7 @@ export function useAgent(connection: AgentConnection) {
     setApprovals([]);
     setMcpAuthorizations([]);
     setSchedules([]);
-    setConnected(false);
-    setConnectionError(undefined);
+    setConnectionState({agentId: connection.agentId, status: "connecting"});
 
     async function poll() {
       let notification:
@@ -109,8 +111,10 @@ export function useAgent(connection: AgentConnection) {
             setEntries((current) => [...current, ...page.entries]);
           }
           if (abort.signal.aborted) return;
-          setConnected(true);
-          setConnectionError(undefined);
+          setConnectionState({
+            agentId: connection.agentId,
+            status: "connected",
+          });
 
           const next = await client.watchNotifications(
             notification.revision,
@@ -137,11 +141,18 @@ export function useAgent(connection: AgentConnection) {
           watchKey = crypto.randomUUID();
         } catch (error) {
           if (abort.signal.aborted) return;
-          setConnected(false);
-          setConnectionError(
-            error instanceof Error ? error.message : String(error),
-          );
+          setConnectionState({
+            agentId: connection.agentId,
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
           await abortableDelay(2_000, abort.signal);
+          if (!abort.signal.aborted) {
+            setConnectionState({
+              agentId: connection.agentId,
+              status: "connecting",
+            });
+          }
         }
       }
     }
@@ -150,11 +161,21 @@ export function useAgent(connection: AgentConnection) {
     return () => abort.abort();
   }, [
     client,
+    connection.agentId,
     refreshApprovals,
     refreshMcpAuthorizations,
     refreshProfile,
     refreshSchedules,
   ]);
+
+  const activeConnectionState =
+    connectionState.agentId === connection.agentId
+      ? connectionState
+      : {
+          agentId: connection.agentId,
+          status: "connecting" as const,
+          error: undefined,
+        };
 
   return {
     client,
@@ -163,8 +184,9 @@ export function useAgent(connection: AgentConnection) {
     approvals,
     mcpAuthorizations,
     schedules,
-    connected,
-    connectionError,
+    connected: activeConnectionState.status === "connected",
+    connectionError: activeConnectionState.error,
+    connectionStatus: activeConnectionState.status,
     refreshProfile,
     refreshApprovals,
     refreshMcpAuthorizations,
