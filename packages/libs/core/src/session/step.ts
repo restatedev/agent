@@ -3,42 +3,36 @@
 // action, and runs an allowed foreground tool batch in parallel. It owns no
 // state that survives its return.
 
-import type {ApprovalDecision, Guardrail} from "@restate-agents/types";
+import type {Guardrail} from "@restate-agents/types";
 import {
   all,
   allSettled,
-  client,
   type Future,
   InterruptedError,
   type Operation,
-  sendClient,
-  signal,
   spawn,
   type Task,
 } from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
-import {Agent} from "../agent/index.js";
 import type {
   GuardrailApproval,
   ModelResult,
   ProposedAction,
 } from "../gateway/index.js";
-import {callGuardrailModel, callModel} from "../gateway/index.js";
-import {approvalSignalName} from "../internal-types.js";
+import {callModel} from "../gateway/index.js";
+import {PROGRAM_TOOL_NAME} from "../ptc/definition.js";
 import {raceBranches} from "../race.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
+import {type GuardrailDecisions, guardAction} from "./guardrails.js";
 import type {TurnHistory} from "./history.js";
 import type {McpAgentTool} from "./mcp-tools.js";
-import type {AgentToolContext, ToolOutcome} from "./tools.js";
+import type {createPendingOperations} from "./pending.js";
+import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
 
-/** Guardrail decisions that the Turn must retain across model steps. */
-export type GuardrailDecisions = {
-  approvedActions: GuardrailApproval[];
-  rejectedGuardrails: string[];
-};
+export type {GuardrailDecisions} from "./guardrails.js";
 
 /** A model tool-call action paired with its foreground execution outcomes. */
 export type ToolStep = GuardrailDecisions & {
@@ -46,6 +40,7 @@ export type ToolStep = GuardrailDecisions & {
   step: number;
   action: ToolCallAction;
   outcomes: ToolOutcome[];
+  pendingEvents: PendingEvent[];
 };
 
 type AgentStepResult =
@@ -76,6 +71,7 @@ export function* agentStep({
   stepNumber,
   discoveredTools,
   mcpTools,
+  pending,
 }: {
   context: AgentToolContext;
   transcript: TurnHistory;
@@ -88,6 +84,7 @@ export function* agentStep({
   stepNumber: number;
   discoveredTools: DiscoveredAgentTool[];
   mcpTools: McpAgentTool[];
+  pending: ReturnType<typeof createPendingOperations>;
 }): Operation<AgentStepResult> {
   let activeTools:
     | {
@@ -96,6 +93,7 @@ export function* agentStep({
         decisions: GuardrailDecisions;
       }
     | undefined;
+  const pendingEvents: PendingEvent[] = [];
 
   try {
     const action = yield* callModel({
@@ -113,137 +111,31 @@ export function* agentStep({
         ? action
         : {
             type: action.type,
-            calls: action.calls,
+            calls: action.calls.filter(
+              (call) => call.toolName !== PROGRAM_TOOL_NAME,
+            ),
             ...(action.activity ? {activity: action.activity} : {}),
           };
-    const approvedForAction = new Set<string>();
-    const newlyApproved: GuardrailApproval[] = [];
-    let approvalNumber = 1;
-    let guarded:
-      | ({decision: "allow"} & GuardrailDecisions)
-      | ({
-          decision: "blocked";
-          guardrailId: string;
-          reason: string;
-        } & GuardrailDecisions);
-
-    while (true) {
-      const remaining = guardrails.filter(({id}) => !approvedForAction.has(id));
-      if (remaining.length === 0) {
-        guarded = {
-          decision: "allow",
-          approvedActions: newlyApproved,
-          rejectedGuardrails: [],
-        };
-        break;
-      }
-
-      const decision = yield* callGuardrailModel({
-        agentId: context.agentId,
-        instructions,
-        guardrails: remaining,
-        approvedActions: [...approvedActions, ...newlyApproved],
-        rejectedGuardrailIds: rejectedGuardrails,
-        messages: guardrailMessages,
-        action: proposed,
-      });
-      if (decision.decision === "allow") {
-        guarded = {
-          decision: "allow",
-          approvedActions: newlyApproved,
-          rejectedGuardrails: [],
-        };
-        break;
-      }
-      if (decision.decision === "deny") {
-        guarded = {
-          decision: "blocked",
-          guardrailId: decision.guardrailId,
-          reason: decision.reason,
-          approvedActions: newlyApproved,
-          rejectedGuardrails: [],
-        };
-        break;
-      }
-
-      const approvalId = `guardrail-${stepNumber}-${approvalNumber}`;
-      const request = {
-        approvalId,
-        turnId: context.turnId,
-        question: decision.question,
-        guardrailId: decision.guardrailId,
-      };
-      const registered = yield* client(Agent, context.agentId).requestApproval(
-        request,
-      );
-      let resolution: ApprovalDecision | undefined;
-      if (registered) {
-        yield* transcript.append(
-          {role: "event", type: "approval_request", ...request},
-          {
-            role: "event",
-            type: "progress",
-            turnId: context.turnId,
-            phase: "waiting",
-            message: `Guardrail ${decision.guardrailId} requires human approval`,
-          },
-        );
-        try {
-          resolution = yield* signal<ApprovalDecision>(
-            approvalSignalName(approvalId),
-          );
-          yield* transcript.append({
-            role: "event",
-            type: "approval",
-            ...request,
-            ...resolution,
+    // PTC is only orchestration. Gate concrete subtool inputs when emitted,
+    // not the JavaScript source or the wrapper's mere use.
+    const guarded =
+      proposed.type === "tool_calls" && proposed.calls.length === 0
+        ? {
+            decision: "allow" as const,
+            approvedActions: [],
+            rejectedGuardrails: [],
+          }
+        : yield* guardAction({
+            context,
+            transcript,
+            instructions,
+            guardrailMessages,
+            guardrails,
+            approvedActions,
+            rejectedGuardrails,
+            approvalPrefix: `guardrail-${stepNumber}`,
+            proposed,
           });
-        } catch (error) {
-          yield* sendClient(Agent, context.agentId).cancelApproval({
-            approvalId,
-            turnId: context.turnId,
-          });
-          yield* transcript.append({
-            role: "event",
-            type: "approval_cancelled",
-            approvalId,
-            turnId: context.turnId,
-          });
-          throw error;
-        }
-      }
-
-      if (!resolution) {
-        guarded = {
-          decision: "blocked",
-          guardrailId: decision.guardrailId,
-          reason: "human approval could not be registered",
-          approvedActions: newlyApproved,
-          rejectedGuardrails: [],
-        };
-        break;
-      }
-      if (resolution.decision === "rejected") {
-        guarded = {
-          decision: "blocked",
-          guardrailId: decision.guardrailId,
-          reason: resolution.reason
-            ? `Human rejected the request: ${resolution.reason}`
-            : "Human rejected the request",
-          approvedActions: newlyApproved,
-          rejectedGuardrails: [decision.guardrailId],
-        };
-        break;
-      }
-
-      newlyApproved.push({
-        guardrailId: decision.guardrailId,
-        question: decision.question,
-        action: proposed,
-      });
-      approvedForAction.add(decision.guardrailId);
-      approvalNumber += 1;
-    }
     const decisions = {
       approvedActions: guarded.approvedActions,
       rejectedGuardrails: guarded.rejectedGuardrails,
@@ -292,7 +184,45 @@ export function* agentStep({
     );
     tasks.push(
       ...action.calls.map((call) =>
-        spawn(agentTools.execute(call, context, discoveredTools, mcpTools)),
+        spawn(
+          agentTools.execute(call, context, discoveredTools, mcpTools, {
+            transcript,
+            step: stepNumber,
+            *guard(nested) {
+              const guarded = yield* guardAction({
+                context,
+                transcript,
+                instructions,
+                guardrailMessages,
+                guardrails,
+                approvedActions: [
+                  ...approvedActions,
+                  ...decisions.approvedActions,
+                ],
+                rejectedGuardrails: [
+                  ...rejectedGuardrails,
+                  ...decisions.rejectedGuardrails,
+                ],
+                approvalPrefix: `guardrail-${stepNumber}-${nested.toolCallId}`,
+                proposed: {type: "tool_calls", calls: [nested]},
+              });
+              decisions.approvedActions.push(...guarded.approvedActions);
+              decisions.rejectedGuardrails.push(...guarded.rejectedGuardrails);
+              return guarded.decision === "blocked"
+                ? guarded.reason
+                : undefined;
+            },
+            *cancelPending(outcome) {
+              const applied = yield* pending.apply(
+                [outcome],
+                context,
+                stepNumber,
+              );
+              pendingEvents.push(...applied.events);
+              return applied.outcomes[0];
+            },
+          }),
+        ),
       ),
     );
     return {
@@ -300,6 +230,7 @@ export function* agentStep({
       step: stepNumber,
       action,
       outcomes: yield* all(tasks),
+      pendingEvents,
       ...decisions,
     };
   } catch (error) {
@@ -325,6 +256,7 @@ export function* agentStep({
         type: "tools",
         step: stepNumber,
         action,
+        pendingEvents,
         ...decisions,
         outcomes: action.calls.map((call, index): ToolOutcome => {
           const result = settled[index];

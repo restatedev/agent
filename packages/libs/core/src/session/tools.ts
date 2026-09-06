@@ -21,6 +21,7 @@ import {z} from "zod";
 import {Agent} from "../agent/index.js";
 import type {ToolCall, ToolManifest} from "../gateway/index.js";
 import {approvalSignalName} from "../internal-types.js";
+import {PROGRAM_TOOL_NAME, programToolManifest} from "../ptc/definition.js";
 import {
   Sandbox,
   type SandboxClient,
@@ -28,6 +29,7 @@ import {
   sandboxProvider,
 } from "../sandbox/index.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
+import type {TurnHistory} from "./history.js";
 import {
   executeMcpTool,
   type McpAgentTool,
@@ -35,6 +37,7 @@ import {
   type McpAuthorizationGrant,
   requestMcpAuthorization,
 } from "./mcp-tools.js";
+import {executeProgramTool} from "./program-tool.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
 
@@ -77,6 +80,14 @@ export type AgentToolContext = {
       challenge: McpAuthChallenge,
     ): restate.Operation<McpAuthorizationGrant>;
   };
+};
+
+/** Step-owned policy and lifecycle hooks used by PTC's concrete child calls. */
+export type ToolExecutionScope = {
+  transcript: TurnHistory;
+  step: number;
+  guard(call: ToolCall): restate.Operation<string | undefined>;
+  cancelPending(outcome: ToolOutcome): restate.Operation<ToolOutcome>;
 };
 
 type ToolCallContext = AgentToolContext & {
@@ -247,6 +258,7 @@ export function manifests(
   mcpTools: McpAgentTool[],
 ): ToolManifest[] {
   return [
+    programToolManifest,
     ...definitions.map(
       (tool): ToolManifest => ({
         name: tool.name,
@@ -278,6 +290,8 @@ export function manifests(
 
 /** Returns the concise user-facing activity label for a tool call. */
 export function summarize(call: ToolCall): string | undefined {
+  if (call.toolName === PROGRAM_TOOL_NAME)
+    return "Coordinated tools with JavaScript";
   return findTool(call.toolName)?.summarize(call.input);
 }
 
@@ -287,7 +301,18 @@ export function* execute(
   context: AgentToolContext,
   discovered: DiscoveredAgentTool[],
   mcpTools: McpAgentTool[],
+  scope?: ToolExecutionScope,
 ): restate.Operation<ToolOutcome> {
+  if (call.toolName === PROGRAM_TOOL_NAME) {
+    if (!scope) throw new Error("PTC requires an active tool execution scope");
+    return yield* executeProgramTool(
+      call,
+      context,
+      discovered,
+      mcpTools,
+      scope,
+    );
+  }
   const tool = findTool(call.toolName);
   if (tool) {
     return {
@@ -853,7 +878,7 @@ const definitions = [
 ] as const;
 
 /** Names reserved by built-in tools and unavailable to dynamic discovery. */
-export const names = definitions.map(({name}) => name);
+export const names = [PROGRAM_TOOL_NAME, ...definitions.map(({name}) => name)];
 
 // The schema type parameter exists only to type `run`/`complete` inputs from
 // `inputSchema`; callers see a plain AgentTool.

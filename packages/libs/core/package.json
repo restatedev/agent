@@ -16,22 +16,26 @@
     }
   },
   "scripts": {
+    "test:ptc": "tsc -p test/ptc/tsconfig.json && node --import tsx --test test/ptc/*.test.ts test/ptc/*.test.mjs",
+    "test:ptc:restart": "node --import tsx test/ptc/restart.mjs",
     "build": "tsc --noEmitOnError",
     "start": "node ./dist/app.js",
     "dev": "tsx watch ./src/app.ts",
     "example:conversation-history": "tsx ./examples/conversation-history.ts",
     "prebundle": "rm -rf dist",
-    "bundle": "esbuild src/app.ts --bundle --format=esm --minify --sourcemap --platform=node --target=node22 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/app.js",
+    "bundle": "esbuild src/app.ts --bundle --format=esm --minify --sourcemap --platform=node --target=node22 --banner:js=\"import { createRequire as __restateCreateRequire } from 'node:module'; const require = __restateCreateRequire(import.meta.url); const __dirname = import.meta.dirname;\" --outfile=dist/app.js",
     "postbundle": "cd dist && zip -r index.zip app.js*"
   },
   "dependencies": {
+    "@jitl/quickjs-singlefile-cjs-release-sync": "0.31.0",
     "@ai-sdk/openai": "^4.0.10",
     "@modelcontextprotocol/client": "^2.0.0",
     "@restate-agents/types": "workspace:*",
-    "@restatedev/restate-sdk": "^1.16.2",
-    "@restatedev/restate-sdk-gen": "^1.16.2",
+    "@restatedev/restate-sdk": "1.17.0",
+    "@restatedev/restate-sdk-gen": "1.17.0",
     "ai": "^7.0.26",
     "modal": "^0.9.0",
+    "quickjs-emscripten-core": "0.31.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

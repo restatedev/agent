@@ -24,7 +24,7 @@
     "build": "tsc --noEmitOnError"
   },
   "dependencies": {
-    "@restatedev/restate-sdk-gen": "^1.16.2",
+    "@restatedev/restate-sdk-gen": "1.17.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

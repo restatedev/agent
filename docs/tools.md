@@ -43,7 +43,8 @@ It does not receive tool executors. `session/tools.ts` owns execution, and
 That separation keeps these decisions explicit:
 
 - the model chooses a tool from a serializable catalog;
-- the guardrail model evaluates the complete proposed batch before execution;
+- the guardrail model evaluates concrete tool calls before execution (PTC emits
+  its concrete calls while its program runs);
 - the active `agentStep` starts every allowed foreground call in the batch together;
 - Restate journals every operation and its result;
 - results are projected back into model messages as observations by
@@ -96,6 +97,109 @@ of the model contract, not cosmetic documentation.
 | `readFile` | Read a UTF-8 sandbox file | Foreground sandbox operation |
 | `writeFile` | Replace a UTF-8 sandbox file | Foreground sandbox operation |
 | `executeCommand` | Run one shell command to completion | Foreground sandbox operation |
+| `executeProgram` | Coordinate tools in JavaScript and return a compact result | Foreground, with supervised child calls |
+
+## Programmatic tool calling (PTC)
+
+The model can use `executeProgram({source})` to coordinate the same static,
+Restate-discovered, and MCP tools that it can call directly. The source evaluates
+to an async function accepting `tools`; each function takes the exact input
+object described by its model-facing tool schema. PTC itself is excluded from
+the guest catalog, so programs cannot recursively start programs.
+
+```js
+async tools => {
+  const cities = ["Berlin", "Paris", "London"];
+  const results = await Promise.allSettled(
+    cities.map(city => tools.getWeather({city})),
+  );
+  return results.map((result, i) => ({
+    city: cities[i],
+    weather: result.status === "fulfilled" ? result.value : null,
+    error: result.status === "rejected" ? result.reason.message : null,
+  }));
+}
+```
+
+`tools["exact-tool-name"]({...})` works for names that are not JavaScript
+identifiers. Successful calls return parsed JSON when their result is JSON,
+otherwise a string. MCP results retain `content` and `structuredContent` and
+the existing size/attachment filtering. Failed tool outcomes reject promises.
+Only the returned JSON or deterministic program error becomes an observation
+for the agent model. Child activity and approval events still appear in the
+transcript without raw arguments or results.
+
+The tool description and system instructions explain when to use PTC: dependent
+lookups, parallel work, filtering, joins, and aggregation where carrying every
+intermediate response through the agent model would waste context. Simple
+actions can still use direct calls. Available tool schemas remain in the model's
+catalog; this change reduces intermediate result context, not schema context.
+
+### Durable execution
+
+`ptc/guest.ts` runs QuickJS inside an embedded WebAssembly module. Each execution
+attempt creates a fresh runtime. The model response already journals the source,
+and discovery journals the turn's catalog. `ptc/runtime.ts` runs inline within
+`AgentSession.doTurn` using its existing generator scheduler:
+
+1. Drain guest microtasks synchronously.
+2. Spawn emitted tool operations in order, with IDs `<outer-call-id>:call-N`.
+3. Inspect the serialized root result.
+4. Select one tool completion through Restate, deliver it to the corresponding
+   guest promise, and repeat.
+
+Tool operations reuse the existing dispatcher and own their existing durable
+RPCs, runs, timers, and signals. Neither the whole program nor a compound tool
+operation is wrapped in another `run`. Native `Promise.race`, `any`, `all`, and
+`allSettled` work because result delivery is controlled at the host boundary.
+Replay reconstructs the heap and promises using the recorded completion order.
+The ordering contract depends on the pinned Restate SDK 1.17.0 and QuickJS
+0.31.0; changes to the engine, bridge, budgets, or tool semantics require replay
+compatibility review for in-flight turns.
+
+### Policy, pending tools, and interruption
+
+The PTC wrapper and its JavaScript source are not submitted for policy approval.
+Each emitted concrete call goes through the normal guardrail gate with its
+actual tool name and input. MCP authentication and sandbox access use the same
+turn context as direct calls.
+
+Inside a program, `sleep` and `humanApproval` promises resolve when their pending
+completion arrives. Human approval returns its normal text decision; the program
+must inspect it before taking dependent actions. `cancelOperation` can target an
+existing turn-owned operation using an ID obtained from an earlier direct call.
+
+Racing does not cancel losing branches while the program runs. When its root
+returns or throws, outstanding child calls are interrupted and joined; await
+`Promise.allSettled` on those branches before returning if they must finish.
+Turn interruption also disposes the guest and stops its active child tasks.
+Cancellation cannot undo effects that already occurred.
+
+Known program failures (syntax, uncaught rejection, invalid output, or exhausted
+computation budget) become repairable tool failures. Escaped host/SDK failures
+and turn interruption propagate through the scheduler rather than becoming
+guest rejections or model feedback.
+
+Programs have no direct I/O, timers, module loader, `Date`, or `Math.random`.
+Inputs and results cross as JSON copies. Limits are 128 tool calls, 64,000 source
+characters, 64,000 output characters, 32 MiB memory, 512 KiB stack, 10,000
+interrupt checks per attempt, and 10,000 microtasks per drain. The private bridge
+is held by the host rather than exposed through guest globals.
+
+### Verification
+
+`pnpm --filter @restate-agents/core test:ptc` checks guest replay, full and partial
+real-SDK protocol replay, failures and limits, mixed tool dispatch, MCP auth
+retry, subtool policy enforcement, and child interruption. Protocol peers and
+outbound tool fixtures are local to the tests; no real provider credentials or
+model calls are needed.
+
+The optional `test:ptc:restart` command expects a disposable Restate server with
+admin on port 19070 and ingress on 18080. It starts a test endpoint on 19880,
+registers it as `http://host.docker.internal:19880`, kills that endpoint after a
+race and its branches have completed, and restarts it. It asserts the recovered
+winner, completion order, and results, and verifies recorded tool bodies are
+not repeated. It changes only the disposable server and its own test processes.
 
 ## Foreground and pending execution
 
@@ -619,8 +723,10 @@ tools without first defining their context and trust semantics.
 
 ## Guardrails and tools
 
-The agent model proposes a complete batch. The guardrail model evaluates the
-proposal against the configured policy set before any member starts and
+The agent model proposes a complete batch. The guardrail model evaluates direct
+calls against the configured policy set before any member starts. PTC wrappers
+are excluded from that check; their concrete child calls are evaluated as they
+are emitted, before the child tool executes. The gate
 returns one aggregate decision, referencing one policy when blocked:
 
 - `allow`;

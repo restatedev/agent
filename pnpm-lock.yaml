@@ -58,8 +58,8 @@ importers:
         specifier: workspace:*
         version: link:../types
       '@restatedev/restate-sdk-clients':
-        specifier: ^1.16.2
-        version: 1.16.2
+        specifier: 1.17.0
+        version: 1.17.0
     devDependencies:
       typescript:
         specifier: ^6.0.3
@@ -70,6 +70,9 @@ importers:
       '@ai-sdk/openai':
         specifier: ^4.0.10
         version: 4.0.10(zod@4.4.3)
+      '@jitl/quickjs-singlefile-cjs-release-sync':
+        specifier: 0.31.0
+        version: 0.31.0
       '@modelcontextprotocol/client':
         specifier: ^2.0.0
         version: 2.0.0
@@ -77,17 +80,20 @@ importers:
         specifier: workspace:*
         version: link:../types
       '@restatedev/restate-sdk':
-        specifier: ^1.16.2
-        version: 1.16.2
+        specifier: 1.17.0
+        version: 1.17.0
       '@restatedev/restate-sdk-gen':
-        specifier: ^1.16.2
-        version: 1.16.2(@restatedev/restate-sdk@1.16.2)
+        specifier: 1.17.0
+        version: 1.17.0(@restatedev/restate-sdk@1.17.0)
       ai:
         specifier: ^7.0.26
         version: 7.0.26(zod@4.4.3)
       modal:
         specifier: ^0.9.0
         version: 0.9.0
+      quickjs-emscripten-core:
+        specifier: 0.31.0
+        version: 0.31.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -108,8 +114,8 @@ importers:
   packages/libs/types:
     dependencies:
       '@restatedev/restate-sdk-gen':
-        specifier: ^1.16.2
-        version: 1.16.2(@restatedev/restate-sdk@1.16.2)
+        specifier: 1.17.0
+        version: 1.17.0(@restatedev/restate-sdk@1.17.0)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -712,6 +718,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@jitl/quickjs-ffi-types@0.31.0':
+    resolution: {integrity: sha512-1yrgvXlmXH2oNj3eFTrkwacGJbmM0crwipA3ohCrjv52gBeDaD7PsTvFYinlAnqU8iPME3LGP437yk05a2oejw==}
+
+  '@jitl/quickjs-singlefile-cjs-release-sync@0.31.0':
+    resolution: {integrity: sha512-TQ6WUsmdcdlXQKPyyGE/qNAoWY83mvjn+VNru6ug5ILv1D3Y+yaFXnMx+QyNX0onx9xSRGgVNZxXN0V0U+ZKpQ==}
+
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
 
@@ -805,19 +817,19 @@ packages:
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
-  '@restatedev/restate-sdk-clients@1.16.2':
-    resolution: {integrity: sha512-LWieGNx0nhY1lmQP3V5gtZIvdYBdHIBWwwz+zK+aY8T1Oyl5KrCdY+8ku0P5v85Sc8MBC1GzdHURM5mZRbAxcA==}
+  '@restatedev/restate-sdk-clients@1.17.0':
+    resolution: {integrity: sha512-5gz4x9PP/KV5HD/8VUZTVQaX/YsGocOkZ8dLX1q7Pb+Km9sU4wMytciFCJ9SlyH33o0s5iRcpFNR0Soaz+B42g==}
 
-  '@restatedev/restate-sdk-core@1.16.2':
-    resolution: {integrity: sha512-dytd78+c7x24NFhfj7XpziqYJCY5E4DE2Qd0N6la/hXoF2SbhhM5/Iey82MCwELCEnN7RPfN3+/Th58LQezTQw==}
+  '@restatedev/restate-sdk-core@1.17.0':
+    resolution: {integrity: sha512-439ONo+YDoG4YBZnQ0wXaWkJDdOqDJ0AjqOwUAYZolxoC5JoaHqWzEFWkeRXiSNpsOc1+ODRUUGupDQ7qxcvJg==}
 
-  '@restatedev/restate-sdk-gen@1.16.2':
-    resolution: {integrity: sha512-Lvztt/YxaiXdcd/eav29/nf2ff6obsojcPjgcS/VraQigmfjoMxyMQA0miyjMaTYBWFOCl+1/VI94iqidx+fJA==}
+  '@restatedev/restate-sdk-gen@1.17.0':
+    resolution: {integrity: sha512-MUl2oPL5s3N1EYvocwsuybdinkeGILHXm7Zy6oZHTCDFpk9rvwxi9eEEFA35Guj0cv2E5+oNKXnMZ8fnVzgqqg==}
     peerDependencies:
       '@restatedev/restate-sdk': ^1.15.0
 
-  '@restatedev/restate-sdk@1.16.2':
-    resolution: {integrity: sha512-L2XqUukvdGYmqCqsFvJzTsaU3JiuFzsYSh6nK19Q1yKNOr/bBBZKdic0o0hza5P5QdiiFC5jLHJ5wCWt77IO0Q==}
+  '@restatedev/restate-sdk@1.17.0':
+    resolution: {integrity: sha512-4b3OrB2M8K0MsG4JA4YBYQgSZpUUdle4gxUrrH7Qs3deOwuAtrdabkKJpRWtR45zvQDdi09gzxwUGee0aCqKmA==}
 
   '@shadcn/react@0.2.1':
     resolution: {integrity: sha512-5krgi3dRMKb5jH6a+qPzVJUy/54s0kKE4Rw4LjDfLqOdVQTWKUgxWf1kW8r912I0jX/Lzxqc+pgjkjWxUIK5BQ==}
@@ -1026,6 +1038,9 @@ packages:
   protobufjs@7.6.5:
     resolution: {integrity: sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==}
     engines: {node: '>=12.0.0'}
+
+  quickjs-emscripten-core@0.31.0:
+    resolution: {integrity: sha512-oQz8p0SiKDBc1TC7ZBK2fr0GoSHZKA0jZIeXxsnCyCs4y32FStzCW4d1h6E1sE0uHDMbGITbk2zhNaytaoJwXQ==}
 
   react-dom@19.2.8:
     resolution: {integrity: sha512-rVprimfGBG3DR+Tq0IQG2DT5PxKth1WIGDmj5yPmlzr4YBe7uyE+Du4oVqTDXZSHGGGXRtTJEGSSePyQCMBglQ==}
@@ -1494,6 +1509,12 @@ snapshots:
   '@img/sharp-win32-x64@0.34.5':
     optional: true
 
+  '@jitl/quickjs-ffi-types@0.31.0': {}
+
+  '@jitl/quickjs-singlefile-cjs-release-sync@0.31.0':
+    dependencies:
+      '@jitl/quickjs-ffi-types': 0.31.0
+
   '@js-sdsl/ordered-map@4.4.2': {}
 
   '@modelcontextprotocol/client@2.0.0':
@@ -1556,21 +1577,21 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@restatedev/restate-sdk-clients@1.16.2':
+  '@restatedev/restate-sdk-clients@1.17.0':
     dependencies:
-      '@restatedev/restate-sdk-core': 1.16.2
+      '@restatedev/restate-sdk-core': 1.17.0
 
-  '@restatedev/restate-sdk-core@1.16.2': {}
+  '@restatedev/restate-sdk-core@1.17.0': {}
 
-  '@restatedev/restate-sdk-gen@1.16.2(@restatedev/restate-sdk@1.16.2)':
+  '@restatedev/restate-sdk-gen@1.17.0(@restatedev/restate-sdk@1.17.0)':
     dependencies:
-      '@restatedev/restate-sdk': 1.16.2
-      '@restatedev/restate-sdk-clients': 1.16.2
-      '@restatedev/restate-sdk-core': 1.16.2
+      '@restatedev/restate-sdk': 1.17.0
+      '@restatedev/restate-sdk-clients': 1.17.0
+      '@restatedev/restate-sdk-core': 1.17.0
 
-  '@restatedev/restate-sdk@1.16.2':
+  '@restatedev/restate-sdk@1.17.0':
     dependencies:
-      '@restatedev/restate-sdk-core': 1.16.2
+      '@restatedev/restate-sdk-core': 1.17.0
 
   '@shadcn/react@0.2.1(@types/react@19.2.18)(react@19.2.8)':
     optionalDependencies:
@@ -1823,6 +1844,10 @@ snapshots:
       '@protobufjs/utf8': 1.1.2
       '@types/node': 22.20.1
       long: 5.3.2
+
+  quickjs-emscripten-core@0.31.0:
+    dependencies:
+      '@jitl/quickjs-ffi-types': 0.31.0
 
   react-dom@19.2.8(react@19.2.8):
     dependencies:

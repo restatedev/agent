@@ -272,6 +272,7 @@ function* executeTurn(
         stepNumber: state.steps + 1,
         discoveredTools: state.discoveredTools,
         mcpTools: state.mcpTools,
+        pending: state.pending,
       }),
     );
     const step = yield* settleStep(task, state.interrupt);
@@ -283,10 +284,12 @@ function* executeTurn(
         // check on the finalization text; no approval message is pushed
         // during shutdown.
         state.approvedActions.push(...toolStep.approvedActions);
+        yield* appendToolTranscript(state, toolStep.pendingEvents);
         yield* appendToolTranscript(state, toolStep.outcomes, step.reason);
         state.messages.push(
           toolStep.action.message,
           agentTools.toModelMessage(toolStep.outcomes),
+          ...toolStep.pendingEvents.map(agentTools.toRuntimeMessage),
           ...toolStep.outcomes.flatMap((outcome): ModelMessage[] =>
             outcome.status === "pending"
               ? [
@@ -415,6 +418,7 @@ function* executeTurn(
         continue;
 
       case "tools":
+        yield* appendToolTranscript(state, step.pendingEvents);
         yield* appendToolTranscript(state, step.outcomes);
         {
           const applied = yield* state.pending.apply(
@@ -426,6 +430,7 @@ function* executeTurn(
           state.messages.push(
             step.action.message,
             agentTools.toModelMessage(applied.outcomes),
+            ...step.pendingEvents.map(agentTools.toRuntimeMessage),
             ...applied.events.map(agentTools.toRuntimeMessage),
           );
           yield* consumeSteering(state, steering);
