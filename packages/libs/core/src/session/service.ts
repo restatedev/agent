@@ -131,7 +131,11 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           req.memories,
         );
         state = {
-          context: agentTools.createAgentToolContext(agentId, turnId),
+          context: agentTools.createAgentToolContext(
+            agentId,
+            turnId,
+            req.webSearchEnabled,
+          ),
           transcript,
           instructions: req.instructions,
           guardrails: req.guardrails,

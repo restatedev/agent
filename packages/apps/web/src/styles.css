@@ -1644,6 +1644,52 @@ svg {
   font-size: 10px;
 }
 
+.web-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  border: 0;
+  padding: 5px 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.web-search-toggle:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.web-search-toggle:focus-visible {
+  outline: 2px solid var(--primary-bright);
+  outline-offset: 4px;
+  border-radius: 5px;
+}
+
+.web-search-toggle .web-search-toggle-track {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  width: 30px;
+  padding: 3px;
+  border-radius: 99px;
+  background: var(--border);
+}
+
+.web-search-toggle[aria-checked="true"] .web-search-toggle-track {
+  justify-content: flex-end;
+  background: var(--primary-bright);
+}
+
+.web-search-toggle-track > span {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+}
+
 .settings-section textarea,
 .settings-section input,
 .settings-section select {

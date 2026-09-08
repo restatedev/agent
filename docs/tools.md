@@ -80,7 +80,8 @@ registration:
 - `agentTools.names` reserves the name from dynamic discovery;
 - `agentTools.manifests()` converts the Zod schema to JSON Schema;
 - `agentTools.execute()` validates input and dispatches the call;
-- the tool becomes available to every agent run.
+- the tool becomes available to agent runs, subject to capability settings in
+  the turn's profile snapshot.
 
 Use `.describe()` on fields whose meaning is not obvious. Descriptions are part
 of the model contract, not cosmetic documentation.
@@ -90,6 +91,7 @@ of the model contract, not cosmetic documentation.
 | Tool | Purpose | Execution kind |
 | --- | --- | --- |
 | `getWeather` | Synthetic weather lookup used to demonstrate parallel calls | Foreground |
+| `webSearch` | Tavily keyless web search with bounded source evidence | Foreground journaled HTTP request |
 | `sleep` | Durable timer | Pending |
 | `humanApproval` | Signal-backed human decision | Pending |
 | `cancelOperation` | Cancel one pending operation by ID | Foreground control |
@@ -102,6 +104,48 @@ of the model contract, not cosmetic documentation.
 | `writeFile` | Replace a UTF-8 sandbox file | Foreground sandbox operation |
 | `executeCommand` | Run one shell command to completion | Foreground sandbox operation |
 | `executeProgram` | Coordinate tools in JavaScript and return a compact result | Foreground, with supervised child calls |
+
+## Web search
+
+`webSearch({query, maxResults})` uses [Tavily keyless access](https://docs.tavily.com/documentation/keyless):
+no API key, account, or OAuth setup is needed. It is enabled by default. In the
+UI, open **Context → Web search** to enable or disable it for that Agent. The
+switch saves immediately to `AgentProfile.webSearchEnabled`, publishes a
+`profile` notification, and survives refreshes. Changes apply from the next
+turn; an active turn keeps its original profile snapshot.
+
+Disabled turns omit `webSearch` from both the model and PTC catalogs, and the
+dispatcher rejects direct attempts to call it. This switch controls only this
+built-in tool, not internet access through separately configured MCP tools or
+the sandbox.
+
+Both input fields are required: `query` is a non-empty public search query of
+up to 1,000 characters, and `maxResults` is an integer from 1 to 10 (normally 5).
+The result is `{query, results: [{title, url, snippet}]}`; it contains source
+snippets, not full pages or a provider-generated answer. For example:
+
+```js
+async tools => {
+  const result = await tools.webSearch({
+    query: "Restate durable execution documentation",
+    maxResults: 3,
+  });
+  return result.results;
+}
+```
+
+Queries are sent to Tavily, so the tool instructions prohibit sending secrets
+or private conversation data. Results are untrusted evidence, not instructions;
+the model is told to cite relevant source URLs. Keyless access is free but
+rate-limited, not unlimited. Quota and invalid-response failures are reported
+as tool failures, never fabricated empty searches.
+
+The HTTP request is inside `restate.run`; successful journaled results are
+reused on replay. It uses basic search, at most two attempts for transient
+failures, a 15-second timeout per attempt, and the turn's cancellation signal.
+Quota/auth failures are not automatically retried. Responses are capped at
+1 MB, titles at 300 characters, and snippets at 1,500 characters per result.
+Normal tool guardrails and interruption apply, including calls emitted by PTC.
 
 ## Programmatic tool calling (PTC)
 

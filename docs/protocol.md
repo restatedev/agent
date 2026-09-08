@@ -178,6 +178,7 @@ Void input. Output:
 ```ts
 type AgentProfile = {
   instructions?: string;
+  webSearchEnabled: boolean; // defaults to true
   memories: Array<{key: string; content: string}>;
   guardrails: Array<{id: string; rule: string}>;
   mcpServers: Array<{
@@ -210,6 +211,14 @@ Input:
 The list completely replaces policy for future turns. IDs must be unique and
 non-empty; an empty list clears guardrails. The handler publishes a `profile`
 notification.
+
+### `Agent.setWebSearchEnabled`
+
+Input is `{enabled: boolean}`. Saves web search availability for future turns
+and publishes a `profile` notification. There is no API key to configure:
+the built-in `webSearch` tool uses Tavily keyless access. The browser calls
+the same-origin BFF at `POST /api/agent/{agentId}/web-search`; it does not
+contact Tavily or Restate directly.
 
 ### `Agent.upsertMcpServer`
 

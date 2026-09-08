@@ -100,7 +100,7 @@ export function* agentStep({
       agentId: context.agentId,
       instructions,
       messages,
-      tools: agentTools.manifests(discoveredTools, mcpTools),
+      tools: agentTools.manifests(discoveredTools, mcpTools, context),
     });
     if (action.type === "error") {
       return {...action, approvedActions: [], rejectedGuardrails: []};

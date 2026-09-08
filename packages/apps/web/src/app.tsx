@@ -13,6 +13,7 @@ import {
   FileText,
   FlaskConical,
   GitBranch,
+  Globe,
   HardDrive,
   KeyRound,
   Layers,
@@ -1261,6 +1262,7 @@ function ProfilePanel({
   const [guardrails, setGuardrails] = useState<Guardrail[]>([]);
   const [instructionsDirty, setInstructionsDirty] = useState(false);
   const [guardrailsDirty, setGuardrailsDirty] = useState(false);
+  const [savingWebSearch, setSavingWebSearch] = useState(false);
   const [schedule, setSchedule] = useState({
     scheduleId: "",
     message: "",
@@ -1315,6 +1317,55 @@ function ProfilePanel({
 
   return (
     <div className="settings-sections">
+      <section className="settings-section">
+        <div className="section-heading">
+          <div>
+            <Globe />
+            <span>
+              <strong>Web search</strong>
+              <small>Tavily · free keyless access</small>
+            </span>
+          </div>
+          <button
+            aria-label="Web search"
+            aria-checked={profile?.webSearchEnabled ?? true}
+            aria-describedby="web-search-description"
+            className="web-search-toggle"
+            disabled={!profile || savingWebSearch}
+            onClick={async () => {
+              if (!profile || savingWebSearch) return;
+              const enabled = !profile.webSearchEnabled;
+              setSavingWebSearch(true);
+              try {
+                await client.setWebSearchEnabled(enabled);
+                await refreshProfile();
+                notify(
+                  `Web search ${enabled ? "enabled" : "disabled"} for future turns`,
+                );
+              } catch (error) {
+                notify(errorMessage(error), true);
+              } finally {
+                setSavingWebSearch(false);
+              }
+            }}
+            role="switch"
+            type="button"
+          >
+            <span className="web-search-toggle-track" aria-hidden="true">
+              <span />
+            </span>
+            {savingWebSearch
+              ? "Saving…"
+              : profile?.webSearchEnabled === false
+                ? "Disabled"
+                : "Enabled"}
+          </button>
+        </div>
+        <p className="section-copy" id="web-search-description">
+          Search queries are sent to Tavily. No API key needed; free access is
+          rate-limited. Changes apply from the next turn.
+        </p>
+      </section>
       <section className="settings-section">
         <div className="section-heading">
           <div>

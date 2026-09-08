@@ -39,7 +39,7 @@ export function* executeProgramTool(
       status: "failed",
       error: `Invalid program input: ${parsed.error.message}`,
     };
-  const names = manifests(discovered, mcpTools)
+  const names = manifests(discovered, mcpTools, context)
     .map((tool) => tool.name)
     .filter((name) => name !== PROGRAM_TOOL_NAME);
   try {

@@ -81,6 +81,7 @@ function toolContext() {
   return {
     agentId: "test",
     turnId: "turn",
+    webSearchEnabled: true,
     sandbox: {
       *client() {
         throw new Error("sandbox not used");

@@ -46,6 +46,7 @@ import {
   ScheduleSpecSchema,
   SetGuardrailsSchema,
   SetInstructionsSchema,
+  SetWebSearchEnabledSchema,
 } from "./index.js";
 import {
   AGENT_NOTIFICATIONS_SERVICE_NAME,
@@ -69,6 +70,10 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     output: z.void(),
   }),
   setGuardrails: iface.schemas({input: SetGuardrailsSchema, output: z.void()}),
+  setWebSearchEnabled: iface.schemas({
+    input: SetWebSearchEnabledSchema,
+    output: z.void(),
+  }),
   upsertMcpServer: iface.schemas({
     input: McpServerSchema,
     output: McpServerMutationResultSchema,

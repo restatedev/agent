@@ -1,6 +1,6 @@
 // Durable profile for one Agent virtual object. Instructions, guardrails, and
-// MCP servers are user-managed configuration; memories are a bounded keyed
-// collection managed by the model through an Agent handler.
+// MCP servers and web search are user-managed configuration; memories are a
+// bounded keyed collection managed by the model through an Agent handler.
 
 import type {
   AgentProfile,
@@ -17,6 +17,7 @@ const INSTRUCTIONS = "profile/instructions";
 const MEMORIES = "profile/memories";
 const GUARDRAILS = "profile/guardrails";
 const MCP_SERVERS = "profile/mcp-servers";
+const WEB_SEARCH_ENABLED = "profile/web-search-enabled";
 const MAX_MEMORIES = 32;
 const MAX_MCP_SERVERS = 16;
 
@@ -27,18 +28,26 @@ const MAX_MCP_SERVERS = 16;
  * snapshot and never reads this state directly.
  */
 export function* read(): restate.Operation<AgentProfile> {
-  const [instructions, memories, guardrails, mcpServers] = yield* restate.all([
-    restate.sharedState().get<string>(INSTRUCTIONS),
-    restate.sharedState().get<MemoryEntry[]>(MEMORIES),
-    restate.sharedState().get<Guardrail[]>(GUARDRAILS),
-    restate.sharedState().get<McpServer[]>(MCP_SERVERS),
-  ]);
+  const [instructions, memories, guardrails, mcpServers, webSearchEnabled] =
+    yield* restate.all([
+      restate.sharedState().get<string>(INSTRUCTIONS),
+      restate.sharedState().get<MemoryEntry[]>(MEMORIES),
+      restate.sharedState().get<Guardrail[]>(GUARDRAILS),
+      restate.sharedState().get<McpServer[]>(MCP_SERVERS),
+      restate.sharedState().get<boolean>(WEB_SEARCH_ENABLED),
+    ]);
   return {
     ...(instructions ? {instructions} : {}),
     memories: memories ?? [],
     guardrails: guardrails ?? [],
     mcpServers: mcpServers ?? [],
+    webSearchEnabled: webSearchEnabled ?? true,
   };
+}
+
+/** Controls the built-in web search capability for future turns. */
+export function setWebSearchEnabled(enabled: boolean): void {
+  restate.state().set(WEB_SEARCH_ENABLED, enabled);
 }
 
 /** Replaces or clears the persistent user-authored instructions. */

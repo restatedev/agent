@@ -206,6 +206,12 @@ export const Agent = restate.implement(AgentDefinition, {
       yield* publishNotification("profile");
     },
 
+    /** Enables or disables built-in web search for subsequent turns. */
+    *setWebSearchEnabled({enabled}): restate.Operation<void> {
+      profile.setWebSearchEnabled(enabled);
+      yield* publishNotification("profile");
+    },
+
     /** Creates or replaces one MCP server in the Agent profile. */
     *upsertMcpServer(server) {
       const previous = (yield* profile.read()).mcpServers.find(

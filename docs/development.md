@@ -40,6 +40,11 @@ Programmatic tool calling (PTC) is enabled by default. To disable it, start the
 core service with `AGENT_PTC_ENABLED=false pnpm dev:service`. See
 [tools.md](tools.md#programmatic-tool-calling-ptc) for the tool and replay contract.
 
+Web search is also enabled by default and requires no API key or environment
+variable. Use **Context → Web search** in the UI to save a per-Agent preference
+for future turns. It uses Tavily's free, rate-limited keyless API; see
+[web search](tools.md#web-search) for privacy, limits, and a PTC example.
+
 The endpoint listens on port 9080. Register it with Restate:
 
 ```sh

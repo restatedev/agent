@@ -4,6 +4,7 @@ import type {
   Guardrail,
   McpServer,
 } from "@restate-agents/types";
+import {SetWebSearchEnabledSchema} from "@restate-agents/types";
 import {startMcpOAuth} from "../../../../../src/server/mcp-oauth";
 import {
   agentClient,
@@ -110,6 +111,15 @@ export async function POST(request: Request, context: RouteContext) {
       case "guardrails": {
         const body = await input<{guardrails: Guardrail[]}>(request);
         await client.setGuardrails(body.guardrails);
+        return Response.json(null);
+      }
+      case "web-search": {
+        const parsed = SetWebSearchEnabledSchema.safeParse(
+          await input<unknown>(request),
+        );
+        if (!parsed.success)
+          throw new BffError(400, "enabled must be a boolean");
+        await client.setWebSearchEnabled(parsed.data.enabled);
         return Response.json(null);
       }
       case "mcp-server":

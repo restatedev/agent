@@ -470,8 +470,11 @@ export const AgentProfileSchema = z.object({
   memories: z.array(MemoryEntrySchema),
   guardrails: z.array(GuardrailSchema),
   mcpServers: z.array(McpServerSchema),
+  webSearchEnabled: z.boolean().default(true),
 });
 export type AgentProfile = z.infer<typeof AgentProfileSchema>;
+
+export const SetWebSearchEnabledSchema = z.object({enabled: z.boolean()});
 
 // The decision delivered to a waiting tool or policy gate over a signal and
 // retained in history after successful delivery.

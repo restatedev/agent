@@ -62,11 +62,12 @@ chain-of-thought.
 | Queue, steer, and interrupt | Busy `ask` queues; steering preserves current tool work and enters the next iteration; interruption stops unfinished work and makes one tool-free finalization call. |
 | Parallel tool batches | Independent calls from one model response are spawned together and joined as a batch. |
 | Programmatic tool calling (PTC) | The model can write JavaScript to coordinate built-in, dynamic Restate, and MCP tools, returning only a compact result to model context. Enabled by default, with replay-safe promise completion and normal subtool policy enforcement. |
+| Web search | Tavily keyless search returns bounded source snippets and URLs. Enabled by default, with a durable per-Agent UI toggle; available directly and through PTC. |
 | Cross-step pending operations | `sleep` and `humanApproval` can acknowledge pending work and complete in later iterations. |
 | Selective cancellation | The model can cancel one pending operation by stable ID without stopping unrelated work. |
 | Runtime guardrails | A separate policy pass gates the exact proposed text or complete tool batch before it runs. Non-allow decisions receive an independent confirmation pass. |
 | Human-in-the-loop approval | Policy gates and the explicit approval tool register durable Agent state and resume through turn-scoped signals. |
-| Persistent profile | User instructions, model-managed semantic memory, user-defined guardrails, and structured MCP server definitions are durable per Agent and snapshotted at turn start. |
+| Persistent profile | User instructions, model-managed semantic memory, user-defined guardrails, structured MCP server definitions, and web search availability are durable per Agent and snapshotted at turn start. |
 | General change notifications | `AgentNotifications/{agentId}` maintains revisioned `history`, `profile`, `approvals`, `mcpAuth`, and `schedules` watermarks that wake clients to re-read authoritative state. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
@@ -101,7 +102,7 @@ Agent owns only the state that must remain responsive while a run is active:
 
 - active `doTurn` invocation ID and accepted interrupt reason;
 - pending user/event entries and steering reconciliation batches;
-- instructions, memories, guardrails, and structured MCP server definitions;
+- instructions, memories, guardrails, structured MCP server definitions, and web search availability;
 - private MCP OAuth and bearer credentials plus pending authorization requests;
 - pending approvals; and
 - routing of external deliveries according to their busy-turn policy.
@@ -271,6 +272,7 @@ Current built-ins:
 | Tool | Kind | Purpose |
 | --- | --- | --- |
 | `getWeather` | foreground | Synthetic lookup for parallel-call examples |
+| `webSearch` | foreground | Public web search via Tavily keyless access, with journaled source snippets and URLs |
 | `sleep` | pending | Durable timer |
 | `humanApproval` | pending | Explicit signal-backed human decision |
 | `cancelOperation` | foreground control | Stop one pending task by operation ID |
@@ -282,6 +284,15 @@ Current built-ins:
 All allowed foreground calls in one model response are spawned together and
 joined. Pending tools acknowledge immediately and start completion tasks that
 survive across later iterations. `toolCallId` is their stable operation ID.
+
+### Web search
+
+Web search is **enabled by default** through [Tavily keyless access](https://docs.tavily.com/documentation/keyless),
+with no API key or OAuth setup. Toggle it in **Context → Web search**; the
+per-Agent setting is saved immediately and applies from the next turn.
+Searches use normal guardrails and can be called directly or through PTC.
+Queries are sent to Tavily, and free access is rate-limited. See
+[web search](docs/tools.md#web-search) for the input/output contract and limits.
 
 ### Programmatic tool calling (PTC)
 

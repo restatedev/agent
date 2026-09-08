@@ -265,6 +265,11 @@ export function createAgentClient({
       return invoke(agent.setGuardrails({guardrails}));
     },
 
+    /** Controls built-in web search for future turns; enabled by default. */
+    async setWebSearchEnabled(enabled: boolean): Promise<void> {
+      return invoke(agent.setWebSearchEnabled({enabled}));
+    },
+
     /** Creates or replaces one MCP server in the Agent profile. */
     async upsertMcpServer(server: McpServer): Promise<McpServerMutationResult> {
       return invoke(agent.upsertMcpServer(server));

@@ -121,6 +121,9 @@ export function createAgentClient(agentId: string) {
     async setGuardrails(guardrails: Guardrail[]): Promise<void> {
       await write("guardrails", {guardrails});
     },
+    async setWebSearchEnabled(enabled: boolean): Promise<void> {
+      await write("web-search", {enabled});
+    },
     async upsertMcpServer(server: McpServer): Promise<McpServerMutationResult> {
       return write("mcp-server", server);
     },
