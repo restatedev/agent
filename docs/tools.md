@@ -101,6 +101,13 @@ of the model contract, not cosmetic documentation.
 
 ## Programmatic tool calling (PTC)
 
+PTC is enabled by default. Set `AGENT_PTC_ENABLED=false` on the core service to
+disable it, for example `AGENT_PTC_ENABLED=false pnpm dev:service`.
+Only the exact value `false` disables PTC; leaving the variable unset or setting
+it to `true` enables it. When disabled, new model calls omit the PTC tool and its
+instructions.
+Already-recorded program calls retain their normal execution and replay behavior.
+
 The model can use `executeProgram({source})` to coordinate the same static,
 Restate-discovered, and MCP tools that it can call directly. The source evaluates
 to an async function accepting `tools`; each function takes the exact input
@@ -129,7 +136,7 @@ Only the returned JSON or deterministic program error becomes an observation
 for the agent model. Child activity and approval events still appear in the
 transcript without raw arguments or results.
 
-The tool description and system instructions explain when to use PTC: dependent
+The tool description explains when to use PTC: dependent
 lookups, parallel work, filtering, joins, and aggregation where carrying every
 intermediate response through the agent model would waste context. Simple
 actions can still use direct calls. Available tool schemas remain in the model's

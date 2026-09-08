@@ -190,8 +190,9 @@ test("PTC dispatches static, dynamic and MCP tools with auth retry and compact o
       ),
     );
     assert.equal(result.output.status, "succeeded", result.output.error);
-    assert.deepEqual(JSON.parse(result.output.result), {
-      weather: "22°C, sunny in Berlin",
+    const {weather, ...summary} = JSON.parse(result.output.result);
+    assert.match(weather, /^(?:[1-3]\d|40)°C, sunny in Berlin$/);
+    assert.deepEqual(summary, {
       ids: [1, 2],
       count: 7,
     });
@@ -297,10 +298,9 @@ test("only concrete subtools are policy checked, with normal human approval and 
     "succeeded",
     live.output.outcomes[0].error,
   );
-  assert.deepEqual(JSON.parse(live.output.outcomes[0].result), [
-    "22°C, sunny in Berlin",
-    "Tool blocked: Paris is blocked",
-  ]);
+  const results = JSON.parse(live.output.outcomes[0].result);
+  assert.match(results[0], /^(?:[1-3]\d|40)°C, sunny in Berlin$/);
+  assert.deepEqual(results.slice(1), ["Tool blocked: Paris is blocked"]);
   assert.deepEqual(
     live.policies.map((call) => call.toolName),
     ["humanApproval", "sleep", "getWeather", "getWeather"],

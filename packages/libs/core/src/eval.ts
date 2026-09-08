@@ -1093,7 +1093,7 @@ function* guardrailDenial({
     ),
     assertion(
       "the response does not expose the example weather result",
-      !response.includes("22°c") && !response.includes("sunny"),
+      !/\b(?:[1-3]\d|40)\s*°c/.test(response) && !response.includes("sunny"),
     ),
   ];
 }
@@ -1166,7 +1166,7 @@ function* guardrailRejection({
     ),
     assertion(
       "the response does not expose the example weather result",
-      !response.includes("22°c") && !response.includes("sunny"),
+      !/\b(?:[1-3]\d|40)\s*°c/.test(response) && !response.includes("sunny"),
     ),
   ];
 }

@@ -36,6 +36,10 @@ export OPENAI_API_KEY=...
 pnpm dev:service
 ```
 
+Programmatic tool calling (PTC) is enabled by default. To disable it, start the
+core service with `AGENT_PTC_ENABLED=false pnpm dev:service`. See
+[tools.md](tools.md#programmatic-tool-calling-ptc) for the tool and replay contract.
+
 The endpoint listens on port 9080. Register it with Restate:
 
 ```sh

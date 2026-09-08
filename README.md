@@ -478,12 +478,16 @@ curl localhost:8080/Agent/demo/resolveApproval \
 
 ## Model flow control
 
+The main agent uses `gpt-5.6-luna`; guardrails and policy reviews use `gpt-5.6-terra`.
+
 Agent, guardrail, and policy-review calls go through the `openai` scope. Limit
 keys have the form `<model>/<agent-hash>`, so each call
 draws from provider-wide, model-wide, and per-Agent budgets:
 
 ```sh
 restate rules set "openai" --concurrency 100
+restate rules set "openai/gpt-5.6-luna" --concurrency 20
+restate rules set "openai/gpt-5.6-luna/*" --concurrency 2
 restate rules set "openai/gpt-5.6-terra" --concurrency 20
 restate rules set "openai/gpt-5.6-terra/*" --concurrency 2
 ```

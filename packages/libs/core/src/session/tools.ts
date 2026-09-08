@@ -472,7 +472,11 @@ const getWeatherTool = defineAgentTool({
       const weather = yield* restate.run(
         async ({signal}) => {
           await setTimeout(200, undefined, {signal});
-          return {city, temp: 22, condition: "sunny"};
+          return {
+            city,
+            temp: 10 + Math.floor(Math.random() * 31),
+            condition: "sunny",
+          };
         },
         {
           name: "getWeather",
