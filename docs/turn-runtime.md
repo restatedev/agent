@@ -33,6 +33,9 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
   across steps.
 - `session/tools.ts` owns concrete tool definitions, validation, execution,
   completion, and model/transcript projections.
+- `session/program-tool.ts` adapts PTC child calls to that same dispatcher and
+  policy gate. `ptc/runtime.ts` supervises their execution inline in `doTurn`;
+  `ptc/guest.ts` owns the bounded QuickJS/WebAssembly guest.
 - `Sandbox`, keyed by `agentId`, owns external workspace state across turns.
   One turn borrows lazily and releases on every handled exit.
 
@@ -60,7 +63,8 @@ deployed dynamic handlers as ordinary durable RPCs.
 ## Agent-loop iterations
 
 - A run performs at most 50 loop iterations. The runtime does not impose a
-  separate limit on the number of tool calls proposed within or across steps.
+  separate turn-wide tool-call budget. Each PTC program is independently
+  bounded to 128 child calls plus source, output, memory, and computation limits.
 - Each step receives a copy of the complete live model context accumulated by
   the run.
 - Persistent memories are injected once as data before conversation context;
@@ -82,6 +86,9 @@ deployed dynamic handlers as ordinary durable RPCs.
   then a dedicated policy model evaluates the exact text or complete tool
   batch before publication or execution. A second policy review confirms every
   non-allow candidate before enforcement.
+- The `executeProgram` wrapper and source are excluded from that policy check.
+  Each emitted child call is gated separately with its concrete name and input
+  before execution; PTC does not bypass subtool approvals or authorization.
 - No guardrails means no policy-model call. With guardrails, decisions are
   `allow`, `deny`, or `require_approval`; policy-model failure fails closed
   under the gateway retry policy.
@@ -153,15 +160,16 @@ write history.
 
 ## Foreground and pending tools
 
-- Tools validate inputs and run only after the entire proposed batch passes
-  guardrails.
+- Direct tools validate inputs and run only after their proposed batch passes
+  guardrails. PTC child calls pass the same gate individually as they are emitted.
 - Every foreground call in a batch runs concurrently and is joined by the
   step. One tool failure is an observation and does not discard sibling
   results.
 - Sandbox file and command calls are one-shot foreground operations, each
   inside its own `restate.run` with cancellation propagation.
 - Parallel sandbox calls share one in-flight borrow; dependent operations must
-  be proposed in separate loop iterations.
+  either be proposed in separate loop iterations or awaited in order inside a
+  PTC program.
 - `manageMemory` atomically mutates at most 32 Agent memory entries and is
   accepted only for the active, non-interrupting `turnId`.
 - Schedule tools call AgentScheduler directly. Once an upsert completes, that
@@ -179,6 +187,29 @@ write history.
   that wins the race stays a completion; unrelated operations continue.
 - Text remains only a candidate answer while pending work exists. The run waits
   for completion, steering, or interruption before another step.
+
+### Programmatic tool calling (PTC)
+
+`executeProgram({source})` is a foreground tool available to the model by
+default. It executes an async JavaScript function against the turn's exact tool
+catalog, excluding itself. The guest has no direct I/O; all external work goes
+through existing tool operations. Only the program's JSON result or program
+failure becomes its model observation; child lifecycle and approval events
+remain visible in history.
+
+The host drains guest microtasks, registers emitted calls in order, selects one
+durable tool completion, and delivers it before draining again. Replay rebuilds
+the guest using recorded results and completion ordering, including native
+`Promise.all`, `Promise.any`, `Promise.race`, and `Promise.allSettled`.
+
+Within PTC, `sleep` and `humanApproval` are awaited to completion inside the
+program instead of returning a pending acknowledgement to the next model round.
+Steering is consumed after the foreground step settles. A race alone does not
+cancel losing branches, but program return, failure, or turn interruption stops
+and joins outstanding children. Completed side effects are not undone.
+
+See [the PTC guide](tools.md#programmatic-tool-calling-ptc) for examples, limits,
+failure handling, and the replay-safe `AGENT_PTC_ENABLED=false` opt-out.
 
 ## Interruption and stopping
 
@@ -240,8 +271,10 @@ Any rewrite must preserve:
 8. Honest completion-versus-cancellation races.
 9. Tool-free interruption finalization using only retained work.
 10. Distinct `completed`, `interrupted`, `stopped`, and `failed` outcomes.
-11. The 50-step turn bound, without a separate tool-call budget.
+11. The 50-step turn bound and separate per-program PTC limits, without a
+    turn-wide tool-call budget.
 12. Stable profile input for the lifetime of a turn.
-13. Guardrail evaluation before publishing text or spawning proposed tools.
+13. Guardrail evaluation before publishing text or executing concrete tools;
+    gate PTC children, not their wrapper or source.
 14. Durable approval before protected work and reevaluation after steering.
 15. One initial transcript read followed by direct append-only writes.

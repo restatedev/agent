@@ -37,7 +37,23 @@ run.
 
 ## Service boundaries
 
+The first three views separate task control, task execution, and client
+invalidation. Supporting services follow afterward; they are deliberately
+hidden from the controller diagram.
+
 ### Agent Virtual Object
+
+Treat `AgentSession.doTurn` as an opaque task here. Agent tracks its invocation
+ID and accepts its terminal callback; it does not poll or inspect the internal
+model/tool loop.
+
+```mermaid
+flowchart TD
+  Input["User commands / external messages"] --> A["Agent<br/>Responsive controller"]
+  A -->|"start with snapshot"| Task["AgentSession.doTurn<br/>Opaque durable task"]
+  A -.->|"steer / interrupt / resolve waits"| Task
+  Task -->|"onTurnEnd"| A
+```
 
 `Agent`, keyed by `agentId`, is the serialized conversation controller. Its
 exclusive handlers own decisions about:
@@ -70,28 +86,28 @@ State logic is grouped into handler-scoped namespaces:
 These modules use the current Restate handler context. They are not process
 services or dependency containers.
 
-### AgentNotifications Virtual Object
-
-`AgentNotifications`, keyed by `agentId`, is the invalidation plane. It owns a
-global revision, per-topic watermarks, caller awakeables, and subscriptions.
-It owns no conversation, profile, approval, authorization, or schedule data.
-Producers one-way publish `history`, `profile`, `approvals`, `mcpAuth`, or
-`schedules`; consumers wake and re-read the authoritative owner.
-
-### AgentScheduler Virtual Object
-
-`AgentScheduler`, keyed by `agentId`, owns the bounded schedule registry,
-delayed invocation IDs, replacement, cancellation, and fixed-delay
-recurrence. It uses eager state because every operation reads the small
-schedule collection. A timer acts only when its invocation ID matches the
-stored record, advances state before delivery, and calls generic
-`Agent.deliver` with its message and busy-turn policy.
-
-Schedule tools and external clients call AgentScheduler directly. Once an
-upsert completes, the schedule is an independent durable side effect rather
-than active-turn state.
-
 ### AgentSession Virtual Object
+
+Now expand the task, keeping the controller and notification delivery outside
+the view. This is the normal execution loop; interruption can stop an active
+step or wait and take the cleanup/finalization path described below.
+
+```mermaid
+flowchart TD
+  Open["Load conversation<br/>Discover tool catalog"] --> Step["Run one agentStep<br/>Model, policy, tools"]
+  Step --> Apply["Record outcomes<br/>Consume steering"]
+  Apply --> Next{"Next action?"}
+  Next -->|"continue"| Step
+  Next -->|"pending work"| Wait["Wait for result or steering"]
+  Wait --> Step
+  Next -->|"done"| Finish["Release resources<br/>Report outcome and close history"]
+```
+
+One `agentStep` groups inference, policy checks, and allowed tool execution.
+Built-ins, discovered Restate handlers, and MCP tools share its catalog; PTC can
+coordinate them within the step. Model admission, sandbox lifecycle, and
+scheduling stay behind the corresponding call boundaries. The
+[iteration view](#one-agent-loop-iteration) expands only that step.
 
 `AgentSession` is keyed by the same `agentId` and has two responsibilities that
 share the same durable state:
@@ -120,6 +136,53 @@ The turn state machine owns:
 exclusive. The object uses normal eager state for the main turn because it
 needs the conversation context at startup; the history reader still loads only
 the chunks needed for a page.
+
+### AgentNotifications Virtual Object
+
+This view is independent of task execution. Once initial data and revision
+watermarks have been loaded, clients repeat a watch / wake / re-read cycle:
+
+```mermaid
+sequenceDiagram
+  participant C as Client / BFF
+  participant N as AgentNotifications
+  participant O as State owner
+  C->>N: watch(afterRevision)
+  O->>O: Change state
+  O-)N: publish(topic)
+  N-->>C: Updated revision + topic versions
+  C->>O: Re-read changed data
+  O-->>C: Current data
+```
+
+“State owner” is shorthand for the existing owners, not a separate service:
+
+| Topic | Read from |
+| --- | --- |
+| `history` | AgentSession |
+| `profile`, `approvals`, `mcpAuth` | Agent |
+| `schedules` | AgentScheduler |
+
+`AgentNotifications`, keyed by `agentId`, is the invalidation plane. It owns a
+global revision, per-topic watermarks, caller awakeables, and subscriptions.
+It owns no conversation, profile, approval, authorization, or schedule data.
+Producers one-way publish changed topics; consumers wake and re-read the
+authoritative owner. The subscription re-check catches changes that happen
+before watch registration. See the [client protocol](protocol.md#following-state-correctly)
+for initial reads, cursors, and subsequent long-polls.
+
+### AgentScheduler Virtual Object
+
+`AgentScheduler`, keyed by `agentId`, owns the bounded schedule registry,
+delayed invocation IDs, replacement, cancellation, and fixed-delay
+recurrence. It uses eager state because every operation reads the small
+schedule collection. A timer acts only when its invocation ID matches the
+stored record, advances state before delivery, and calls generic
+`Agent.deliver` with its message and busy-turn policy.
+
+Schedule tools and external clients call AgentScheduler directly. Once an
+upsert completes, the schedule is an independent durable side effect rather
+than active-turn state.
 
 ### ModelGateway service
 
@@ -276,7 +339,7 @@ sequenceDiagram
   end
   S->>S: interrupt and join current step
   S->>P: stop and join older pending work
-  S->>M: tools=[]; summarize retained work
+  S->>M: Summarize retained work with tools=[]
   M-->>S: final text
   S->>A: onTurnEnd(interrupted outcome)
   opt queued work exists
@@ -326,6 +389,17 @@ The step owns foreground tasks only until it returns. Pending completion tasks
 are created afterward by the turn's pending registry and can survive across
 later iterations.
 
+PTC adds orchestration inside a foreground `executeProgram` call, not another
+service or model loop. Its bounded QuickJS/WebAssembly guest calls built-in,
+dynamic Restate, and MCP tools through `session/program-tool.ts`. The wrapper
+is excluded from the diagram's batch policy gate; each emitted child call is
+checked before it runs. `ptc/runtime.ts` journals completion selection through
+the existing Restate scheduler so replay reconstructs the guest's promises and
+branch decisions. Only the compact program result returns to model context.
+Pending tools invoked inside PTC are awaited there, and outstanding children
+are stopped and joined before the program exits. See
+[programmatic tool calling](tools.md#programmatic-tool-calling-ptc).
+
 ## Transcript and notifications
 
 `session/history.ts` stores entries in chunks of 32 with stable positive
@@ -346,7 +420,7 @@ model-relevant.
 AgentNotifications exposes a general invalidation protocol:
 
 - `snapshot()` returns `{revision, versions}` for `history`, `profile`,
-  `approvals`, and `schedules`;
+  `approvals`, `mcpAuth`, and `schedules`;
 - `watch({afterRevision, timeoutSeconds})` parks until a newer
   revision or returns the current snapshot at timeout;
 - an internal subscribe handler re-checks the revision before registering a
@@ -388,6 +462,8 @@ the active session.
 Guardrails are not sent to the main agent model. A dedicated evaluator gates
 the exact proposed text or complete tool batch with `allow`, `deny`, or
 `require_approval`; a second review call confirms every non-allow candidate.
+For PTC, this gate applies to each emitted concrete tool call, not the
+`executeProgram` wrapper or JavaScript source.
 Approval state lives on Agent, while the wait and decision are correlated with
 the active `turnId`. Steering resets request-scoped decisions.
 

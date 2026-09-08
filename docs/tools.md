@@ -9,6 +9,10 @@ This project has three ways to make a capability available to the model:
 All three become serializable `ToolManifest` values for model inference. Their
 execution boundaries are intentionally different.
 
+The built-in [programmatic tool calling (PTC)](#programmatic-tool-calling-ptc)
+tool can compose capabilities from all three sources in one JavaScript program.
+It is enabled by default and does not require a separate tool registration.
+
 In standard agent terminology this is the **tool-use** or **function-calling**
 layer. A model proposes tool actions; validated tool results become
 observations in a later agent-loop iteration.
@@ -101,6 +105,11 @@ of the model contract, not cosmetic documentation.
 
 ## Programmatic tool calling (PTC)
 
+PTC reduces intermediate model context: instead of returning every tool response
+to the model for the next decision, the model writes a program that calls tools,
+branches on their results, and computes a compact answer. It is another tool in
+the existing agent loop, not a separate agent or a replacement tool backend.
+
 PTC is enabled by default. Set `AGENT_PTC_ENABLED=false` on the core service to
 disable it, for example `AGENT_PTC_ENABLED=false pnpm dev:service`.
 Only the exact value `false` disables PTC; leaving the variable unset or setting
@@ -141,6 +150,26 @@ lookups, parallel work, filtering, joins, and aggregation where carrying every
 intermediate response through the agent model would waste context. Simple
 actions can still use direct calls. Available tool schemas remain in the model's
 catalog; this change reduces intermediate result context, not schema context.
+
+### Try it in chat
+
+With the core service running and PTC enabled, no MCP setup is needed for this
+built-in-tool example:
+
+> Use executeProgram to look up the demo weather for Berlin, Paris, and London
+> in parallel. Return only the warmest city and its temperature, and report any
+> failed lookups. Do the comparison in JavaScript, not in another model round.
+
+`getWeather` returns text such as `24°C, sunny in Berlin`, not an object with a
+`temp` field. Its synthetic temperature is a random integer from 10 to 40°C;
+the tool journals that sample, so replay reuses it. The program can parse the
+leading temperature and aggregate the results before returning JSON.
+
+In the UI, expect `executeProgram` and its child `getWeather` activity; inspect
+the Restate journal for the generated source and compact return value. The
+model still chooses its tools, so enabling PTC does not force every task to use
+it. Replacing the example calls with discovered tools uses their exact catalog
+names and input schemas, with no separate PTC configuration.
 
 ### Durable execution
 

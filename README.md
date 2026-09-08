@@ -61,6 +61,7 @@ chain-of-thought.
 | Session-owned conversation | `AgentSession/{agentId}` stores the append-only transcript and summary checkpoint beside the exclusive turn handler. |
 | Queue, steer, and interrupt | Busy `ask` queues; steering preserves current tool work and enters the next iteration; interruption stops unfinished work and makes one tool-free finalization call. |
 | Parallel tool batches | Independent calls from one model response are spawned together and joined as a batch. |
+| Programmatic tool calling (PTC) | The model can write JavaScript to coordinate built-in, dynamic Restate, and MCP tools, returning only a compact result to model context. Enabled by default, with replay-safe promise completion and normal subtool policy enforcement. |
 | Cross-step pending operations | `sleep` and `humanApproval` can acknowledge pending work and complete in later iterations. |
 | Selective cancellation | The model can cancel one pending operation by stable ID without stopping unrelated work. |
 | Runtime guardrails | A separate policy pass gates the exact proposed text or complete tool batch before it runs. Non-allow decisions receive an independent confirmation pass. |
@@ -78,34 +79,23 @@ chain-of-thought.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  C["Client"] -->|"ask / steer / interrupt / profile"| A["Agent VO\nkey = agentId"]
-  C -->|"history pages"| S["AgentSession VO\nkey = agentId"]
-  C -->|"notification long-poll"| N["AgentNotifications VO\nkey = agentId"]
-  C -->|"schedule API"| Q["AgentScheduler VO\nkey = agentId"]
-  A -->|"one-way doTurn"| S
-  A -.->|"control, approval, and MCP auth signals"| S
-  S -->|"spawn one iteration"| Step["agentStep"]
-  Step -->|"scoped calls"| G["ModelGateway"]
-  G --> M["Agent and policy models"]
-  Step -->|"parallel built-ins"| T["Local tools"]
-  Step -->|"durable RPC"| D["Discovered Restate tools"]
-  Step -->|"tools/call"| MCP["Configured MCP servers"]
-  T -->|"Agent state"| A
-  T -->|"schedule RPC"| Q
-  T -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
-  X --> P["Local or Modal provider"]
-  S -->|"history invalidation"| N
-  A -->|"profile / approval / MCP auth invalidation"| N
-  Q -->|"schedule invalidation"| N
-  Q -->|"deliver(source=schedule)"| A
-  S -->|"terminal outcome"| A
-  E["Evals"] --> A
-  E --> S
-```
+Read the system in three views: **control the task**, **execute the task**, then
+**refresh the client**. Each view hides the internals of the other layers.
 
-### `Agent`: control plane
+### 1. Agent: control the task
+
+From Agent's perspective, `AgentSession.doTurn` is an opaque, long-running task.
+Agent starts it, tracks its invocation ID, sends control signals, and reconciles
+its terminal outcome. Models, tools, sandboxes, and notifications are omitted
+from this view.
+
+```mermaid
+flowchart TD
+  Input["User commands / external messages"] --> A["Agent<br/>Responsive controller"]
+  A -->|"start with snapshot"| Task["AgentSession.doTurn<br/>Opaque durable task"]
+  A -.->|"steer / interrupt / resolve waits"| Task
+  Task -->|"onTurnEnd"| A
+```
 
 Agent owns only the state that must remain responsive while a run is active:
 
@@ -125,24 +115,31 @@ request for the next turn. `onTurnEnd` retires exactly the matching invocation,
 recovers missed steering, clears abandoned approvals and MCP authorization
 actions, and dispatches queued work.
 
-### `AgentNotifications`: invalidation plane
+At most one task is active per Agent. Tracking is event-driven, not a polling
+loop: the task calls `onTurnEnd`. Scheduled input is simply another external
+delivery through `Agent.deliver`; its timing belongs to `AgentScheduler`.
 
-AgentNotifications is keyed by `agentId`. It owns only revision watermarks,
-caller awakeables, and subscriptions. History remains authoritative on
-AgentSession; profile, approvals, and MCP authorization state remain
-authoritative on Agent; schedules remain authoritative on AgentScheduler.
-Producers publish topic invalidations, and consumers wake before re-reading the
-corresponding owner.
+### 2. AgentSession.doTurn: execute the task
 
-### `AgentScheduler`: durable message scheduling
+Now open the task box. One invocation owns the model/tool loop and its working
+context. The diagram shows normal progress; the turn supervisor can interrupt
+the current step or wait without waiting for the next loop iteration.
 
-AgentScheduler is keyed by `agentId` and owns the bounded schedule registry,
-delayed invocation IDs, replacement, cancellation, and fixed-delay recurrence.
-When a valid timer fires, it advances its state and calls the source-agnostic
-`Agent.deliver`. The Agent then starts, queues, steers, or interrupts without
-knowing how the message was scheduled.
+```mermaid
+flowchart TD
+  Open["Load conversation<br/>Discover tool catalog"] --> Step["Run one agentStep<br/>Model, policy, tools"]
+  Step --> Apply["Record outcomes<br/>Consume steering"]
+  Apply --> Next{"Next action?"}
+  Next -->|"continue"| Step
+  Next -->|"pending work"| Wait["Wait for result or steering"]
+  Wait --> Step
+  Next -->|"done"| Finish["Release resources<br/>Report outcome and close history"]
+```
 
-### `AgentSession`: conversation and execution plane
+`agentStep` uses `ModelGateway` for inference and policy checks. Its tools can
+be built-ins, discovered Restate handlers, or MCP calls. PTC coordinates those
+same tools within a step; sandbox and scheduling services remain behind their
+tool interfaces. These details do not change Agent's task contract.
 
 AgentSession is keyed by the same `agentId`. It owns transcript chunks,
 sequence allocation, compaction reservation, and the current summary.
@@ -160,6 +157,39 @@ decisions, the steering inbox, pending operations, discovered tool snapshot,
 sandbox lease context, and tool state. Each iteration spawns one bounded
 `agentStep`, applies its returned delta, and decides whether to iterate, wait,
 finalize, or finish.
+
+Graceful interruption stops and joins unfinished work, makes one tool-free
+finalization call over retained results, and then reports the outcome. External
+invocation cancellation follows its separate cleanup path without model
+finalization. See [turn runtime](docs/turn-runtime.md) for those exit paths.
+
+### 3. Notifications: refresh the client
+
+Notifications do not drive the task. They tell clients which authoritative data
+to re-read. After loading initial state and revision watermarks, a client repeats
+this cycle:
+
+```mermaid
+sequenceDiagram
+  participant C as Client / BFF
+  participant N as AgentNotifications
+  participant O as State owner
+  C->>N: watch(afterRevision)
+  O->>O: Change state
+  O-)N: publish(topic)
+  N-->>C: Updated revision + topic versions
+  C->>O: Re-read changed data
+  O-->>C: Current data
+```
+
+“State owner” stands for AgentSession (history), Agent (profile, approvals, MCP
+authorization actions), or AgentScheduler (schedules), not another service.
+AgentNotifications is keyed by the same `agentId` and stores only revision
+watermarks and waiting subscriptions. It does not store or return domain data.
+The registration re-check catches changes that arrive before the watch starts.
+
+See [architecture and data flow](docs/architecture.md) for ownership details and
+the individual control sequences.
 
 ## Control semantics
 
@@ -247,10 +277,40 @@ Current built-ins:
 | `manageMemory` | foreground Agent RPC | Set or delete persistent memory entries |
 | `scheduleMessage` / `cancelSchedule` / `listSchedules` | foreground AgentScheduler RPC | Manage durable scheduled input independently of the current turn |
 | `listFiles` / `readFile` / `writeFile` / `executeCommand` | foreground sandbox | Work in the Agent-scoped workspace |
+| `executeProgram` | foreground orchestration | Coordinate available tools in JavaScript, filter intermediate results, and return a compact JSON value |
 
 All allowed foreground calls in one model response are spawned together and
 joined. Pending tools acknowledge immediately and start completion tasks that
 survive across later iterations. `toolCallId` is their stable operation ID.
+
+### Programmatic tool calling (PTC)
+
+PTC lets the model choose `executeProgram({source})` for work that benefits from
+code: parallel lookups, dependent calls, filtering, joins, and aggregation. The
+source is an `async tools => { ... }` function with access to every other
+available built-in, Restate-discovered, and MCP tool. Intermediate results stay
+inside the program; only its returned JSON or program failure goes back to the
+model. Tool schemas remain in model context, and direct calls remain available.
+
+Programs run in a bounded QuickJS/WebAssembly runtime inline in
+`AgentSession.doTurn`. Native `Promise.all`, `Promise.any`, `Promise.race`, and
+`Promise.allSettled` use host-controlled, journaled completion ordering for
+replay. The wrapper needs no policy approval; each concrete subtool call still
+uses its normal guardrails, human approvals, MCP authorization, and cancellation
+behavior. Programs have no direct network or filesystem access.
+
+PTC is **enabled by default**. Set `AGENT_PTC_ENABLED=false` on the core service
+to hide it from new model calls; already-recorded program calls still replay.
+For local development: `AGENT_PTC_ENABLED=false pnpm dev:service`.
+
+Try asking in chat:
+
+> Use executeProgram to look up the demo weather for Berlin, Paris, and London
+> in parallel. Return only the warmest city and its temperature, and report any
+> failed lookups. Do the comparison in JavaScript, not in another model round.
+
+See the [PTC guide](docs/tools.md#programmatic-tool-calling-ptc) for source
+examples, result contracts, execution limits, and interruption semantics.
 
 ### Dynamic Restate tools
 
@@ -329,6 +389,9 @@ main agent model does not receive the list. After it proposes text or a complete
 tool batch, the policy model returns `allow`, `deny`, or `require_approval`.
 Every non-allow candidate is checked by a second independent policy review;
 unconfirmed candidates become `allow`.
+
+For PTC, the `executeProgram` wrapper is excluded from the batch policy check.
+Each concrete call emitted by its program is gated separately before execution.
 
 `deny` prevents publication/execution and returns policy feedback to the next
 model iteration. Repeating the same block produces a deterministic refusal.

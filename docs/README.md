@@ -22,6 +22,8 @@ agent. The implementation keeps the important control flow visible:
 - an append-only, cursor-consumable conversation event log;
 - model inference behind scoped admission and retry control;
 - parallel foreground tool batches and cross-step pending tools;
+- programmatic tool calling (PTC): model-written JavaScript coordinates tools
+  with replay-safe promise completion and compact results for model context;
 - explicit queue, steer, interrupt, and selective-cancellation semantics;
 - user instructions, model-managed memory, runtime guardrails, and approvals;
 - non-destructive conversation compaction;
@@ -32,33 +34,22 @@ agent. The implementation keeps the important control flow visible:
 
 The seams are durable ownership boundaries, not framework extension points.
 
-## System in one diagram
+## Architecture in three views
 
-```mermaid
-flowchart LR
-  C["Client or UI"] -->|"conversation and state API"| A["Agent VO\nkey = agentId"]
-  C -->|"history pages"| S["AgentSession VO\nkey = agentId"]
-  C -->|"notification long-poll"| N["AgentNotifications VO\nkey = agentId"]
-  C -->|"schedule API"| Q["AgentScheduler VO\nkey = agentId"]
-  A -->|"one-way doTurn"| S
-  A -.->|"steering, interrupt, approval signals"| S
-  S -->|"one loop iteration at a time"| Step["agentStep"]
-  Step -->|"scoped RPC"| G["ModelGateway"]
-  G --> O["OpenAI"]
-  Step -->|"spawn built-ins in parallel"| B["Built-in tools\ninside doTurn"]
-  Step -->|"durable restate.call"| D["Discovered Restate handlers"]
-  Step -->|"tools/call"| M["Configured MCP servers"]
-  B -->|"schedule RPC"| Q
-  B -->|"lazy lease"| X["Sandbox VO\nkey = agentId"]
-  X --> P["Local or Modal provider"]
-  S -->|"history invalidation"| N
-  A -->|"profile / approval invalidation"| N
-  Q -->|"schedule invalidation"| N
-  Q -->|"generic delivery"| A
-  S -->|"terminal outcome"| A
-  E["Evals"] -->|"same public protocol"| A
-  E -->|"history pages"| S
-```
+Start with the [three diagrams in the root README](../README.md#architecture),
+then follow the same boundaries in the architecture guide:
+
+1. [Agent: control the task](architecture.md#agent-virtual-object) — keep
+   `AgentSession.doTurn` opaque; start it, track its ID, steer or interrupt it,
+   resolve waits, and handle `onTurnEnd`.
+2. [AgentSession.doTurn: execute the task](architecture.md#agentsession-virtual-object)
+   — load conversation context, run the model/tool loop, apply steering, and
+   clean up at the terminal boundary.
+3. [Notifications: refresh the client](architecture.md#agentnotifications-virtual-object)
+   — publish topic versions, wake readers, and re-read the state owner.
+
+Model providers, tool backends, sandboxes, and schedules are supporting details,
+not additional boxes in the Agent controller view.
 
 ## The seven Restate services
 
@@ -89,8 +80,11 @@ Read in this order when learning the entire project:
    response shapes, notifications, and event-log entries.
 4. [Turn runtime](turn-runtime.md) — the `doTurn` state machine, steering,
    interruption, guardrails, pending operations, and finalization.
-5. [Tools](tools.md) — built-in tools, foreground versus pending behavior, and
-   dynamic Restate handler discovery.
+5. [Tools](tools.md) — built-in tools, foreground versus pending behavior,
+   dynamic Restate handler discovery, and MCP integration. The
+   [PTC guide](tools.md#programmatic-tool-calling-ptc) covers JavaScript tool
+   orchestration, the default-on `AGENT_PTC_ENABLED` flag, replay, and subtool
+   policy enforcement.
 6. [Sandboxes](sandboxes.md) — lifecycle, provider contract, local and Modal
    adapters, and adding another provider.
 7. [Development and verification](development.md) — setup, local operation,
@@ -133,6 +127,11 @@ schemas and mechanics. `ModelGateway` owns inference admission and retry
 behavior. `AgentNotifications` owns invalidation delivery, `AgentScheduler`
 owns scheduled input, and `Sandbox` owns the external execution environment
 lifecycle.
+
+`executeProgram` is an optional model-selected tool, enabled by default, not a
+separate service or agent loop. It coordinates the same available tools inside
+`doTurn` and returns a compact result; individual calls retain their existing
+authorization and policy gates.
 
 History reads and turn execution share the same `AgentSession/{agentId}` state.
 AgentNotifications is only the invalidation broker: AgentSession owns history,
