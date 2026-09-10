@@ -11,8 +11,10 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 ## Ownership
 
 - `Agent` owns the active invocation ID, queued input, profile, approvals,
-  private MCP OAuth/bearer state and authorization actions, and
+  immutable owner and per-turn authorization actions, and
   external-message routing.
+- `User` owns identity, shared MCP connections and encrypted credentials/flows;
+  `UserSession` owns browser-session expiry and revocation.
 - `AgentNotifications` owns invalidation revisions and subscriptions;
   `AgentScheduler` owns schedules and durable timers.
 - `AgentSession`, keyed by the same `agentId`, owns the append-only transcript
@@ -21,10 +23,11 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 - At startup, `doTurn` opens history once, appends its activated entries, and
   builds model context from the session summary and uncompacted entries.
 - The Agent-supplied profile and minimal MCP credential snapshots
-  (`serverId` and `accessToken`) are stable at run start. Profile changes affect
+  (`serverId` and `encryptedToken`) are stable at run start. Profile changes affect
   the next turn; an OAuth completion can additionally deliver a replacement
   minimal credential directly to the waiting run. Refresh tokens and OAuth
-  protocol state never enter the Turn.
+  protocol state never enter the Turn. Decryption happens only inside the MCP
+  HTTP run; its journaled result must never include plaintext credentials.
 - `session/step.ts` owns one bounded transition: model call, guardrail gate,
   optional approval wait, and allowed foreground tool batch. It owns no task
   after returning.
@@ -113,28 +116,17 @@ decision is deterministic runtime control flow.
 
 ## MCP authorization
 
-- Agent-configured MCP servers and their auth type are profile state. OAuth
-  credentials and bearer tokens are separate private Agent state and never
-  appear in `Agent.profile`.
-- A new Turn receives only each authenticated server's `serverId` and current
-  access token with its profile snapshot.
-- An OAuth or bearer server without credentials pauses during tool discovery.
-  A 401 or insufficient-scope response during discovery or invocation does the
-  same.
-- The Turn registers or joins one pending authorization action per server and
-  active Turn, then waits on a named signal. Parallel callers therefore share
-  the same browser action.
-- The BFF performs OAuth discovery, dynamic client registration, refresh when
-  possible, and authorization-code plus PKCE flow. Redirect-round-trip state is
-  stored durably by Agent. Bearer actions instead submit a user-provided token
-  directly to private Agent state.
-- Completion is accepted only for the active, non-interrupting Turn. Agent
-  stores the returned OAuth or bearer state before signaling the waiter with a
-  minimal credential. Distinct follow-up scope challenges may open another
-  bounded authorization round.
-- Interruption resolves pending authorization waiters as cancelled. Terminal
-  reconciliation and material MCP server changes also clear abandoned
-  authorization state.
+Agent snapshots its owner's resolved connections and minimal encrypted
+credentials, filtered by its tool grants. Missing/expired credentials produce
+an Agent UI action and a User-owned shared flow. The turn waits on its named
+signal. BFF handles OAuth or PAT submission; User persists ciphertext and
+notifies all attached Agents. Agent signals only a matching active,
+non-interrupting turn.
+
+Profile grants are fixed for a turn, including its authorization eligibility.
+A global connection change/disconnect invalidates its revision before another
+MCP call. Interrupting one turn removes only its waiter; other agents continue.
+Full OAuth state never enters the turn. See [identity](user-identity.md).
 
 ## Steering
 

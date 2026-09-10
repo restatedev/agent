@@ -29,6 +29,8 @@ map.
 | Term | Meaning in this repository |
 | --- | --- |
 | Agent | The model and harness operating together for one `agentId` |
+| `User` Virtual Object | Verified identity, agent directory, shared MCP connections and encrypted credentials |
+| `UserSession` Virtual Object | Expiring, revocable browser sessions |
 | `Agent` Virtual Object | The deterministic controller for active work, queued input, profile, approvals, MCP authorization, and externally delivered messages |
 | `AgentSession` Virtual Object | The transcript owner and durable turn executor for the same `agentId` |
 | `AgentNotifications` Virtual Object | The per-Agent invalidation stream for history, profile, approvals, MCP authorization actions, and schedules |
@@ -67,7 +69,8 @@ chain-of-thought.
 | Selective cancellation | The model can cancel one pending operation by stable ID without stopping unrelated work. |
 | Runtime guardrails | A separate policy pass gates the exact proposed text or complete tool batch before it runs. Non-allow decisions receive an independent confirmation pass. |
 | Human-in-the-loop approval | Policy gates and the explicit approval tool register durable Agent state and resume through turn-scoped signals. |
-| Persistent profile | User instructions, model-managed semantic memory, user-defined guardrails, structured MCP server definitions, and web search availability are durable per Agent and snapshotted at turn start. |
+| User identity and ownership | Google Workspace sign-in restricted to `restate.dev` through the BFF, private per-user agents, account-level connections, and per-agent tool grants. See [setup](docs/user-identity.md). |
+| Persistent profile | User instructions, model-managed semantic memory, user-defined guardrails, per-agent tool grants, and web search availability are durable per Agent and snapshotted at turn start. |
 | General change notifications | `AgentNotifications/{agentId}` maintains revisioned `history`, `profile`, `approvals`, `mcpAuth`, and `schedules` watermarks that wake clients to re-read authoritative state. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
@@ -75,7 +78,8 @@ chain-of-thought.
 | Inference admission control | Model calls use a Restate scope with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Agent-scoped sandbox | A `Sandbox` Virtual Object lazily provisions/resumes a local or Modal workspace, lends it to one turn, and suspends it after idle release. |
 | Restate-native dynamic tools | A deployed JSON handler can opt in through `restate.dev/agent` metadata; one journaled catalog snapshot drives both inference and execution. |
-| MCP tools | Agent-configured stateless 2026-07-28 or stateful 2025-era Streamable HTTP endpoints contribute tools to the same per-turn catalog snapshot, with durable OAuth waits when required. |
+| MCP tools | User-configured stateless 2026-07-28 or stateful 2025-era Streamable HTTP endpoints contribute tools to the same per-turn catalog snapshot, with durable OAuth waits when required. |
+| Encrypted credentials | MCP OAuth state, PATs/API keys, and PKCE flow state are encrypted before Restate ingress using AES-256-GCM-SIV and `APP_SECRET_KEY`; state and journal payloads carry ciphertext. |
 | Durable evaluation harness | Concurrent isolated trials drive the public protocol and return code-based assertions plus the observed transcript. |
 
 ## Architecture
@@ -102,13 +106,13 @@ Agent owns only the state that must remain responsive while a run is active:
 
 - active `doTurn` invocation ID and accepted interrupt reason;
 - pending user/event entries and steering reconciliation batches;
-- instructions, memories, guardrails, structured MCP server definitions, and web search availability;
-- private MCP OAuth and bearer credentials plus pending authorization requests;
+- instructions, memories, guardrails, per-agent tool grants, and web search availability;
+- immutable user ownership and per-turn authorization actions (credentials belong to User);
 - pending approvals; and
 - routing of external deliveries according to their busy-turn policy.
 
 An idle `ask` snapshots the profile plus a minimal MCP credential for each
-server (`serverId` and `accessToken`) and one-way sends
+server (`serverId` and `encryptedToken`) and one-way sends
 `AgentSession.doTurn`. A busy `ask` stores a queued user entry in Agent state.
 `steer` drains that queue into one durable signal;
 `interrupt` signals the active invocation and optionally stores a replacement
@@ -352,8 +356,14 @@ RESTATE_ADMIN_TOKEN=<optional bearer token>
 
 ### MCP tools
 
-Agent-configured MCP servers contribute tools through Streamable HTTP. Each
-profile entry explicitly selects either stateless MCP revision `2026-07-28` or
+The core service and BFF must share `APP_SECRET_KEY`. Outside production it
+defaults to `restate` for development; production requires a strong random
+secret. Keep it stable across restarts. The encrypted credential format requires
+fresh development state and MCP reauthorization; it does not rewrite old
+plaintext journals. See [credential encryption](docs/credential-encryption.md).
+
+User-configured MCP servers contribute tools through Streamable HTTP. Each
+connection entry explicitly selects either stateless MCP revision `2026-07-28` or
 the stateful 2025-era `initialize` protocol; the runtime does not guess or
 silently fall back between them.
 
@@ -374,15 +384,12 @@ catalog and protocol verdict once per turn, and invokes the exact snapshotted de
 Model-facing names are qualified as `mcp__<server-id>__<tool-name>` and safely
 shortened when necessary.
 
-OAuth state and user-supplied bearer tokens live in private Agent VO state,
-outside `AgentProfile`. A new Turn receives its configured server definitions
-plus only each server's current access token. Refresh tokens, redirect details,
-client registration, and OAuth discovery state remain on the private Agent/BFF
-boundary. If discovery or invocation needs authorization, the Turn registers a
-pending Agent action and waits durably. OAuth actions use browser discovery,
-registration, and PKCE. Bearer actions accept a token through the same-origin
-BFF. Either path stores private state before signaling the same Turn with a
-replacement access token to retry.
+OAuth state and bearer tokens live encrypted in the User VO. Each Agent profile
+selects allowed tools from that user's connections. A new turn receives resolved
+server definitions and only `{serverId, encryptedToken}`. The BFF handles OAuth
+and PAT entry; User stores credentials, then Agent signals its waiting turn.
+Multiple agents can share a connection flow without sharing their conversations.
+See [identity, ownership, and setup](docs/user-identity.md).
 
 MCP calls send a stable `Idempotency-Key` derived from the turn and tool-call
 IDs, but MCP does not standardize deduplication, so mutating tools remain
@@ -506,9 +513,22 @@ pnpm dev:service
 
 For a production build and core service process, use `pnpm start:service`.
 
+To start the web UI, configure Sign in with Google and `APP_PUBLIC_URL` as
+described in [user identity setup](docs/user-identity.md), then run
+`pnpm dev:ui`. The sidebar lists your agents; Connections manages your accounts.
+
 ## Try the protocol
 
+These commands use **private Restate ingress**, which trusts callers. First
+create a synthetic development user and its agent (the BFF never accepts
+client-supplied identities):
+
 ```sh
+curl localhost:8080/User/dev-user/register \
+  --json '{"userId":"dev-user","issuer":"https://accounts.google.com","subject":"development","email":"dev@example.test","displayName":"Developer"}'
+curl localhost:8080/User/dev-user/createAgent \
+  --json '{"agentId":"demo","name":"Demo"}'
+
 curl localhost:8080/Agent/demo/setInstructions \
   --json '{"instructions":"Prefer concise answers and metric units."}'
 

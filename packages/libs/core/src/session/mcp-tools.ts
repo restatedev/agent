@@ -15,11 +15,14 @@ import {
   type Tool,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
+import {openMcpToken} from "@restate-agents/secrets";
 import type {
+  EncryptedSecret,
   McpAuthorizationResolution,
   McpServer,
   McpTurnCredential,
 } from "@restate-agents/types";
+import {UserDefinition} from "@restate-agents/types/services";
 import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {Agent} from "../agent/index.js";
@@ -50,6 +53,9 @@ type McpServerSnapshot = {
   protocol: McpServer["protocol"];
   auth: McpServer["auth"]["type"];
   turnId: string;
+  agentId: string;
+  ownerUserId?: string;
+  revision: number;
   credential?: McpTurnCredential;
   timeoutMs: number;
 };
@@ -84,6 +90,8 @@ type McpCachedDiscoveryResult = {
 export type McpAuthChallenge = {
   reason: McpAuthorizationReason;
   requestedScope?: string;
+  rejectedToken?: EncryptedSecret;
+  connectionRevision?: number;
 };
 
 export type McpAuthorizationGrant = {
@@ -144,7 +152,7 @@ const statefulConnections = new Map<string, StatefulConnection>();
 export function* discoverMcpTools(
   servers: McpServer[],
   credentials: McpTurnCredential[],
-  context: {agentId: string; turnId: string},
+  context: {agentId: string; turnId: string; ownerUserId?: string},
   reservedNames: string[],
 ): restate.Operation<McpToolDiscovery> {
   if (servers.length === 0) {
@@ -259,7 +267,11 @@ export function* executeMcpTool(
         tool.target.server.id,
         tool.target.server.auth,
         `${context.toolCallId}-${tool.target.server.auth}-${nextRound}`,
-        attempt,
+        {
+          ...attempt,
+          rejectedToken: tool.target.server.credential?.encryptedToken,
+          connectionRevision: tool.target.server.revision,
+        },
       );
       tool.target.server.credential = grant.credential;
       authorizationRound = nextRound;
@@ -293,6 +305,7 @@ function* callMcpTool(
   tool: McpAgentTool,
   phase: string,
 ): restate.Operation<McpAttempt<CallToolResult>> {
+  yield* requireConnection(tool.target.server);
   return yield* restate.run(
     async ({signal}) => {
       try {
@@ -348,10 +361,10 @@ function* callMcpTool(
 function* discoverMcpServer(
   config: McpServer,
   credential: McpTurnCredential | undefined,
-  context: {agentId: string; turnId: string},
+  context: {agentId: string; turnId: string; ownerUserId?: string},
 ): restate.Operation<McpDiscoveryResult> {
   try {
-    const server = serverSnapshot(config, credential, context.turnId);
+    const server = serverSnapshot(config, credential, context);
     let authorizationRound = 0;
     if (server.auth !== "none" && !server.credential) {
       const nextRound = authorizationRound + 1;
@@ -360,7 +373,7 @@ function* discoverMcpServer(
         context,
         server.auth,
         `discovery-${server.id}-${server.auth}-${nextRound}`,
-        {reason: "missing_credentials"},
+        {reason: "missing_credentials", connectionRevision: server.revision},
       );
       authorizationRound = nextRound;
     }
@@ -388,7 +401,11 @@ function* discoverMcpServer(
         context,
         server.auth,
         `discovery-${server.id}-${server.auth}-${nextRound}`,
-        challenge,
+        {
+          ...challenge,
+          rejectedToken: server.credential?.encryptedToken,
+          connectionRevision: server.revision,
+        },
       );
       authorizationRound = nextRound;
       attempt = yield* discoverMcpServerAttempt(
@@ -413,6 +430,7 @@ function* discoverMcpServerAttempt(
   server: McpServerSnapshot,
   phase: string,
 ): restate.Operation<McpAttempt<McpDiscoveryResult>> {
+  yield* requireConnection(server);
   const attempt = yield* restate.run(
     async ({signal}) => {
       try {
@@ -669,16 +687,19 @@ function noRedirectFetch(
 }
 
 function serverSnapshot(
-  config: McpServer,
+  config: McpServer & {revision?: number},
   credential: McpTurnCredential | undefined,
-  turnId: string,
+  context: {agentId: string; turnId: string; ownerUserId?: string},
 ): McpServerSnapshot {
   return {
     id: config.id,
     endpoint: config.url,
     protocol: config.protocol,
     auth: config.auth.type,
-    turnId,
+    turnId: context.turnId,
+    agentId: context.agentId,
+    ownerUserId: context.ownerUserId,
+    revision: config.revision ?? 0,
     ...(credential ? {credential} : {}),
     timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
   };
@@ -737,8 +758,14 @@ export function releaseMcpSessionsAfterCancellation(turnId: string): void {
 }
 
 function resolveToken(server: McpServerSnapshot): string | undefined {
-  const accessToken = server.credential?.accessToken;
-  if (!accessToken) return undefined;
+  if (!server.credential) return undefined;
+  if (!server.ownerUserId)
+    throw new Error("MCP credentials require an owning user");
+  if (server.credential.serverId !== server.id)
+    throw new Error("MCP credential server binding does not match");
+  // Called only inside the external HTTP run. The journaled snapshot retains
+  // ciphertext; plaintext is never returned from this boundary.
+  const accessToken = openMcpToken(server.ownerUserId, server.credential);
 
   let normalized = unwrapQuotedToken(accessToken.trim());
   normalized = normalized.replace(/^Authorization\s*:\s*/i, "").trim();
@@ -787,7 +814,7 @@ function protocolPrior(
 
 export function* requestMcpAuthorization(
   serverId: string,
-  context: {agentId: string; turnId: string},
+  context: {agentId: string; turnId: string; ownerUserId?: string},
   authType: McpCredentialAuthType,
   causeId: string,
   challenge: McpAuthChallenge,
@@ -795,7 +822,9 @@ export function* requestMcpAuthorization(
   const request = yield* restate
     .client(Agent, context.agentId)
     .requestMcpAuthorization({
-      authRequestId: `${causeId}:${serverId}`,
+      authRequestId: `${context.turnId}:${causeId}:${serverId}`,
+      connectionRevision: challenge.connectionRevision,
+      rejectedToken: challenge.rejectedToken,
       serverId,
       turnId: context.turnId,
       authType,
@@ -995,4 +1024,51 @@ function isCancellation(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function* requireConnection(
+  server: McpServerSnapshot,
+): restate.Operation<void> {
+  if (!server.ownerUserId)
+    throw new Error("MCP execution requires an owning user");
+  const allowed = yield* restate
+    .client(UserDefinition, server.ownerUserId)
+    .validateConnection({
+      agentId: server.agentId,
+      connectionId: server.id,
+      revision: server.revision,
+    });
+  if (!allowed)
+    throw new Error(
+      "User connection was removed, disconnected, or changed; start a new turn",
+    );
+}
+/** Account-level discovery does not create an Agent turn or authorization waiter. */
+export function* discoverConnectionTools(
+  config: McpServer & {revision: number},
+  credential: McpTurnCredential | undefined,
+  userId: string,
+): restate.Operation<Array<{name: string; description: string}>> {
+  const snapshot = serverSnapshot(config, credential, {
+    agentId: userId,
+    ownerUserId: userId,
+    turnId: restate.handlerRequest().id,
+  });
+  return yield* restate.run(
+    async ({signal}) => {
+      try {
+        const result = await discoverCached(config, snapshot, signal);
+        return (
+          result.catalog?.tools.map((t) => ({
+            name: t.name,
+            description: t.description ?? "",
+          })) ?? []
+        );
+      } finally {
+        if (snapshot.protocol === "stateful")
+          await discardStatefulConnection(snapshot, resolveToken(snapshot));
+      }
+    },
+    {name: "discover-user-connection", retry: {maxAttempts: 1}},
+  );
 }

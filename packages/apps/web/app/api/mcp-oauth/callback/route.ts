@@ -17,8 +17,9 @@ export async function GET(request: Request) {
       return Response.redirect(result.authorizationUrl);
     }
     return Response.redirect(returnUrl(request, agentId, "completed"));
-  } catch (error) {
-    console.error("MCP OAuth callback failed", error);
+  } catch {
+    // Provider errors can contain token-exchange requests. Never log them.
+    console.warn("MCP OAuth callback failed");
     return Response.redirect(returnUrl(request, agentId, "failed"));
   }
 }

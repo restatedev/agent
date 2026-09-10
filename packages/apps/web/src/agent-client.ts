@@ -1,18 +1,17 @@
 import type {
   AgentNotificationSnapshot,
   AgentProfile,
+  AgentTools,
   ApprovalRequest,
   ApprovalResolution,
   AskResult,
   Guardrail,
   HistoryPage,
   McpAuthorizationRequest,
-  McpServer,
-  McpServerMutationResult,
-  McpServerRemovalResult,
   ScheduleCancellationResult,
   ScheduledMessage,
   ScheduleMutationResult,
+  ToolDescriptor,
 } from "@restate-agents/types";
 
 export type SequencedEntry = HistoryPage["entries"][number];
@@ -42,7 +41,7 @@ export class AgentClientError extends Error {
   }
 }
 
-async function request<T>(path: string, options: RequestOptions = {}) {
+export async function request<T>(path: string, options: RequestOptions = {}) {
   const response = await fetch(path, {
     method: options.body === undefined ? "GET" : "POST",
     headers: {
@@ -124,11 +123,14 @@ export function createAgentClient(agentId: string) {
     async setWebSearchEnabled(enabled: boolean): Promise<void> {
       await write("web-search", {enabled});
     },
-    async upsertMcpServer(server: McpServer): Promise<McpServerMutationResult> {
-      return write("mcp-server", server);
+    async setTools(tools: AgentTools): Promise<void> {
+      await write("tools", tools);
     },
-    async removeMcpServer(id: string): Promise<McpServerRemovalResult> {
-      return write("remove-mcp-server", {id});
+    async toolCatalog(): Promise<{
+      builtin: ToolDescriptor[];
+      dynamic: ToolDescriptor[];
+    }> {
+      return read("tool-catalog");
     },
     async mcpAuthorizations(): Promise<McpAuthorizationRequest[]> {
       return read("mcp-authorizations");

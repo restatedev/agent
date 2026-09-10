@@ -6,6 +6,7 @@
 
 import {setTimeout} from "node:timers/promises";
 import {
+  type AgentTools,
   type ApprovalDecision,
   type ConversationEntry,
   type McpServer,
@@ -38,6 +39,7 @@ import {
   requestMcpAuthorization,
 } from "./mcp-tools.js";
 import {executeProgramTool} from "./program-tool.js";
+import {toolAllowed} from "./tool-permissions.js";
 import {searchWeb} from "./web-search.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
@@ -71,6 +73,8 @@ export type AgentToolContext = {
   agentId: string;
   turnId: string;
   webSearchEnabled: boolean;
+  permissions: AgentTools;
+  ownerUserId: string;
   sandbox: {
     client(): restate.Operation<SandboxClient>;
   };
@@ -119,6 +123,8 @@ export function createAgentToolContext(
   agentId: string,
   turnId: string,
   webSearchEnabled: boolean,
+  permissions: AgentTools,
+  ownerUserId: string,
 ): AgentToolContext {
   let borrow: restate.Future<SandboxRef> | undefined;
   let ref: SandboxRef | undefined;
@@ -127,6 +133,8 @@ export function createAgentToolContext(
     agentId,
     turnId,
     webSearchEnabled,
+    permissions,
+    ownerUserId,
     sandbox: {
       *client(): restate.Operation<SandboxClient> {
         borrow ??= restate.client(Sandbox, agentId).borrow({turnId});
@@ -260,7 +268,7 @@ export function transcriptEntries(
 export function manifests(
   discovered: DiscoveredAgentTool[],
   mcpTools: McpAgentTool[],
-  context: Pick<AgentToolContext, "webSearchEnabled">,
+  context: Pick<AgentToolContext, "webSearchEnabled" | "permissions">,
 ): ToolManifest[] {
   return [
     programToolManifest,
@@ -292,7 +300,9 @@ export function manifests(
         strict: false,
       }),
     ),
-  ];
+  ].filter((tool) =>
+    toolAllowed(tool.name, context.permissions, discovered, mcpTools, names),
+  );
 }
 
 /** Returns the concise user-facing activity label for a tool call. */
@@ -310,6 +320,20 @@ export function* execute(
   mcpTools: McpAgentTool[],
   scope?: ToolExecutionScope,
 ): restate.Operation<ToolOutcome> {
+  if (
+    !toolAllowed(
+      call.toolName,
+      context.permissions,
+      discovered,
+      mcpTools,
+      names,
+    )
+  )
+    return {
+      call,
+      status: "failed",
+      error: "This tool is not enabled for this agent.",
+    };
   if (call.toolName === "webSearch" && !context.webSearchEnabled) {
     return {
       call,

@@ -1,0 +1,31 @@
+import type {
+  McpAuthorizationRequest,
+  McpServer,
+  McpServerMutationResult,
+  ToolDescriptor,
+  UserAgent,
+  UserProfile,
+} from "@restate-agents/types";
+import {request} from "./agent-client";
+
+const write = <T>(operation: string, body: unknown) =>
+  request<T>(`/api/user/${operation}`, {body});
+export const userClient = {
+  profile: () => request<UserProfile>("/api/user/profile"),
+  createAgent: (name: string, creationId: string) =>
+    write<UserAgent>("agent", {name, creationId}),
+  upsertConnection: (server: McpServer) =>
+    write<McpServerMutationResult>("connection", server),
+  removeConnection: (id: string) => write("remove-connection", {id}),
+  disconnectConnection: (id: string) => write("disconnect-connection", {id}),
+  discoverConnection: (id: string) =>
+    write<ToolDescriptor[]>("discover-connection", {id}),
+  beginAuthorization: (connectionId: string) =>
+    write<McpAuthorizationRequest>("begin-authorization", {connectionId}),
+  startAuthorization: (authRequestId: string) =>
+    write<
+      {status: "redirect"; authorizationUrl: string} | {status: "completed"}
+    >("start-authorization", {authRequestId}),
+  completeBearer: (authRequestId: string, accessToken: string) =>
+    write<boolean>("complete-bearer", {authRequestId, accessToken}),
+};

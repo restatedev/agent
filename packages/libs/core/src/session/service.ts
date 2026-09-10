@@ -135,6 +135,8 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
             agentId,
             turnId,
             req.webSearchEnabled,
+            req.tools,
+            req.ownerUserId,
           ),
           transcript,
           instructions: req.instructions,
@@ -248,7 +250,11 @@ function* executeTurn(
   const mcpDiscovery = yield* discoverMcpTools(
     state.mcpServers,
     state.mcpCredentials,
-    {agentId: state.context.agentId, turnId: state.context.turnId},
+    {
+      agentId: state.context.agentId,
+      turnId: state.context.turnId,
+      ownerUserId: state.context.ownerUserId,
+    },
     [...agentTools.names, ...state.discoveredTools.map(({name}) => name)],
   );
   state.mcpTools = mcpDiscovery.tools;

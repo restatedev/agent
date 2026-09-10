@@ -12,34 +12,63 @@ import {
   type StoredOAuthClientInformation,
   type StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
+import {
+  openMcpOAuthFlow,
+  openMcpOAuthState,
+  sealMcpOAuthFlow,
+  sealMcpOAuthState,
+} from "@restate-agents/secrets";
 import type {
+  EncryptedSecret,
   McpAuthorizationContext,
   McpOAuthFlow,
   McpOAuthState,
 } from "@restate-agents/types";
 import {publicUrl} from "./public-url";
-import {agentClient, BffError} from "./restate";
+import {BffError, type userClient} from "./restate";
+import {requireUser} from "./user-auth";
 
 export type McpOAuthStartResult =
   | {status: "redirect"; authorizationUrl: string}
   | {status: "completed"};
 
-type McpOAuthCallbackTarget = {agentId: string; authRequestId: string};
+type McpOAuthCallbackTarget = {
+  userId: string;
+  sessionId: string;
+  agentId?: string;
+  authRequestId: string;
+};
+type OAuthContext = Omit<
+  NonNullable<McpAuthorizationContext>,
+  "oauthState" | "flow"
+> & {
+  oauthState?: McpOAuthState;
+  flow?: McpOAuthFlow;
+  storedFlow: EncryptedSecret | null;
+};
 
 /** Starts discovery/registration/authorization for one pending Agent request. */
 export async function startMcpOAuth(
   request: Request,
-  agentId: string,
+  agentId: string | undefined,
   authRequestId: string,
 ): Promise<McpOAuthStartResult> {
-  const client = agentClient(agentId);
-  const context = await requiredContext(client, authRequestId);
+  const user = await requireUser();
+  if (agentId && !(await user.client.ownsAgent(agentId)))
+    throw new BffError(404, "Agent not found");
+  const client = user.client;
+  const context = await requiredContext(client, user.userId, authRequestId);
   const redirectUrl = callbackUrl(request);
   const provider = OAuthProvider.start(
     context,
     redirectUrl,
     clientMetadataUrl(request),
-    callbackState(agentId, authRequestId),
+    callbackState({
+      userId: user.userId,
+      sessionId: user.sessionId,
+      agentId,
+      authRequestId: context.request.authRequestId,
+    }),
   );
   const scope = authorizationScope(context);
 
@@ -50,7 +79,7 @@ export async function startMcpOAuth(
       context.request.reason === "insufficient_scope" &&
       isStrictScopeSuperset(scope, context.oauthState?.tokens.scope),
   });
-  return finishOrPersist(client, context, provider, result);
+  return finishOrPersist(client, user.userId, context, provider, result);
 }
 
 /** Validates the redirect and exchanges its code for the waiting Turn. */
@@ -58,9 +87,17 @@ export async function finishMcpOAuth(
   request: Request,
   target: McpOAuthCallbackTarget,
 ): Promise<McpOAuthStartResult> {
-  const {agentId, authRequestId} = target;
-  const client = agentClient(agentId);
-  const context = await requiredContext(client, authRequestId);
+  const user = await requireUser();
+  if (user.userId !== target.userId || user.sessionId !== target.sessionId)
+    throw new BffError(403, "This OAuth flow belongs to another login session");
+  if (target.agentId && !(await user.client.ownsAgent(target.agentId)))
+    throw new BffError(404, "Agent not found");
+  const client = user.client;
+  const context = await requiredContext(
+    client,
+    user.userId,
+    target.authRequestId,
+  );
   if (!context.flow) {
     throw new BffError(409, "This OAuth flow has not been started");
   }
@@ -92,7 +129,7 @@ export async function finishMcpOAuth(
       context.request.reason === "insufficient_scope" &&
       isStrictScopeSuperset(scope, context.oauthState?.tokens.scope),
   });
-  return finishOrPersist(client, context, provider, result);
+  return finishOrPersist(client, user.userId, context, provider, result);
 }
 
 /** Reads the routing envelope; finishMcpOAuth subsequently validates it. */
@@ -104,31 +141,30 @@ export function mcpOAuthCallbackTarget(
     throw new BffError(400, "OAuth callback did not include state");
   }
   try {
-    const value = JSON.parse(Buffer.from(state, "base64url").toString()) as {
-      agentId?: unknown;
-      authRequestId?: unknown;
-      nonce?: unknown;
-    };
+    const value = JSON.parse(
+      Buffer.from(state, "base64url").toString(),
+    ) as McpOAuthCallbackTarget & {nonce: string};
     if (
-      typeof value.agentId !== "string" ||
-      !value.agentId ||
-      value.agentId.length > 256 ||
+      typeof value.userId !== "string" ||
+      typeof value.sessionId !== "string" ||
       typeof value.authRequestId !== "string" ||
       !value.authRequestId ||
       typeof value.nonce !== "string" ||
-      !value.nonce
-    ) {
-      throw new Error("invalid routing envelope");
-    }
-    return {agentId: value.agentId, authRequestId: value.authRequestId};
+      (value.agentId !== undefined && typeof value.agentId !== "string")
+    )
+      throw new Error("invalid envelope");
+    return {
+      userId: value.userId,
+      sessionId: value.sessionId,
+      authRequestId: value.authRequestId,
+      ...(value.agentId ? {agentId: value.agentId} : {}),
+    };
   } catch {
     throw new BffError(400, "OAuth callback state is malformed");
   }
 }
 
-function authorizationScope(
-  context: NonNullable<McpAuthorizationContext>,
-): string | undefined {
+function authorizationScope(context: OAuthContext): string | undefined {
   return computeScopeUnion(
     context.oauthState?.tokens.scope,
     context.request.requestedScope,
@@ -136,9 +172,10 @@ function authorizationScope(
 }
 
 async function requiredContext(
-  client: ReturnType<typeof agentClient>,
+  client: ReturnType<typeof userClient>,
+  userId: string,
   authRequestId: string,
-): Promise<NonNullable<McpAuthorizationContext>> {
+): Promise<OAuthContext> {
   const context = await client.mcpAuthorizationContext(authRequestId);
   if (!context) {
     throw new BffError(404, "MCP authorization request is no longer pending");
@@ -146,19 +183,35 @@ async function requiredContext(
   if (context.server.auth.type !== "oauth") {
     throw new BffError(409, "MCP server is not configured for OAuth");
   }
-  return context;
+  return {
+    ...context,
+    storedFlow: context.flow ?? null,
+    oauthState: context.oauthState
+      ? openMcpOAuthState(userId, context.oauthState)
+      : undefined,
+    flow: context.flow
+      ? openMcpOAuthFlow(
+          userId,
+          context.server.id,
+          context.request.authRequestId,
+          context.flow,
+        )
+      : undefined,
+  };
 }
 
 async function finishOrPersist(
-  client: ReturnType<typeof agentClient>,
-  context: NonNullable<McpAuthorizationContext>,
+  client: ReturnType<typeof userClient>,
+  userId: string,
+  context: OAuthContext,
   provider: OAuthProvider,
   result: "AUTHORIZED" | "REDIRECT",
 ): Promise<McpOAuthStartResult> {
   if (result === "AUTHORIZED") {
     const completed = await client.completeMcpAuthorization(
       context.request.authRequestId,
-      provider.oauthState(context.server.id),
+      sealMcpOAuthState(userId, provider.oauthState(context.server.id)),
+      context.storedFlow,
     );
     if (!completed) {
       throw new BffError(
@@ -178,7 +231,13 @@ async function finishOrPersist(
   }
   const saved = await client.saveMcpAuthorizationFlow(
     context.request.authRequestId,
-    provider.flow(),
+    sealMcpOAuthFlow(
+      userId,
+      context.server.id,
+      context.request.authRequestId,
+      provider.flow(),
+    ),
+    context.storedFlow,
   );
   if (!saved) {
     throw new BffError(409, "The waiting Turn no longer accepts authorization");
@@ -195,9 +254,9 @@ function clientMetadataUrl(request: Request): string | undefined {
   return url.protocol === "https:" ? url.toString() : undefined;
 }
 
-function callbackState(agentId: string, authRequestId: string): string {
+function callbackState(target: McpOAuthCallbackTarget): string {
   return Buffer.from(
-    JSON.stringify({agentId, authRequestId, nonce: crypto.randomUUID()}),
+    JSON.stringify({...target, nonce: crypto.randomUUID()}),
   ).toString("base64url");
 }
 
@@ -210,7 +269,7 @@ function sameSecret(left: string, right: string): boolean {
   );
 }
 
-/** In-memory SDK adapter whose complete state is persisted by the Agent VO. */
+/** In-memory SDK adapter whose complete state is persisted by the User VO. */
 class OAuthProvider implements OAuthClientProvider {
   authorizationUrl?: string;
   private codeVerifierValue?: string;
@@ -225,7 +284,7 @@ class OAuthProvider implements OAuthClientProvider {
   ) {}
 
   static start(
-    context: NonNullable<McpAuthorizationContext>,
+    context: OAuthContext,
     redirectUrl: string,
     metadataUrl: string | undefined,
     state: string,

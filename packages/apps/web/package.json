@@ -10,8 +10,10 @@
     "start": "next start"
   },
   "dependencies": {
+    "google-auth-library": "11.0.2",
     "@restate-agents/client": "workspace:*",
     "@restate-agents/types": "workspace:*",
+    "@restate-agents/secrets": "workspace:*",
     "@modelcontextprotocol/client": "^2.0.0",
     "@shadcn/react": "^0.2.1",
     "lucide-react": "^1.28.0",

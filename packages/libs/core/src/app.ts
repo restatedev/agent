@@ -12,11 +12,15 @@ import {
   Evals,
   ModelGateway,
   Sandbox,
+  User,
+  UserSession,
 } from "./index.js";
 
 serve({
   services: [
     Agent,
+    User,
+    UserSession,
     AgentNotifications,
     AgentScheduler,
     AgentSession,

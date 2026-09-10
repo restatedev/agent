@@ -584,7 +584,7 @@ deployable independently.
 
 ## MCP tools
 
-The runtime can also discover tools from Agent-configured MCP Streamable HTTP
+The runtime can also discover tools from User-configured MCP Streamable HTTP
 endpoints. Every entry declares one protocol mode: `stateless` pins revision
 [`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28) and
 uses `server/discover`; `stateful` uses the 2025-era `initialize` handshake.
@@ -600,8 +600,8 @@ once per turn. Their execution remains distinct:
 
 ### Configuration
 
-Add each trusted server to the Agent profile through the Web UI or
-`Agent.upsertMcpServer`:
+Add each trusted server to the user's Connections page or trusted
+`User.upsertConnection`, then grant its tools through `Agent.setTools`:
 
 ```json
 {
@@ -623,19 +623,17 @@ Fields:
 | `protocol` | yes | `stateless` for 2026-07-28 discovery, or `stateful` for the 2025-era initialize protocol |
 | `auth.type` | yes | `none`, `oauth`, or `bearer` for a user-supplied access token |
 
-Server IDs must be unique. The server definition is part of `AgentProfile` and
-the journaled Turn snapshot, so do not put secrets in its fields. Full OAuth
-OAuth state and bearer tokens are separate private Agent VO state and are
-serialized without application-level encryption in this reference
-implementation. A Turn receives only `{serverId, accessToken}`; refresh tokens,
-redirect details, dynamic-client registration, and discovery metadata remain
-on the private Agent/BFF boundary. No credential is returned by `Agent.profile`
-or the pending-authorization API.
+Server IDs are unique per User. Configuration is credential-free and User-owned;
+the Agent profile holds only tool grants. The User snapshots permitted
+connections into each turn with a durable connection revision. Credentials stay
+encrypted in User state and only `{serverId, encryptedToken}` enters a turn.
+Full OAuth state remains on the User/BFF boundary. See
+[user identity and grants](user-identity.md) and
+[credential encryption](credential-encryption.md).
 
-An MCP endpoint is a trusted capability boundary. Its tool names,
-descriptions, and schemas enter the model action space, and its handlers run
-with the Agent's credential. Conversation input must never choose an endpoint
-or credential.
+An MCP endpoint is a trusted outbound capability. Do not take URLs or tokens
+from conversation input. “All tools” grants include future tools; selected
+grants use raw remote names. Both direct calls and PTC enforce the same grants.
 
 ### Compatibility gate
 
@@ -643,7 +641,7 @@ An endpoint fits this integration when all of these conditions hold:
 
 - it uses Streamable HTTP rather than stdio or the deprecated standalone
   HTTP+SSE transport;
-- its profile entry selects the matching protocol mode: handshake-free MCP
+- its connection entry selects the matching protocol mode: handshake-free MCP
   `2026-07-28` with `server/discover` for `stateless`, or the 2025-era
   `initialize` handshake for `stateful`; and
 - it is anonymous, uses the MCP OAuth authorization-code flow supported by the
@@ -655,56 +653,31 @@ visible.
 
 ### OAuth lifecycle
 
-MCP OAuth is coordinated by Agent state but split across the Turn and BFF:
+1. Agent asks its owner User for the permitted connection/credential snapshot.
+2. Discovery or invocation requests authorization through the Agent, which
+   records a UI action and attaches its turn to the User's shared flow.
+3. The turn waits on its own named signal. The BFF authenticates the user and
+   handles discovery, refresh, registration, authorization code and PKCE.
+4. User stores encrypted flow state; OAuth callbacks are bound to the initiating
+   browser session. Save/completion compares encrypted flow versions.
+5. User saves credentials and notifies each attached Agent. Agent signals only
+   its matching active, non-interrupting turn with a minimal encrypted token.
+6. Interrupted turns detach independently. Other agents' authorization work
+   continues. Disconnecting a connection invalidates every turn's generation.
 
-1. Agent projects each stored OAuth state to `{serverId, accessToken}` and
-   snapshots those minimal credentials into a new Turn.
-2. An OAuth server with no credential, or a discovery/invocation 401 or
-   insufficient-scope challenge, calls `Agent.requestMcpAuthorization`.
-3. Agent verifies the active Turn, coalesces requests for the same server,
-   stores the pending action, and publishes `mcpAuth` invalidation.
-4. The Turn waits on a named signal belonging to its own invocation.
-5. The Web UI re-reads `Agent.mcpAuthorizations` and presents an Authorize
-   action. The BFF performs OAuth discovery, refresh when possible, dynamic
-   client registration, and authorization-code plus PKCE flow.
-6. Agent durably stores discovery, registered-client, OAuth state, and PKCE
-   material across the browser redirect. Those private values never enter the
-   profile, Turn, or browser response.
-7. The callback validates OAuth state, exchanges the code, and calls
-   `Agent.completeMcpAuthorization` with the resulting full OAuth state.
-8. Agent stores the OAuth state, removes the pending flow, publishes `mcpAuth`,
-   and signals the waiting Turn with only `{serverId, accessToken}`. The Turn
-   retries the failed operation. A rejected replacement credential creates
-   another visible authorization action, bounded to four rounds per tool call.
-
-Completion is rejected for a stale, terminal, or interrupting Turn. Changing
-or removing a server clears its credential and cancels related waiters. Turn
-cleanup removes abandoned authorization actions and redirect state.
+A rejected replacement can trigger another authorization round, bounded to
+four rounds per call. Full refresh and registration state never enters the
+turn. [User identity](user-identity.md) details the ownership model.
 
 ### Bearer-token lifecycle
 
-Bearer authentication uses the same durable authorization wait without an
-OAuth redirect:
+Bearer actions use the same waiter path without an OAuth redirect. A password
+input sends the token only to the authenticated same-origin BFF, which encrypts
+it before `User.completeMcpBearerAuthorization`. User stores it and notifies
+the waiting Agents. MCP execution decrypts only inside its HTTP run.
 
-1. A server with no token, or one that returns 401/insufficient scope, creates
-   an authorization action tagged `bearer` and the Turn waits on its signal.
-2. The Web UI accepts the token in a password input and sends it through the
-   same-origin BFF to `Agent.completeMcpBearerAuthorization`.
-3. Agent stores the token in private VO state, removes the pending action,
-   publishes `mcpAuth`, and signals the waiting Turn with the minimal
-   `{serverId, accessToken}` credential.
-4. The Turn retries discovery or invocation. Repeated authorization failures
-   keep asking for a replacement token with an explicit rejected-credential
-   explanation, bounded by the same four-round limit.
-
-Bearer tokens have no automatic refresh. Expiration, revocation, or missing
-permissions require the user to provide a replacement. They never enter the
-profile, transcript, model context, or authorization read response.
-
-Saving a token means only that the credential was submitted. The remote MCP
-server validates it on the retry, so the UI does not claim the server is
-connected at submission time. Likewise, a preset marked `Configured` describes
-profile state, not successful authentication.
+Tokens have no automatic refresh. Saving one does not prove it is valid:
+discovery or a remote call must validate it. Never paste tokens into chat.
 
 ### Discovery and names
 

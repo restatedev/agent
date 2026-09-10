@@ -45,16 +45,18 @@ Preserve these unless the requested change explicitly replaces them:
 
 1. `Agent` is the only durable conversation controller for an `agentId`. Its
    exclusive handlers serialize the active invocation, pending input,
-   profile, approvals, MCP OAuth/bearer state and authorization actions, and
+   profile, approvals, immutable user ownership and authorization actions, and
    externally delivered messages. It does not own conversation history,
-   notifications, or schedules.
+   notifications, or schedules. User owns identity, connections and encrypted
+   credentials; UserSession owns browser sessions. The BFF authenticates Google
+   and enforces ownership; all internal ingress remains trusted.
 2. `AgentSession`, keyed by the same `agentId`, owns the canonical transcript
    and summary checkpoint. The transcript is append-only; never rewrite an
    existing user entry to explain later routing.
 3. At most one `AgentSession.doTurn` invocation is active for an Agent. Its
    Restate invocation ID is the stable `turnId` and signal target.
 4. A turn receives a stable profile snapshot. Instructions, memories,
-   guardrails, and MCP servers changed during that turn affect the next turn.
+   guardrails, and tool grants changed during that turn affect the next turn.
    The session loads its conversation context once at the beginning of
    `doTurn`.
 5. Steering does not cancel the current model/tool step or existing pending
@@ -87,8 +89,10 @@ Preserve these unless the requested change explicitly replaces them:
     explicitly selected stateless `2026-07-28` or stateful 2025-era protocol.
     The exact server, protocol verdict, remote name, and tool definition used
     for inference are retained in the turn snapshot used for invocation.
-    OAuth and bearer credentials are private Agent state; authorization
-    completion stores them before signaling the waiting Turn.
+    OAuth and bearer credentials are private User state; authorization
+    completion stores them before signaling the waiting Turn. The BFF encrypts
+    credentials before Restate ingress; state, RPCs, run results, and signals
+    must never contain their plaintext. See [credential encryption](credential-encryption.md).
 18. Keep the layers distinct in prose and code comments: `Agent` is the
     deterministic controller, `AgentSession` owns session history and turn
     execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
@@ -134,7 +138,7 @@ The detailed turn-runtime list lives in
   the agent service's authority.
 - MCP endpoint configuration is also a trusted capability boundary. Tool
   descriptions and schemas enter the model prompt, credentials live in
-  private Agent state rather than the profile, and HTTP calls may be repeated
+  private User state rather than the profile, and HTTP calls may be repeated
   unless the remote server honors the stable idempotency key.
 - AgentSession history is the public conversation event log, not the complete
   agent trajectory or Restate execution trace. The `transcript` wire name is
@@ -199,12 +203,12 @@ in [tools.md](tools.md).
 
 ### MCP tool
 
-Add the endpoint to the Agent profile through the structured MCP server API.
+Add the endpoint to User connections, then grant its tools in the Agent profile.
 Select `stateless` for handshake-free `2026-07-28` servers and `stateful` for
 servers that use the 2025-era `initialize` handshake.
 Do not accept MCP URLs or credential values from conversation input. Keep full
-OAuth and bearer state private to the Agent/BFF boundary, pass only an access
-token into a Turn, retain the exact tool definition in the per-turn snapshot,
+OAuth and bearer state private to the User/BFF boundary, pass only an encrypted
+access token into a Turn, retain the exact tool definition in the per-turn snapshot,
 and read [tools.md](tools.md) for transport, auth, retry, and result constraints.
 
 ### New Agent handler

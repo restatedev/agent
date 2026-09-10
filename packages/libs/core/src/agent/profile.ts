@@ -1,25 +1,24 @@
 // Durable profile for one Agent virtual object. Instructions, guardrails, and
-// MCP servers and web search are user-managed configuration; memories are a
+// Tool grants and web search are user-managed configuration; memories are a
 // bounded keyed collection managed by the model through an Agent handler.
 
 import type {
   AgentProfile,
+  AgentTools,
   Guardrail,
-  McpServer,
-  McpServerMutationResult,
   MemoryChange,
   MemoryEntry,
 } from "@restate-agents/types";
+import {DEFAULT_AGENT_TOOLS} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {MemoryUpdateResult} from "../internal-types.js";
 
 const INSTRUCTIONS = "profile/instructions";
 const MEMORIES = "profile/memories";
 const GUARDRAILS = "profile/guardrails";
-const MCP_SERVERS = "profile/mcp-servers";
+const TOOLS = "profile/tools";
 const WEB_SEARCH_ENABLED = "profile/web-search-enabled";
 const MAX_MEMORIES = 32;
-const MAX_MCP_SERVERS = 16;
 
 /**
  * Handler-scoped access to persistent profile state for the current Agent.
@@ -28,19 +27,19 @@ const MAX_MCP_SERVERS = 16;
  * snapshot and never reads this state directly.
  */
 export function* read(): restate.Operation<AgentProfile> {
-  const [instructions, memories, guardrails, mcpServers, webSearchEnabled] =
+  const [instructions, memories, guardrails, tools, webSearchEnabled] =
     yield* restate.all([
       restate.sharedState().get<string>(INSTRUCTIONS),
       restate.sharedState().get<MemoryEntry[]>(MEMORIES),
       restate.sharedState().get<Guardrail[]>(GUARDRAILS),
-      restate.sharedState().get<McpServer[]>(MCP_SERVERS),
+      restate.sharedState().get<AgentTools>(TOOLS),
       restate.sharedState().get<boolean>(WEB_SEARCH_ENABLED),
     ]);
   return {
     ...(instructions ? {instructions} : {}),
     memories: memories ?? [],
     guardrails: guardrails ?? [],
-    mcpServers: mcpServers ?? [],
+    tools: tools ?? structuredClone(DEFAULT_AGENT_TOOLS),
     webSearchEnabled: webSearchEnabled ?? true,
   };
 }
@@ -69,44 +68,9 @@ export function setGuardrails(guardrails: Guardrail[]): void {
   }
 }
 
-/** Creates or replaces one user-configured MCP server by stable ID. */
-export function* upsertMcpServer(
-  server: McpServer,
-): restate.Operation<McpServerMutationResult> {
-  const servers =
-    (yield* restate.sharedState().get<McpServer[]>(MCP_SERVERS)) ?? [];
-  const index = servers.findIndex(({id}) => id === server.id);
-  if (index < 0 && servers.length >= MAX_MCP_SERVERS) {
-    return {
-      accepted: false,
-      error: `MCP servers are limited to ${MAX_MCP_SERVERS} entries`,
-    };
-  }
-
-  if (index < 0) {
-    servers.push(server);
-  } else {
-    servers[index] = server;
-  }
-  restate.state().set(MCP_SERVERS, servers);
-  return {accepted: true, replaced: index >= 0, server};
-}
-
-/** Removes one configured MCP server when it exists. */
-export function* removeMcpServer(id: string): restate.Operation<boolean> {
-  const servers =
-    (yield* restate.sharedState().get<McpServer[]>(MCP_SERVERS)) ?? [];
-  const index = servers.findIndex((server) => server.id === id);
-  if (index < 0) {
-    return false;
-  }
-  servers.splice(index, 1);
-  if (servers.length === 0) {
-    restate.state().clear(MCP_SERVERS);
-  } else {
-    restate.state().set(MCP_SERVERS, servers);
-  }
-  return true;
+/** Replaces explicit per-agent capabilities for subsequent turns. */
+export function setTools(tools: AgentTools): void {
+  restate.state().set(TOOLS, tools);
 }
 
 /** Atomically applies model-requested changes to the bounded Agent memory. */

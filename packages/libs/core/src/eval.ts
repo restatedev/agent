@@ -7,6 +7,7 @@ import {type HistoryPage, HistoryPageSchema} from "@restate-agents/types";
 import {
   AgentNotificationsDefinition,
   AgentSchedulerDefinition,
+  UserDefinition,
 } from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
@@ -1432,6 +1433,17 @@ function* evaluate(
   const invocationId = restate.handlerRequest().id;
   const isolation = runId ? `${runId}-${invocationId}` : invocationId;
   const agentId = `eval-${isolation}-${caseId}-${attempt}`;
+  // Evals run inside the trusted boundary with their own isolated identity.
+  const userId = `eval-user-${agentId}`;
+  const user = restate.client(UserDefinition, userId);
+  yield* user.register({
+    userId,
+    issuer: "https://accounts.google.com",
+    subject: userId,
+    email: "eval@example.test",
+    displayName: "Evaluation",
+  });
+  yield* user.createAgent({agentId, name: caseId});
   const history: HistoryReader = {
     agentId,
     nextSequence: 1,

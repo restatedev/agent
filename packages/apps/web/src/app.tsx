@@ -4,20 +4,14 @@ import {
   Activity,
   AlarmClock,
   Ban,
-  Bot,
-  Bug,
   Check,
   ChevronRight,
   CircleAlert,
   CircleCheck,
-  FileText,
   FlaskConical,
   GitBranch,
   Globe,
-  HardDrive,
   KeyRound,
-  Layers,
-  ListTodo,
   MemoryStick,
   MessageSquareText,
   Plus,
@@ -25,7 +19,6 @@ import {
   Save,
   Send,
   Settings2,
-  Shapes,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -45,6 +38,7 @@ import type {
   ScheduleSpecInput,
   SequencedEntry,
 } from "./agent-client";
+import {AgentToolsPanel} from "./agent-tools-panel";
 import {Transcript} from "./transcript";
 import {
   type AgentConnection,
@@ -58,9 +52,6 @@ import {
 type Mode = "ask" | "steer" | "interrupt";
 type Tab = "approvals" | "profile" | "evals";
 type Guardrail = AgentProfile["guardrails"][number];
-type McpServer = AgentProfile["mcpServers"][number];
-type McpAuthType = McpServer["auth"]["type"];
-type McpProtocol = McpServer["protocol"];
 type TurnTerminalStatus = Extract<
   SequencedEntry["entry"],
   {role: "assistant"}
@@ -132,90 +123,6 @@ const MODE_COPY: Record<Mode, {label: string; description: string}> = {
     description: "Stops unfinished work and asks the turn for a final summary.",
   },
 };
-
-const MCP_SERVER_PRESETS = [
-  {
-    id: "slack",
-    label: "Slack",
-    url: "https://mcp.slack.com/mcp",
-    protocol: "stateful",
-    authType: "oauth",
-    setup: "OAuth app required",
-    icon: MessageSquareText,
-  },
-  {
-    id: "notion",
-    label: "Notion",
-    url: "https://mcp.notion.com/mcp",
-    protocol: "stateless",
-    authType: "oauth",
-    setup: "One-click OAuth",
-    icon: FileText,
-  },
-  {
-    id: "github",
-    label: "GitHub",
-    url: "https://api.githubcopilot.com/mcp/x/all",
-    protocol: "stateful",
-    authType: "bearer",
-    setup: "All toolsets · personal token",
-    icon: GitBranch,
-  },
-  {
-    id: "google-drive",
-    label: "Google Drive",
-    url: "https://drivemcp.googleapis.com/mcp/v1",
-    protocol: "stateless",
-    authType: "oauth",
-    setup: "OAuth app required",
-    icon: HardDrive,
-  },
-  {
-    id: "linear",
-    label: "Linear",
-    url: "https://mcp.linear.app/mcp",
-    protocol: "stateful",
-    authType: "oauth",
-    setup: "One-click OAuth",
-    icon: ListTodo,
-  },
-  {
-    id: "figma",
-    label: "Figma",
-    url: "https://mcp.figma.com/mcp",
-    protocol: "stateful",
-    authType: "oauth",
-    setup: "One-click OAuth",
-    icon: Shapes,
-  },
-  {
-    id: "atlassian",
-    label: "Atlassian",
-    url: "https://mcp.atlassian.com/v2/mcp",
-    protocol: "stateful",
-    authType: "oauth",
-    setup: "One-click OAuth",
-    icon: Layers,
-  },
-  {
-    id: "sentry",
-    label: "Sentry",
-    url: "https://mcp.sentry.dev/mcp",
-    protocol: "stateful",
-    authType: "oauth",
-    setup: "One-click OAuth",
-    icon: Bug,
-  },
-  {
-    id: "lovable",
-    label: "Lovable",
-    url: "https://mcp.lovable.dev",
-    protocol: "stateful",
-    authType: "oauth",
-    setup: "One-click OAuth",
-    icon: Sparkles,
-  },
-] as const;
 
 function shortTurn(turnId: string) {
   return turnId.length > 14 ? `${turnId.slice(0, 14)}…` : turnId;
@@ -622,25 +529,16 @@ function RestateMark({state}: {state: AgentMarkState}) {
 
 function ConnectionHeader({
   activity,
-  connection,
+  name,
   connected,
   error,
-  onConnect,
-  onNewAgent,
 }: {
   activity: AgentMarkState;
-  connection: AgentConnection;
+  name: string;
   connected: boolean;
   error?: string;
-  onConnect: (agentId: string) => void;
-  onNewAgent: () => void;
 }) {
-  const [agentId, setAgentId] = useState(connection.agentId);
-  useEffect(() => {
-    setAgentId(connection.agentId);
-  }, [connection.agentId]);
   const connectionLabel = connected ? "Live" : error ? "Offline" : "Connecting";
-
   return (
     <header className="topbar">
       <div className="brand">
@@ -653,49 +551,19 @@ function ConnectionHeader({
           <RestateMark state={activity} />
         </div>
         <div>
-          <strong>Restate Agent</strong>
-          <span>durable runtime demo</span>
+          <strong>{name}</strong>
+          <span>Restate Agent</span>
         </div>
       </div>
-      <form
-        className="connection-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onConnect(agentId);
-        }}
-      >
-        <label>
-          <span>Agent</span>
-          <input
-            aria-label="Agent ID"
-            onChange={(event) => setAgentId(event.target.value)}
-            spellCheck={false}
-            value={agentId}
-          />
-        </label>
-        <button className="button secondary compact" type="submit">
-          Connect
-        </button>
-      </form>
       <div className="topbar-actions">
         <span
           className="connection-status"
           data-connected={connected}
-          title={
-            error ??
-            (connected ? "Connected to the agent runtime" : "Connecting")
-          }
+          title={error ?? connectionLabel}
         >
           <span className="connection-dot" />
           {connectionLabel}
         </span>
-        <button
-          className="button ghost compact"
-          onClick={onNewAgent}
-          type="button"
-        >
-          <Plus /> New agent
-        </button>
       </div>
     </header>
   );
@@ -1190,59 +1058,6 @@ function ScheduleList({
   );
 }
 
-function McpServerList({
-  servers,
-  client,
-  notify,
-  refresh,
-}: {
-  servers: McpServer[];
-  client: AgentClient;
-  notify: (message: string, error?: boolean) => void;
-  refresh: () => Promise<unknown>;
-}) {
-  if (servers.length === 0) {
-    return <p className="empty-copy">No MCP servers configured.</p>;
-  }
-  return (
-    <div className="mcp-server-list">
-      {[...servers]
-        .sort((left, right) => left.id.localeCompare(right.id))
-        .map((server) => (
-          <article className="compact-card mcp-server-card" key={server.id}>
-            <div>
-              <strong>{server.id}</strong>
-              <span>
-                {server.type} · {server.protocol} · {server.auth.type} ·{" "}
-                {server.url}
-              </span>
-            </div>
-            <button
-              aria-label={`Remove MCP server ${server.id}`}
-              className="icon-button danger"
-              onClick={async () => {
-                try {
-                  const result = await client.removeMcpServer(server.id);
-                  notify(
-                    result.removed
-                      ? `Removed MCP server ${server.id}`
-                      : "MCP server was already gone",
-                  );
-                  await refresh();
-                } catch (error) {
-                  notify(errorMessage(error), true);
-                }
-              }}
-              type="button"
-            >
-              <Trash2 />
-            </button>
-          </article>
-        ))}
-    </div>
-  );
-}
-
 function ProfilePanel({
   client,
   profile,
@@ -1270,16 +1085,6 @@ function ProfilePanel({
     repeatEverySeconds: "",
     whenBusy: "queue" as ScheduleSpecInput["whenBusy"],
   });
-  const [mcpServer, setMcpServer] = useState({
-    id: "",
-    type: "http" as const,
-    url: "",
-    protocol: "stateless" as McpProtocol,
-    authType: "oauth" as McpAuthType,
-  });
-  const [addingMcpPresetId, setAddingMcpPresetId] = useState<string | null>(
-    null,
-  );
 
   useEffect(() => {
     if (!profile) return;
@@ -1290,29 +1095,6 @@ function ProfilePanel({
   const changeGuardrails = (next: Guardrail[]) => {
     setGuardrails(next);
     setGuardrailsDirty(true);
-  };
-
-  const addMcpPreset = async (preset: (typeof MCP_SERVER_PRESETS)[number]) => {
-    setAddingMcpPresetId(preset.id);
-    try {
-      const result = await client.upsertMcpServer({
-        id: preset.id,
-        type: "http",
-        url: preset.url,
-        protocol: preset.protocol,
-        auth: {type: preset.authType},
-      });
-      if (!result.accepted) {
-        notify(result.error, true);
-        return;
-      }
-      notify(`Configured ${preset.label} MCP server`);
-      await refreshProfile();
-    } catch (error) {
-      notify(errorMessage(error), true);
-    } finally {
-      setAddingMcpPresetId(null);
-    }
   };
 
   return (
@@ -1489,174 +1271,12 @@ function ProfilePanel({
         )}
       </section>
 
-      <section className="settings-section">
-        <div className="section-heading">
-          <div>
-            <Bot />
-            <span>
-              <strong>MCP servers</strong>
-              <small>Agent-owned tool configuration</small>
-            </span>
-          </div>
-        </div>
-        <McpServerList
-          client={client}
-          notify={notify}
-          refresh={refreshProfile}
-          servers={profile?.mcpServers ?? []}
-        />
-        <div className="mcp-presets">
-          <span className="mcp-presets-label">Popular presets</span>
-          <div className="mcp-preset-list">
-            {MCP_SERVER_PRESETS.map((preset) => {
-              const Icon = preset.icon;
-              const configured = profile?.mcpServers.find(
-                ({id}) => id === preset.id,
-              );
-              const added =
-                configured?.url === preset.url &&
-                configured.protocol === preset.protocol &&
-                configured.auth.type === preset.authType;
-              const adding = addingMcpPresetId === preset.id;
-              return (
-                <button
-                  aria-label={
-                    added
-                      ? `${preset.label} MCP server configured`
-                      : configured
-                        ? `Update ${preset.label} MCP server`
-                        : `Add ${preset.label} MCP server`
-                  }
-                  className="mcp-preset-button"
-                  data-added={added}
-                  disabled={Boolean(added || addingMcpPresetId)}
-                  key={preset.id}
-                  onClick={() => addMcpPreset(preset)}
-                  title={`${preset.label}: ${preset.protocol} · ${preset.url}`}
-                  type="button"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="mcp-preset-icon"
-                    data-provider={preset.id}
-                  >
-                    <Icon />
-                    {added ? (
-                      <span className="mcp-preset-check">
-                        <Check />
-                      </span>
-                    ) : null}
-                  </span>
-                  <span>
-                    <strong>{preset.label}</strong>
-                    <small>
-                      {adding
-                        ? "Adding…"
-                        : added
-                          ? `Configured · ${preset.protocol}`
-                          : configured
-                            ? `Update · ${preset.protocol}`
-                            : `${preset.setup} · ${preset.protocol}`}
-                    </small>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <form
-          className="mcp-server-form"
-          onSubmit={async (event: FormEvent) => {
-            event.preventDefault();
-            const id = mcpServer.id.trim();
-            const url = mcpServer.url.trim();
-            if (!id || !url) {
-              notify("MCP server id and URL are required", true);
-              return;
-            }
-            try {
-              const result = await client.upsertMcpServer({
-                id,
-                type: mcpServer.type,
-                url,
-                protocol: mcpServer.protocol,
-                auth: {type: mcpServer.authType},
-              });
-              if (!result.accepted) {
-                notify(result.error, true);
-                return;
-              }
-              notify(
-                result.replaced
-                  ? `Updated MCP server ${result.server.id}`
-                  : `Configured MCP server ${result.server.id}`,
-              );
-              setMcpServer({
-                id: "",
-                type: "http",
-                url: "",
-                protocol: "stateless",
-                authType: "oauth",
-              });
-              await refreshProfile();
-            } catch (error) {
-              notify(errorMessage(error), true);
-            }
-          }}
-        >
-          <div className="form-grid two">
-            <input
-              onChange={(event) =>
-                setMcpServer({...mcpServer, id: event.target.value})
-              }
-              placeholder="Server id"
-              value={mcpServer.id}
-            />
-            <select aria-label="MCP transport" disabled value={mcpServer.type}>
-              <option value="http">HTTP</option>
-            </select>
-          </div>
-          <input
-            onChange={(event) =>
-              setMcpServer({...mcpServer, url: event.target.value})
-            }
-            placeholder="https://mcp.example.com/mcp"
-            value={mcpServer.url}
-          />
-          <div className="form-grid two">
-            <select
-              aria-label="MCP protocol mode"
-              onChange={(event) =>
-                setMcpServer({
-                  ...mcpServer,
-                  protocol: event.target.value as McpProtocol,
-                })
-              }
-              value={mcpServer.protocol}
-            >
-              <option value="stateless">Stateless</option>
-              <option value="stateful">Stateful</option>
-            </select>
-            <select
-              aria-label="MCP authentication type"
-              onChange={(event) =>
-                setMcpServer({
-                  ...mcpServer,
-                  authType: event.target.value as McpAuthType,
-                })
-              }
-              value={mcpServer.authType}
-            >
-              <option value="oauth">OAuth</option>
-              <option value="bearer">Bearer token</option>
-              <option value="none">No authentication</option>
-            </select>
-          </div>
-          <button className="button secondary small" type="submit">
-            <Plus /> Add or update server
-          </button>
-        </form>
-      </section>
+      <AgentToolsPanel
+        client={client}
+        profile={profile}
+        refresh={refreshProfile}
+        notify={notify}
+      />
 
       <section className="settings-section">
         <div className="section-heading">
@@ -1990,8 +1610,14 @@ function Inspector({
   );
 }
 
-export function App({initialAgentId}: {initialAgentId: string}) {
-  const [connection, setConnection] = useState<AgentConnection>({
+export function App({
+  initialAgentId,
+  agentName,
+}: {
+  initialAgentId: string;
+  agentName: string;
+}) {
+  const [connection] = useState<AgentConnection>({
     agentId: initialAgentId,
   });
   const [mode, setMode] = useState<Mode>("ask");
@@ -2039,15 +1665,6 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     window.history.replaceState(null, "", url);
   }, [notify]);
 
-  function connect(agentId: string) {
-    const nextAgent = agentId.trim() || "demo";
-    const url = new URL(window.location.href);
-    url.searchParams.set("agent", nextAgent);
-    window.history.replaceState(null, "", url);
-    setProvisionalTurn(undefined);
-    setConnection({agentId: nextAgent});
-  }
-
   async function sendMessage(message: string, replacement?: string) {
     try {
       if (mode === "ask") {
@@ -2094,19 +1711,15 @@ export function App({initialAgentId}: {initialAgentId: string}) {
       <ConnectionHeader
         activity={markState}
         connected={agent.connected}
-        connection={connection}
+        name={agentName}
         error={agent.connectionError}
-        onConnect={connect}
-        onNewAgent={() =>
-          connect(`agent-${Math.random().toString(36).slice(2, 8)}`)
-        }
       />
       <main className="workspace">
         <section className="conversation-pane">
           <div className="conversation-heading">
             <div>
               <p className="eyebrow">Conversation</p>
-              <h1>{connection.agentId}</h1>
+              <h1>{agentName}</h1>
             </div>
             <div className="conversation-stat">
               <Activity />

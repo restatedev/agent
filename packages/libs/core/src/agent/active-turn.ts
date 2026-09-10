@@ -2,7 +2,7 @@
 // `turn` and `pending` state keys plus the AgentSession invocation and signals.
 // It deliberately knows nothing about conversation history.
 
-import type {ConversationEntry} from "@restate-agents/types";
+import type {AgentTools, ConversationEntry} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {
   AGENT_SESSION_SIGNALS,
@@ -14,6 +14,7 @@ import {AgentSession} from "../session/index.js";
 
 /** Durable state for the invocation currently owned by the Agent. */
 type ActiveTurnState = {
+  tools: AgentTools;
   /** AgentSession.doTurn invocation ID and signal target. */
   id: string;
   /** The accepted interruption while its terminal outcome is still pending. */
@@ -58,6 +59,7 @@ export function* start(
     .doTurn(request);
   restate.state().set("turn", {
     id: started.id,
+    tools: request.tools,
     steeringBatches: [],
   });
   return started.id;

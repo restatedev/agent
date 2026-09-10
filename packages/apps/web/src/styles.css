@@ -59,6 +59,64 @@
   box-sizing: border-box;
 }
 
+.user-workspace {display:grid;grid-template-columns:220px minmax(0,1fr);height:100dvh;overflow:hidden;}
+.agents-sidebar {padding:22px 16px;border-right:1px solid var(--border);display:flex;flex-direction:column;gap:16px;overflow:auto;background:var(--surface);}
+.account-identity {display:grid;gap:4px;overflow-wrap:anywhere;}
+.account-identity small,.account-pane>p,.tool-selection small,.check-label small {color:var(--text-muted);}
+.agents-sidebar .eyebrow {margin:8px 0 0;}
+.agents-sidebar nav {display:grid;gap:5px;}
+.agents-sidebar nav button {background:transparent;border:0;border-radius:8px;padding:10px;text-align:left;overflow-wrap:anywhere;}
+.agents-sidebar nav button[data-active="true"],.agents-sidebar>button[data-active="true"] {background:var(--primary-soft);color:var(--primary-bright);}
+.agents-sidebar form {display:grid;gap:8px;}
+.agents-sidebar input {width:100%;min-width:0;}
+.agent-workspace {min-width:0;min-height:0;overflow:hidden;}
+.agent-workspace .workspace {grid-template-columns:minmax(320px,1fr) minmax(320px,390px);}
+.agent-workspace .topbar {justify-content:space-between;}
+.account-pane {height:100%;overflow:auto;padding:32px;max-width:1100px;margin:auto;}
+.account-pane h1 {margin:0 0 12px;}
+.account-pane .mcp-preset-list {margin:24px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));}
+.account-connections {display:grid;gap:12px;margin:24px 0;}
+.account-pane .account-connection {display:flex;flex-direction:column;align-items:stretch;gap:14px;padding:18px;}
+.account-pane .account-connection>div:first-child {display:grid;gap:4px;overflow-wrap:anywhere;}
+.account-pane .account-connection strong {font-size:14px;}
+.account-pane .account-connection span {font-size:12px;}
+.account-pane .connection-actions {display:flex;flex-direction:row;flex-wrap:wrap;gap:8px;}
+.account-pane label {display:grid;gap:6px;}
+.custom-connection {margin:28px 0;}
+.custom-connection summary {cursor:pointer;font-weight:600;}
+.agent-connection {border-top:1px solid var(--border);padding:16px 0;display:grid;gap:10px;}
+.check-label {display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+.check-label input,.tool-checkboxes input {width:16px;height:16px;flex-shrink:0;accent-color:var(--primary);}
+.tool-selection {border:1px solid var(--border);border-radius:10px;margin:12px 0;padding:12px;min-width:0;}
+.tool-selection legend {padding:0 5px;font-weight:600;}
+.field-label {display:grid;gap:6px;}
+.tool-checkboxes {display:grid;gap:10px;max-height:300px;overflow:auto;margin-top:12px;}
+.tool-checkboxes label {display:flex;align-items:start;gap:8px;overflow-wrap:anywhere;}
+.tool-checkboxes small {display:block;font-size:11px;}
+.login-page {height:100dvh;display:grid;place-items:center;padding:24px;}
+.login-page section {max-width:480px;padding:40px;border:1px solid var(--border);border-radius:20px;background:var(--surface);}
+.login-page h1 {font-size:32px;line-height:1.2;}
+.login-page small {display:block;color:var(--text-muted);margin-top:24px;}
+@media(max-width:1100px) {
+  .user-workspace {grid-template-columns:180px minmax(0,1fr);}
+  .agent-workspace {overflow:auto;}
+  .agent-workspace .app-shell {height:auto;min-height:100%;}
+  .agent-workspace .workspace {display:flex;flex-direction:column;overflow:visible;}
+  .agent-workspace .conversation-pane {height:65dvh;min-height:520px;}
+  .agent-workspace .inspector {height:600px;min-height:0;flex:none;}
+  .agent-workspace .inspector-content {overflow:auto;}
+  .agent-workspace .brand > div:last-child {display:flex;}
+}
+@media(max-width:650px) {
+  .user-workspace {display:flex;flex-direction:column;}
+  .agents-sidebar {flex:none;max-height:32dvh;border-right:0;border-bottom:1px solid var(--border);padding:12px;}
+  .agents-sidebar nav {display:flex;flex-wrap:wrap;}
+  .agents-sidebar form {grid-template-columns:minmax(0,1fr) auto;}
+  .agents-sidebar>.empty-copy,.agents-sidebar>.eyebrow {display:none;}
+  .agent-workspace {flex:1;}
+  .account-pane {padding:20px;}
+}
+
 html,
 body,
 #root {

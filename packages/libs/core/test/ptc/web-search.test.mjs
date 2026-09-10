@@ -9,7 +9,7 @@ import {runHandler} from "./harness.mjs";
 
 const input = {query: "durable execution", maxResults: 2};
 const hit = {title: "Source", url: "https://example.com/docs", content: "Evidence"};
-const context = enabled => agentTools.createAgentToolContext("test", "turn", enabled);
+const context = enabled => agentTools.createAgentToolContext("test", "turn", enabled,{builtin:{mode:"all"},dynamic:{mode:"selected",names:[]},mcp:[]},"test-user");
 const call = {toolCallId: "search", toolName: "webSearch", input};
 const scope = guard => ({
   transcript: { *append() {} },
@@ -19,7 +19,7 @@ const scope = guard => ({
 });
 
 test("web search profile defaults on and accepts only a boolean toggle", () => {
-  const profile = {memories: [], guardrails: [], mcpServers: []};
+  const profile = {memories: [], guardrails: []};
   assert.equal(AgentProfileSchema.parse(profile).webSearchEnabled, true);
   assert.equal(AgentProfileSchema.parse({...profile, webSearchEnabled: false}).webSearchEnabled, false);
   assert.equal(SetWebSearchEnabledSchema.safeParse({enabled: "false"}).success, false);

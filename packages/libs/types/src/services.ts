@@ -11,7 +11,9 @@ import {
   AgentNotificationTopicSchema,
   AgentNotificationUnsubscribeSchema,
   AgentNotificationWatchRequestSchema,
+  AgentOwnershipSchema,
   AgentProfileSchema,
+  AgentToolsSchema,
   AgentTurnOutcomeSchema,
   AgentTurnRequestSchema,
   ApprovalCancellationSchema,
@@ -31,14 +33,17 @@ import {
   McpAuthorizationFlowUpdateSchema,
   McpAuthorizationRequestInputSchema,
   McpAuthorizationRequestSchema,
+  McpAuthorizationResolutionSchema,
   McpBearerAuthorizationCompletionSchema,
   McpServerIdRequestSchema,
   McpServerMutationResultSchema,
   McpServerRemovalResultSchema,
   McpServerSchema,
+  McpTurnCredentialSchema,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
   MessageSchema,
+  ResolvedMcpServerSchema,
   ScheduleCancellationResultSchema,
   ScheduledMessageSchema,
   ScheduleIdRequestSchema,
@@ -47,6 +52,11 @@ import {
   SetGuardrailsSchema,
   SetInstructionsSchema,
   SetWebSearchEnabledSchema,
+  ToolDescriptorSchema,
+  UserAgentSchema,
+  UserConnectionSchema,
+  UserIdentitySchema,
+  UserProfileSchema,
 } from "./index.js";
 import {
   AGENT_NOTIFICATIONS_SERVICE_NAME,
@@ -74,13 +84,26 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     input: SetWebSearchEnabledSchema,
     output: z.void(),
   }),
-  upsertMcpServer: iface.schemas({
-    input: McpServerSchema,
-    output: McpServerMutationResultSchema,
+  initialize: iface.schemas({input: AgentOwnershipSchema, output: z.void()}),
+  ownership: iface.schemas({
+    input: z.void(),
+    output: AgentOwnershipSchema.nullable(),
   }),
-  removeMcpServer: iface.schemas({
-    input: McpServerIdRequestSchema,
-    output: McpServerRemovalResultSchema,
+  setTools: iface.schemas({input: AgentToolsSchema, output: z.void()}),
+  toolCatalog: iface.schemas({
+    input: z.void(),
+    output: z.object({
+      builtin: z.array(ToolDescriptorSchema),
+      dynamic: z.array(ToolDescriptorSchema),
+    }),
+  }),
+  resolveMcpAuthorization: iface.schemas({
+    input: z.object({
+      authRequestId: z.string(),
+      turnId: z.string(),
+      resolution: McpAuthorizationResolutionSchema,
+    }),
+    output: z.void(),
   }),
   requestMcpAuthorization: iface.schemas({
     input: McpAuthorizationRequestInputSchema,
@@ -93,22 +116,6 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
   mcpAuthorizations: iface.schemas({
     input: z.void(),
     output: z.array(McpAuthorizationRequestSchema),
-  }),
-  mcpAuthorizationContext: iface.schemas({
-    input: McpAuthorizationContextRequestSchema,
-    output: McpAuthorizationContextSchema,
-  }),
-  saveMcpAuthorizationFlow: iface.schemas({
-    input: McpAuthorizationFlowUpdateSchema,
-    output: z.boolean(),
-  }),
-  completeMcpAuthorization: iface.schemas({
-    input: McpAuthorizationCompletionSchema,
-    output: z.boolean(),
-  }),
-  completeMcpBearerAuthorization: iface.schemas({
-    input: McpBearerAuthorizationCompletionSchema,
-    output: z.boolean(),
   }),
   updateMemory: iface.schemas({
     input: MemoryUpdateSchema,
@@ -198,4 +205,104 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
     output: z.void(),
   }),
   doTurn: iface.schemas({input: AgentTurnRequestSchema, output: z.void()}),
+});
+
+/** Private per-user account, agent directory and shared MCP credentials. */
+export const UserDefinition = iface.object("User", {
+  register: iface.schemas({input: UserIdentitySchema, output: z.void()}),
+  profile: iface.schemas({input: z.void(), output: UserProfileSchema}),
+  createAgent: iface.schemas({input: UserAgentSchema, output: UserAgentSchema}),
+  ownsAgent: iface.schemas({
+    input: z.object({agentId: z.string()}),
+    output: z.boolean(),
+  }),
+  upsertConnection: iface.schemas({
+    input: McpServerSchema,
+    output: McpServerMutationResultSchema,
+  }),
+  removeConnection: iface.schemas({
+    input: McpServerIdRequestSchema,
+    output: McpServerRemovalResultSchema,
+  }),
+  disconnectConnection: iface.schemas({
+    input: McpServerIdRequestSchema,
+    output: z.void(),
+  }),
+  connections: iface.schemas({
+    input: z.void(),
+    output: z.array(UserConnectionSchema),
+  }),
+  snapshot: iface.schemas({
+    input: z.object({agentId: z.string(), tools: AgentToolsSchema}),
+    output: z.object({
+      servers: z.array(ResolvedMcpServerSchema),
+      credentials: z.array(McpTurnCredentialSchema),
+    }),
+  }),
+  validateConnection: iface.schemas({
+    input: z.object({
+      agentId: z.string(),
+      connectionId: z.string(),
+      revision: z.number(),
+    }),
+    output: z.boolean(),
+  }),
+  discoverConnection: iface.schemas({
+    input: McpServerIdRequestSchema,
+    output: z.array(ToolDescriptorSchema),
+  }),
+  saveConnectionCatalog: iface.schemas({
+    input: z.object({
+      id: z.string(),
+      revision: z.number(),
+      tools: z.array(ToolDescriptorSchema),
+    }),
+    output: z.boolean(),
+  }),
+  requestMcpAuthorization: iface.schemas({
+    input: z.object({
+      agentId: z.string(),
+      request: McpAuthorizationRequestInputSchema,
+    }),
+    output: McpAuthorizationRequestSchema.nullable(),
+  }),
+  beginAuthorization: iface.schemas({
+    input: z.object({connectionId: z.string(), authRequestId: z.string()}),
+    output: McpAuthorizationRequestSchema,
+  }),
+  cancelMcpAuthorization: iface.schemas({
+    input: z.object({
+      agentId: z.string(),
+      turnId: z.string(),
+      authRequestId: z.string(),
+    }),
+    output: z.void(),
+  }),
+  mcpAuthorizationContext: iface.schemas({
+    input: McpAuthorizationContextRequestSchema,
+    output: McpAuthorizationContextSchema,
+  }),
+  saveMcpAuthorizationFlow: iface.schemas({
+    input: McpAuthorizationFlowUpdateSchema,
+    output: z.boolean(),
+  }),
+  completeMcpAuthorization: iface.schemas({
+    input: McpAuthorizationCompletionSchema,
+    output: z.boolean(),
+  }),
+  completeMcpBearerAuthorization: iface.schemas({
+    input: McpBearerAuthorizationCompletionSchema,
+    output: z.boolean(),
+  }),
+});
+export const UserSessionDefinition = iface.object("UserSession", {
+  create: iface.schemas({
+    input: z.object({userId: z.string(), expiresAt: z.number()}),
+    output: z.void(),
+  }),
+  read: iface.schemas({
+    input: z.void(),
+    output: z.object({userId: z.string(), expiresAt: z.number()}).nullable(),
+  }),
+  revoke: iface.schemas({input: z.void(), output: z.void()}),
 });

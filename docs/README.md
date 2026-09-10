@@ -51,10 +51,12 @@ then follow the same boundaries in the architecture guide:
 Model providers, tool backends, sandboxes, and schedules are supporting details,
 not additional boxes in the Agent controller view.
 
-## The seven Restate services
+## The nine Restate services
 
 | Service | Shape | Identity | Responsibility |
 | --- | --- | --- | --- |
+| `User` | Virtual Object | issuer + subject hash | Identity, agent directory, shared MCP configuration and encrypted authorization |
+| `UserSession` | Virtual Object | session-cookie hash | Browser-session expiry and revocation |
 | `Agent` | Virtual Object | `agentId` | Serialized routing, active invocation, queued input, profile, approvals, and external deliveries |
 | `AgentSession` | Virtual Object | same `agentId` | Authoritative transcript, summary checkpoint, and one exclusive `doTurn` agent-run state machine at a time |
 | `AgentNotifications` | Virtual Object | same `agentId` | Revision watermarks, caller awakeables, and invalidation long-polls |
@@ -63,10 +65,12 @@ not additional boxes in the Agent controller view.
 | `Sandbox` | Virtual Object | same `agentId` | Serialized lifecycle and one-turn lease for the agent's external workspace |
 | `Evals` | Service | suite invocation | Concurrent black-box trials against fresh agent instances |
 
-`Agent`, `AgentSession`, `AgentNotifications`, `AgentScheduler`, and `Sandbox`
+`User`, `UserSession`, `Agent`, `AgentSession`, `AgentNotifications`, `AgentScheduler`, and `Sandbox`
 own Virtual Object state.
 `ModelGateway` and `Evals` are stateless services. The invocation ID of
 `AgentSession.doTurn` is the stable `turnId` and signal target.
+
+See [user identity and ownership](user-identity.md) for Google setup, the BFF security boundary, shared connections, and per-agent grants.
 
 ## Documentation map
 
@@ -90,6 +94,8 @@ Read in this order when learning the entire project:
 7. [Development and verification](development.md) — setup, local operation,
    evals, validation, and troubleshooting.
 8. [Evals](evals.md) — suite protocol, isolation, current tasks, and gaps.
+9. [Credential encryption](credential-encryption.md) — `APP_SECRET_KEY`,
+   encrypted MCP state and journals, deployment and key-lifecycle boundaries.
 
 The root [README](../README.md) is the feature overview and runnable demo guide.
 [PROJECT.md](../PROJECT.md) is the short source map.

@@ -9,6 +9,7 @@
 #                       (default http://localhost:8080)
 #   RESTATE_AUTH_TOKEN  optional bearer token for Restate Cloud or another
 #                       authenticated ingress; omit it for local Restate
+#   APP_SECRET_KEY      strong credential-encryption key, shared with core
 #   PORT                HTTP listen port (default 3000)
 #   HOSTNAME            listen address (default 0.0.0.0)
 
@@ -27,6 +28,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/apps/web/package.json packages/apps/web/
 COPY packages/libs/client/package.json packages/libs/client/
 COPY packages/libs/types/package.json packages/libs/types/
+COPY packages/libs/secrets/package.json packages/libs/secrets/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --filter @restate-agents/web... --frozen-lockfile
 
@@ -34,6 +36,7 @@ COPY tsconfig.base.json ./
 COPY packages/apps/web packages/apps/web
 COPY packages/libs/client packages/libs/client
 COPY packages/libs/types packages/libs/types
+COPY packages/libs/secrets packages/libs/secrets
 RUN pnpm --filter @restate-agents/web... build
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime

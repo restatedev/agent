@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {mock, test} from "node:test";
+import {sealMcpToken} from "@restate-agents/secrets";
 import * as durable from "@restatedev/restate-sdk-gen";
 import {agentStep, settleStep} from "../../src/session/step.ts";
 import * as agentTools from "../../src/session/tools.ts";
@@ -28,8 +29,10 @@ const mcp = {
       protocol: "stateless",
       auth: "bearer",
       turnId: "turn",
+      agentId: "test",
+      ownerUserId:"test",
       timeoutMs: 1000,
-      credential: {serverId: "test", accessToken: "old-test-token"},
+      credential: sealMcpToken("test", "test", "old-test-token"),
     },
     remoteName: "lookup",
     definition: {name: "lookup", inputSchema: {type: "object"}},
@@ -43,6 +46,7 @@ const mcp = {
     },
   },
 };
+const renewedMcpCredential = sealMcpToken("test", "test", "new-test-token");
 
 // Actual gen scheduler and core; outbound RPCs are journaled test fixtures.
 // This keeps the tests offline while exercising the production tool dispatcher.
@@ -63,7 +67,7 @@ function contextWithFixtures(
             return {invocationId};
           }
           return Object.assign(
-            ctx.run(name, () => rpc(opts)),
+            ctx.run(name, () => opts.service==="User" && opts.method==="validateConnection" ? true : rpc(opts)),
             {invocationId},
           );
         };
@@ -80,6 +84,8 @@ function contextWithFixtures(
 function toolContext() {
   return {
     agentId: "test",
+    ownerUserId:"test",
+    permissions:{builtin:{mode:"all"},dynamic:{mode:"all"},mcp:[{connectionId:"test",tools:{mode:"all"}}]},
     turnId: "turn",
     webSearchEnabled: true,
     sandbox: {
@@ -105,6 +111,35 @@ function history(entries) {
     },
   };
 }
+
+test("Agent grants constrain both direct execution and the PTC guest catalog",async()=>{
+  let externalCalls=0;
+  const result=await runHandler(ctx=>durable.execute(contextWithFixtures(ctx,()=>{externalCalls++;throw Error("unauthorized dispatch");}),durable.gen(function*(){
+    const context=toolContext();
+    context.permissions={builtin:{mode:"selected",names:["executeProgram","getWeather"]},dynamic:{mode:"selected",names:[]},mcp:[]};
+    const catalog=agentTools.manifests([dynamic],[mcp],context).map(t=>t.name);
+    const direct=yield* agentTools.execute({toolCallId:"denied",toolName:"lookupItems",input:{}},context,[dynamic],[mcp]);
+    const program=yield* agentTools.execute({toolCallId:"outer",toolName:"executeProgram",input:{source:"async tools => ({dynamic:typeof tools.lookupItems, mcp:typeof tools.mcp__test__lookup, shell:typeof tools.executeCommand, weather:typeof tools.getWeather})"}},context,[dynamic],[mcp],{step:1,transcript:history([]),*guard(){},*cancelPending(){throw Error("unused");}});
+    return {catalog,direct,program};
+  })));
+  assert.deepEqual(result.output.catalog.sort(),["executeProgram","getWeather"]);
+  assert.equal(result.output.direct.status,"failed");
+  assert.equal(result.output.program.status,"succeeded");
+  assert.deepEqual(JSON.parse(result.output.program.result),{dynamic:"undefined",mcp:"undefined",shell:"undefined",weather:"function"});
+  assert.equal(externalCalls,0);
+});
+
+test("a revoked user connection prevents another MCP HTTP call",async t=>{
+  const fetch=t.mock.method(globalThis,"fetch",()=>{throw Error("must not contact revoked connection");});
+  const result=await runHandler(ctx=>durable.execute(new Proxy(ctx,{get(target,key){
+    if(key==="genericCall")return opts=>{assert.equal(opts.method,"validateConnection");return Object.assign(ctx.run("revoked",()=>false),{invocationId:ctx.run("id",()=>"revoked")});};
+    const value=Reflect.get(target,key);return typeof value==="function"?value.bind(target):value;
+  }}),durable.gen(function*(){
+    return yield* agentTools.execute({toolCallId:"revoked",toolName:mcp.name,input:{}},toolContext(),[],[structuredClone(mcp)]);
+  })));
+  assert.equal(result.output.status,"failed");assert.match(result.output.error,/removed, disconnected, or changed/);
+  assert.equal(fetch.mock.callCount(),0);
+});
 
 test("PTC dispatches static, dynamic and MCP tools with auth retry and compact output", {
   timeout: 8000,
@@ -151,9 +186,10 @@ test("PTC dispatches static, dynamic and MCP tools with auth retry and compact o
           const context = toolContext();
           context.mcpAuthorization = {
             *authorize(serverId) {
+              assert.equal(serverId, renewedMcpCredential.serverId);
               auths++;
               return {
-                credential: {serverId, accessToken: "new-test-token"},
+                credential: renewedMcpCredential,
                 challenge: {status: "authorization_required"},
               };
             },

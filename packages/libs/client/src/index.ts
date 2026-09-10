@@ -21,22 +21,21 @@ import type {
   AgentDelivery,
   AgentNotificationSnapshot,
   AgentProfile,
+  AgentTools,
   ApprovalRequest,
   ApprovalResolution,
   AskResult,
   Guardrail,
   HistoryPage,
-  McpAuthorizationContext,
   McpAuthorizationRequest,
-  McpOAuthFlow,
-  McpOAuthState,
-  McpServer,
-  McpServerMutationResult,
-  McpServerRemovalResult,
   ScheduleCancellationResult,
   ScheduledMessage,
   ScheduleMutationResult,
 } from "@restate-agents/types";
+
+export {HttpCallError as IngressClientError} from "@restatedev/restate-sdk-clients";
+export {createUserClient, createUserSessionClient} from "./user.js";
+
 import {
   AgentIngressDefinition,
   type AgentIngressHandlers,
@@ -270,14 +269,14 @@ export function createAgentClient({
       return invoke(agent.setWebSearchEnabled({enabled}));
     },
 
-    /** Creates or replaces one MCP server in the Agent profile. */
-    async upsertMcpServer(server: McpServer): Promise<McpServerMutationResult> {
-      return invoke(agent.upsertMcpServer(server));
+    async setTools(tools: AgentTools): Promise<void> {
+      return invoke(agent.setTools(tools));
     },
-
-    /** Removes one MCP server from the Agent profile. */
-    async removeMcpServer(id: string): Promise<McpServerRemovalResult> {
-      return invoke(agent.removeMcpServer({id}));
+    async ownership() {
+      return invoke(agent.ownership(rpc.opts({input: serde.empty})));
+    },
+    async toolCatalog() {
+      return invoke(agent.toolCatalog(rpc.opts({input: serde.empty})));
     },
 
     // ---- MCP authorization ----
@@ -288,41 +287,6 @@ export function createAgentClient({
         agent.mcpAuthorizations(
           rpc.opts<void, McpAuthorizationRequest[]>({input: serde.empty}),
         ),
-      );
-    },
-
-    /** Returns private OAuth state for use by a trusted server-side BFF. */
-    async mcpAuthorizationContext(
-      authRequestId: string,
-    ): Promise<McpAuthorizationContext> {
-      return invoke(agent.mcpAuthorizationContext({authRequestId}));
-    },
-
-    /** Persists the redirect-round-trip state prepared by the BFF. */
-    async saveMcpAuthorizationFlow(
-      authRequestId: string,
-      flow: McpOAuthFlow,
-    ): Promise<boolean> {
-      return invoke(agent.saveMcpAuthorizationFlow({authRequestId, flow}));
-    },
-
-    /** Stores private OAuth state and resumes the waiting Turn. */
-    async completeMcpAuthorization(
-      authRequestId: string,
-      oauthState: McpOAuthState,
-    ): Promise<boolean> {
-      return invoke(
-        agent.completeMcpAuthorization({authRequestId, oauthState}),
-      );
-    },
-
-    /** Stores a private bearer token and resumes the waiting Turn. */
-    async completeMcpBearerAuthorization(
-      authRequestId: string,
-      accessToken: string,
-    ): Promise<boolean> {
-      return invoke(
-        agent.completeMcpBearerAuthorization({authRequestId, accessToken}),
       );
     },
 

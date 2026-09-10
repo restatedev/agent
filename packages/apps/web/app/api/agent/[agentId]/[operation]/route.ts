@@ -1,16 +1,17 @@
 import type {ScheduleSpecInput} from "@restate-agents/client";
-import type {
-  ApprovalResolution,
-  Guardrail,
-  McpServer,
-} from "@restate-agents/types";
-import {SetWebSearchEnabledSchema} from "@restate-agents/types";
-import {startMcpOAuth} from "../../../../../src/server/mcp-oauth";
+import type {ApprovalResolution, Guardrail} from "@restate-agents/types";
 import {
-  agentClient,
-  BffError,
-  errorResponse,
-} from "../../../../../src/server/restate";
+  AgentToolsSchema,
+  SetWebSearchEnabledSchema,
+} from "@restate-agents/types";
+import {completeMcpBearerAuthorization} from "../../../../../src/server/mcp-bearer";
+import {startMcpOAuth} from "../../../../../src/server/mcp-oauth";
+import {BffError, errorResponse} from "../../../../../src/server/restate";
+
+import {
+  authorizedAgent,
+  requireSameOrigin,
+} from "../../../../../src/server/user-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,7 +45,7 @@ async function input<T>(request: Request): Promise<T> {
 export async function GET(request: Request, context: RouteContext) {
   try {
     const {agentId, operation} = await context.params;
-    const client = agentClient(agentId);
+    const {client} = await authorizedAgent(agentId);
     const {searchParams} = new URL(request.url);
 
     switch (operation) {
@@ -69,6 +70,8 @@ export async function GET(request: Request, context: RouteContext) {
             },
           ),
         );
+      case "tool-catalog":
+        return Response.json(await client.toolCatalog());
       case "profile":
         return Response.json(await client.profile());
       case "approvals":
@@ -87,8 +90,9 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
+    requireSameOrigin(request);
     const {agentId, operation} = await context.params;
-    const client = agentClient(agentId);
+    const {client} = await authorizedAgent(agentId);
 
     switch (operation) {
       case "ask": {
@@ -122,13 +126,13 @@ export async function POST(request: Request, context: RouteContext) {
         await client.setWebSearchEnabled(parsed.data.enabled);
         return Response.json(null);
       }
-      case "mcp-server":
-        return Response.json(
-          await client.upsertMcpServer(await input<McpServer>(request)),
+      case "tools": {
+        const parsed = AgentToolsSchema.safeParse(
+          await input<unknown>(request),
         );
-      case "remove-mcp-server": {
-        const body = await input<{id: string}>(request);
-        return Response.json(await client.removeMcpServer(body.id));
+        if (!parsed.success) throw new BffError(400, "Invalid tool selection");
+        await client.setTools(parsed.data);
+        return Response.json(null);
       }
       case "start-mcp-authorization": {
         const body = await input<{authRequestId: string}>(request);
@@ -142,10 +146,7 @@ export async function POST(request: Request, context: RouteContext) {
           accessToken: string;
         }>(request);
         return Response.json(
-          await client.completeMcpBearerAuthorization(
-            body.authRequestId,
-            body.accessToken,
-          ),
+          await completeMcpBearerAuthorization(agentId, body),
         );
       }
       case "resolve-approval":

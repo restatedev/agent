@@ -67,14 +67,29 @@ pnpm dev:service
 Shell variables must be exported so the Node process receives them. Never
 commit credentials or local launch scripts containing credentials.
 
+MCP credentials use the same `APP_SECRET_KEY` on the core service and BFF.
+An unset key defaults to `restate` outside production; production requires a
+strong random secret. Keep it stable across restarts. This credential format
+requires fresh development data and MCP reauthorization; old plaintext journals
+are not rewritten. See [credential encryption](credential-encryption.md).
+
 See [sandboxes.md](sandboxes.md) for optional Modal settings and lifecycle
 behavior.
 
+Configure [Google sign-in and user ownership](user-identity.md) before running
+`pnpm dev:ui`. There is no anonymous UI fallback. Set `APP_PUBLIC_URL` to the
+exact browser origin, including when using a tunnel.
+
 ## Smoke test
 
-Start one Agent:
+On **trusted private ingress**, register a development identity and create its
+agent first (or create an agent through the signed-in UI and use its ID):
 
 ```sh
+curl localhost:8080/User/dev-user/register \
+  --json '{"userId":"dev-user","issuer":"https://accounts.google.com","subject":"development","email":"dev@example.test","displayName":"Developer"}'
+curl localhost:8080/User/dev-user/createAgent \
+  --json '{"agentId":"demo","name":"Demo"}'
 curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
 ```
@@ -233,7 +248,7 @@ journaled snapshot.
 
 Check:
 
-1. the Agent profile contains the expected structured MCP server entry;
+1. the User has the connection and the Agent profile grants its required tools;
 2. the entry's `protocol` matches the endpoint: `stateless` for MCP revision
    `2026-07-28`, or `stateful` for the 2025-era initialize handshake;
 3. `auth.type` correctly says `none`, `oauth`, or `bearer`;

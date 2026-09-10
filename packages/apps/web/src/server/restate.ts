@@ -1,6 +1,12 @@
 import "server-only";
 
-import {AgentClientError, createAgentClient} from "@restate-agents/client";
+import {
+  AgentClientError,
+  createAgentClient,
+  createUserClient,
+  createUserSessionClient,
+  IngressClientError,
+} from "@restate-agents/client";
 
 const DEFAULT_INGRESS_URL = "http://localhost:8080";
 
@@ -46,6 +52,21 @@ export function agentClient(agentId: string) {
   });
 }
 
+export function userClient(userId: string) {
+  return createUserClient({
+    ingressUrl: ingressUrl(),
+    userId,
+    headers: ingressHeaders(),
+  });
+}
+export function userSessionClient(sessionId: string) {
+  return createUserSessionClient({
+    ingressUrl: ingressUrl(),
+    sessionId,
+    headers: ingressHeaders(),
+  });
+}
+
 export async function invokeEvals(input: unknown, signal: AbortSignal) {
   const response = await fetch(`${ingressUrl()}/Evals/all`, {
     method: "POST",
@@ -74,9 +95,19 @@ export function errorResponse(error: unknown) {
   if (error instanceof BffError || error instanceof AgentClientError) {
     return Response.json({message: error.message}, {status: error.status});
   }
-  console.error(error);
-  return Response.json(
-    {message: error instanceof Error ? error.message : "Unexpected BFF error"},
-    {status: 500},
-  );
+  if (
+    error instanceof IngressClientError &&
+    error.status >= 400 &&
+    error.status < 500
+  ) {
+    let message = "Request rejected by the runtime";
+    try {
+      const body = JSON.parse(error.responseText);
+      if (typeof body.message === "string") message = body.message;
+    } catch {}
+    return Response.json({message}, {status: error.status});
+  }
+  // Unknown provider/SDK errors may carry request headers or token material.
+  console.error("Unexpected BFF request failure");
+  return Response.json({message: "Unexpected BFF error"}, {status: 500});
 }

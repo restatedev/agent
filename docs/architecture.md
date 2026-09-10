@@ -41,6 +41,13 @@ The first three views separate task control, task execution, and client
 invalidation. Supporting services follow afterward; they are deliberately
 hidden from the controller diagram.
 
+### User and UserSession Virtual Objects
+
+The BFF authenticates Google identity and checks ownership on every public
+Agent operation. User owns the agent directory, shared connections and encrypted
+OAuth/bearer state. UserSession owns expiring browser sessions. Agent ownership
+is immutable; each Agent has one conversation. See [user identity](user-identity.md).
+
 ### Agent Virtual Object
 
 Treat `AgentSession.doTurn` as an opaque task here. Agent tracks its invocation
@@ -61,9 +68,8 @@ exclusive handlers own decisions about:
 - the active `AgentSession.doTurn` invocation ID;
 - the FIFO of input waiting for the next turn;
 - steering batches accepted by the active invocation;
-- persistent instructions, memories, guardrails, and MCP server definitions;
-- private MCP OAuth/bearer credentials, redirect state, and pending
-  authorization actions;
+- persistent instructions, memories, guardrails, and tool grants;
+- immutable User ownership and per-turn authorization actions;
 - pending human approvals; and
 - source-attributed external-message routing.
 
@@ -78,9 +84,9 @@ State logic is grouped into handler-scoped namespaces:
 
 - `agent/active-turn.ts` — active invocation, pending input, steering
   bookkeeping, and signal delivery;
-- `agent/profile.ts` — instructions, memories, guardrails, and MCP servers;
-- `agent/mcp-authorization.ts` — private OAuth/bearer state, redirect state,
-  pending actions, and Turn signals;
+- `agent/profile.ts` — instructions, memories, guardrails, and tool grants;
+- `agent/mcp-authorization.ts` — pending Agent actions, User waiter cancellation,
+  and Turn signals;
 - `agent/approval.ts` — pending approval records and decision signals.
 
 These modules use the current Restate handler context. They are not process
@@ -213,6 +219,9 @@ code-based graders to the resulting conversation event log and state.
 
 | State | Owner | Durable mechanism | Readers |
 | --- | --- | --- | --- |
+| Identity, agent directory, MCP connections/credentials/flows | User | Lazy VO state, encrypted secrets | Trusted BFF and owned Agents |
+| Browser session | UserSession | Hashed cookie key, expiry, revoke | BFF only |
+| Tool grants and immutable owner | Agent | Lazy VO state | BFF, turn snapshot |
 | Active turn ID, interrupt reason, steering batches | Agent | Lazy VO state | Exclusive Agent handlers |
 | Pending user/event entries | Agent | Lazy VO state | Exclusive Agent handlers |
 | Instructions, memories, guardrails | Agent | Lazy VO state | Shared profile read; snapshotted at turn start |
@@ -435,24 +444,18 @@ owner.
 
 ## Profile and guardrails
 
-Instructions, memories, guardrails, and MCP server definitions belong to Agent:
+Instructions, memories, guardrails, and tool grants belong to Agent.
+User owns MCP configuration and encrypted credentials. Agent holds per-turn
+authorization actions; User coalesces shared connection flows. The BFF binds
+OAuth to the signed-in browser session and encrypts credentials before ingress.
+User stores ciphertext, then sends completion to each attached Agent, which
+signals only its matching active turn. Interrupting one removes only its
+waiter; disconnecting a connection invalidates every turn's generation.
 
-- instructions are user-managed and appended to model instructions;
-- memories are a model-managed keyed collection of at most 32 facts or
-  preferences, injected as data rather than instructions; and
-- guardrails are user-managed natural-language policies with stable IDs; and
-- MCP servers are user-managed structured endpoint and authentication
-  definitions.
-
-Full OAuth state, bearer tokens, and pending authorization actions also belong
-to Agent, but not to `AgentProfile`. A new Turn receives only
-`{serverId, accessToken}` next to its profile snapshot. When MCP discovery or
-invocation receives an auth challenge, the Turn registers a pending action and
-waits on its own invocation signal. For OAuth, the BFF persists discovery,
-dynamic-client-registration, state, and PKCE data across the browser redirect.
-For bearer authentication, it submits the user-provided token directly.
-Successful completion atomically stores the private credential, retires the
-action, and resolves the Turn with a minimal replacement credential.
+Full refresh and registration state remain on the User/BFF boundary. A turn
+receives only `{serverId, encryptedToken}`; MCP execution decrypts inside its
+HTTP run. See [user identity](user-identity.md) and
+[credential encryption](credential-encryption.md).
 
 Each turn receives one profile snapshot. Profile mutations publish a `profile`
 notification; they are not themselves transcript entries. A successful

@@ -16,10 +16,11 @@
     }
   },
   "scripts": {
+    "test:secrets": "node --import tsx --test test/secrets/*.test.mjs",
     "test:ptc": "tsc -p test/ptc/tsconfig.json && node --import tsx --test test/ptc/*.test.ts test/ptc/*.test.mjs",
     "test:ptc:restart": "node --import tsx test/ptc/restart.mjs",
     "build": "tsc --noEmitOnError",
-    "start": "node ./dist/app.js",
+    "start": "NODE_ENV=production node ./dist/app.js",
     "dev": "tsx watch ./src/app.ts",
     "example:conversation-history": "tsx ./examples/conversation-history.ts",
     "prebundle": "rm -rf dist",
@@ -31,6 +32,7 @@
     "@ai-sdk/openai": "^4.0.10",
     "@modelcontextprotocol/client": "^2.0.0",
     "@restate-agents/types": "workspace:*",
+    "@restate-agents/secrets": "workspace:*",
     "@restatedev/restate-sdk": "1.17.0",
     "@restatedev/restate-sdk-gen": "1.17.0",
     "ai": "^7.0.26",

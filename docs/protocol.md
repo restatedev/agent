@@ -181,15 +181,14 @@ type AgentProfile = {
   webSearchEnabled: boolean; // defaults to true
   memories: Array<{key: string; content: string}>;
   guardrails: Array<{id: string; rule: string}>;
-  mcpServers: Array<{
-    id: string;
-    type: "http";
-    url: string;
-    protocol: "stateless" | "stateful";
-    auth: {type: "none"} | {type: "oauth"} | {type: "bearer"};
-  }>;
-};
+  tools: {
+    builtin: ToolSelection;
+    dynamic: ToolSelection;
+    mcp: Array<{connectionId: string; tools: ToolSelection}>;
+  };};
 ```
+
+`ToolSelection` is `{mode: "all"}` or `{mode: "selected", names: string[]}`.
 
 This is the authoritative current snapshot. Active turns retain the snapshot
 with which they started.
@@ -220,61 +219,47 @@ the built-in `webSearch` tool uses Tavily keyless access. The browser calls
 the same-origin BFF at `POST /api/agent/{agentId}/web-search`; it does not
 contact Tavily or Restate directly.
 
-### `Agent.upsertMcpServer`
+### `Agent.setTools`
 
-Input is one structured MCP server definition:
+Input is the complete `AgentTools` object above. Connection IDs must exist on
+the owner User. Saves grants for future turns and publishes `profile`.
+`Agent.toolCatalog` returns selectable built-in names and dynamic
+`service/handler` identities.
 
-```ts
-{
-  id: string;
-  type: "http";
-  url: string;
-  protocol: "stateless" | "stateful";
-  auth: {type: "none"} | {type: "oauth"} | {type: "bearer"};
-}
-```
+## User ownership and connections
 
-The stable `id` creates or replaces one entry. A successful mutation publishes
-a `profile` notification and returns the stored entry plus whether it replaced
-an existing server.
+`User.register` accepts a verified identity from the trusted BFF.
+`User.createAgent({agentId,name})` initializes immutable
+`Agent.initialize({ownerUserId,name})` ownership and records its directory.
+`User.profile` returns identity, agents, and credential-free connection
+summaries. The browser cannot choose its User ID or claim an existing Agent.
 
-### `Agent.removeMcpServer`
-
-Input is `{id: string}`. It removes the matching entry when present, publishes
-a `profile` notification for an effective removal, and returns
-`{removed: boolean}`.
+`User.upsertConnection` accepts
+`{id,type:"http",url,protocol:"stateless"|"stateful",auth:{type:"none"|"oauth"|"bearer"}}`.
+`removeConnection` and `disconnectConnection` accept `{id}`; material changes
+invalidate credentials and generations. `discoverConnection({id})` returns
+raw remote tool names/descriptions. Connection changes invalidate owned agents'
+profile views. See [user identity](user-identity.md) for BFF endpoints and setup.
 
 ## MCP authorization
 
-OAuth credentials, bearer tokens, and redirect-round-trip state are durable
-Agent VO state, but are not fields of `AgentProfile`.
-`Agent.mcpAuthorizations` is the user-facing read and returns only pending
-actions:
+Agent stores one pending action per connection and active turn; User stores
+shared flows, waiters, and encrypted credentials. Agent publishes `mcpAuth`
+when its action list changes; the turn waits on its own named signal.
 
-```ts
-type McpAuthorizationRequest = {
-  authRequestId: string;
-  serverId: string;
-  turnId: string;
-  authType: "oauth" | "bearer";
-  reason: "missing_credentials" | "unauthorized" | "insufficient_scope";
-  requestedScope?: string;
-};
-```
+Private User handlers are `requestMcpAuthorization`, `beginAuthorization`,
+`cancelMcpAuthorization`, `mcpAuthorizationContext`,
+`saveMcpAuthorizationFlow`, `completeMcpAuthorization`, and
+`completeMcpBearerAuthorization`. OAuth save/completion includes
+`expectedFlow: EncryptedSecret | null` for compare-and-set protection.
+The BFF validates Google browser-session ownership, OAuth state and PKCE,
+and encrypts secrets before ingress.
 
-Discovery or invocation registers one request per server and active Turn, then
-waits on a Turn-scoped signal. Agent publishes an `mcpAuth` notification when
-the pending list changes. For OAuth, the trusted BFF reads private context,
-persists discovery, registration, state, and PKCE material across the browser
-redirect, then calls `completeMcpAuthorization`. For bearer authentication, it
-submits the user-provided token through
-`completeMcpBearerAuthorization`. Agent stores either credential and resolves
-the waiting Turn only if the request still belongs to the active,
-non-interrupting Turn.
-
-Changing or removing a server invalidates credentials bound to that server and
-cancels its pending authorization. Terminal Turn reconciliation clears any
-abandoned requests.
+User completion stores ciphertext and sends `Agent.resolveMcpAuthorization`
+to each attached agent. Agent signals only a matching, active,
+non-interrupting turn. Interrupting one agent removes only its waiter.
+Removing/disconnecting a connection cancels all its waiters and invalidates
+running-turn generations. No refresh tokens or redirect state enter a turn.
 
 ## Human approvals
 
@@ -378,7 +363,7 @@ These are ingress-visible for inspection but are not normal client operations.
 | `requestApproval` | tool or policy gate | Register a pending request for the active turn |
 | `cancelApproval` | interrupted waiter | Remove abandoned approval state |
 | `requestMcpAuthorization` | MCP discovery or tool invocation | Register or coalesce a pending OAuth/bearer action |
-| `cancelMcpAuthorization` | interrupted MCP waiter | Remove an abandoned authorization action and redirect state |
+| `cancelMcpAuthorization` | interrupted MCP waiter | Remove an abandoned Agent action and its User waiter |
 | `mcpAuthorizationContext` | trusted BFF | Read private server, OAuth, and redirect state |
 | `saveMcpAuthorizationFlow` | trusted BFF | Persist discovery, client registration, state, and PKCE material |
 | `completeMcpAuthorization` | trusted BFF | Store private OAuth state and signal the waiting Turn with an access token |
@@ -418,8 +403,11 @@ type AgentTurnRequest = {
   instructions?: string;
   memories: Array<{key: string; content: string}>;
   guardrails: Array<{id: string; rule: string}>;
-  mcpServers: McpServer[];
-  mcpCredentials: Array<{serverId: string; accessToken: string}>; // private Agent-to-Turn field
+  ownerUserId: string;
+  tools: AgentTools;
+  webSearchEnabled: boolean;
+  mcpServers: Array<McpServer & {revision: number}>;
+  mcpCredentials: Array<{serverId: string; encryptedToken: string}>; // private Agent-to-Turn field
   entries: ConversationEntry[];
 };
 ```

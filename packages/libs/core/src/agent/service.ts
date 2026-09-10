@@ -19,6 +19,7 @@ import type {
 import {
   AgentDefinition,
   AgentNotificationsDefinition,
+  UserDefinition,
 } from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
@@ -27,6 +28,9 @@ import type {
   MemoryUpdate,
   MemoryUpdateResult,
 } from "../internal-types.js";
+import {discoverAgentTools} from "../session/dynamic-tools.js";
+import {dynamicToolId} from "../session/tool-permissions.js";
+import * as agentTools from "../session/tools.js";
 import * as activeTurn from "./active-turn.js";
 import * as approvals from "./approval.js";
 import * as mcpAuthorization from "./mcp-authorization.js";
@@ -39,6 +43,65 @@ const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 /** Durable per-Agent controller for turns, routing, profile, and user actions. */
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
+    *initialize(owner) {
+      const existing = yield* restate.state().get<typeof owner>("ownership");
+      if (existing && existing.ownerUserId !== owner.ownerUserId)
+        throw new TerminalError("Agent ownership is immutable", {
+          errorCode: 409,
+        });
+      if (!existing) restate.state().set("ownership", owner);
+    },
+    *ownership() {
+      return (
+        (yield* restate
+          .sharedState()
+          .get<{ownerUserId: string; name: string}>("ownership")) ?? null
+      );
+    },
+    *setTools(tools) {
+      const owner = yield* requireOwner();
+      const connections = yield* restate
+        .client(UserDefinition, owner.ownerUserId)
+        .connections();
+      if (
+        tools.mcp.some(
+          (grant) =>
+            !connections.some((c) => c.server.id === grant.connectionId),
+        )
+      )
+        throw new TerminalError("Unknown user connection", {errorCode: 400});
+      profile.setTools(tools);
+      yield* publishNotification("profile");
+    },
+    *toolCatalog() {
+      const dynamic = yield* discoverAgentTools(agentTools.names);
+      return {
+        builtin: agentTools
+          .manifests([], [], {
+            webSearchEnabled: true,
+            permissions: {
+              builtin: {mode: "all"},
+              dynamic: {mode: "selected", names: []},
+              mcp: [],
+            },
+          })
+          .map(({name, description}) => ({name, description})),
+        dynamic: dynamic.map((tool) => ({
+          name: dynamicToolId(tool),
+          description: tool.description,
+        })),
+      };
+    },
+    *resolveMcpAuthorization(input) {
+      const current = yield* activeTurn.current();
+      if (
+        yield* mcpAuthorization.resolve(
+          input,
+          current?.interruptReason === undefined ? current?.id : undefined,
+        )
+      )
+        yield* publishNotification("mcpAuth");
+    },
     /**
      * Accepts a user message, starting a Turn while idle or appending it to the
      * next-Turn queue while another Turn is active.
@@ -177,7 +240,7 @@ export const Agent = restate.implement(AgentDefinition, {
     },
 
     /**
-     * Returns the durable instructions, memories, guardrails, and MCP servers
+     * Returns the durable instructions, memories, guardrails, and tool grants
      * that the next Turn will snapshot.
      */
     *profile(): restate.Operation<AgentProfile> {
@@ -212,43 +275,6 @@ export const Agent = restate.implement(AgentDefinition, {
       yield* publishNotification("profile");
     },
 
-    /** Creates or replaces one MCP server in the Agent profile. */
-    *upsertMcpServer(server) {
-      const previous = (yield* profile.read()).mcpServers.find(
-        ({id}) => id === server.id,
-      );
-      const result = yield* profile.upsertMcpServer(server);
-      if (result.accepted) {
-        if (previous && JSON.stringify(previous) !== JSON.stringify(server)) {
-          const invalidated = yield* mcpAuthorization.invalidateServer(
-            server.id,
-            "MCP server configuration changed",
-          );
-          if (invalidated) {
-            yield* publishNotification("mcpAuth");
-          }
-        }
-        yield* publishNotification("profile");
-      }
-      return result;
-    },
-
-    /** Removes one MCP server from the Agent profile. */
-    *removeMcpServer({id}) {
-      const removed = yield* profile.removeMcpServer(id);
-      if (removed) {
-        const invalidated = yield* mcpAuthorization.invalidateServer(
-          id,
-          "MCP server was removed",
-        );
-        if (invalidated) {
-          yield* publishNotification("mcpAuth");
-        }
-        yield* publishNotification("profile");
-      }
-      return {removed};
-    },
-
     /** Registers a user authorization action requested by the active Turn. */
     *requestMcpAuthorization(request) {
       const current = yield* activeTurn.current();
@@ -258,25 +284,26 @@ export const Agent = restate.implement(AgentDefinition, {
       ) {
         return null;
       }
-      const server = (yield* profile.read()).mcpServers.find(
-        ({id}) => id === request.serverId,
+      const owner = yield* requireOwner();
+      const grant = current.tools.mcp.find(
+        (g) => g.connectionId === request.serverId,
       );
       if (
-        server?.auth.type === "none" ||
-        server?.auth.type !== request.authType
-      ) {
+        !grant ||
+        (grant.tools.mode === "selected" && grant.tools.names.length === 0)
+      )
         return null;
-      }
-
       const existing = (yield* mcpAuthorization.requests()).find(
-        ({turnId, serverId}) =>
-          turnId === request.turnId && serverId === request.serverId,
+        (r) => r.turnId === request.turnId && r.serverId === request.serverId,
       );
-      const registered = yield* mcpAuthorization.register(request);
-      if (registered && !existing) {
-        yield* publishNotification("mcpAuth");
-      }
-      return registered ?? null;
+      if (existing) return existing;
+      const registered = yield* restate
+        .client(UserDefinition, owner.ownerUserId)
+        .requestMcpAuthorization({agentId: agentKey(), request});
+      if (!registered) return null;
+      yield* mcpAuthorization.register(registered);
+      yield* publishNotification("mcpAuth");
+      return registered;
     },
 
     /** Removes an authorization wait abandoned by Turn cancellation. */
@@ -289,65 +316,6 @@ export const Agent = restate.implement(AgentDefinition, {
     /** Returns user-visible pending MCP authorization actions. */
     *mcpAuthorizations() {
       return yield* mcpAuthorization.requests();
-    },
-
-    /** Returns private OAuth context to the trusted BFF. */
-    *mcpAuthorizationContext({authRequestId}) {
-      const request = (yield* mcpAuthorization.requests()).find(
-        (candidate) => candidate.authRequestId === authRequestId,
-      );
-      const server = request
-        ? (yield* profile.read()).mcpServers.find(
-            ({id}) => id === request.serverId,
-          )
-        : undefined;
-      return yield* mcpAuthorization.context(authRequestId, server);
-    },
-
-    /** Persists PKCE and discovery state across the OAuth redirect. */
-    *saveMcpAuthorizationFlow({authRequestId, flow}) {
-      const current = yield* activeTurn.current();
-      const request = (yield* mcpAuthorization.requests()).find(
-        (candidate) => candidate.authRequestId === authRequestId,
-      );
-      if (
-        !request ||
-        current?.id !== request.turnId ||
-        current.interruptReason !== undefined
-      ) {
-        return false;
-      }
-      return yield* mcpAuthorization.saveFlow(authRequestId, flow);
-    },
-
-    /** Stores private OAuth state and resumes the Turn with an access token. */
-    *completeMcpAuthorization({authRequestId, oauthState}) {
-      const current = yield* activeTurn.current();
-      const completed = yield* mcpAuthorization.complete(
-        authRequestId,
-        oauthState,
-        current?.interruptReason === undefined ? current?.id : undefined,
-      );
-      if (!completed) {
-        return false;
-      }
-      yield* publishNotification("mcpAuth");
-      return true;
-    },
-
-    /** Stores a private bearer token and resumes its waiting Turn. */
-    *completeMcpBearerAuthorization({authRequestId, accessToken}) {
-      const current = yield* activeTurn.current();
-      const completed = yield* mcpAuthorization.completeBearer(
-        authRequestId,
-        accessToken,
-        current?.interruptReason === undefined ? current?.id : undefined,
-      );
-      if (!completed) {
-        return false;
-      }
-      yield* publishNotification("mcpAuth");
-      return true;
     },
 
     /**
@@ -485,17 +453,14 @@ export const Agent = restate.implement(AgentDefinition, {
     enableLazyState: true,
     handlers: {
       // High-volume coordination paths keep no completed-invocation state.
+      ownership: {shared: true, ...noRetention},
+      toolCatalog: {shared: true, ...noRetention},
+      resolveMcpAuthorization: noRetention,
       onTurnEnd: noRetention,
       updateMemory: noRetention,
-      upsertMcpServer: noRetention,
-      removeMcpServer: noRetention,
       requestMcpAuthorization: noRetention,
       cancelMcpAuthorization: noRetention,
       mcpAuthorizations: {shared: true, ...noRetention},
-      mcpAuthorizationContext: {shared: true, ...noRetention},
-      saveMcpAuthorizationFlow: noRetention,
-      completeMcpAuthorization: noRetention,
-      completeMcpBearerAuthorization: noRetention,
       deliver: noRetention,
       requestApproval: noRetention,
       cancelApproval: noRetention,
@@ -512,26 +477,15 @@ function* startTurn(
   entries: ConversationEntry[],
 ): restate.Operation<string> {
   const agentProfile = yield* profile.read();
-  const oauthStates = yield* mcpAuthorization.oauthStates();
-  const bearerCredentials = yield* mcpAuthorization.bearerCredentials();
-  const mcpCredentials = agentProfile.mcpServers.flatMap((server) => {
-    if (server.auth.type === "oauth") {
-      const state = oauthStates.find(({serverId}) => serverId === server.id);
-      return state
-        ? [{serverId: server.id, accessToken: state.tokens.access_token}]
-        : [];
-    }
-    if (server.auth.type === "bearer") {
-      const credential = bearerCredentials.find(
-        ({serverId}) => serverId === server.id,
-      );
-      return credential ? [credential] : [];
-    }
-    return [];
-  });
+  const owner = yield* requireOwner();
+  const snapshot = yield* restate
+    .client(UserDefinition, owner.ownerUserId)
+    .snapshot({agentId, tools: agentProfile.tools});
   return yield* activeTurn.start(agentId, {
     ...agentProfile,
-    mcpCredentials,
+    ownerUserId: owner.ownerUserId,
+    mcpServers: snapshot.servers,
+    mcpCredentials: snapshot.credentials,
     entries,
   });
 }
@@ -568,4 +522,19 @@ function agentKey(): string {
     throw new TerminalError("Agent handlers require an agent key");
   }
   return key;
+}
+
+function* requireOwner(): restate.Operation<{
+  ownerUserId: string;
+  name: string;
+}> {
+  const owner = yield* restate
+    .sharedState()
+    .get<{ownerUserId: string; name: string}>("ownership");
+  if (!owner)
+    throw new TerminalError(
+      "Create this agent through its user account first",
+      {errorCode: 409},
+    );
+  return owner;
 }
