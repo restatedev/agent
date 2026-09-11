@@ -67,6 +67,17 @@ it defaults off. Internal ingress evals remain available to trusted operators.
 
 ## Account connections, agent grants
 
+The **Agents** sidebar shows a **New** badge when a turn finishes with a new
+response. While the page is visible, the browser polls the BFF every three
+seconds for lightweight completion cursors from the authenticated user's
+agents (bounded parallel reads, no conversation downloads). The badge clears
+once that response is loaded in the focused, visible conversation. Switching
+agents, reconnecting and refreshing preserve unread status. Read receipts
+are scoped to the user and agent in browser local storage and synchronized
+across tabs; they are not shared across devices. If browser storage is blocked,
+receipts fall back to memory for that page lifetime. This is an in-app indicator,
+not an OS notification or a browser-permission prompt.
+
 Use **Connections** in the sidebar to add presets/custom endpoints and authorize
 OAuth or save a bearer token. Credentials and PKCE state are encrypted before
 Restate ingress. A saved credential does not prove it is valid; **Discover

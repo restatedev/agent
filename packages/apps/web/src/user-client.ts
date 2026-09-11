@@ -11,6 +11,11 @@ import {request} from "./agent-client";
 const write = <T>(operation: string, body: unknown) =>
   request<T>(`/api/user/${operation}`, {body});
 export const userClient = {
+  agentCompletions: (signal: AbortSignal) =>
+    request<Array<{agentId: string; sequence: number}>>(
+      "/api/user/agent-completions",
+      {signal},
+    ),
   profile: () => request<UserProfile>("/api/user/profile"),
   createAgent: (name: string, creationId: string) =>
     write<UserAgent>("agent", {name, creationId}),

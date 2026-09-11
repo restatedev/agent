@@ -65,7 +65,12 @@
 .account-identity small,.account-pane>p,.tool-selection small,.check-label small {color:var(--text-muted);}
 .agents-sidebar .eyebrow {margin:8px 0 0;}
 .agents-sidebar nav {display:grid;gap:5px;}
-.agents-sidebar nav button {background:transparent;border:0;border-radius:8px;padding:10px;text-align:left;overflow-wrap:anywhere;}
+.agents-sidebar nav button {display:flex;align-items:center;gap:10px;background:transparent;border:0;border-radius:8px;padding:10px;text-align:left;overflow-wrap:anywhere;}
+.agent-name {flex:1;min-width:0;}
+.agent-unread-dot {flex:none;width:8px;height:8px;border-radius:50%;background:var(--primary-bright);box-shadow:0 0 0 3px var(--primary-soft);}
+.agent-unread-badge {display:inline-flex;align-items:center;gap:7px;flex:none;padding:4px 7px;border-radius:6px;background:var(--primary-soft);color:var(--primary-bright);font-size:11px;font-weight:700;line-height:1.2;}
+.agents-sidebar nav button[data-unread="true"] .agent-name {font-weight:700;}
+.agent-notification-warning {color:var(--text-muted);font-size:11px;}
 .agents-sidebar nav button[data-active="true"],.agents-sidebar>button[data-active="true"] {background:var(--primary-soft);color:var(--primary-bright);}
 .agents-sidebar form {display:grid;gap:8px;}
 .agents-sidebar input {width:100%;min-width:0;}

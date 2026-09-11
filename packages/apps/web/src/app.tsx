@@ -38,6 +38,7 @@ import type {
   ScheduleSpecInput,
   SequencedEntry,
 } from "./agent-client";
+import {lastTurnSequence} from "./agent-inbox";
 import {AgentToolsPanel} from "./agent-tools-panel";
 import {Transcript} from "./transcript";
 import {
@@ -1613,9 +1614,11 @@ function Inspector({
 export function App({
   initialAgentId,
   agentName,
+  onTurnSeen,
 }: {
   initialAgentId: string;
   agentName: string;
+  onTurnSeen: (agentId: string, sequence: number) => void;
 }) {
   const [connection] = useState<AgentConnection>({
     agentId: initialAgentId,
@@ -1626,6 +1629,21 @@ export function App({
   const [provisionalTurn, setProvisionalTurn] = useState<string>();
   const toastId = useRef(0);
   const agent = useAgent(connection);
+  const lastResponse = lastTurnSequence(agent.entries);
+  useEffect(() => {
+    const markVisibleResponse = () => {
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        onTurnSeen(connection.agentId, lastResponse);
+      }
+    };
+    markVisibleResponse();
+    window.addEventListener("focus", markVisibleResponse);
+    document.addEventListener("visibilitychange", markVisibleResponse);
+    return () => {
+      window.removeEventListener("focus", markVisibleResponse);
+      document.removeEventListener("visibilitychange", markVisibleResponse);
+    };
+  }, [connection.agentId, lastResponse, onTurnSeen]);
   const pendingTurnId =
     agent.mcpAuthorizations[0]?.turnId ?? agent.approvals[0]?.turnId;
   const turn = useMemo(

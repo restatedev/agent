@@ -2,18 +2,53 @@ import {createHash} from "node:crypto";
 import {McpServerSchema} from "@restate-agents/types";
 import {completeMcpBearerAuthorization} from "../../../../src/server/mcp-bearer";
 import {startMcpOAuth} from "../../../../src/server/mcp-oauth";
-import {BffError, errorResponse} from "../../../../src/server/restate";
+import {
+  agentClient,
+  BffError,
+  errorResponse,
+} from "../../../../src/server/restate";
 import {requireSameOrigin, requireUser} from "../../../../src/server/user-auth";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 type Context = {params: Promise<{operation: string}>};
-export async function GET(_request: Request, context: Context) {
+export async function GET(request: Request, context: Context) {
   try {
     const {client} = await requireUser();
     const {operation} = await context.params;
     if (operation === "profile") return Response.json(await client.profile());
     if (operation === "connections")
       return Response.json(await client.connections());
+    if (operation === "agent-completions") {
+      // Only enumerate the authenticated user's directory, never caller IDs.
+      const {agents} = await client.profile();
+      const completions: Array<{agentId: string; sequence: number}> = [];
+      // Bound ingress fan-out; one unavailable agent must not hide the others.
+      for (let offset = 0; offset < agents.length; offset += 8) {
+        if (request.signal.aborted)
+          throw new DOMException("Aborted", "AbortError");
+        const batch = await Promise.allSettled(
+          agents.slice(offset, offset + 8).map(async ({agentId}) => ({
+            agentId,
+            sequence: await agentClient(agentId).lastTurnSequence({
+              signal: AbortSignal.any([
+                request.signal,
+                AbortSignal.timeout(5_000),
+              ]),
+            }),
+          })),
+        );
+        for (const result of batch) {
+          if (result.status === "fulfilled") completions.push(result.value);
+        }
+      }
+      if (agents.length > 0 && completions.length === 0) {
+        throw new BffError(
+          503,
+          "Agent completion checks are unavailable; retrying",
+        );
+      }
+      return Response.json(completions);
+    }
     throw new BffError(404, "Unknown user operation");
   } catch (error) {
     return errorResponse(error);

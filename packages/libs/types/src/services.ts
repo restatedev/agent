@@ -192,6 +192,10 @@ export const AgentSchedulerDefinition = iface.object(
 
 /** AgentSession contract implemented by core and consumed by clients. */
 export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
+  lastTurnSequence: iface.schemas({
+    input: z.void(),
+    output: z.number().int().nonnegative(),
+  }),
   history: iface.schemas({
     input: HistoryRequestSchema,
     output: HistoryPageSchema,

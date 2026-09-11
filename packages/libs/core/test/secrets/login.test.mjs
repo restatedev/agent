@@ -14,7 +14,7 @@ const jar=new Map();
 const verifiedIdentity={sub:"google-a",email:"a@restate.dev",hd:"restate.dev",email_verified:true,name:"Alice"};
 globalThis.__login={jar,verified:{...verifiedIdentity}};
 const built=await build({
-  stdin:{contents:`export * from "../../apps/web/src/server/user-auth.ts";export {GET as getAuth} from "../../apps/web/app/api/auth/[operation]/route.ts";export {GET as getAgent,POST as postAgent} from "../../apps/web/app/api/agent/[agentId]/[operation]/route.ts";export {POST as postUser} from "../../apps/web/app/api/user/[operation]/route.ts";`,resolveDir:process.cwd()},
+  stdin:{contents:`export * from "../../apps/web/src/server/user-auth.ts";export {GET as getAuth} from "../../apps/web/app/api/auth/[operation]/route.ts";export {GET as getAgent,POST as postAgent} from "../../apps/web/app/api/agent/[agentId]/[operation]/route.ts";export {GET as getUser,POST as postUser} from "../../apps/web/app/api/user/[operation]/route.ts";`,resolveDir:process.cwd()},
   platform:"node",format:"esm",bundle:true,write:false,
   plugins:[{name:"login-fixtures",setup(build){
     build.onResolve({filter:/^(server-only|next\/headers|next\/server|google-auth-library|@modelcontextprotocol\/client)$/},args=>({path:args.path,namespace:"fixture"}));
@@ -35,6 +35,37 @@ const built=await build({
 const bff=await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
 const hash=value=>createHash("sha256").update(value).digest("hex");
 const sessionKey=token=>hash(JSON.stringify(["google-workspace","restate.dev",token]));
+
+test("completion list requires login and reads only owned agents, with partial failure isolation", async t=>{
+  const calls=[];
+  let allUnavailable=false;
+  t.mock.method(globalThis,"fetch",async(url,init)=>{
+    const request=new Request(url,init); calls.push(request.url);
+    if(request.url.endsWith("/read")) return Response.json({userId:"user-a",expiresAt:Date.now()+10000});
+    if(request.url.endsWith("/User/user-a/profile")) return Response.json({agents:[{agentId:"owned",name:"One"},{agentId:"unavailable",name:"Two"}]});
+    if(request.url.endsWith("/AgentSession/owned/lastTurnSequence")) {
+      if(allUnavailable) return Response.json({message:"unavailable"},{status:404});
+      assert.equal(await request.text(),"");
+      assert.equal(request.headers.get("content-type"),null);
+      return Response.json(12);
+    }
+    if(request.url.endsWith("/AgentSession/unavailable/lastTurnSequence")) return Response.json({message:"unavailable"},{status:404});
+    throw Error("Unexpected RPC");
+  });
+  const context={params:Promise.resolve({operation:"agent-completions"})};
+  jar.clear();
+  assert.equal((await bff.getUser(new Request("https://app.example/api/user/agent-completions"),context)).status,401);
+  assert.equal(calls.length,0);
+  jar.set("restate-session","A".repeat(43));
+  const result=await bff.getUser(new Request("https://app.example/api/user/agent-completions?agentId=foreign&userId=user-b"),context);
+  assert.equal(result.status,200);
+  assert.deepEqual(await result.json(),[{agentId:"owned",sequence:12}]);
+  assert.ok(!calls.some(url=>url.includes("foreign")||url.includes("user-b")));
+  allUnavailable=true;
+  const failed=await bff.getUser(new Request("https://app.example/api/user/agent-completions"),context);
+  assert.equal(failed.status,503,"a failed completion poll must not masquerade as no unread agents");
+  jar.clear();
+});
 
 test("Google login binds state, nonce and PKCE; only verified identity and a hashed session reach Restate",async t=>{
   const writes=[];

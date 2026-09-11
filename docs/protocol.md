@@ -133,6 +133,15 @@ type HistoryPage = {
 Use `nextSequence` as the next inclusive cursor. An empty page leaves the
 cursor unchanged.
 
+### `AgentSession.lastTurnSequence`
+
+Void-input shared read returning the sequence number of the latest terminal
+assistant response, or `0` before any response. The cursor is indexed in
+history metadata when the response is appended, so this read does not load
+transcript chunks or wait behind a running turn. Progress, tool activity and
+steering do not advance it. Interrupted, stopped and failed final responses
+also count as new responses. The typed client exposes `lastTurnSequence()`.
+
 ### `AgentNotifications.snapshot`
 
 This is a void-input shared read returning:

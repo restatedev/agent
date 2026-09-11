@@ -32,6 +32,7 @@ type ConversationSummary = {
 
 type HistoryMeta = {
   nextSequence: number;
+  lastTurnSequence?: number;
   compaction?: ConversationCompactionPlan;
 };
 
@@ -54,6 +55,11 @@ const HISTORY_META = "history/meta";
 const HISTORY_SUMMARY = "history/summary";
 const CHUNK_SIZE = 32;
 const COMPACT_AFTER_MESSAGES = 32;
+
+/** The last terminal response, without loading conversation chunks. */
+export function* lastTurnSequence(): restate.Operation<number> {
+  return (yield* readMeta()).lastTurnSequence ?? 0;
+}
 
 /**
  * Handler-scoped access to conversation history for the current AgentSession.
@@ -125,6 +131,9 @@ export function* openTurn(): restate.Operation<TurnHistory> {
           chunk = [];
         }
         const stored = {sequence: meta.nextSequence, entry};
+        if (entry.role === "assistant") {
+          meta.lastTurnSequence = stored.sequence;
+        }
         chunk.push(stored);
         uncompacted.push(stored);
         meta.nextSequence += 1;

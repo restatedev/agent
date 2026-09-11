@@ -4,6 +4,7 @@ import {Check, LogOut, Plug, Plus} from "lucide-react";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {App} from "./app";
 import {MCP_SERVER_PRESETS} from "./mcp-presets";
+import {useAgentInbox} from "./use-agent-inbox";
 import {userClient} from "./user-client";
 import {UserContext, useUser} from "./user-context";
 
@@ -20,6 +21,9 @@ export function UserWorkspace({
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const creationId = useRef<string | undefined>(undefined);
+  const {unread, markSeen, unavailable} = useAgentInbox(
+    profile.identity.userId,
+  );
   const refresh = useCallback(async () => {
     const next = await userClient.profile();
     setProfile(next);
@@ -66,12 +70,34 @@ export function UserWorkspace({
                 type="button"
                 key={agent.agentId}
                 data-active={selected === agent.agentId}
+                data-unread={unread.has(agent.agentId)}
+                aria-label={
+                  unread.has(agent.agentId)
+                    ? `${agent.name} — new response`
+                    : agent.name
+                }
+                title={
+                  unread.has(agent.agentId)
+                    ? "Turn finished — new response"
+                    : undefined
+                }
                 onClick={() => select(agent.agentId)}
               >
-                {agent.name}
+                <span className="agent-name">{agent.name}</span>
+                {unread.has(agent.agentId) && (
+                  <span className="agent-unread-badge" aria-hidden="true">
+                    <span className="agent-unread-dot" />
+                    New
+                  </span>
+                )}
               </button>
             ))}
           </nav>
+          {unavailable && (
+            <small role="status" className="agent-notification-warning">
+              Checking for new responses… reconnecting
+            </small>
+          )}
           <form
             onSubmit={async (event) => {
               event.preventDefault();
@@ -145,6 +171,7 @@ export function UserWorkspace({
               key={agent.agentId}
               initialAgentId={agent.agentId}
               agentName={agent.name}
+              onTurnSeen={markSeen}
             />
           ) : selected ? (
             <div className="account-pane">

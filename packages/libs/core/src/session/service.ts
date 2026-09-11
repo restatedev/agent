@@ -79,6 +79,10 @@ const MAX_STEPS = 50;
  */
 export const AgentSession = restate.implement(AgentSessionDefinition, {
   handlers: {
+    /** Lightweight terminal-response cursor for the account's agent list. */
+    *lastTurnSequence(): restate.Operation<number> {
+      return yield* history.lastTurnSequence();
+    },
     /** Returns one page from this AgentSession's authoritative transcript. */
     *history({fromSequence, limit}): restate.Operation<HistoryPage> {
       return yield* history.page(fromSequence, limit);
@@ -215,6 +219,11 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
   },
   options: {
     handlers: {
+      lastTurnSequence: {
+        shared: true,
+        idempotencyRetention: 0,
+        journalRetention: 0,
+      },
       history: {
         shared: true,
         idempotencyRetention: 0,
