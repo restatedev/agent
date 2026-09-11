@@ -210,7 +210,7 @@ function Connections() {
     if (result) {
       setNotice(
         result === "completed"
-          ? "Connection authorized. Enable its tools in an agent’s Context tab."
+          ? "Connection authorized. Switch it on in an agent’s Context → Tool access."
           : "Authorization failed. Try again.",
       );
       url.searchParams.delete("mcpAuth");
@@ -233,7 +233,7 @@ function Connections() {
     const result = await userClient.upsertConnection(value);
     if (!result.accepted) throw new Error(result.error);
     setNotice(
-      `Configured ${value.id}. Select its tools separately for each agent.`,
+      `Configured ${value.id}. Authorize it here, then switch it on for each agent.`,
     );
   }
   return (
@@ -350,12 +350,12 @@ function Connections() {
                       connection.id,
                     );
                     setNotice(
-                      `${connection.id}: ${catalog.length} tools available. Select tools in the agent’s Context tab.`,
+                      `${connection.id}: ${catalog.length} tools available. Switch this connection on in an agent’s Context → Tool access.`,
                     );
                   })
                 }
               >
-                Discover tools{tools.length ? ` (${tools.length})` : ""}
+                Test connection{tools.length ? ` (${tools.length} tools)` : ""}
               </button>
               {connected && connection.auth.type !== "none" && (
                 <button

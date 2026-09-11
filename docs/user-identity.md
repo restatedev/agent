@@ -80,10 +80,21 @@ not an OS notification or a browser-permission prompt.
 
 Use **Connections** in the sidebar to add presets/custom endpoints and authorize
 OAuth or save a bearer token. Credentials and PKCE state are encrypted before
-Restate ingress. A saved credential does not prove it is valid; **Discover
-tools** checks the remote server.
+Restate ingress. A saved credential does not prove it is valid; **Test
+connection** checks the remote server.
 
-Create an agent by name, then select tools in **Context → Tool access**:
+Create an agent by name, then use **Context → Tool access**:
+
+- Authorize connections once on the account's **Connections** page.
+- Each agent has one on/off switch per connection. On grants all of that
+  connection's tools (including future tools); off removes only this agent's
+  grant, without disconnecting the account or changing other agents.
+- Unauthenticated connections link back to **Connections** for authorization.
+- Built-in and dynamic tools have compact name-only switches in expandable
+  groups. No per-agent discovery step, access-mode dropdown, or tool-description
+  list is required. Changes apply to the next turn.
+
+The underlying grant contract still supports explicit selections for API clients:
 
 ```json
 {

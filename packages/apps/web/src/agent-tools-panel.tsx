@@ -5,83 +5,84 @@ import type {
   ToolDescriptor,
   ToolSelection,
 } from "@restate-agents/types";
-import {useEffect, useState} from "react";
+import {useEffect, useRef, useState} from "react";
 import type {AgentClient} from "./agent-client";
-import {userClient} from "./user-client";
+import {MCP_SERVER_PRESETS} from "./mcp-presets";
+import {
+  connectionEnabled,
+  toggleConnection,
+  toggleTool,
+  toolEnabled,
+} from "./tool-toggles";
 import {useUser} from "./user-context";
 
-function Selection({
+function ToolSwitch({
   label,
-  value,
-  tools,
-  onChange,
+  checked,
   disabled,
+  onChange,
 }: {
   label: string;
-  value: ToolSelection;
-  tools: ToolDescriptor[];
-  onChange: (value: ToolSelection) => void;
+  checked: boolean;
   disabled: boolean;
+  onChange: (enabled: boolean) => void;
 }) {
-  // Retain explicit grants when discovery is temporarily unavailable.
-  const catalog = [
-    ...tools,
-    ...(value.mode === "selected"
-      ? value.names
-          .filter((name) => !tools.some((t) => t.name === name))
-          .map((name) => ({name, description: "Not in the current catalog"}))
-      : []),
+  return (
+    <label className="agent-tool-toggle">
+      <span>{label}</span>
+      <input
+        type="checkbox"
+        role="switch"
+        aria-checked={checked}
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
+  );
+}
+
+function ToolGroup({
+  label,
+  selection,
+  catalog,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  selection: ToolSelection;
+  catalog: ToolDescriptor[];
+  disabled: boolean;
+  onChange: (selection: ToolSelection) => void;
+}) {
+  // Keep saved names visible even if discovery is temporarily unavailable.
+  const names = [
+    ...new Set([
+      ...catalog.map((tool) => tool.name),
+      ...(selection.mode === "selected" ? selection.names : []),
+    ]),
   ];
   return (
-    <fieldset className="tool-selection" disabled={disabled}>
-      <legend>{label}</legend>
-      <label className="field-label">
-        Access
-        <select
-          aria-label={`${label} access`}
-          value={value.mode}
-          onChange={(event) =>
-            onChange(
-              event.target.value === "all"
-                ? {mode: "all"}
-                : {mode: "selected", names: []},
-            )
-          }
-        >
-          <option value="selected">Selected tools only</option>
-          <option value="all">All tools (including future tools)</option>
-        </select>
-      </label>
-      {value.mode === "selected" && (
-        <div className="tool-checkboxes">
-          {!catalog.length && (
-            <p className="empty-copy">
-              No tools loaded. No tools are permitted.
-            </p>
-          )}
-          {catalog.map((tool) => (
-            <label key={tool.name} title={tool.description}>
-              <input
-                type="checkbox"
-                checked={value.names.includes(tool.name)}
-                onChange={(event) =>
-                  onChange({
-                    mode: "selected",
-                    names: event.target.checked
-                      ? [...value.names, tool.name]
-                      : value.names.filter((name) => name !== tool.name),
-                  })
-                }
-              />
-              <span>
-                {tool.name}
-                <small>{tool.description}</small>
-              </span>
-            </label>
+    <details className="agent-tool-group">
+      <summary>{label}</summary>
+      {names.length === 0 ? (
+        <p className="empty-copy">No tools available.</p>
+      ) : (
+        <div className="agent-tool-list">
+          {names.map((name) => (
+            <ToolSwitch
+              key={name}
+              label={name}
+              checked={toolEnabled(selection, name)}
+              disabled={disabled}
+              onChange={(enabled) =>
+                onChange(toggleTool(selection, names, name, enabled))
+              }
+            />
           ))}
         </div>
       )}
-    </fieldset>
+    </details>
   );
 }
 
@@ -101,8 +102,8 @@ export function AgentToolsPanel({
     builtin: ToolDescriptor[];
     dynamic: ToolDescriptor[];
   }>({builtin: [], dynamic: []});
-  const [remote, setRemote] = useState<Record<string, ToolDescriptor[]>>({});
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   useEffect(() => {
     let active = true;
     client
@@ -117,124 +118,66 @@ export function AgentToolsPanel({
       active = false;
     };
   }, [client, notify]);
+
   async function save(tools: AgentTools) {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       await client.setTools(tools);
       await refresh();
-      notify("Tool access saved for future turns");
+      notify("Tool access saved for the next turn");
     } catch (error) {
       notify(String(error), true);
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
+
   if (!profile) return <p>Loading tool access…</p>;
   const permissions = profile.tools;
   return (
     <section className="settings-section">
       <div className="section-heading">
-        <div>
-          <span>
-            <strong>Tool access</strong>
-            <small>Only these tools are available to this agent</small>
-          </span>
-        </div>
+        <strong>Tool access</strong>
       </div>
       <p className="empty-copy">
-        Connections belong to your account. Enabling one here does not enable it
-        for other agents. Changes apply to the next turn.
+        Enable tools for this agent. Changes apply to the next turn.
       </p>
-      <Selection
-        label="Built-in tools"
-        value={permissions.builtin}
-        tools={catalog.builtin}
-        disabled={saving}
-        onChange={(builtin) => void save({...permissions, builtin})}
-      />
-      <Selection
-        label="Dynamic tools"
-        value={permissions.dynamic}
-        tools={catalog.dynamic}
-        disabled={saving}
-        onChange={(dynamic) => void save({...permissions, dynamic})}
-      />
-      {!user.profile.connections.length && (
-        <p className="empty-copy">
-          Add a connection from the account sidebar first.
-        </p>
-      )}
-      {user.profile.connections.map((connection) => {
-        const id = connection.server.id,
-          grant = permissions.mcp.find((g) => g.connectionId === id);
-        return (
-          <div className="agent-connection" key={id}>
-            <label className="check-label">
-              <input
-                type="checkbox"
-                disabled={saving}
-                checked={Boolean(grant)}
-                onChange={(event) =>
-                  void save({
-                    ...permissions,
-                    mcp: event.target.checked
-                      ? [
-                          ...permissions.mcp,
-                          {
-                            connectionId: id,
-                            tools: {mode: "selected", names: []},
-                          },
-                        ]
-                      : permissions.mcp.filter((g) => g.connectionId !== id),
-                  })
+      <div className="agent-tool-list">
+        {user.profile.connections.map((connection) => {
+          const id = connection.server.id;
+          const label =
+            MCP_SERVER_PRESETS.find((preset) => preset.id === id)?.label ?? id;
+          const enabled = connectionEnabled(permissions, id);
+          const ready =
+            connection.connected || connection.server.auth.type === "none";
+          return (
+            <div key={id}>
+              <ToolSwitch
+                label={label}
+                checked={enabled}
+                disabled={saving || (!ready && !enabled)}
+                onChange={(on) =>
+                  void save(toggleConnection(permissions, id, on))
                 }
               />
-              <strong>{id}</strong>
-              <small>
-                {connection.connected
-                  ? "Credential available"
-                  : "Authorization needed"}
-              </small>
-            </label>
-            {grant && (
-              <>
-                <button
-                  type="button"
-                  className="button secondary small"
-                  disabled={saving || !connection.connected}
-                  onClick={async () => {
-                    setSaving(true);
-                    try {
-                      const tools = await userClient.discoverConnection(id);
-                      setRemote((current) => ({...current, [id]: tools}));
-                    } catch (error) {
-                      notify(String(error), true);
-                    } finally {
-                      setSaving(false);
-                    }
-                  }}
-                >
-                  Load available tools
-                </button>
-                <Selection
-                  label={id}
-                  value={grant.tools}
-                  tools={remote[id] ?? connection.tools}
-                  disabled={saving}
-                  onChange={(tools) =>
-                    void save({
-                      ...permissions,
-                      mcp: permissions.mcp.map((g) =>
-                        g.connectionId === id ? {...g, tools} : g,
-                      ),
-                    })
-                  }
-                />
-              </>
-            )}
-          </div>
-        );
-      })}
+              {!ready && (
+                <a className="agent-tool-connect" href="/">
+                  Authorize {label} in Connections
+                </a>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {!user.profile.connections.length && (
+        <p className="empty-copy">No connections yet.</p>
+      )}
+      <a className="agent-tool-connect" href="/">
+        Manage account connections
+      </a>
       {permissions.mcp
         .filter(
           (g) =>
@@ -243,23 +186,30 @@ export function AgentToolsPanel({
             ),
         )
         .map((g) => (
-          <div className="agent-connection" key={g.connectionId}>
-            <span>{g.connectionId} · connection removed</span>
-            <button
-              type="button"
-              className="button ghost small"
-              disabled={saving}
-              onClick={() =>
-                void save({
-                  ...permissions,
-                  mcp: permissions.mcp.filter((item) => item !== g),
-                })
-              }
-            >
-              Remove grant
-            </button>
-          </div>
+          <ToolSwitch
+            key={g.connectionId}
+            label={`${g.connectionId} (removed)`}
+            checked={connectionEnabled(permissions, g.connectionId)}
+            disabled={saving}
+            onChange={() =>
+              void save(toggleConnection(permissions, g.connectionId, false))
+            }
+          />
         ))}
+      <ToolGroup
+        label="Built-in tools"
+        selection={permissions.builtin}
+        catalog={catalog.builtin}
+        disabled={saving}
+        onChange={(builtin) => void save({...permissions, builtin})}
+      />
+      <ToolGroup
+        label="Dynamic tools"
+        selection={permissions.dynamic}
+        catalog={catalog.dynamic}
+        disabled={saving}
+        onChange={(dynamic) => void save({...permissions, dynamic})}
+      />
     </section>
   );
 }

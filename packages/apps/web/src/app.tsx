@@ -1100,6 +1100,12 @@ function ProfilePanel({
 
   return (
     <div className="settings-sections">
+      <AgentToolsPanel
+        client={client}
+        profile={profile}
+        refresh={refreshProfile}
+        notify={notify}
+      />
       <section className="settings-section">
         <div className="section-heading">
           <div>
@@ -1271,13 +1277,6 @@ function ProfilePanel({
           <p className="empty-copy">No memories stored by the model.</p>
         )}
       </section>
-
-      <AgentToolsPanel
-        client={client}
-        profile={profile}
-        refresh={refreshProfile}
-        notify={notify}
-      />
 
       <section className="settings-section">
         <div className="section-heading">
