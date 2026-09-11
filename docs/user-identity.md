@@ -62,8 +62,8 @@ the BFF. Existing OAuth links should be started again.
 Production requires HTTPS and a strong `APP_SECRET_KEY`. The restate.dev
 Workspace restriction applies in every environment. `GOOGLE_ALLOWED_EMAILS`
 is optional in both development and production.
-`ENABLE_WEB_EVALS=true` explicitly enables authenticated public eval requests;
-it defaults off. Internal ingress evals remain available to trusted operators.
+Evals are not exposed through the BFF or web UI. They remain available only
+through trusted internal Restate ingress.
 
 ## Account connections, agent grants
 

@@ -5,10 +5,8 @@ import {
   AlarmClock,
   Ban,
   Check,
-  ChevronRight,
   CircleAlert,
   CircleCheck,
-  FlaskConical,
   GitBranch,
   Globe,
   KeyRound,
@@ -51,7 +49,7 @@ import {
 } from "./use-agent";
 
 type Mode = "ask" | "steer" | "interrupt";
-type Tab = "approvals" | "profile" | "evals";
+type Tab = "approvals" | "profile";
 type Guardrail = AgentProfile["guardrails"][number];
 type TurnTerminalStatus = Extract<
   SequencedEntry["entry"],
@@ -75,39 +73,6 @@ type Toast = {
   message: string;
   error: boolean;
 };
-
-type EvalAssertion = {
-  name: string;
-  passed: boolean;
-  details?: string;
-};
-
-type EvalResult = {
-  caseId: string;
-  status: "passed" | "failed";
-  assertions: EvalAssertion[];
-};
-
-type EvalSuite = {
-  status: "passed" | "failed";
-  results: EvalResult[];
-};
-
-const EVAL_CASES = [
-  "basic-turn",
-  "steering",
-  "interruption",
-  "external-cancellation",
-  "interruption-replacement",
-  "memory",
-  "scheduling",
-  "guardrail-approval",
-  "guardrail-scope",
-  "guardrail-denial",
-  "guardrail-rejection",
-  "guardrail-removal",
-  "guardrail-steering",
-] as const;
 
 const MODE_COPY: Record<Mode, {label: string; description: string}> = {
   ask: {
@@ -1405,138 +1370,6 @@ function ProfilePanel({
   );
 }
 
-function EvalsPanel({
-  notify,
-}: {
-  notify: (message: string, error?: boolean) => void;
-}) {
-  const [selected, setSelected] = useState<Set<string>>(new Set(EVAL_CASES));
-  const [timeout, setTimeoutValue] = useState(300);
-  const [running, setRunning] = useState(false);
-  const [suite, setSuite] = useState<EvalSuite>();
-
-  async function run() {
-    if (selected.size === 0) {
-      notify("Select at least one eval case", true);
-      return;
-    }
-    setRunning(true);
-    setSuite(undefined);
-    try {
-      const response = await fetch("/api/evals", {
-        method: "POST",
-        headers: {"content-type": "application/json"},
-        body: JSON.stringify({
-          runId: "demo-ui",
-          timeoutSeconds: timeout,
-          ...(selected.size === EVAL_CASES.length
-            ? {}
-            : {cases: [...selected]}),
-        }),
-      });
-      const text = await response.text();
-      const data = text
-        ? (JSON.parse(text) as EvalSuite | {message?: string})
-        : undefined;
-      if (!response.ok) {
-        throw new Error(
-          (data && "message" in data && data.message) ||
-            `${response.status} ${response.statusText}`,
-        );
-      }
-      setSuite(data as EvalSuite);
-    } catch (error) {
-      notify(`Eval run failed: ${errorMessage(error)}`, true);
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  return (
-    <div className="eval-panel">
-      <div className="eval-intro">
-        <FlaskConical />
-        <div>
-          <strong>Durable protocol evals</strong>
-          <span>
-            Each case drives a fresh Agent through public handlers and checks
-            its transcript.
-          </span>
-        </div>
-      </div>
-      <div className="eval-cases">
-        {EVAL_CASES.map((caseId) => (
-          <label key={caseId}>
-            <input
-              checked={selected.has(caseId)}
-              onChange={(event) => {
-                const next = new Set(selected);
-                if (event.target.checked) next.add(caseId);
-                else next.delete(caseId);
-                setSelected(next);
-              }}
-              type="checkbox"
-            />
-            <code>{caseId}</code>
-          </label>
-        ))}
-      </div>
-      <div className="eval-actions">
-        <button
-          className="button primary"
-          disabled={running}
-          onClick={() => void run()}
-          type="button"
-        >
-          {running ? <RefreshCw className="spin" /> : <FlaskConical />}
-          {running
-            ? `Running ${selected.size}…`
-            : `Run ${selected.size} selected`}
-        </button>
-        <label>
-          Timeout
-          <input
-            min="10"
-            max="600"
-            onChange={(event) => setTimeoutValue(Number(event.target.value))}
-            type="number"
-            value={timeout}
-          />
-          s
-        </label>
-      </div>
-      {suite && (
-        <div className="eval-results" data-status={suite.status}>
-          <div className="suite-status">
-            {suite.status === "passed" ? <CircleCheck /> : <CircleAlert />}
-            Suite {suite.status}
-          </div>
-          {suite.results.map((result) => (
-            <details key={result.caseId} open={result.status === "failed"}>
-              <summary>
-                {result.status === "passed" ? <Check /> : <X />}
-                <code>{result.caseId}</code>
-                <ChevronRight />
-              </summary>
-              <ul>
-                {result.assertions.map((assertion) => (
-                  <li data-passed={assertion.passed} key={assertion.name}>
-                    {assertion.passed ? <Check /> : <X />}
-                    <span>
-                      {assertion.name}
-                      {assertion.details ? ` · ${assertion.details}` : ""}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Inspector({
   tab,
   setTab,
@@ -1563,7 +1396,6 @@ function Inspector({
   const tabs: Array<{id: Tab; label: string; icon: typeof Activity}> = [
     {id: "approvals", label: "Approvals", icon: ShieldCheck},
     {id: "profile", label: "Context", icon: Settings2},
-    {id: "evals", label: "Evals", icon: FlaskConical},
   ];
   return (
     <aside className="inspector">
@@ -1604,7 +1436,6 @@ function Inspector({
             schedules={schedules}
           />
         )}
-        {tab === "evals" && <EvalsPanel notify={notify} />}
       </div>
     </aside>
   );

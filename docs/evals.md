@@ -149,7 +149,8 @@ races the watch against its durable case deadline.
 The code-based graders assert event-log structure, event ordering,
 correlations, and durable outcome state rather than exact model prose.
 
-Invoke the complete suite through Restate ingress:
+Evals have no web UI or BFF endpoint. Trusted operators can invoke the complete
+suite through private Restate ingress:
 
 ```sh
 curl localhost:8080/Evals/all \

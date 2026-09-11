@@ -46,9 +46,15 @@ test("agent UI renders name-only connection switches with account-level authoriz
   const html=render({tools:defaults()},{connections:[connection("notion",true),connection("github",false)]});
   assert.match(html,/Notion/);
   assert.equal((html.match(/role="switch"/g)||[]).length,2);
+  assert.equal((html.match(/class="web-search-toggle"/g)||[]).length,2);
+  assert.equal((html.match(/class="web-search-toggle-track"/g)||[]).length,2);
+  assert.ok(!html.includes('type="checkbox"'));
+  assert.match(html,/aria-checked="false"/);
+  assert.match(html,/>Disabled<\/button>/);
   assert.match(html,/Authorize GitHub in Connections/);
   assert.match(html,/disabled=""/);
   for(const text of ["<select","Load available tools","Selected tools only","VERY LONG DESCRIPTION MUST NOT APPEAR"])assert.ok(!html.includes(text),text);
   const on=render({tools:toggleConnection(defaults(),"notion",true)},{connections:[connection("notion",true)]});
-  assert.match(on,/checked=""/);
+  assert.match(on,/aria-checked="true"/);
+  assert.match(on,/>Enabled<\/button>/);
 });

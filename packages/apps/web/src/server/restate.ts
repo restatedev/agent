@@ -17,11 +17,10 @@ function ingressUrl() {
   );
 }
 
-function ingressHeaders(contentType = false): Record<string, string> {
+function ingressHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   const token = process.env.RESTATE_AUTH_TOKEN?.trim();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (contentType) headers["content-type"] = "application/json";
   return headers;
 }
 
@@ -65,27 +64,6 @@ export function userSessionClient(sessionId: string) {
     sessionId,
     headers: ingressHeaders(),
   });
-}
-
-export async function invokeEvals(input: unknown, signal: AbortSignal) {
-  const response = await fetch(`${ingressUrl()}/Evals/all`, {
-    method: "POST",
-    headers: ingressHeaders(true),
-    body: JSON.stringify(input),
-    cache: "no-store",
-    signal,
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    let message = body || `${response.status} ${response.statusText}`;
-    try {
-      message = (JSON.parse(body) as {message?: string}).message ?? message;
-    } catch {
-      // Preserve a non-JSON Restate error response.
-    }
-    throw new BffError(response.status, message);
-  }
-  return body ? (JSON.parse(body) as unknown) : null;
 }
 
 export function errorResponse(error: unknown) {

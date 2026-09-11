@@ -28,17 +28,23 @@ function ToolSwitch({
   onChange: (enabled: boolean) => void;
 }) {
   return (
-    <label className="agent-tool-toggle">
+    <div className="agent-tool-toggle">
       <span>{label}</span>
-      <input
-        type="checkbox"
+      <button
+        type="button"
+        className="web-search-toggle"
         role="switch"
+        aria-label={label}
         aria-checked={checked}
-        checked={checked}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-    </label>
+        onClick={() => onChange(!checked)}
+      >
+        <span className="web-search-toggle-track" aria-hidden="true">
+          <span />
+        </span>
+        {checked ? "Enabled" : "Disabled"}
+      </button>
+    </div>
   );
 }
 
