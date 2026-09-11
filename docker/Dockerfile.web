@@ -10,6 +10,9 @@
 #   RESTATE_AUTH_TOKEN  optional bearer token for Restate Cloud or another
 #                       authenticated ingress; omit it for local Restate
 #   APP_SECRET_KEY      strong credential-encryption key, shared with core
+#   APP_PUBLIC_URL      public HTTPS origin used for cookies and OAuth callbacks
+#   GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET  Google Web application OAuth client
+#   GOOGLE_ALLOWED_EMAILS  optional allowlist within restate.dev
 #   PORT                HTTP listen port (default 3000)
 #   HOSTNAME            listen address (default 0.0.0.0)
 

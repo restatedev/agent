@@ -80,6 +80,20 @@ Configure [Google sign-in and user ownership](user-identity.md) before running
 `pnpm dev:ui`. There is no anonymous UI fallback. Set `APP_PUBLIC_URL` to the
 exact browser origin, including when using a tunnel.
 
+## Production BFF image
+
+The separate `docker-web` GitHub Actions workflow builds
+`docker/Dockerfile.web` on pushes to `main` and on manual dispatch. It publishes
+`ghcr.io/restatedev/agent-web:latest` on the default branch and a
+`sha-<short-commit>` tag for each build, for Linux amd64 and arm64. The existing
+`docker` workflow independently publishes the core image.
+
+The BFF Dockerfile runs the dependency builds and `next build`, and runs the
+standalone output as a non-root user with `NODE_ENV=production` on port 3000.
+Neither workflow deploys anything. Supply `APP_PUBLIC_URL`, Google OAuth
+credentials, `APP_SECRET_KEY`, and Restate connectivity settings at deployment
+time; no application credentials are needed to build the image.
+
 ## Smoke test
 
 On **trusted private ingress**, register a development identity and create its

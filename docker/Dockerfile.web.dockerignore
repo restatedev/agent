@@ -15,3 +15,4 @@ restate-data
 modal.sh
 wire-secrets.sh
 .env*
+**/.env*
