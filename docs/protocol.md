@@ -442,6 +442,9 @@ These are ingress-visible for inspection but are not normal client operations.
 | --- | --- | --- |
 | `updateMemory` | `manageMemory` tool | Validate active turn and forward a shared memory batch to its owning User |
 | `createSubAgent` | `createSubAgent` tool | Validate active turn, inherit/restrict configuration, and register a child through its owning User |
+| `startSubAgentTask` | Parent session's create/follow-up tool | Validate parent turn and direct-child ownership, start the child turn, and record it for cleanup |
+| `startDelegatedTurn` | Owning parent Agent | Start one child task without holding a lock while it executes; reject overlapping tasks |
+| `finishSubAgentTask` / `interruptDelegatedTurn` | Parent tool/controller cleanup | Idempotently stop only the recorded child turn, never a later follow-up |
 | `listSubAgents` | `listSubAgents` tool | Validate active turn and list only this agent's direct children through User |
 | `deleteSubAgent` | `deleteSubAgent` tool | Validate active turn and ask User to delete a direct child's subtree |
 | `requestApproval` | tool or policy gate | Register a pending request for the active turn |

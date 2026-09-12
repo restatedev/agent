@@ -108,8 +108,118 @@ export const Agent = restate.implement(AgentDefinition, {
         .createSubAgent({
           agent: {agentId, name: config.name, parentAgentId: agentKey()},
           profile: inherited,
-          initialMessage: config.initialMessage,
         });
+    },
+    *startSubAgentTask({turnId, toolCallId, agentId, message, source}) {
+      const owner = yield* requireOwner();
+      const current = yield* activeTurn.current();
+      if (current?.id !== turnId || current.interruptReason !== undefined)
+        throw new TerminalError(
+          "Delegation requires the active, non-interrupting Turn",
+          {errorCode: 409},
+        );
+      if (owner.parentAgentId || !selected(current.tools.builtin, source))
+        throw new TerminalError("This agent cannot delegate this task", {
+          errorCode: 403,
+        });
+      if (source === "createSubAgent") {
+        const expected = createHash("sha256")
+          .update(
+            JSON.stringify([
+              "sub-agent",
+              owner.ownerUserId,
+              agentKey(),
+              turnId,
+              toolCallId,
+            ]),
+          )
+          .digest("hex");
+        if (agentId !== expected)
+          throw new TerminalError(
+            "Creation can only start its newly created child",
+            {errorCode: 403},
+          );
+      }
+      const children = yield* restate
+        .client(UserDefinition, owner.ownerUserId)
+        .listSubAgents({parentAgentId: agentKey()});
+      if (!children.some((child) => child.agentId === agentId))
+        throw new TerminalError("Agent is not a direct child of this parent", {
+          errorCode: 403,
+        });
+      const tasks = yield* subAgentTasks();
+      const existing = tasks.find(
+        (task) => task.turnId === turnId && task.toolCallId === toolCallId,
+      );
+      if (existing) return {turnId: existing.childTurnId};
+      const child = yield* restate
+        .client(AgentDefinition, agentId)
+        .startDelegatedTurn({
+          ownerUserId: owner.ownerUserId,
+          parentAgentId: agentKey(),
+          parentTurnId: turnId,
+          message,
+        });
+      restate
+        .state()
+        .set("sub-agent-tasks", [
+          ...tasks,
+          {turnId, toolCallId, agentId, childTurnId: child.turnId},
+        ]);
+      return child;
+    },
+    *startDelegatedTurn({ownerUserId, parentAgentId, parentTurnId, message}) {
+      const owner = yield* requireOwner();
+      if (
+        owner.ownerUserId !== ownerUserId ||
+        owner.parentAgentId !== parentAgentId
+      )
+        throw new TerminalError(
+          "Only the owning parent can submit a child task",
+          {errorCode: 403},
+        );
+      if (yield* activeTurn.current())
+        throw new TerminalError(
+          "Sub-agent is busy; wait for its current task before sending a follow-up",
+          {errorCode: 400},
+        );
+      const turnId = yield* startTurn(agentKey(), [
+        {
+          role: "user",
+          text: message,
+          delegatedBy: {agentId: parentAgentId, turnId: parentTurnId},
+          delivery: "turn",
+        },
+      ]);
+      return {turnId};
+    },
+    *finishSubAgentTask({turnId, toolCallId}) {
+      const tasks = yield* subAgentTasks();
+      const task = tasks.find(
+        (task) => task.turnId === turnId && task.toolCallId === toolCallId,
+      );
+      if (!task) return;
+      // Also covers abandoned PTC branches and interrupted parent waits. The
+      // child checks the exact turn ID, so a late cleanup cannot stop a follow-up.
+      yield* stopSubAgentTask(task, "Parent stopped waiting for this task");
+      restate.state().set(
+        "sub-agent-tasks",
+        tasks.filter((item) => item !== task),
+      );
+    },
+    *interruptDelegatedTurn({parentAgentId, turnId, reason}) {
+      const owner = yield* restate
+        .state()
+        .get<{parentAgentId?: string}>("ownership");
+      if (owner?.parentAgentId !== parentAgentId)
+        throw new TerminalError("Agent is not a direct child of this parent", {
+          errorCode: 403,
+        });
+      const current = yield* activeTurn.current();
+      if (current?.id !== turnId) return;
+      yield* activeTurn.interrupt(reason);
+      yield* mcpAuthorization.cancelTurn(turnId, reason);
+      yield* approvals.clearTurn(turnId);
     },
     *deleteSubAgent({turnId, agentId}) {
       const owner = yield* requireOwner();
@@ -153,6 +263,7 @@ export const Agent = restate.implement(AgentDefinition, {
         });
       restate.state().set("deleted", true);
       restate.state().clear("pending");
+      yield* stopSubAgentTasks(undefined, "Parent deleted");
       const current = yield* activeTurn.current();
       if (current) {
         yield* activeTurn.interrupt("Agent deleted");
@@ -228,6 +339,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *ask({message}): restate.Operation<AskResult> {
       yield* requireNotDeleted();
+      yield* requireTopLevelConversation();
       const agentId = agentKey();
       const current = yield* activeTurn.current();
       if (current) {
@@ -264,11 +376,21 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *interrupt({reason, message}): restate.Operation<boolean> {
       yield* requireNotDeleted();
+      const owner = yield* requireOwner();
+      if (owner.parentAgentId) {
+        if (message !== undefined)
+          throw new TerminalError(
+            "Sub-agent conversations are read-only; only interrupt is allowed",
+            {errorCode: 403},
+          );
+        reason = "Interrupted by the user";
+      }
       const current = yield* activeTurn.current();
       const requested = yield* activeTurn.interrupt(reason);
       if (requested === undefined || current === undefined) {
         return false;
       }
+      yield* stopSubAgentTasks(current.id, reason);
 
       if (message) {
         yield* activeTurn.enqueue({
@@ -301,6 +423,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *steer(message): restate.Operation<boolean> {
       yield* requireNotDeleted();
+      yield* requireTopLevelConversation();
       return yield* activeTurn.steer(message);
     },
 
@@ -313,6 +436,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *deliver(delivery): restate.Operation<void> {
       if (yield* restate.state().get<boolean>("deleted")) return;
+      yield* requireTopLevelConversation();
       const current = yield* activeTurn.current();
       if (!current) {
         yield* startTurn(agentKey(), [
@@ -545,6 +669,7 @@ export const Agent = restate.implement(AgentDefinition, {
       if (!finished) {
         return null;
       }
+      yield* stopSubAgentTasks(finished.outcome.turnId, "Parent turn ended");
       const cancelledApprovals = yield* approvals.clearTurn(
         finished.outcome.turnId,
       );
@@ -582,6 +707,10 @@ export const Agent = restate.implement(AgentDefinition, {
     handlers: {
       initialize: coordinationRetention,
       createSubAgent: coordinationRetention,
+      startSubAgentTask: coordinationRetention,
+      startDelegatedTurn: coordinationRetention,
+      finishSubAgentTask: coordinationRetention,
+      interruptDelegatedTurn: coordinationRetention,
       deleteSubAgent: coordinationRetention,
       retire: coordinationRetention,
       listSubAgents: noRetention,
@@ -613,6 +742,52 @@ export const Agent = restate.implement(AgentDefinition, {
 function* requireNotDeleted(): restate.Operation<void> {
   if (yield* restate.state().get<boolean>("deleted"))
     throw new TerminalError("Agent has been deleted", {errorCode: 410});
+}
+
+type SubAgentTask = {
+  turnId: string;
+  toolCallId: string;
+  agentId: string;
+  childTurnId: string;
+};
+function* subAgentTasks(): restate.Operation<SubAgentTask[]> {
+  return (yield* restate.state().get<SubAgentTask[]>("sub-agent-tasks")) ?? [];
+}
+function* stopSubAgentTask(
+  task: SubAgentTask,
+  reason: string,
+): restate.Operation<void> {
+  yield* restate
+    .sendClient(AgentDefinition, task.agentId)
+    .interruptDelegatedTurn({
+      parentAgentId: agentKey(),
+      turnId: task.childTurnId,
+      reason,
+    });
+}
+function* stopSubAgentTasks(
+  turnId: string | undefined,
+  reason: string,
+): restate.Operation<void> {
+  const tasks = yield* subAgentTasks();
+  for (const task of tasks) {
+    if (turnId === undefined || task.turnId === turnId)
+      yield* stopSubAgentTask(task, reason);
+  }
+  restate.state().set(
+    "sub-agent-tasks",
+    tasks.filter((task) => turnId !== undefined && task.turnId !== turnId),
+  );
+}
+function* requireTopLevelConversation(): restate.Operation<void> {
+  const owner = yield* restate
+    .state()
+    .get<{parentAgentId?: string}>("ownership");
+  if (owner?.parentAgentId)
+    throw new TerminalError(
+      "Only the parent agent can send messages to a sub-agent",
+      {errorCode: 403},
+    );
 }
 
 // Cross-component coordination belongs here: snapshot the Agent profile and

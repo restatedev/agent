@@ -1421,10 +1421,12 @@ export function App({
   agentName,
   onTurnSeen,
   active,
+  readOnly = false,
 }: {
   initialAgentId: string;
   agentName: string;
   active: boolean;
+  readOnly?: boolean;
   onTurnSeen: (agentId: string, sequence: number) => void;
 }) {
   const [connection] = useState<AgentConnection>({
@@ -1544,7 +1546,7 @@ export function App({
         name={agentName}
         error={agent.connectionError}
       />
-      <main className="workspace">
+      <main className="workspace" data-readonly={readOnly}>
         <section className="conversation-pane">
           <div className="conversation-heading">
             <div>
@@ -1561,7 +1563,7 @@ export function App({
               entries={agent.entries}
               busy={Boolean(turn && !turn.terminal)}
               pendingAction={
-                agent.mcpAuthorizations.length > 0 ? (
+                !readOnly && agent.mcpAuthorizations.length > 0 ? (
                   <section
                     aria-label="MCP authorization required"
                     className="conversation-authorization"
@@ -1594,25 +1596,64 @@ export function App({
             />
           </div>
           <StatusStrip turn={turn} />
-          <Composer
-            busy={Boolean(turn && !turn.terminal)}
-            mode={mode}
-            onSend={sendMessage}
-            setMode={setMode}
-          />
+          {readOnly ? (
+            <div className="composer-shell">
+              <p className="empty-copy">
+                Sub-agent conversation — only its parent can send tasks and
+                follow-ups.
+              </p>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={!turn || turn.terminal}
+                onClick={async () => {
+                  try {
+                    const accepted = await agent.client.interrupt(
+                      "Interrupted by the user",
+                    );
+                    notify(
+                      accepted
+                        ? "Interruption requested"
+                        : "Nothing to interrupt",
+                    );
+                  } catch (error) {
+                    notify(errorMessage(error), true);
+                  }
+                }}
+              >
+                <Ban /> Interrupt
+              </button>
+              {(agent.approvals.length > 0 ||
+                agent.mcpAuthorizations.length > 0) && (
+                <p className="empty-copy">
+                  This child is waiting for approval or an account connection.
+                  You can interrupt its task.
+                </p>
+              )}
+            </div>
+          ) : (
+            <Composer
+              busy={Boolean(turn && !turn.terminal)}
+              mode={mode}
+              onSend={sendMessage}
+              setMode={setMode}
+            />
+          )}
         </section>
-        <Inspector
-          approvals={agent.approvals}
-          client={agent.client}
-          mcpAuthorizations={agent.mcpAuthorizations}
-          notify={notify}
-          profile={agent.profile}
-          refreshProfile={agent.refreshProfile}
-          refreshSchedules={agent.refreshSchedules}
-          schedules={agent.schedules}
-          setTab={setTab}
-          tab={tab}
-        />
+        {!readOnly && (
+          <Inspector
+            approvals={agent.approvals}
+            client={agent.client}
+            mcpAuthorizations={agent.mcpAuthorizations}
+            notify={notify}
+            profile={agent.profile}
+            refreshProfile={agent.refreshProfile}
+            refreshSchedules={agent.refreshSchedules}
+            schedules={agent.schedules}
+            setTab={setTab}
+            tab={tab}
+          />
+        )}
       </main>
       <Toasts toasts={toasts} />
     </div>

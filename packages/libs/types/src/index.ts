@@ -599,14 +599,13 @@ export const SubAgentConfigSchema = z.object({
     .max(16000)
     .nullable()
     .describe(
-      "Optional first task to start asynchronously, or null to create an idle agent.",
+      "First task to run and await. The tool returns the child's answer when it finishes. Null creates an idle agent for later messageSubAgent calls.",
     ),
 });
 export type SubAgentConfig = z.infer<typeof SubAgentConfigSchema>;
 export const UserCreateSubAgentSchema = z.object({
   agent: UserAgentSchema.extend({parentAgentId: z.string().min(1)}),
   profile: AgentProfileSchema,
-  initialMessage: z.string().nullable(),
 });
 
 export const SetWebSearchEnabledSchema = z.object({enabled: z.boolean()});
@@ -705,6 +704,7 @@ export const ConversationEntrySchema = z.discriminatedUnion("role", [
     role: z.literal("user"),
     text: z.string(),
     delivery: UserMessageDeliverySchema,
+    delegatedBy: z.object({agentId: z.string(), turnId: z.string()}).optional(),
   }),
   z.object({
     role: z.literal("assistant"),

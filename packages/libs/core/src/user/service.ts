@@ -89,7 +89,7 @@ export const User = restate.implement(UserDefinition, {
       yield* notifyUser();
       return agent;
     },
-    *createSubAgent({agent, profile, initialMessage}) {
+    *createSubAgent({agent, profile}) {
       // Never call the parent while holding User: Agent -> User -> parent
       // would deadlock. The parent handler already checked its active Turn.
       yield* requireAgent(agent.parentAgentId);
@@ -119,11 +119,8 @@ export const User = restate.implement(UserDefinition, {
         profile,
       });
       restate.state().set("agents", [...list, agent]);
-      // Send rather than wait: child's ask reads this User's credentials.
-      if (initialMessage)
-        yield* restate
-          .sendClient(AgentDefinition, agent.agentId)
-          .ask({message: initialMessage});
+      // The parent session starts and awaits the task after creation. Never
+      // wait for child execution while holding the User object's lock.
       yield* notifyUser();
       return agent;
     },
@@ -153,6 +150,14 @@ export const User = restate.implement(UserDefinition, {
       return result;
     },
     *deleteAgent({agentId}) {
+      if (
+        (yield* agents()).find((agent) => agent.agentId === agentId)
+          ?.parentAgentId
+      )
+        throw new TerminalError(
+          "Only the parent agent can delete a sub-agent",
+          {errorCode: 403},
+        );
       return yield* deleteAgentTree(agentId);
     },
     *connections() {

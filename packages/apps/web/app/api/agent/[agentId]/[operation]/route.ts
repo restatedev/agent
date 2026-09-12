@@ -13,6 +13,7 @@ import {
   loadAgentSnapshot,
   syncAgentSnapshot,
 } from "../../../../../src/server/agent-snapshot";
+import {allowsUserAgentMutation} from "../../../../../src/server/agent-mutation-policy";
 import {completeMcpBearerAuthorization} from "../../../../../src/server/mcp-bearer";
 import {startMcpOAuth} from "../../../../../src/server/mcp-oauth";
 import {BffError, errorResponse} from "../../../../../src/server/restate";
@@ -141,6 +142,17 @@ export async function POST(request: Request, context: RouteContext) {
     const {agentId, operation} = await context.params;
     const {client, user, accessToken} = await authorizedAgent(agentId, request);
     const json = authorizedJson(accessToken, user.userId);
+    // Read-only child policy is enforced server-side, independently of the UI
+    // and cached ownership proofs. This also rejects recently deleted agents.
+    const agent = (await user.client.profile()).agents.find(
+      (agent) => agent.agentId === agentId,
+    );
+    if (!agent) throw new BffError(404, "Agent not found");
+    if (!allowsUserAgentMutation(agent, operation))
+      throw new BffError(
+        403,
+        "Sub-agent conversations are read-only; only interrupt is allowed",
+      );
 
     switch (operation) {
       case "ask": {
@@ -153,6 +165,14 @@ export async function POST(request: Request, context: RouteContext) {
       }
       case "interrupt": {
         const body = await input<{reason: string; message?: string}>(request);
+        if (agent.parentAgentId) {
+          if (body.message !== undefined)
+            throw new BffError(
+              403,
+              "Cannot send a replacement message to a sub-agent",
+            );
+          return json(await client.interrupt("Interrupted by the user"));
+        }
         return json(await client.interrupt(body.reason, body.message));
       }
       case "instructions": {

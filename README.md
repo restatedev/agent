@@ -71,7 +71,7 @@ chain-of-thought.
 | Human-in-the-loop approval | Policy gates and the explicit approval tool register durable Agent state and resume through turn-scoped signals. |
 | User identity and ownership | Google Workspace sign-in restricted to `restate.dev` through the BFF, private per-user agents, and account-level connections. Authorized MCP tools are enabled each turn by default, with persistent per-agent opt-outs. See [setup](docs/user-identity.md). |
 | Persistent context | Instructions, guardrails, tool grants, and web search availability are durable per Agent. Semantic memories are shared per User; Agent includes the entire collection in each turn. |
-| Persistent sub-agents | Agents can create user-visible children with inherited configuration, narrower tool access, separate conversations and sandboxes, and an optional asynchronous first task. Deletion cascades; a parent can delete its own children. See [ownership and lifecycle](docs/user-identity.md#sub-agents). |
+| Persistent sub-agents | Agents delegate tasks and follow-ups to user-visible children with inherited configuration, narrower tool access, separate conversations and sandboxes. Tool calls wait durably for child results; children are read-only except Interrupt. Deletion cascades. See [ownership and lifecycle](docs/user-identity.md#sub-agents). |
 | Workspace notifications and caching | One `UserNotifications/{userId}` feed synchronizes all agents and shared user state. Visited conversations, drafts, and expanded details stay cached when switching agents; the BFF fetches only changed data. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
@@ -292,7 +292,8 @@ Current built-ins:
 | `humanApproval` | pending | Explicit signal-backed human decision |
 | `cancelOperation` | foreground control | Stop one pending task by operation ID |
 | `manageMemory` | foreground Agent → User RPC | Set or delete shared user memories for personalization across agents |
-| `createSubAgent` | foreground Agent → User RPC | Create an owned child with inherited configuration and optionally submit its first task |
+| `createSubAgent` | durable child-turn wait | Create an owned child with inherited configuration and await its optional first task |
+| `messageSubAgent` | durable child-turn wait | Ask a direct child a follow-up in its existing conversation and return its answer |
 | `listSubAgents` | foreground Agent → User RPC | Find this agent's existing direct children by name and ID |
 | `deleteSubAgent` | foreground Agent → User RPC | Delete a direct child and all descendants, stopping work and retiring private resources |
 | `scheduleMessage` / `cancelSchedule` / `listSchedules` | foreground AgentScheduler RPC | Manage durable scheduled input independently of the current turn |

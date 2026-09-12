@@ -154,7 +154,7 @@ test("creation and deletion reject stale/interrupted turns or missing tool permi
   await assert.rejects(childContext.invoke(Agent.object.createSubAgent, {...config, turnId: "turn", toolCallId: "call-1"}), /cannot create/);
 });
 
-test("child initialized before registration and first task is sent once, never awaited", async () => {
+test("child initializes before registration; task dispatch is left to the parent session", async () => {
   const f = context("alice", {agents: [directory[0]]}, call => {
     assert.equal(call.service, "Agent");
     assert.equal(call.key, "child");
@@ -166,8 +166,7 @@ test("child initialized before registration and first task is sent once, never a
   assert.deepEqual(await f.invoke(User.object.createSubAgent, request), child);
   assert.deepEqual(await f.invoke(User.object.createSubAgent, request), child);
   assert.equal(f.calls.length, 1);
-  assert.deepEqual(f.sends.map(s => [s.service, s.key, s.method]), [["Agent", "child", "ask"], ["UserNotifications", "alice", "publish"]]);
-  assert.equal(f.sends[0].parameter.message, request.initialMessage);
+  assert.deepEqual(f.sends.map(s => [s.service, s.key, s.method]), [["UserNotifications", "alice", "publish"]]);
 });
 
 test("initial profile and ownership are atomic and immutable on initialization retries", async () => {
@@ -253,8 +252,9 @@ test("child dispatch has a separate AgentSession key and keeps user-level creden
     assert.equal(call.parameter.agentId, "child");
     return {tools: grants, servers: [], credentials: [], memories: []};
   });
-  await f.invoke(Agent.object.ask, {message: "Work independently"});
+  await f.invoke(Agent.object.startDelegatedTurn, {ownerUserId: "alice", parentAgentId: "parent", parentTurnId: "turn", message: "Work independently"});
   assert.equal(f.sends.find(s => s.method === "doTurn").key, "child");
+  assert.deepEqual(f.sends.find(s => s.method === "doTurn").parameter.entries[0].delegatedBy, {agentId: "parent", turnId: "turn"});
   await f.invoke(Agent.object.retire, {ownerUserId: "alice"});
   assert.equal(f.sends.find(s => s.service === "Sandbox").key, "child");
 });

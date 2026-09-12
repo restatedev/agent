@@ -340,10 +340,12 @@ function UserMessage({item}: {item: SequencedEntry}) {
   return (
     <Message align="end">
       <MessageAvatar>
-        <UserRound />
+        {entry.delegatedBy ? <Bot /> : <UserRound />}
       </MessageAvatar>
       <MessageContent>
-        <MessageHeader>You</MessageHeader>
+        <MessageHeader>
+          {entry.delegatedBy ? "Parent agent" : "You"}
+        </MessageHeader>
         <Bubble align="end" variant="tinted">
           <BubbleContent>{entry.text}</BubbleContent>
         </Bubble>

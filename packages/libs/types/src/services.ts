@@ -105,6 +105,37 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     }),
     output: UserAgentSchema,
   }),
+  startSubAgentTask: iface.schemas({
+    input: z.object({
+      turnId: z.string().min(1),
+      toolCallId: z.string().min(1),
+      agentId: z.string().min(1),
+      message: z.string().trim().min(1).max(16000),
+      source: z.enum(["createSubAgent", "messageSubAgent"]),
+    }),
+    output: z.object({turnId: z.string()}),
+  }),
+  finishSubAgentTask: iface.schemas({
+    input: z.object({turnId: z.string(), toolCallId: z.string()}),
+    output: z.void(),
+  }),
+  startDelegatedTurn: iface.schemas({
+    input: z.object({
+      ownerUserId: z.string(),
+      parentAgentId: z.string(),
+      parentTurnId: z.string(),
+      message: z.string().trim().min(1).max(16000),
+    }),
+    output: z.object({turnId: z.string()}),
+  }),
+  interruptDelegatedTurn: iface.schemas({
+    input: z.object({
+      parentAgentId: z.string(),
+      turnId: z.string(),
+      reason: z.string(),
+    }),
+    output: z.void(),
+  }),
   deleteSubAgent: iface.schemas({
     input: z.object({turnId: z.string().min(1), agentId: z.string().min(1)}),
     output: z.boolean(),
@@ -268,7 +299,10 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
     input: ConversationCompactionResultSchema,
     output: z.void(),
   }),
-  doTurn: iface.schemas({input: AgentTurnRequestSchema, output: z.void()}),
+  doTurn: iface.schemas({
+    input: AgentTurnRequestSchema,
+    output: AgentTurnOutcomeSchema,
+  }),
 });
 
 /** Private per-user account, agent directory, shared memories and MCP credentials. */

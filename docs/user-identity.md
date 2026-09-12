@@ -51,7 +51,9 @@ conversation caches. Sub-agents are not a new authorization principal.
 guardrails and active-turn tool grants. Additional guardrails cannot replace
 inherited IDs, tool access can only narrow, and disabled web search cannot be
 enabled by the tool. Parent configuration edits do not propagate afterward.
-The user may edit a child's configuration normally. Children share the owner's
+Child conversations are read-only for users except Interrupt, enforced by the
+BFF as well as the UI. Only their parent can submit tasks and follow-ups.
+Children share the owner's
 memories and authorized credentials through the existing User snapshot, not
 through copies of secrets in their profile. Their MCP grants use
 `mcpDefault: "disabled"`, so newly connected services require explicit opt-in;
@@ -60,13 +62,25 @@ remain unavailable. Child creation is currently limited to one level.
 
 The Agent derives owner and parent IDs from durable ownership, checks its active
 turn/tool permission, then calls that owner's User object. User checks parent
-membership, initializes the child before exposing it, and optionally sends its
-first task without waiting for completion. No parent lock is reacquired from
+membership and initializes the child before exposing it. The parent session
+then asks its Agent VO to start a delegated child turn. The controller validates
+the same-user/direct-child relationship, starts the turn and records its ID.
+The parent session attaches to that invocation and waits durably for its result;
+the controller lock is free for Interrupt throughout execution. `messageSubAgent`
+reuses this path for follow-ups in the same child's history and sandbox.
+No parent lock is reacquired from
 User, and child initialization does not call User. Creation/deletion publishes
 the existing user-level profile notification; the BFF's ownership checks apply
 to children exactly as to other agents.
 
-Deleting any agent from the UI deletes all its descendants. The parent can also
+Parent interruption and turn completion stop outstanding delegated tasks;
+each tool also cleans up its wait, including losing PTC branches. Cleanup targets
+the exact child turn, is idempotent, and cannot interrupt a newer follow-up.
+Child failures and interruptions become tool errors for the waiting parent.
+Completed children are retained for follow-ups, with normal sandbox lease
+release/idle policy; journal expiry does not delete children.
+
+Deleting a top-level agent from the UI deletes all its descendants. The parent can also
 call `deleteSubAgent`, limited to its own direct children and their subtrees—not
 siblings, unrelated agents, itself, or another user's agents. User serializes
 directory removal with creation, tombstones every removed ID, removes pending

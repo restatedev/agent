@@ -217,18 +217,20 @@ export function UserWorkspace({
                         )}
                       </span>
                     </button>
-                    <button
-                      type="button"
-                      className="agent-delete"
-                      aria-label={`Delete ${agent.name}`}
-                      title={`Delete ${agent.name}`}
-                      disabled={deleting !== undefined}
-                      onClick={() =>
-                        void deleteAgent(agent.agentId, agent.name)
-                      }
-                    >
-                      <Trash2 size={15} />
-                    </button>
+                    {!agent.parentAgentId && (
+                      <button
+                        type="button"
+                        className="agent-delete"
+                        aria-label={`Delete ${agent.name}`}
+                        title={`Delete ${agent.name}`}
+                        disabled={deleting !== undefined}
+                        onClick={() =>
+                          void deleteAgent(agent.agentId, agent.name)
+                        }
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
                   </div>
                 ),
               )}
@@ -347,6 +349,7 @@ export function UserWorkspace({
                   <App
                     initialAgentId={a.agentId}
                     agentName={a.name}
+                    readOnly={Boolean(a.parentAgentId)}
                     active={a.agentId === selected}
                     onTurnSeen={markSeen}
                   />

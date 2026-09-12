@@ -75,7 +75,12 @@ export function buildModelContext(
           : entry.delivery === "steer"
             ? ["[Steering request for the active turn]", entry.text].join("\n")
             : entry.text;
-      message = {role: "user", content};
+      message = {
+        role: "user",
+        content: entry.delegatedBy
+          ? `[Task from parent agent ${JSON.stringify(entry.delegatedBy.agentId)}]\n${content}`
+          : content,
+      };
     } else if (entry.role === "assistant") {
       message =
         entry.status === "failed"

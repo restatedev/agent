@@ -119,7 +119,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
      * tools are stopped, an interrupted outcome is reported, and cancellation
      * is rethrown to preserve Restate semantics.
      */
-    *doTurn(req: AgentTurnRequest): restate.Operation<void> {
+    *doTurn(req: AgentTurnRequest): restate.Operation<AgentTurnOutcome> {
       const agentId = sessionKey();
       const turnId = restate.handlerRequest().id;
       let state: AgentSessionState | undefined;
@@ -216,6 +216,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           yield* restate.sendClient(AgentSession, agentId).compact(compaction);
         }
       }
+      return reconciled ?? outcome;
     },
   },
   options: {

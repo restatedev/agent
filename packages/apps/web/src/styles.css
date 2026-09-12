@@ -589,6 +589,10 @@ svg {
   min-height: 0;
 }
 
+.workspace[data-readonly="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .conversation-pane {
   display: grid;
   min-width: 0;
