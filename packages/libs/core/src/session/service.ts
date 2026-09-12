@@ -133,6 +133,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           conversation.entries,
           conversation.summary,
           req.memories,
+          req.agentName,
         );
         state = {
           context: agentTools.createAgentToolContext(

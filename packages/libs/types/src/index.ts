@@ -842,6 +842,8 @@ export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
 export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;
 
 export const AgentTurnRequestSchema = AgentProfileSchema.extend({
+  // Optional for already-journaled turns; new dispatches always include the name.
+  agentName: z.string().optional(),
   memories: z.array(MemoryEntrySchema),
   ownerUserId: z.string().min(1),
   mcpServers: z.array(ResolvedMcpServerSchema),

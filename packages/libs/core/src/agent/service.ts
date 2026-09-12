@@ -628,6 +628,7 @@ function* startTurn(
     .snapshot({agentId, tools: agentProfile.tools});
   return yield* activeTurn.start(agentId, {
     ...agentProfile,
+    agentName: owner.name,
     tools: snapshot.tools,
     ownerUserId: owner.ownerUserId,
     memories: snapshot.memories,

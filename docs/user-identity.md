@@ -15,6 +15,10 @@ application, not a sandbox for arbitrary internet users.
 
 ## Shared memories
 
+Every new turn includes the current agent's display name from its ownership
+state as model-context metadata, distinct from the user identity. It is not an
+instruction or permission grant, and is not written into shared memories.
+
 Memories belong to the user, not an agent. At each turn start, Agent fetches
 `User.snapshot` and passes the entire memory collection to `AgentSession.doTurn`.
 There is no memory search or per-agent selection. Already-running turns retain
