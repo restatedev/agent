@@ -1,9 +1,18 @@
 import type {ScheduleSpecInput} from "@restate-agents/client";
-import type {ApprovalResolution, Guardrail} from "@restate-agents/types";
+import type {
+  AgentNotificationSnapshot,
+  ApprovalResolution,
+  Guardrail,
+} from "@restate-agents/types";
 import {
+  AgentNotificationSnapshotSchema,
   AgentToolsSchema,
   SetWebSearchEnabledSchema,
 } from "@restate-agents/types";
+import {
+  loadAgentSnapshot,
+  syncAgentSnapshot,
+} from "../../../../../src/server/agent-snapshot";
 import {completeMcpBearerAuthorization} from "../../../../../src/server/mcp-bearer";
 import {startMcpOAuth} from "../../../../../src/server/mcp-oauth";
 import {BffError, errorResponse} from "../../../../../src/server/restate";
@@ -49,6 +58,30 @@ export async function GET(request: Request, context: RouteContext) {
     const {searchParams} = new URL(request.url);
 
     switch (operation) {
+      case "snapshot":
+        return Response.json(await loadAgentSnapshot(client, request.signal), {
+          headers: {"Cache-Control": "private, no-store"},
+        });
+      case "sync": {
+        let since: AgentNotificationSnapshot;
+        try {
+          since = AgentNotificationSnapshotSchema.parse(
+            JSON.parse(searchParams.get("since") ?? "null"),
+          );
+        } catch {
+          throw new BffError(400, "Invalid notification cursor");
+        }
+        const fromSequence = integerParameter(searchParams, "fromSequence", 1);
+        if (fromSequence < 1)
+          throw new BffError(400, "fromSequence must be positive");
+        return Response.json(
+          await syncAgentSnapshot(client, since, fromSequence, {
+            signal: request.signal,
+            idempotencyKey: request.headers.get("idempotency-key") ?? undefined,
+          }),
+          {headers: {"Cache-Control": "private, no-store"}},
+        );
+      }
       case "history":
         return Response.json(
           await client.history(

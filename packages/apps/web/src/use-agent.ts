@@ -95,20 +95,15 @@ export function useAgent(connection: AgentConnection) {
       while (!abort.signal.aborted) {
         try {
           if (!notification) {
-            const initialNotification = await client.notifications();
-            await Promise.all([
-              refreshProfile(),
-              refreshApprovals(),
-              refreshMcpAuthorizations(),
-              refreshSchedules(),
-            ]);
-            notification = initialNotification;
-          }
-          while (!abort.signal.aborted) {
-            const page = await client.history(nextSequence, 100);
-            if (page.entries.length === 0) break;
-            nextSequence = page.nextSequence;
-            setEntries((current) => [...current, ...page.entries]);
+            const initial = await client.snapshot({signal: abort.signal});
+            if (abort.signal.aborted) return;
+            setProfile(initial.profile);
+            setApprovals(initial.approvals);
+            setMcpAuthorizations(initial.mcpAuthorizations);
+            setSchedules(initial.schedules);
+            setEntries(initial.history.entries);
+            nextSequence = initial.history.nextSequence;
+            notification = initial.notification;
           }
           if (abort.signal.aborted) return;
           setConnectionState({
@@ -116,28 +111,23 @@ export function useAgent(connection: AgentConnection) {
             status: "connected",
           });
 
-          const next = await client.watchNotifications(
-            notification.revision,
-            25,
-            {idempotencyKey: watchKey, signal: abort.signal},
-          );
+          const next = await client.sync(notification, nextSequence, {
+            idempotencyKey: watchKey,
+            signal: abort.signal,
+          });
           if (abort.signal.aborted) return;
 
-          const refreshes: Promise<unknown>[] = [];
-          if (next.versions.profile > notification.versions.profile) {
-            refreshes.push(refreshProfile());
+          if (next.profile !== undefined) setProfile(next.profile);
+          if (next.approvals !== undefined) setApprovals(next.approvals);
+          if (next.mcpAuthorizations !== undefined)
+            setMcpAuthorizations(next.mcpAuthorizations);
+          if (next.schedules !== undefined) setSchedules(next.schedules);
+          if (next.history !== undefined) {
+            const page = next.history;
+            setEntries((current) => [...current, ...page.entries]);
+            nextSequence = page.nextSequence;
           }
-          if (next.versions.approvals > notification.versions.approvals) {
-            refreshes.push(refreshApprovals());
-          }
-          if (next.versions.mcpAuth > notification.versions.mcpAuth) {
-            refreshes.push(refreshMcpAuthorizations());
-          }
-          if (next.versions.schedules > notification.versions.schedules) {
-            refreshes.push(refreshSchedules());
-          }
-          await Promise.all(refreshes);
-          notification = next;
+          notification = next.notification;
           watchKey = crypto.randomUUID();
         } catch (error) {
           if (abort.signal.aborted) return;
@@ -159,14 +149,7 @@ export function useAgent(connection: AgentConnection) {
 
     void poll();
     return () => abort.abort();
-  }, [
-    client,
-    connection.agentId,
-    refreshApprovals,
-    refreshMcpAuthorizations,
-    refreshProfile,
-    refreshSchedules,
-  ]);
+  }, [client, connection.agentId]);
 
   const activeConnectionState =
     connectionState.agentId === connection.agentId

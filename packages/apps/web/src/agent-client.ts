@@ -15,6 +15,16 @@ import type {
 } from "@restate-agents/types";
 
 export type SequencedEntry = HistoryPage["entries"][number];
+export type AgentSnapshot = {
+  notification: AgentNotificationSnapshot;
+  profile: AgentProfile;
+  approvals: ApprovalRequest[];
+  mcpAuthorizations: McpAuthorizationRequest[];
+  schedules: ScheduledMessage[];
+  history: HistoryPage;
+};
+export type AgentSnapshotUpdate = Pick<AgentSnapshot, "notification"> &
+  Partial<Omit<AgentSnapshot, "notification">>;
 export type ScheduleWhenBusy = ScheduledMessage["whenBusy"];
 
 export type ScheduleSpecInput = {
@@ -77,6 +87,22 @@ export function createAgentClient(agentId: string) {
     request<T>(`${base}/${operation}`, {body});
 
   return {
+    async snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot> {
+      return request(`${base}/snapshot`, options);
+    },
+    async sync(
+      since: AgentNotificationSnapshot,
+      fromSequence: number,
+      options?: {idempotencyKey?: string; signal?: AbortSignal},
+    ): Promise<AgentSnapshotUpdate> {
+      return request(
+        `${base}/sync?${new URLSearchParams({
+          since: JSON.stringify(since),
+          fromSequence: String(fromSequence),
+        })}`,
+        options,
+      );
+    },
     async ask(message?: string): Promise<AskResult> {
       return write("ask", {message});
     },
