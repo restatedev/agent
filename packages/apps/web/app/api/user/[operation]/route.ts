@@ -62,6 +62,16 @@ export async function POST(request: Request, context: Context) {
     const body = await request.json();
     const {operation} = await context.params;
     switch (operation) {
+      case "delete-agent": {
+        if (
+          typeof body.agentId !== "string" ||
+          !body.agentId ||
+          body.agentId.length > 256
+        )
+          throw new BffError(400, "Agent ID required");
+        // User VO checks membership; callers cannot target another user's agent.
+        return Response.json(await client.deleteAgent(body.agentId));
+      }
       case "agent": {
         if (
           typeof body.name !== "string" ||

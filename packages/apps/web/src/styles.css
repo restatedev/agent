@@ -74,6 +74,24 @@
 .agents-sidebar nav button[data-active="true"],.agents-sidebar>button[data-active="true"] {background:var(--primary-soft);color:var(--primary-bright);}
 .agents-sidebar form {display:grid;gap:8px;}
 .agents-sidebar input {width:100%;min-width:0;}
+.agents-heading {display:flex;align-items:center;justify-content:space-between;}
+.agents-heading .eyebrow {margin:0;}
+.agent-count {color:var(--text-muted);font-size:12px;}
+.agent-list-row {display:flex;align-items:center;border:1px solid transparent;border-radius:12px;min-width:0;transition:background .15s ease;}
+.agent-list-row:hover {background:var(--primary-soft);}
+.agent-list-row[data-active="true"] {background:var(--primary-soft);border-color:var(--border);}
+.agents-sidebar nav .agent-select {flex:1;min-width:0;padding:9px 6px 9px 8px;background:transparent;border-radius:12px;}
+.agents-sidebar nav .agent-select[data-active="true"] {background:transparent;}
+.agent-avatar {display:grid;place-items:center;flex:none;width:30px;height:30px;font-size:21px;line-height:1;}
+.agent-select .agent-name {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;}
+.agents-sidebar nav .agent-delete {flex:none;margin-right:4px;padding:7px;color:var(--text-muted);opacity:.5;}
+.agent-list-row:hover .agent-delete,.agent-list-row:focus-within .agent-delete {opacity:1;}
+.agents-sidebar nav .agent-delete:hover {color:var(--danger);background:var(--danger-soft);}
+.new-agent-button {display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:transparent;color:var(--text-muted);font:inherit;font-size:13px;cursor:pointer;}
+.new-agent-button:hover {color:var(--primary-bright);background:var(--primary-soft);border-color:var(--primary-bright);}
+.agents-sidebar .new-agent-form {padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--primary-soft);grid-template-columns:1fr;}
+.new-agent-actions {display:flex;gap:4px;}
+.new-agent-actions>button:first-child {flex:1;}
 .agent-workspace {min-width:0;min-height:0;overflow:hidden;}
 .agent-workspace .workspace {grid-template-columns:minmax(320px,1fr) minmax(320px,390px);}
 .agent-workspace .topbar {justify-content:space-between;}

@@ -65,6 +65,8 @@ export const User = restate.implement(UserDefinition, {
       };
     },
     *createAgent(agent) {
+      if (yield* restate.state().get<boolean>(`deleted-agent:${agent.agentId}`))
+        throw new TerminalError("Agent has been deleted", {errorCode: 410});
       if (!(yield* restate.state().get("identity")))
         throw new TerminalError("User is not registered", {errorCode: 404});
       const list = yield* agents();
@@ -83,6 +85,30 @@ export const User = restate.implement(UserDefinition, {
     },
     *ownsAgent({agentId}) {
       return (yield* agents()).some((agent) => agent.agentId === agentId);
+    },
+    *deleteAgent({agentId}) {
+      const list = yield* agents();
+      if (!list.some((agent) => agent.agentId === agentId)) return false;
+      restate.state().set(`deleted-agent:${agentId}`, true);
+      restate.state().set(
+        "agents",
+        list.filter((agent) => agent.agentId !== agentId),
+      );
+      // Durable one-way cleanup avoids a User -> Agent -> User lock cycle.
+      yield* restate
+        .sendClient(AgentDefinition, agentId)
+        .retire({ownerUserId: key()});
+      const pending = yield* authorizations();
+      for (const auth of pending) {
+        auth.waiters = auth.waiters.filter(
+          (waiter) => waiter.agentId !== agentId,
+        );
+      }
+      restate.state().set(
+        "authorizations",
+        pending.filter((auth) => auth.manual || auth.waiters.length > 0),
+      );
+      return true;
     },
     *connections() {
       return (yield* connections()).map(publicConnection);

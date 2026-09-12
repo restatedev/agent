@@ -28,10 +28,24 @@ const IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
 export const Sandbox = restate.object({
   name: "Sandbox",
   handlers: {
+    retire: restate.schemas(
+      {input: z.void(), output: z.void()},
+      function* (): restate.Operation<void> {
+        restate.state().set("deleted", true);
+        const current = yield* readSandbox();
+        // A borrowed sandbox is destroyed by release after the turn stops.
+        if (!current || current.status === "borrowed") return;
+        if (current.status === "idle")
+          restate.invocation(current.timerId).cancel();
+        yield* destroyRef(current.ref);
+      },
+    ),
     borrow: restate.schemas(
       {input: BorrowSchema, output: SandboxRefSchema},
       function* ({turnId}): restate.Operation<SandboxRef> {
         const agentId = sandboxKey();
+        if (yield* restate.state().get<boolean>("deleted"))
+          throw new TerminalError("Agent has been deleted", {errorCode: 410});
         const current = yield* readSandbox();
         if (current?.status === "borrowed") {
           if (current.turnId !== turnId) {
@@ -75,6 +89,10 @@ export const Sandbox = restate.object({
       function* ({turnId}): restate.Operation<void> {
         const current = yield* readSandbox();
         if (current?.status !== "borrowed" || current.turnId !== turnId) {
+          return;
+        }
+        if (yield* restate.state().get<boolean>("deleted")) {
+          yield* destroyRef(current.ref);
           return;
         }
 
@@ -135,6 +153,13 @@ export const Sandbox = restate.object({
     ),
   },
 });
+
+function* destroyRef(ref: SandboxRef): restate.Operation<void> {
+  yield* restate.run(({signal}) => sandboxProvider.destroy(ref, {signal}), {
+    name: "destroyRetiredSandbox",
+  });
+  restate.state().clear(STATE);
+}
 
 function sandboxKey(): string {
   const key = restate.handlerRequest().key;

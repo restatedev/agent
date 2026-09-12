@@ -30,6 +30,7 @@ export function createUserClient({
     profile: () => user.profile(rpc.opts({input: serde.empty})),
     connections: () => user.connections(rpc.opts({input: serde.empty})),
     createAgent: (agent: UserAgent) => user.createAgent(agent),
+    deleteAgent: (agentId: string) => user.deleteAgent({agentId}),
     ownsAgent: (agentId: string) => user.ownsAgent({agentId}),
     upsertConnection: (server: McpServer) => user.upsertConnection(server),
     removeConnection: (id: string) => user.removeConnection({id}),

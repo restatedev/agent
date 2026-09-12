@@ -25,8 +25,17 @@ const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 /** Durable schedule registry and timer lifecycle for one Agent. */
 export const AgentScheduler = restate.implement(AgentSchedulerDefinition, {
   handlers: {
+    *retire() {
+      restate.state().set("deleted", true);
+      for (const schedule of yield* readSchedules())
+        restate.invocation(schedule.timerId).cancel();
+      restate.state().clear(SCHEDULES);
+      yield* publishChange();
+    },
     /** Creates or replaces a schedule and installs its next durable timer. */
     *upsert(spec) {
+      if (yield* restate.state().get<boolean>("deleted"))
+        return {accepted: false as const, error: "Agent has been deleted"};
       const existing = yield* getSchedule(spec.scheduleId);
       if (existing) {
         restate.invocation(existing.timerId).cancel();

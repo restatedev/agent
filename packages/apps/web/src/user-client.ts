@@ -19,6 +19,7 @@ export const userClient = {
   profile: () => request<UserProfile>("/api/user/profile"),
   createAgent: (name: string, creationId: string) =>
     write<UserAgent>("agent", {name, creationId}),
+  deleteAgent: (agentId: string) => write<boolean>("delete-agent", {agentId}),
   upsertConnection: (server: McpServer) =>
     write<McpServerMutationResult>("connection", server),
   removeConnection: (id: string) => write("remove-connection", {id}),

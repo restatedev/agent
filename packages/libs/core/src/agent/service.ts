@@ -19,6 +19,7 @@ import type {
 import {
   AgentDefinition,
   AgentNotificationsDefinition,
+  AgentSchedulerDefinition,
   UserDefinition,
 } from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
@@ -28,6 +29,7 @@ import type {
   MemoryUpdate,
   MemoryUpdateResult,
 } from "../internal-types.js";
+import {Sandbox} from "../sandbox/index.js";
 import {discoverAgentTools} from "../session/dynamic-tools.js";
 import {dynamicToolId} from "../session/tool-permissions.js";
 import * as agentTools from "../session/tools.js";
@@ -44,12 +46,35 @@ const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
     *initialize(owner) {
+      yield* requireNotDeleted();
       const existing = yield* restate.state().get<typeof owner>("ownership");
       if (existing && existing.ownerUserId !== owner.ownerUserId)
         throw new TerminalError("Agent ownership is immutable", {
           errorCode: 409,
         });
       if (!existing) restate.state().set("ownership", owner);
+    },
+    *retire({ownerUserId}) {
+      const owner = yield* restate
+        .state()
+        .get<{ownerUserId: string}>("ownership");
+      if (!owner || owner.ownerUserId !== ownerUserId)
+        throw new TerminalError("Agent does not belong to this user", {
+          errorCode: 403,
+        });
+      restate.state().set("deleted", true);
+      restate.state().clear("pending");
+      const current = yield* activeTurn.current();
+      if (current) {
+        yield* activeTurn.interrupt("Agent deleted");
+        yield* mcpAuthorization.cancelTurn(current.id, "Agent deleted");
+        yield* approvals.clearTurn(current.id);
+      }
+      // Neither cleanup call may hold Agent's lock while waiting for a caller
+      // (a schedule delivery or the active turn) to finish.
+      yield* restate.sendClient(AgentSchedulerDefinition, agentKey()).retire();
+      yield* restate.sendClient(Sandbox, agentKey()).retire();
+      yield* publishNotification("profile");
     },
     *ownership() {
       return (
@@ -111,6 +136,7 @@ export const Agent = restate.implement(AgentDefinition, {
      * @returns The routing decision, relevant Turn ID, and queue statistics.
      */
     *ask({message}): restate.Operation<AskResult> {
+      yield* requireNotDeleted();
       const agentId = agentKey();
       const current = yield* activeTurn.current();
       if (current) {
@@ -146,6 +172,7 @@ export const Agent = restate.implement(AgentDefinition, {
      * @returns Whether an interruption or replacement message was accepted.
      */
     *interrupt({reason, message}): restate.Operation<boolean> {
+      yield* requireNotDeleted();
       const current = yield* activeTurn.current();
       const requested = yield* activeTurn.interrupt(reason);
       if (requested === undefined || current === undefined) {
@@ -182,6 +209,7 @@ export const Agent = restate.implement(AgentDefinition, {
      * left untouched.
      */
     *steer(message): restate.Operation<boolean> {
+      yield* requireNotDeleted();
       return yield* activeTurn.steer(message);
     },
 
@@ -193,6 +221,7 @@ export const Agent = restate.implement(AgentDefinition, {
      * direct user interaction.
      */
     *deliver(delivery): restate.Operation<void> {
+      if (yield* restate.state().get<boolean>("deleted")) return;
       const current = yield* activeTurn.current();
       if (!current) {
         yield* startTurn(agentKey(), [
@@ -254,6 +283,7 @@ export const Agent = restate.implement(AgentDefinition, {
      * profile snapshot.
      */
     *setInstructions({instructions}): restate.Operation<void> {
+      yield* requireNotDeleted();
       profile.setInstructions(instructions);
       yield* publishNotification("profile");
     },
@@ -265,12 +295,14 @@ export const Agent = restate.implement(AgentDefinition, {
      * enforce the replacement list.
      */
     *setGuardrails({guardrails}): restate.Operation<void> {
+      yield* requireNotDeleted();
       profile.setGuardrails(guardrails);
       yield* publishNotification("profile");
     },
 
     /** Enables or disables built-in web search for subsequent turns. */
     *setWebSearchEnabled({enabled}): restate.Operation<void> {
+      yield* requireNotDeleted();
       profile.setWebSearchEnabled(enabled);
       yield* publishNotification("profile");
     },
@@ -436,7 +468,10 @@ export const Agent = restate.implement(AgentDefinition, {
       const queuedMessages = finished.queuedEntries.filter(
         ({role}) => role === "user",
       ).length;
-      if (queuedMessages > 0) {
+      if (
+        queuedMessages > 0 &&
+        !(yield* restate.state().get<boolean>("deleted"))
+      ) {
         yield* startTurn(agentKey(), [
           ...finished.queuedEntries,
           {
@@ -469,6 +504,11 @@ export const Agent = restate.implement(AgentDefinition, {
     },
   },
 });
+
+function* requireNotDeleted(): restate.Operation<void> {
+  if (yield* restate.state().get<boolean>("deleted"))
+    throw new TerminalError("Agent has been deleted", {errorCode: 410});
+}
 
 // Cross-component coordination belongs here: snapshot the Agent profile and
 // let AgentSession append the entries that open the turn.
@@ -528,6 +568,7 @@ function* requireOwner(): restate.Operation<{
   ownerUserId: string;
   name: string;
 }> {
+  yield* requireNotDeleted();
   const owner = yield* restate
     .sharedState()
     .get<{ownerUserId: string; name: string}>("ownership");

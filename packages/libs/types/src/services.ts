@@ -67,6 +67,10 @@ import {
 
 /** Restate contract implemented by core and consumed by external clients. */
 export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
+  retire: iface.schemas({
+    input: z.object({ownerUserId: z.string()}),
+    output: z.void(),
+  }),
   ask: iface.schemas({input: AskRequestSchema, output: AskResultSchema}),
   interrupt: iface.schemas({
     input: InterruptRequestSchema,
@@ -174,6 +178,7 @@ export const AgentNotificationsDefinition = iface.object(
 export const AgentSchedulerDefinition = iface.object(
   AGENT_SCHEDULER_SERVICE_NAME,
   {
+    retire: iface.schemas({input: z.void(), output: z.void()}),
     upsert: iface.schemas({
       input: ScheduleSpecSchema,
       output: ScheduleMutationResultSchema,
@@ -216,6 +221,10 @@ export const UserDefinition = iface.object("User", {
   register: iface.schemas({input: UserIdentitySchema, output: z.void()}),
   profile: iface.schemas({input: z.void(), output: UserProfileSchema}),
   createAgent: iface.schemas({input: UserAgentSchema, output: UserAgentSchema}),
+  deleteAgent: iface.schemas({
+    input: z.object({agentId: z.string().min(1)}),
+    output: z.boolean(),
+  }),
   ownsAgent: iface.schemas({
     input: z.object({agentId: z.string()}),
     output: z.boolean(),

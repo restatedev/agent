@@ -1,6 +1,6 @@
 "use client";
 import type {McpServer, UserProfile} from "@restate-agents/types";
-import {Check, LogOut, Plug, Plus} from "lucide-react";
+import {Check, LogOut, Plug, Plus, Trash2, X} from "lucide-react";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {App} from "./app";
 import {MCP_SERVER_PRESETS} from "./mcp-presets";
@@ -20,13 +20,19 @@ export function UserWorkspace({
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [deleting, setDeleting] = useState<string>();
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const refreshVersion = useRef(0);
   const creationId = useRef<string | undefined>(undefined);
   const {unread, markSeen, unavailable} = useAgentInbox(
     profile.identity.userId,
   );
   const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current;
     const next = await userClient.profile();
-    setProfile(next);
+    if (version === refreshVersion.current) setProfile(next);
   }, []);
   useEffect(() => {
     const reload = () => {
@@ -55,6 +61,30 @@ export function UserWorkspace({
     window.history.pushState(null, "", url);
   }
   const agent = profile.agents.find((agent) => agent.agentId === selected);
+  async function deleteAgent(agentId: string, agentName: string) {
+    if (
+      deleting ||
+      !window.confirm(
+        `Delete “${agentName}”?\n\nThis removes the agent, stops its work, cancels its schedules and deletes its sandbox files. Your shared connections are kept. Conversation records remain stored internally; this is not a permanent data purge.`,
+      )
+    )
+      return;
+    setDeleting(agentId);
+    setError("");
+    try {
+      await userClient.deleteAgent(agentId);
+      ++refreshVersion.current; // Ignore profile reads started before deletion.
+      setProfile((current) => ({
+        ...current,
+        agents: current.agents.filter((a) => a.agentId !== agentId),
+      }));
+      if (selectedRef.current === agentId) select();
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setDeleting(undefined);
+    }
+  }
   return (
     <UserContext.Provider value={{profile, refresh}}>
       <div className="user-workspace">
@@ -63,34 +93,56 @@ export function UserWorkspace({
             <strong>{profile.identity.displayName}</strong>
             <small>{profile.identity.email}</small>
           </div>
-          <p className="eyebrow">Agents</p>
+          <div className="agents-heading">
+            <p className="eyebrow">Agents</p>
+            <span className="agent-count">{profile.agents.length}</span>
+          </div>
           <nav aria-label="Your agents">
             {profile.agents.map((agent) => (
-              <button
-                type="button"
+              <div
+                className="agent-list-row"
                 key={agent.agentId}
                 data-active={selected === agent.agentId}
-                data-unread={unread.has(agent.agentId)}
-                aria-label={
-                  unread.has(agent.agentId)
-                    ? `${agent.name} — new response`
-                    : agent.name
-                }
-                title={
-                  unread.has(agent.agentId)
-                    ? "Turn finished — new response"
-                    : undefined
-                }
-                onClick={() => select(agent.agentId)}
               >
-                <span className="agent-name">{agent.name}</span>
-                {unread.has(agent.agentId) && (
-                  <span className="agent-unread-badge" aria-hidden="true">
-                    <span className="agent-unread-dot" />
-                    New
+                <button
+                  type="button"
+                  className="agent-select"
+                  data-active={selected === agent.agentId}
+                  data-unread={unread.has(agent.agentId)}
+                  aria-label={
+                    unread.has(agent.agentId)
+                      ? `${agent.name} — new response`
+                      : agent.name
+                  }
+                  title={
+                    unread.has(agent.agentId)
+                      ? "Turn finished — new response"
+                      : agent.name
+                  }
+                  onClick={() => select(agent.agentId)}
+                >
+                  <span className="agent-avatar" aria-hidden="true">
+                    🤖
                   </span>
-                )}
-              </button>
+                  <span className="agent-name">{agent.name}</span>
+                  {unread.has(agent.agentId) && (
+                    <span className="agent-unread-badge" aria-hidden="true">
+                      <span className="agent-unread-dot" />
+                      New
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="agent-delete"
+                  aria-label={`Delete ${agent.name}`}
+                  title={`Delete ${agent.name}`}
+                  disabled={deleting !== undefined}
+                  onClick={() => void deleteAgent(agent.agentId, agent.name)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
             ))}
           </nav>
           {unavailable && (
@@ -98,49 +150,75 @@ export function UserWorkspace({
               Checking for new responses… reconnecting
             </small>
           )}
-          <form
-            onSubmit={async (event) => {
-              event.preventDefault();
-              if (creating || !name.trim()) return;
-              setCreating(true);
-              setError("");
-              creationId.current ??= crypto.randomUUID();
-              try {
-                const created = await userClient.createAgent(
-                  name.trim(),
-                  creationId.current,
-                );
-                await refresh();
-                setName("");
-                creationId.current = undefined;
-                select(created.agentId);
-              } catch (error) {
-                setError(String(error));
-              } finally {
-                setCreating(false);
-              }
-            }}
-          >
-            <input
-              aria-label="New agent name"
-              placeholder="Agent name"
-              maxLength={100}
-              value={name}
-              disabled={creating}
-              onChange={(event) => {
-                setName(event.target.value);
-                creationId.current = undefined;
-              }}
-            />
+          {!showCreate ? (
             <button
-              type="submit"
-              className="button secondary small"
-              disabled={creating || !name.trim()}
+              type="button"
+              className="new-agent-button"
+              onClick={() => setShowCreate(true)}
             >
-              <Plus />
-              {creating ? "Creating…" : "New agent"}
+              <Plus size={17} /> New agent
             </button>
-          </form>
+          ) : (
+            <form
+              className="new-agent-form"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (creating || !name.trim()) return;
+                setCreating(true);
+                setError("");
+                creationId.current ??= crypto.randomUUID();
+                try {
+                  const created = await userClient.createAgent(
+                    name.trim(),
+                    creationId.current,
+                  );
+                  await refresh();
+                  setName("");
+                  creationId.current = undefined;
+                  setShowCreate(false);
+                  select(created.agentId);
+                } catch (error) {
+                  setError(String(error));
+                } finally {
+                  setCreating(false);
+                }
+              }}
+            >
+              <input
+                ref={(input) => {
+                  input?.focus();
+                }}
+                aria-label="New agent name"
+                placeholder="Name your agent…"
+                maxLength={100}
+                value={name}
+                disabled={creating}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  creationId.current = undefined;
+                }}
+              />
+              <div className="new-agent-actions">
+                <button
+                  type="submit"
+                  className="button secondary small"
+                  disabled={creating || !name.trim()}
+                >
+                  <span aria-hidden="true">🤖</span>
+                  {creating ? "Creating…" : "Create agent"}
+                </button>
+                <button
+                  type="button"
+                  className="button ghost small"
+                  aria-label="Cancel creating agent"
+                  disabled={creating}
+                  onClick={() => setShowCreate(false)}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </form>
+          )}
           <button
             type="button"
             className="button ghost small"
