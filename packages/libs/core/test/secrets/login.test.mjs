@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
 import {test} from "node:test";
 import {build} from "esbuild";
-import {openSecret} from "@restate-agents/secrets";
+import {openSecret, sealSecret} from "@restate-agents/secrets";
 
 process.env.APP_SECRET_KEY="test-key-only-32-bytes-not-a-real-secret";
 process.env.APP_PUBLIC_URL="https://app.example";
@@ -19,7 +19,7 @@ const built=await build({
   plugins:[{name:"login-fixtures",setup(build){
     build.onResolve({filter:/^(server-only|next\/headers|next\/server|google-auth-library|@modelcontextprotocol\/client)$/},args=>({path:args.path,namespace:"fixture"}));
     build.onLoad({filter:/.*/,namespace:"fixture"},({path})=>({contents:
-      path==="server-only"?"":path==="next/headers"?'export async function cookies(){return {get:name=>{const value=globalThis.__login.jar.get(name);return value?{value}:undefined;}};}':
+      path==="server-only"?"":path==="next/headers"?'export async function cookies(){return {set:(name,value,options)=>{globalThis.__login.jar.set(name,value);globalThis.__login.cookieOptions=options;},get:name=>{const value=globalThis.__login.jar.get(name);return value?{value}:undefined;}};}':
       path==="next/server"?`export const NextResponse={redirect:(url,status=307)=>({url,status,cookies:{set:(name,value,options)=>{globalThis.__login.jar.set(name,value);globalThis.__login.cookieOptions=options;}}})};`:
       path==="@modelcontextprotocol/client"?'export const auth=()=>{};export const computeScopeUnion=()=>{};export const isStrictScopeSuperset=()=>false;':
       `export const CodeChallengeMethod={S256:"S256"};
@@ -35,17 +35,127 @@ const built=await build({
 const bff=await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
 const hash=value=>createHash("sha256").update(value).digest("hex");
 const sessionKey=token=>hash(JSON.stringify(["google-workspace","restate.dev",token]));
+const audience=()=>JSON.stringify(["https://app.example","restate.dev",(process.env.GOOGLE_ALLOWED_EMAILS??"").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean).sort()]);
+const claims=()=>JSON.parse(openSecret(jar.get("restate-session"),["bff-session-v2",audience()]));
+function putSession({userId="user-a",sessionId=sessionKey("A".repeat(43)),fresh=false}={}) {
+  const now=Date.now();
+  jar.set("restate-session",sealSecret(JSON.stringify({userId,sessionId,issuedAt:now-(fresh?0:300001),validatedUntil:now+(fresh?300000:-1),expiresAt:now+86400000}),["bff-session-v2",audience()]));
+}
+
+test("fresh session and ownership leases eliminate auth RPCs; expiry revalidates and renews", async t=>{
+  jar.clear();
+  let now=Date.now(),revoked=false,owned=true;
+  const backingExpiry=now+86400000;
+  t.mock.method(Date,"now",()=>now);
+  const calls=[];
+  t.mock.method(globalThis,"fetch",async(url,init)=>{
+    const req=new Request(url,init);calls.push(req.url);
+    if(req.url.endsWith("/read"))return Response.json(revoked?null:{userId:"user-a",expiresAt:backingExpiry});
+    if(req.url.endsWith("/ownsAgent"))return Response.json(owned && (await req.json()).agentId==="owned");
+    if(req.url.endsWith("/Agent/owned/profile"))return Response.json({name:"Owned"});
+    throw Error("Unexpected or foreign RPC: "+req.url);
+  });
+  const invoke=(token,agentId="owned")=>bff.getAgent(new Request(`https://app.example/api/agent/${agentId}/profile`,{headers:token?{"x-agent-access":token}:{}}),{params:Promise.resolve({agentId,operation:"profile"})});
+  putSession({fresh:true});
+  const cookie=jar.get("restate-session");
+  const first=await invoke();assert.equal(first.status,200);
+  const token=first.headers.get("x-agent-access");assert.ok(token);
+  assert.equal(first.headers.get("x-agent-user"),"user-a");
+  assert.equal(calls.filter(c=>c.endsWith("/ownsAgent")).length,1);
+  assert.ok(!calls.some(c=>c.includes("/UserSession/")));
+  calls.length=0;
+  assert.equal((await invoke(token)).status,200);
+  assert.deepEqual(calls,["http://test-ingress/Agent/owned/profile"]);
+  // Another agent never inherits this proof, even under the same session.
+  assert.equal((await invoke(token,"foreign")).status,404);
+  assert.ok(!calls.some(c=>c.includes("/Agent/foreign/")));
+  now+=300001;calls.length=0;
+  const refreshed=await invoke(token);assert.equal(refreshed.status,200);
+  assert.equal(calls.filter(c=>c.endsWith("/read")).length,1);
+  assert.equal(calls.filter(c=>c.endsWith("/ownsAgent")).length,1);
+  assert.notEqual(jar.get("restate-session"),cookie);
+  assert.equal(claims().expiresAt,backingExpiry);
+  assert.equal(globalThis.__login.cookieOptions.httpOnly,true);
+  assert.equal(globalThis.__login.cookieOptions.sameSite,"lax");
+  assert.equal(globalThis.__login.cookieOptions.secure,true);
+  assert.equal(globalThis.__login.cookieOptions.maxAge,Math.floor((backingExpiry-now)/1000));
+  const renewed=refreshed.headers.get("x-agent-access");
+  calls.length=0;
+  assert.equal((await invoke(renewed)).status,200);
+  assert.deepEqual(calls,["http://test-ingress/Agent/owned/profile"]);
+  // Revocation is intentionally bounded by the lease, not falsely immediate.
+  revoked=true;
+  assert.equal((await invoke(renewed)).status,200);
+  now+=300001;calls.length=0;
+  assert.equal((await invoke(renewed)).status,401);
+  assert.equal(calls.length,1);assert.ok(calls[0].endsWith("/read"));
+  // Removed ownership is rejected on the next authoritative validation.
+  revoked=false;owned=false;putSession({fresh:true});calls.length=0;
+  assert.equal((await invoke(token)).status,404);
+  assert.ok(!calls.some(c=>c.includes("/Agent/")));
+  jar.clear();
+});
+
+test("workspace proof skips directory RPCs and cannot authorize another user's feed or agent", async t=>{
+  jar.clear();putSession({fresh:true});
+  const calls=[];
+  let revision=0,ids=["owned"];
+  t.mock.method(globalThis,"fetch",async(url,init)=>{
+    const req=new Request(url,init);calls.push(req.url);
+    if(req.url.endsWith("/User/user-a/profile"))return Response.json({identity:{userId:"user-a"},agents:ids.map(agentId=>({agentId})),connections:[],memories:[]});
+    if(req.url.includes("/UserNotifications/"))return Response.json({revision,profileRevision:revision,agents:{}});
+    if(req.url.endsWith("/lastTurnSequence"))return Response.json(0);
+    if(req.url.endsWith("/ownsAgent"))return Response.json(false);
+    if(req.url.endsWith("/Agent/owned/profile"))return Response.json({name:"Owned"});
+    throw Error("Unexpected RPC: "+req.url);
+  });
+  const invoke=body=>bff.postUser(new Request("https://app.example/api/user/sync",{method:"POST",headers:{origin:"https://app.example","content-type":"application/json"},body:JSON.stringify(body)}),{params:Promise.resolve({operation:"sync"})});
+  const initial=await invoke({revision:null,profileRevision:null,agents:[]});assert.equal(initial.status,200);
+  const {authorization}=await initial.json();assert.ok(authorization);
+  calls.length=0;
+  const next=await invoke({revision:0,profileRevision:0,agents:[],authorization});assert.equal(next.status,200);
+  assert.ok(calls.every(c=>c.includes("/UserNotifications/user-a/")),calls.join(","));
+  assert.equal((await next.json()).authorization,authorization);
+  calls.length=0;
+  const context={params:Promise.resolve({agentId:"owned",operation:"profile"})};
+  const req=()=>new Request("https://app.example/api/agent/owned/profile",{headers:{"x-workspace-access":authorization}});
+  assert.equal((await bff.getAgent(req(),context)).status,200);
+  assert.deepEqual(calls,["http://test-ingress/Agent/owned/profile"]);
+  putSession({userId:"user-b",sessionId:"session-b",fresh:true});calls.length=0;
+  assert.equal((await bff.getAgent(req(),context)).status,404);
+  assert.ok(!calls.some(c=>c.includes("/Agent/owned/")));
+  putSession({fresh:true});ids=[];revision=1;calls.length=0;
+  const deleted=await invoke({revision:0,profileRevision:0,agents:[],authorization});assert.equal(deleted.status,200);
+  assert.deepEqual((await deleted.json()).agentIds,[]);
+  assert.ok(calls.some(c=>c.endsWith("/User/user-a/profile")),"directory notification forces fresh ownership");
+  jar.clear();
+});
+
+test("tampered cookies and changed login policy fail closed without a session lookup", async t=>{
+  t.mock.method(globalThis,"fetch",()=>assert.fail("invalid cookies must not cause RPCs"));
+  jar.clear();putSession({fresh:true});
+  const token=jar.get("restate-session");
+  jar.set("restate-session",token.slice(0,-8)+"AAAAAAAA");
+  assert.equal(await bff.currentUser(),null);
+  jar.set("restate-session",token);
+  const previous=process.env.GOOGLE_ALLOWED_EMAILS;
+  t.after(()=>{process.env.GOOGLE_ALLOWED_EMAILS=previous;jar.clear();});
+  process.env.GOOGLE_ALLOWED_EMAILS="someone-else@restate.dev";
+  assert.equal(await bff.currentUser(),null);
+});
 
 test("workspace sync binds its feed to the authenticated session and rejects cross-user selectors", async t=>{
   const calls=[];
   let revoked=false, revokeOnWatch=false;
+  let now=Date.now();
+  t.mock.method(Date,"now",()=>now);
   const marker={revision:0,profileRevision:0,agents:{}};
   t.mock.method(globalThis,"fetch",async(url,init)=>{
     const req=new Request(url,init); calls.push(req.url);
     if(req.url.endsWith("/read"))return Response.json(revoked?null:{userId:"user-a",expiresAt:Date.now()+10000});
     if(req.url.endsWith("/User/user-a/profile"))return Response.json({identity:{userId:"user-a"},agents:[],memories:[],connections:[]});
     if(req.url.endsWith("/UserNotifications/user-a/snapshot"))return Response.json(marker);
-    if(req.url.endsWith("/UserNotifications/user-a/watch")){if(revokeOnWatch)revoked=true;return Response.json(marker);}
+    if(req.url.endsWith("/UserNotifications/user-a/watch")){if(revokeOnWatch){revoked=true;now+=300001;}return Response.json(marker);}
     throw Error("Unexpected RPC: "+req.url);
   });
   const context={params:Promise.resolve({operation:"sync"})};
@@ -54,7 +164,7 @@ test("workspace sync binds its feed to the authenticated session and rejects cro
   jar.clear();
   assert.equal((await invoke()).status,401);
   assert.equal(calls.length,0);
-  jar.set("restate-session","A".repeat(43));
+  putSession();
   assert.equal((await invoke(input,"https://attacker.example")).status,403);
   assert.equal(calls.length,0);
   assert.equal((await invoke({...input,userId:"user-b"})).status,400);
@@ -90,7 +200,7 @@ test("completion list requires login and reads only owned agents, with partial f
   jar.clear();
   assert.equal((await bff.getUser(new Request("https://app.example/api/user/agent-completions"),context)).status,401);
   assert.equal(calls.length,0);
-  jar.set("restate-session","A".repeat(43));
+  putSession();
   const result=await bff.getUser(new Request("https://app.example/api/user/agent-completions?agentId=foreign&userId=user-b"),context);
   assert.equal(result.status,200);
   assert.deepEqual(await result.json(),[{agentId:"owned",sequence:12}]);
@@ -119,14 +229,16 @@ test("Google login binds state, nonce and PKCE; only verified identity and a has
   assert.ok(writes[0].url.endsWith("/register"));
   assert.equal(writes[0].body.userId,hash(JSON.stringify(["https://accounts.google.com","google-a"])));
   const rawSession=jar.get("restate-session");
-  assert.ok(writes[1].url.includes(`/UserSession/${sessionKey(rawSession)}/create`));
+  assert.ok(writes[1].url.includes(`/UserSession/${claims().sessionId}/create`));
+  assert.equal(claims().userId,writes[0].body.userId);
+  assert.ok(claims().validatedUntil-claims().issuedAt<=300000);
   assert.ok(!JSON.stringify(writes).includes(rawSession));
   for(const secret of ["pkce-secret","signed-token-fixture","fixture-google-secret"])assert.ok(!JSON.stringify(writes).includes(secret));
   assert.equal(globalThis.__login.cookieOptions.httpOnly,true);assert.equal(globalThis.__login.cookieOptions.secure,true);
 });
 
 test("all Agent routes authenticate before reading or writing another user's object",async t=>{
-  jar.set("restate-session","A".repeat(43));
+  putSession();
   const calls=[];
   t.mock.method(globalThis,"fetch",async(url,init)=>{
     const request=new Request(url,init);calls.push(request.url);
@@ -200,7 +312,7 @@ test("verified Workspace accounts can sign in without an email allowlist in deve
   assert.equal(writes.length,4);
 });
 
-test("sessions issued before Workspace enforcement cannot be reused; new sessions can be read and revoked",async t=>{
+test("old random cookies cannot be reused; authenticated leases can be refreshed and revoked",async t=>{
   jar.clear();
   const oldToken="O".repeat(43),newToken="N".repeat(43);
   const oldKey=hash(oldToken),newKey=sessionKey(newToken),calls=[];
@@ -212,8 +324,8 @@ test("sessions issued before Workspace enforcement cannot be reused; new session
   });
   jar.set("restate-session",oldToken);
   assert.equal(await bff.currentUser(),null);
-  assert.ok(calls[0].includes(`/UserSession/${sessionKey(oldToken)}/read`));
-  jar.set("restate-session",newToken);
+  assert.deepEqual(calls,[]);
+  putSession({sessionId:newKey});
   assert.equal((await bff.currentUser()).sessionId,newKey);
   await bff.logout(new Request("https://app.example/api/auth/logout",{method:"POST",headers:{origin:"https://app.example"}}));
   assert.ok(calls.at(-1).endsWith(`/UserSession/${newKey}/revoke`));
@@ -221,7 +333,7 @@ test("sessions issued before Workspace enforcement cannot be reused; new session
 });
 
 test("agent creation cannot spoof a User ID or claim an existing Agent ID",async t=>{
-  jar.set("restate-session","B".repeat(43));
+  putSession({sessionId:sessionKey("B".repeat(43))});
   const creationId="8ba4cffa-bf07-451a-802f-27f980c2723c",writes=[];
   t.mock.method(globalThis,"fetch",async(url,init)=>{
     const request=new Request(url,init);

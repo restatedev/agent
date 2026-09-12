@@ -45,6 +45,7 @@ Restate ingress. Input:
 {
   revision: number | null; // null for bootstrap
   profileRevision: number | null;
+  authorization?: string; // opaque BFF-issued ownership lease; return unchanged
   agents: Array<{
     agentId: string;
     notification?: AgentNotificationSnapshot; // omitted on first opening
@@ -53,7 +54,8 @@ Restate ingress. Input:
 }
 ```
 
-The BFF derives the user identity from its session. It returns the user ID,
+The BFF derives the user identity from its authenticated session cookie. It returns
+an opaque `authorization` lease (cached in workspace memory), the user ID,
 global/profile revisions, current owned agent IDs, optional changed User profile,
 per-agent state deltas (`reset: true` for first load), and changed completion
 cursors. A single UserNotifications watch waits up to 25 seconds. Only opened
@@ -61,6 +63,9 @@ agents need full data. Deleted agents are evicted; failures retain retry cursors
 and return generic per-agent errors without leaking provider details. Never
 advance cursors until the response data has been applied. A reset/future cursor
 requires a fresh snapshot. Responses are private and non-cacheable by HTTP caches.
+Fresh five-minute session and ownership leases validate locally; expiry causes
+authoritative Restate revalidation in the same request. Profile notifications
+also refresh the owned directory. See [security and revocation semantics](user-identity.md).
 
 Internal `UserNotifications/{userId}` exposes `snapshot`, `watch`, `publish`,
 `subscribe`, and `unsubscribe`. Like other ingress handlers, these must remain

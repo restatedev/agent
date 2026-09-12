@@ -2,6 +2,7 @@ import type {UserProfile} from "@restate-agents/types";
 import type {AgentSnapshotUpdate} from "./agent-client";
 
 export type WorkspaceSyncResponse = {
+  authorization?: string;
   userId: string;
   revision: number | null;
   profileRevision: number;

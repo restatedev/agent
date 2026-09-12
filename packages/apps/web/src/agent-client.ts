@@ -36,6 +36,8 @@ export type ScheduleSpecInput = {
 };
 
 type RequestOptions = {
+  headers?: Record<string, string>;
+  onResponse?: (response: Response) => void;
   body?: unknown;
   idempotencyKey?: string;
   signal?: AbortSignal;
@@ -55,6 +57,7 @@ export async function request<T>(path: string, options: RequestOptions = {}) {
   const response = await fetch(path, {
     method: options.body === undefined ? "GET" : "POST",
     headers: {
+      ...options.headers,
       ...(options.body === undefined
         ? {}
         : {"content-type": "application/json"}),
@@ -76,26 +79,51 @@ export async function request<T>(path: string, options: RequestOptions = {}) {
         : undefined) ?? `${response.status} ${response.statusText}`,
     );
   }
+  options.onResponse?.(response);
   return result as T;
 }
 
-export function createAgentClient(agentId: string) {
+export function createAgentClient(
+  agentId: string,
+  workspace?: {userId: string; authorization: () => string | undefined},
+) {
+  // Private to this client/workspace instance, never persisted or shared across accounts.
+  let accessToken: string | undefined;
+  const send = <T>(path: string, options: RequestOptions = {}) => {
+    const proof = workspace?.authorization();
+    return request<T>(path, {
+      ...options,
+      headers: {
+        ...(accessToken ? {"x-agent-access": accessToken} : {}),
+        // Large directories use the small per-agent proof to stay within proxy header limits.
+        ...(proof && proof.length <= 6000 ? {"x-workspace-access": proof} : {}),
+      },
+      onResponse(response) {
+        if (
+          workspace &&
+          response.headers.get("x-agent-user") !== workspace.userId
+        )
+          throw new AgentClientError(401, "Session changed");
+        accessToken = response.headers.get("x-agent-access") ?? accessToken;
+      },
+    });
+  };
   const base = `/api/agent/${encodeURIComponent(agentId)}`;
   const read = <T>(operation: string, parameters?: URLSearchParams) =>
-    request<T>(`${base}/${operation}${parameters ? `?${parameters}` : ""}`);
+    send<T>(`${base}/${operation}${parameters ? `?${parameters}` : ""}`);
   const write = <T>(operation: string, body: unknown) =>
-    request<T>(`${base}/${operation}`, {body});
+    send<T>(`${base}/${operation}`, {body});
 
   return {
     async snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot> {
-      return request(`${base}/snapshot`, options);
+      return send(`${base}/snapshot`, options);
     },
     async sync(
       since: AgentNotificationSnapshot,
       fromSequence: number,
       options?: {idempotencyKey?: string; signal?: AbortSignal},
     ): Promise<AgentSnapshotUpdate> {
-      return request(
+      return send(
         `${base}/sync?${new URLSearchParams({
           since: JSON.stringify(since),
           fromSequence: String(fromSequence),
@@ -129,7 +157,7 @@ export function createAgentClient(agentId: string) {
       timeoutSeconds: number,
       options?: {idempotencyKey?: string; signal?: AbortSignal},
     ): Promise<AgentNotificationSnapshot> {
-      return request(
+      return send(
         `${base}/watch?${new URLSearchParams({
           afterRevision: String(afterRevision),
           timeoutSeconds: String(timeoutSeconds),

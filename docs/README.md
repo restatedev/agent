@@ -56,7 +56,7 @@ not additional boxes in the Agent controller view.
 | Service | Shape | Identity | Responsibility |
 | --- | --- | --- | --- |
 | `User` | Virtual Object | issuer + subject hash | Identity, agent directory, shared MCP configuration and encrypted authorization |
-| `UserSession` | Virtual Object | session-cookie hash | Browser-session expiry and revocation |
+| `UserSession` | Virtual Object | random session identifier hash | Backing expiry/revocation for five-minute BFF cookie leases |
 | `Agent` | Virtual Object | `agentId` | Serialized routing, active invocation, queued input, profile, approvals, and external deliveries |
 | `AgentSession` | Virtual Object | same `agentId` | Authoritative transcript, summary checkpoint, and one exclusive `doTurn` agent-run state machine at a time |
 | `AgentNotifications` | Virtual Object | same `agentId` | Revision watermarks, caller awakeables, and invalidation long-polls |

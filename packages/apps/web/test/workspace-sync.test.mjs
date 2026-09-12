@@ -17,6 +17,12 @@ function fixture() {
     watchNotifications: async () => {calls.push("watch"); f.onWatch(); return structuredClone(f.notification);},
   };
   f.dependencies = {
+    authorize: async (_user, token, force) => {
+      if (token && !force) return {agentIds: JSON.parse(token), authorization: token};
+      const profile = await user.profile();
+      const agentIds = profile.agents.map(a => a.agentId);
+      return {agentIds, authorization: JSON.stringify(agentIds), profile};
+    },
     authenticate: async () => {f.authCount++; f.onAuth(f.authCount); return {userId: "alice", client: user};},
     agent: id => {
       calls.push(`client:${id}`);

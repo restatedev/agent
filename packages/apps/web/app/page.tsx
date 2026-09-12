@@ -7,7 +7,9 @@ export default async function Page({
 }: {
   searchParams: Promise<{agent?: string | string[]}>;
 }) {
-  const user = await currentUser();
+  // Server Components cannot set cookies. The first API request renews an
+  // expired lease; normal page and API reads both validate fresh cookies locally.
+  const user = await currentUser({renewCookie: false});
   if (!user)
     return (
       <main className="login-page">

@@ -29,6 +29,19 @@ type RouteContext = {
   params: Promise<{agentId: string; operation: string}>;
 };
 
+function authorizedJson(accessToken: string, userId: string) {
+  return (value: unknown, init?: ResponseInit) =>
+    Response.json(value, {
+      ...init,
+      headers: {
+        "Cache-Control": "private, no-store",
+        Vary: "Cookie",
+        "x-agent-access": accessToken,
+        "x-agent-user": userId,
+      },
+    });
+}
+
 function integerParameter(
   searchParams: URLSearchParams,
   name: string,
@@ -54,12 +67,13 @@ async function input<T>(request: Request): Promise<T> {
 export async function GET(request: Request, context: RouteContext) {
   try {
     const {agentId, operation} = await context.params;
-    const {client} = await authorizedAgent(agentId);
+    const {client, user, accessToken} = await authorizedAgent(agentId, request);
+    const json = authorizedJson(accessToken, user.userId);
     const {searchParams} = new URL(request.url);
 
     switch (operation) {
       case "snapshot":
-        return Response.json(await loadAgentSnapshot(client, request.signal), {
+        return json(await loadAgentSnapshot(client, request.signal), {
           headers: {"Cache-Control": "private, no-store"},
         });
       case "sync": {
@@ -74,7 +88,7 @@ export async function GET(request: Request, context: RouteContext) {
         const fromSequence = integerParameter(searchParams, "fromSequence", 1);
         if (fromSequence < 1)
           throw new BffError(400, "fromSequence must be positive");
-        return Response.json(
+        return json(
           await syncAgentSnapshot(client, since, fromSequence, {
             signal: request.signal,
             idempotencyKey: request.headers.get("idempotency-key") ?? undefined,
@@ -83,16 +97,16 @@ export async function GET(request: Request, context: RouteContext) {
         );
       }
       case "history":
-        return Response.json(
+        return json(
           await client.history(
             integerParameter(searchParams, "fromSequence", 1),
             integerParameter(searchParams, "limit", 100),
           ),
         );
       case "notifications":
-        return Response.json(await client.notifications());
+        return json(await client.notifications());
       case "watch":
-        return Response.json(
+        return json(
           await client.watchNotifications(
             integerParameter(searchParams, "afterRevision", 0),
             integerParameter(searchParams, "timeoutSeconds", 25),
@@ -104,15 +118,15 @@ export async function GET(request: Request, context: RouteContext) {
           ),
         );
       case "tool-catalog":
-        return Response.json(await client.toolCatalog());
+        return json(await client.toolCatalog());
       case "profile":
-        return Response.json(await client.profile());
+        return json(await client.profile());
       case "approvals":
-        return Response.json(await client.approvals());
+        return json(await client.approvals());
       case "mcp-authorizations":
-        return Response.json(await client.mcpAuthorizations());
+        return json(await client.mcpAuthorizations());
       case "schedules":
-        return Response.json(await client.schedules());
+        return json(await client.schedules());
       default:
         throw new BffError(404, `Unknown agent read operation: ${operation}`);
     }
@@ -125,30 +139,31 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     requireSameOrigin(request);
     const {agentId, operation} = await context.params;
-    const {client} = await authorizedAgent(agentId);
+    const {client, user, accessToken} = await authorizedAgent(agentId, request);
+    const json = authorizedJson(accessToken, user.userId);
 
     switch (operation) {
       case "ask": {
         const body = await input<{message?: string}>(request);
-        return Response.json(await client.ask(body.message));
+        return json(await client.ask(body.message));
       }
       case "steer": {
         const body = await input<{message: string}>(request);
-        return Response.json(await client.steer(body.message));
+        return json(await client.steer(body.message));
       }
       case "interrupt": {
         const body = await input<{reason: string; message?: string}>(request);
-        return Response.json(await client.interrupt(body.reason, body.message));
+        return json(await client.interrupt(body.reason, body.message));
       }
       case "instructions": {
         const body = await input<{instructions: string | null}>(request);
         await client.setInstructions(body.instructions);
-        return Response.json(null);
+        return json(null);
       }
       case "guardrails": {
         const body = await input<{guardrails: Guardrail[]}>(request);
         await client.setGuardrails(body.guardrails);
-        return Response.json(null);
+        return json(null);
       }
       case "web-search": {
         const parsed = SetWebSearchEnabledSchema.safeParse(
@@ -157,7 +172,7 @@ export async function POST(request: Request, context: RouteContext) {
         if (!parsed.success)
           throw new BffError(400, "enabled must be a boolean");
         await client.setWebSearchEnabled(parsed.data.enabled);
-        return Response.json(null);
+        return json(null);
       }
       case "tools": {
         const parsed = AgentToolsSchema.safeParse(
@@ -165,36 +180,32 @@ export async function POST(request: Request, context: RouteContext) {
         );
         if (!parsed.success) throw new BffError(400, "Invalid tool selection");
         await client.setTools(parsed.data);
-        return Response.json(null);
+        return json(null);
       }
       case "start-mcp-authorization": {
         const body = await input<{authRequestId: string}>(request);
-        return Response.json(
-          await startMcpOAuth(request, agentId, body.authRequestId),
-        );
+        return json(await startMcpOAuth(request, agentId, body.authRequestId));
       }
       case "complete-mcp-bearer-authorization": {
         const body = await input<{
           authRequestId: string;
           accessToken: string;
         }>(request);
-        return Response.json(
-          await completeMcpBearerAuthorization(agentId, body),
-        );
+        return json(await completeMcpBearerAuthorization(agentId, body));
       }
       case "resolve-approval":
-        return Response.json(
+        return json(
           await client.resolveApproval(
             await input<ApprovalResolution>(request),
           ),
         );
       case "schedule":
-        return Response.json(
+        return json(
           await client.scheduleMessage(await input<ScheduleSpecInput>(request)),
         );
       case "cancel-schedule": {
         const body = await input<{scheduleId: string}>(request);
-        return Response.json(await client.cancelSchedule(body.scheduleId));
+        return json(await client.cancelSchedule(body.scheduleId));
       }
       default:
         throw new BffError(

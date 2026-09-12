@@ -5,6 +5,17 @@ import {EncryptedSecretSchema} from "@restate-agents/types";
 import {CodeChallengeMethod, OAuth2Client} from "google-auth-library";
 import {cookies} from "next/headers";
 import {NextResponse} from "next/server";
+import {
+  AGENT_ACCESS_HEADER,
+  AUTH_LEASE_MS,
+  readSession,
+  readWorkspaceAccess,
+  type SessionClaims,
+  sealAgentAccess,
+  sealSession,
+  sealWorkspaceAccess,
+  verifyAgentAccess,
+} from "./auth-tokens";
 import {agentClient, BffError, userClient, userSessionClient} from "./restate";
 
 const SESSION_COOKIE = "restate-session";
@@ -92,25 +103,120 @@ function tokenExchangeError(error: unknown): BffError {
     "Google token exchange failed. Check the BFF's connection to oauth2.googleapis.com and its Google OAuth client configuration, then start a fresh login.",
   );
 }
-export async function currentUser() {
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
-  const sessionId = sessionKey(token),
-    session = await userSessionClient(sessionId).read();
-  return session
-    ? {userId: session.userId, sessionId, client: userClient(session.userId)}
-    : null;
+function tokenAudience() {
+  // Changing the allowed-login policy invalidates old local authorization leases.
+  const allowed = (process.env.GOOGLE_ALLOWED_EMAILS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .sort();
+  return JSON.stringify([appOrigin(), GOOGLE_HOSTED_DOMAIN, allowed]);
+}
+function sessionClaims(
+  sessionId: string,
+  session: {userId: string; expiresAt: number},
+): SessionClaims {
+  const now = Date.now();
+  return {
+    ...session,
+    sessionId,
+    issuedAt: now,
+    validatedUntil: Math.min(now + AUTH_LEASE_MS, session.expiresAt),
+  };
+}
+export async function currentUser({
+  renewCookie = true,
+}: {
+  renewCookie?: boolean;
+} = {}) {
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  let claims = readSession(token, tokenAudience());
+  if (!claims || claims.validatedUntil <= Date.now()) {
+    // Only authenticated claims may select a backing session. Old random-handle
+    // cookies require a fresh login, including after a login-policy change.
+    const sessionId = claims?.sessionId;
+    if (!sessionId) return null;
+    const session = await userSessionClient(sessionId).read();
+    if (
+      !session ||
+      session.expiresAt <= Date.now() ||
+      (claims && claims.userId !== session.userId)
+    )
+      return null;
+    claims = sessionClaims(sessionId, session);
+    if (renewCookie)
+      jar.set(
+        SESSION_COOKIE,
+        sealSession(claims, tokenAudience()),
+        cookieOptions(
+          Math.max(0, Math.floor((claims.expiresAt - Date.now()) / 1000)),
+        ),
+      );
+  }
+  return {
+    userId: claims.userId,
+    sessionId: claims.sessionId,
+    claims,
+    client: userClient(claims.userId),
+  };
 }
 export async function requireUser() {
   const user = await currentUser();
   if (!user) throw new BffError(401, "Sign in with Google to continue");
   return user;
 }
-export async function authorizedAgent(agentId: string) {
+export async function authorizedAgent(agentId: string, request?: Request) {
   const user = await requireUser();
+  const supplied = request?.headers.get(AGENT_ACCESS_HEADER) ?? undefined;
+  const workspace = readWorkspaceAccess(
+    request?.headers.get("x-workspace-access") ?? undefined,
+    user.claims,
+    tokenAudience(),
+  );
+  if (workspace?.includes(agentId))
+    return {
+      user,
+      client: agentClient(agentId),
+      accessToken: sealAgentAccess(user.claims, agentId, tokenAudience()),
+    };
+  if (verifyAgentAccess(supplied, user.claims, agentId, tokenAudience()))
+    return {
+      user,
+      client: agentClient(agentId),
+      accessToken: supplied as string,
+    };
   if (!(await user.client.ownsAgent(agentId)))
     throw new BffError(404, "Agent not found");
-  return {user, client: agentClient(agentId)};
+  return {
+    user,
+    client: agentClient(agentId),
+    accessToken: sealAgentAccess(user.claims, agentId, tokenAudience()),
+  };
+}
+export async function authorizeWorkspace(
+  user: NonNullable<Awaited<ReturnType<typeof currentUser>>>,
+  token?: string,
+  force = false,
+) {
+  const agentIds = force
+    ? null
+    : readWorkspaceAccess(token, user.claims, tokenAudience());
+  if (agentIds) return {agentIds, authorization: token as string};
+  const profile = await user.client.profile();
+  if (profile.identity.userId !== user.userId)
+    throw new BffError(403, "User identity mismatch");
+  const ids = profile.agents.map((a) => a.agentId);
+  return {
+    agentIds: ids,
+    // Bound proof size; oversized directories retain authoritative reads.
+    authorization:
+      ids.length <= 100
+        ? sealWorkspaceAccess(user.claims, ids, tokenAudience())
+        : undefined,
+    profile,
+  };
 }
 export async function startGoogleLogin(): Promise<NextResponse> {
   const client = google();
@@ -234,13 +340,12 @@ export async function finishGoogleLogin(
   }
   const old = (await cookies()).get(SESSION_COOKIE)?.value;
   const token = randomBytes(32).toString("base64url");
+  const newSessionId = sessionKey(token);
+  const newSession = {userId, expiresAt: Date.now() + SESSION_TTL * 1000};
   try {
-    if (old && /^[A-Za-z0-9_-]{43}$/.test(old))
-      await userSessionClient(sessionKey(old)).revoke();
-    await userSessionClient(sessionKey(token)).create(
-      userId,
-      Date.now() + SESSION_TTL * 1000,
-    );
+    const oldId = readSession(old, tokenAudience())?.sessionId;
+    if (oldId) await userSessionClient(oldId).revoke();
+    await userSessionClient(newSessionId).create(userId, newSession.expiresAt);
   } catch {
     throw new BffError(
       503,
@@ -248,13 +353,17 @@ export async function finishGoogleLogin(
     );
   }
   const response = NextResponse.redirect(appOrigin());
-  response.cookies.set(SESSION_COOKIE, token, cookieOptions(SESSION_TTL));
+  response.cookies.set(
+    SESSION_COOKIE,
+    sealSession(sessionClaims(newSessionId, newSession), tokenAudience()),
+    cookieOptions(SESSION_TTL),
+  );
   response.cookies.set(LOGIN_COOKIE, "", cookieOptions(0));
   return response;
 }
 export async function logout(request: Request): Promise<NextResponse> {
   requireSameOrigin(request);
-  const user = await currentUser();
+  const user = await currentUser({renewCookie: false});
   if (user) await userSessionClient(user.sessionId).revoke();
   const response = NextResponse.redirect(appOrigin(), 303);
   response.cookies.set(SESSION_COOKIE, "", cookieOptions(0));

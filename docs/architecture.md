@@ -237,7 +237,7 @@ code-based graders to the resulting conversation event log and state.
 | State | Owner | Durable mechanism | Readers |
 | --- | --- | --- | --- |
 | Identity, agent directory, MCP connections/credentials/flows | User | Lazy VO state, encrypted secrets | Trusted BFF and owned Agents |
-| Browser session | UserSession | Hashed cookie key, expiry, revoke | BFF only |
+| Browser session | UserSession | Hashed random ID, expiry, revoke; BFF validates five-minute encrypted cookie leases locally | BFF only |
 | Tool grants and immutable owner | Agent | Lazy VO state | BFF, turn snapshot |
 | Active turn ID, interrupt reason, steering batches | Agent | Lazy VO state | Exclusive Agent handlers |
 | Pending user/event entries | Agent | Lazy VO state | Exclusive Agent handlers |

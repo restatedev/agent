@@ -702,6 +702,7 @@ export type UserNotificationSnapshot = z.infer<
 // No caller-selected user identity. These are cache positions, not authority.
 export const WorkspaceSyncRequestSchema = z
   .object({
+    authorization: z.string().max(48_000).optional(),
     revision: z.number().int().nonnegative().nullable(),
     profileRevision: z.number().int().nonnegative().nullable(),
     agents: z

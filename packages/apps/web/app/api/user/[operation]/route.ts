@@ -10,7 +10,11 @@ import {
   BffError,
   errorResponse,
 } from "../../../../src/server/restate";
-import {requireSameOrigin, requireUser} from "../../../../src/server/user-auth";
+import {
+  authorizeWorkspace,
+  requireSameOrigin,
+  requireUser,
+} from "../../../../src/server/user-auth";
 import {
   syncWorkspace,
   WorkspaceSyncError,
@@ -68,7 +72,7 @@ export async function POST(request: Request, context: Context) {
     if (operation === "sync") {
       await requireUser();
       const text = await request.text();
-      if (text.length > 64_000)
+      if (text.length > 128_000)
         throw new BffError(400, "Sync request too large");
       let body: unknown;
       try {
@@ -81,7 +85,11 @@ export async function POST(request: Request, context: Context) {
       try {
         const update = await syncWorkspace(
           parsed.data,
-          {authenticate: requireUser, agent: agentClient},
+          {
+            authenticate: requireUser,
+            authorize: authorizeWorkspace,
+            agent: agentClient,
+          },
           request.signal,
         );
         return Response.json(update, {

@@ -26,7 +26,7 @@ const emptySchedules: ScheduledMessage[] = [];
 export function useAgent(connection: AgentConnection) {
   const {cache, state} = useWorkspaceCache();
   const id = connection.agentId;
-  const client = useMemo(() => createAgentClient(id), [id]);
+  const client = useMemo(() => createAgentClient(id, cache), [id, cache]);
   const cached = Object.hasOwn(state.agents, id) ? state.agents[id] : undefined;
   const refreshProfile = useCallback(async () => {
     const profile = await client.profile();

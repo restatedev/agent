@@ -22,6 +22,7 @@ export function createWorkspaceCache(profile: UserProfile) {
   };
   let revision: number | null = null;
   let profileRevision: number | null = null;
+  let authorization: string | undefined;
   const listeners = new Set<() => void>();
   const wake = new Set<() => void>();
   function publish(next: WorkspaceState) {
@@ -35,6 +36,7 @@ export function createWorkspaceCache(profile: UserProfile) {
   }
   return {
     userId,
+    authorization: () => authorization,
     getSnapshot: () => state,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -59,6 +61,7 @@ export function createWorkspaceCache(profile: UserProfile) {
     },
     cursor(): WorkspaceSyncRequest {
       return {
+        ...(authorization ? {authorization} : {}),
         revision,
         profileRevision,
         agents: Object.entries(state.agents).map(([agentId, cached]) => ({
@@ -103,6 +106,7 @@ export function createWorkspaceCache(profile: UserProfile) {
         };
       }
       revision = update.revision;
+      authorization = update.authorization;
       profileRevision = update.profileRevision;
       const completions = new Map(
         state.completions
@@ -153,6 +157,7 @@ export function createWorkspaceCache(profile: UserProfile) {
     },
     clear() {
       revision = null;
+      authorization = undefined;
       profileRevision = null;
       publish({
         ...state,

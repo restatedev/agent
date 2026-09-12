@@ -9,7 +9,7 @@ application, not a sandbox for arbitrary internet users.
 | Google + BFF | Sign in, verify identity, manage browser cookies, enforce ownership and same-origin writes |
 | User VO | Verified identity, agent directory, shared memories, MCP connections and encrypted credentials/flows |
 | UserNotifications VO | Per-user revision feed for shared state and every owned agent; no transcripts or credentials |
-| UserSession VO | Expiry and revocation of a browser session, keyed by a hash of its opaque cookie |
+| UserSession VO | Backing session expiry/revocation, keyed by a hash of a random session identifier |
 | Agent VO | Immutable owner, one conversation, profile/tool grants, approvals and per-turn authorization actions |
 | AgentSession.doTurn | Execute the snapshotted allowed tools; wait durably for authorization |
 
@@ -70,12 +70,48 @@ narrows access within that domain; it never permits other domains. See
 
 Login uses state, nonce, PKCE, and an encrypted ten-minute flow cookie. Browser
 sessions last seven days and use HttpOnly, SameSite=Lax cookies (Secure on
-HTTPS). Only a domain-bound SHA-256 hash of the random session cookie enters
-Restate. Sessions issued before the domain restriction require a new sign-in;
-their old lookup keys are no longer accepted, even if the cookie is reused.
-Logout revokes that session; other browser sessions and running turns continue.
+HTTPS, host-only, Path=/). The cookie contains AES-256-GCM-SIV authenticated,
+encrypted claims: user ID, backing session ID, issuance time, five-minute
+validation deadline and absolute expiry. It contains no provider credentials.
+The backing session ID is a domain-bound SHA-256 hash of a random identifier.
+Cookies are bound to the configured application origin and allowed-login policy.
+Old random-handle cookies require a fresh sign-in after this format change.
+
+The BFF verifies fresh cookies locally, without a `UserSession.read` RPC. Once
+the five-minute lease expires, it reads the backing session, rejects revoked or
+expired sessions, and renews the cookie without extending the seven-day absolute
+expiry. Server-rendered pages may validate but cannot set cookies; the next API
+request renews them. No browser refresh endpoint or extra browser round trip is
+needed. Invalid ciphertext fails closed without a backing lookup.
+
+Agent ownership also uses five-minute encrypted proofs. Workspace sync returns
+an opaque `authorization` value containing the owned directory. The UI keeps it
+in workspace memory and sends it back unchanged. Agent requests can carry it in
+`x-workspace-access`, or reuse the smaller per-agent `x-agent-access` proof returned
+by the BFF. Missing/expired proofs cause an authoritative directory/ownership
+read in the same request. Large directories use the per-agent proof to avoid
+proxy header-size limits; directories over 100 agents keep authoritative reads
+instead of issuing a workspace proof. Proofs are bound to user, login session, origin,
+purpose, and (for per-agent proofs) agent ID; none outlive session validation.
+They do not replace the required session cookie. No authorization proof belongs
+in a URL or local storage. Directory-change notifications force a fresh profile
+read even when the cached directory proof is still valid.
+
+**Revocation tradeoff:** logout clears this browser's cookie and revokes its
+backing session, but a copied valid cookie/proof can authorize new requests for
+up to five minutes. Deletion/access changes have the same maximum lease window
+for direct requests; directory notifications update the normal UI sooner.
+Already admitted operations can finish. Immediate revocation would require an
+authoritative check on every request (or a separate revocation mechanism).
+Other browser sessions and running turns continue.
 MCP callbacks must return to the same signed-in browser session that started
-the flow.
+the flow; lease renewal preserves that session ID.
+
+All BFF replicas must share `APP_SECRET_KEY` and the public-origin/login-policy
+configuration. The existing strong production key is reused with purpose-bound
+authenticated data; no new environment variable or auth cache service is needed.
+Rotating the key invalidates these cookies and proofs (and also affects stored
+credentials encrypted with that key).
 
 `APP_PUBLIC_URL` is authoritative for login, MCP metadata/callback URLs and
 CSRF checks. Do not rely on forwarded headers. Changing a tunnel URL requires
@@ -103,10 +139,12 @@ not an OS notification or a browser-permission prompt.
 
 ### Workspace synchronization and isolation
 
-`POST /api/user/sync` accepts only cache revisions and up to 100 agent cursors,
+`POST /api/user/sync` accepts cache revisions, an optional opaque authorization
+proof and up to 100 agent cursors,
 never a user ID, session ID, service name, or arbitrary handler. The BFF derives
 the notification key from the authenticated cookie/session, checks every
-requested agent against that User's directory before any agent read, and rejects
+requested agent against that User's authenticated directory proof (or an
+authoritative directory read when absent/expired) before any agent read, and rejects
 mixed owned/foreign IDs. It rechecks the session after waiting and before
 releasing data. Feed entries never confer ownership: reads enumerate only the
 authenticated directory, and deleted agents are removed from the response/cache.
@@ -118,7 +156,8 @@ remounts the workspace. Only read receipts are persisted, under user-scoped keys
 Switching agents retains drafts and expanded transcript details. Hidden views
 never mark responses as read. A page refresh rebuilds the cache from the server.
 
-The BFF holds no cross-request authorization or conversation cache. Restate
+The BFF holds no process-local cross-request authorization or conversation cache;
+authorization leases travel encrypted through the browser. Restate
 ingress (including UserNotifications and AgentSession) must remain private;
 internal handlers trust the BFF/operator and are not public authentication APIs.
 

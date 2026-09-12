@@ -30,7 +30,7 @@ map.
 | --- | --- |
 | Agent | The model and harness operating together for one `agentId` |
 | `User` Virtual Object | Verified identity, agent directory, shared MCP connections and encrypted credentials |
-| `UserSession` Virtual Object | Expiring, revocable browser sessions |
+| `UserSession` Virtual Object | Backing browser sessions with five-minute, locally verified BFF authorization leases |
 | `Agent` Virtual Object | The deterministic controller for active work, queued input, profile, approvals, MCP authorization, and externally delivered messages |
 | `AgentSession` Virtual Object | The transcript owner and durable turn executor for the same `agentId` |
 | `AgentNotifications` Virtual Object | The per-Agent invalidation stream for history, profile, approvals, MCP authorization actions, and schedules |
