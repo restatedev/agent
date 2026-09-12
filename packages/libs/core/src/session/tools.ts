@@ -775,35 +775,35 @@ const cancelOperationTool = defineAgentTool({
 // Profile schemas are not necessarily valid strict model schemas. A regular
 // union emits anyOf (supported by OpenAI); the distinct mode literals still
 // make the choices exclusive. mcpDefault is set by the runtime, not the model.
-const subAgentToolSelectionSchema = z.union(ToolSelectionSchema.options);
-const subAgentToolConfigSchema = SubAgentConfigSchema.extend({
-  tools: AgentToolsSchema.omit({mcpDefault: true})
-    .extend({
-      builtin: subAgentToolSelectionSchema.describe(
-        "Built-in tool names, including webSearch. Do not also put these in dynamic.",
-      ),
-      dynamic: subAgentToolSelectionSchema.describe(
-        'Dynamic tools only, using service/handler IDs, not built-in or MCP names. Use {mode: "selected", names: []} for none.',
-      ),
-      mcp: z
-        .array(
-          AgentToolsSchema.shape.mcp.element.extend({
-            tools: subAgentToolSelectionSchema,
-          }),
-        )
-        .max(32)
-        .refine(
-          (items) =>
-            new Set(items.map((item) => item.connectionId)).size ===
-            items.length,
-          "Connection IDs must be unique",
-        ),
-    })
-    .nullable()
-    .describe(
-      SubAgentConfigSchema.shape.tools.description ??
-        "A complete, narrower tool selection, or null to inherit current access.",
+const modelToolSelectionSchema = z.union(ToolSelectionSchema.options);
+const modelAgentToolsSchema = AgentToolsSchema.omit({mcpDefault: true})
+  .extend({
+    builtin: modelToolSelectionSchema.describe(
+      "Built-in tool names, including webSearch. Do not also put these in dynamic.",
     ),
+    dynamic: modelToolSelectionSchema.describe(
+      'Dynamic tools only, using service/handler IDs, not built-in or MCP names. Use {mode: "selected", names: []} for none.',
+    ),
+    mcp: z
+      .array(
+        AgentToolsSchema.shape.mcp.element.extend({
+          tools: modelToolSelectionSchema,
+        }),
+      )
+      .max(32)
+      .refine(
+        (items) =>
+          new Set(items.map((item) => item.connectionId)).size === items.length,
+        "Connection IDs must be unique",
+      ),
+  })
+  .nullable();
+
+const subAgentToolConfigSchema = SubAgentConfigSchema.extend({
+  tools: modelAgentToolsSchema.describe(
+    SubAgentConfigSchema.shape.tools.description ??
+      "A complete, narrower tool selection, or null to inherit current access.",
+  ),
 });
 
 const createSubAgentTool = defineAgentTool({
@@ -1010,7 +1010,11 @@ const createScheduleTool = defineAgentTool({
   name: "createSchedule",
   description:
     "Create or replace a USER-owned schedule, only when the user asks for future or recurring work. Each occurrence creates a fresh independent agent/conversation with shared user memories and separate sandbox. Runs appear under Schedules, not in this conversation. Overlapping occurrences are skipped. Instructions must be self-contained; no conversation history or files are inherited. Null tools inherits this agent's current access; otherwise narrow it. Inherited guardrails still apply. Use listSchedules before replacing an existing ID; never replace unrelated work without the user's request. Deleting this agent does not cancel user schedules.",
-  inputSchema: UserScheduleSpecSchema,
+  inputSchema: UserScheduleSpecSchema.extend({
+    tools: modelAgentToolsSchema.describe(
+      UserScheduleSpecSchema.shape.tools.description!,
+    ),
+  }),
   *run(schedule, context): restate.Operation<ToolExecution> {
     try {
       const result = yield* restate
