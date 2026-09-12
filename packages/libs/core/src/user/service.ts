@@ -20,6 +20,7 @@ import {
 } from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
+import {coordinationRetention, noRetention} from "../retention.js";
 import {discoverConnectionTools} from "../session/mcp-tools.js";
 import * as memory from "./memory.js";
 
@@ -37,7 +38,6 @@ type Authorization = {
   expiresAt: number;
   flow?: EncryptedSecret;
 };
-const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 
 export const User = restate.implement(UserDefinition, {
   handlers: {
@@ -414,6 +414,11 @@ export const User = restate.implement(UserDefinition, {
   options: {
     enableLazyState: true,
     handlers: {
+      createAgent: coordinationRetention,
+      createSubAgent: coordinationRetention,
+      deleteAgent: coordinationRetention,
+      deleteSubAgent: coordinationRetention,
+      listSubAgents: noRetention,
       profile: {shared: true, ...noRetention},
       updateMemory: noRetention,
       ownsAgent: {shared: true, ...noRetention},
@@ -422,9 +427,12 @@ export const User = restate.implement(UserDefinition, {
       validateConnection: {shared: true, ...noRetention},
       discoverConnection: {shared: true, ...noRetention},
       mcpAuthorizationContext: {shared: true, ...noRetention},
-      saveMcpAuthorizationFlow: noRetention,
-      completeMcpAuthorization: noRetention,
-      completeMcpBearerAuthorization: noRetention,
+      requestMcpAuthorization: coordinationRetention,
+      beginAuthorization: coordinationRetention,
+      cancelMcpAuthorization: coordinationRetention,
+      saveMcpAuthorizationFlow: coordinationRetention,
+      completeMcpAuthorization: coordinationRetention,
+      completeMcpBearerAuthorization: coordinationRetention,
     },
   },
 });

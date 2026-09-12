@@ -8,6 +8,39 @@ The API uses `history`, `ConversationEntry`, and `transcript` for the public
 **conversation event log**. It is not the complete model/tool trajectory or
 Restate execution trace.
 
+## Completed invocation retention
+
+Retention starts after an invocation completes. These settings do not limit
+running turns, remove active journals, or expire Virtual Object state such as
+profiles, credentials, notification cursors, and conversation history.
+
+| Handlers | Journal | Idempotency/result |
+| --- | --- | --- |
+| `AgentSession.doTurn` | 1 hour | 1 hour |
+| `Agent.ask` | 10 minutes | 10 minutes |
+| `ModelGateway.complete`, `evaluateGuardrails` | 1 hour | 1 hour |
+| UI reads: profiles, history, ownership, catalogs, approvals, agent/schedule lists | 0 | 0 |
+| Agent profile updates: instructions, guardrails, tools, web search | 0 | 0 |
+| Agent/user notifications, including snapshot and watch | 0 | 1 hour |
+| `Agent.interrupt`, `steer` | 0 | 10 minutes |
+| Approval request, cancel, resolve | 0 | 1 hour |
+| MCP authorization request, begin, save flow, complete, cancel | 0 | 1 hour |
+| Agent creation, initialization, deletion, retirement (including sub-agents) | 0 | 1 hour |
+| Sandbox borrow/provision, release, suspend, destroy, retire | 1 hour | 1 hour |
+| Schedule upsert, cancel, fire, retire | 0 | 1 hour |
+
+For retried ingress requests, reuse the same idempotency key within the retained
+window. Distinct operations (including fresh notification reads) must not reuse
+that key. Zero journal retention still permits result retention/deduplication
+when idempotency retention is nonzero.
+
+Policies are explicit per handler; other handlers keep their existing settings
+or server defaults. In particular, this review does not change compaction,
+message delivery/turn-end coordination, memories, login sessions, or connector
+configuration mutations. Re-register the service deployment to publish changed
+retention settings to Restate. Existing retained records are not explicitly
+purged by this code change.
+
 ## Addressing and serialization
 
 One logical agent uses the same `agentId` as the key of four public protocol

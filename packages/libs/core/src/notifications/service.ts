@@ -19,10 +19,10 @@ import {
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {raceBranches} from "../race.js";
+import {coordinationRetention} from "../retention.js";
 
 const SNAPSHOT = "snapshot";
 const SUBSCRIPTIONS = "subscriptions";
-const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 
 const EMPTY_SNAPSHOT: AgentNotificationSnapshot = {
   revision: 0,
@@ -158,15 +158,15 @@ export const AgentNotifications = restate.implement(
     options: {
       enableLazyState: true,
       handlers: {
-        publish: noRetention,
-        snapshot: {shared: true, ...noRetention},
+        publish: coordinationRetention,
+        snapshot: {shared: true, ...coordinationRetention},
         watch: {
           shared: true,
           inactivityTimeout: {seconds: 1},
-          ...noRetention,
+          ...coordinationRetention,
         },
-        subscribe: noRetention,
-        unsubscribe: noRetention,
+        subscribe: coordinationRetention,
+        unsubscribe: coordinationRetention,
       },
     },
   },

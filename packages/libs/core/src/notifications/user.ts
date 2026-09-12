@@ -6,8 +6,8 @@ import type {
 import {UserNotificationsDefinition} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {raceBranches} from "../race.js";
+import {coordinationRetention} from "../retention.js";
 
-const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 const emptyVersions = {
   history: 0,
   profile: 0,
@@ -94,11 +94,15 @@ export const UserNotifications = restate.implement(
     options: {
       enableLazyState: true,
       handlers: {
-        publish: noRetention,
-        snapshot: {shared: true, ...noRetention},
-        watch: {shared: true, inactivityTimeout: {seconds: 1}, ...noRetention},
-        subscribe: noRetention,
-        unsubscribe: noRetention,
+        publish: coordinationRetention,
+        snapshot: {shared: true, ...coordinationRetention},
+        watch: {
+          shared: true,
+          inactivityTimeout: {seconds: 1},
+          ...coordinationRetention,
+        },
+        subscribe: coordinationRetention,
+        unsubscribe: coordinationRetention,
       },
     },
   },

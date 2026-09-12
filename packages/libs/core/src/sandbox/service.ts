@@ -4,6 +4,7 @@
 import {rpc, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
+import {executionRetention} from "../retention.js";
 import {
   type SandboxRef,
   SandboxRefSchema,
@@ -27,6 +28,15 @@ const IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
  */
 export const Sandbox = restate.object({
   name: "Sandbox",
+  options: {
+    handlers: {
+      borrow: executionRetention,
+      release: executionRetention,
+      suspend: executionRetention,
+      destroy: executionRetention,
+      retire: executionRetention,
+    },
+  },
   handlers: {
     retire: restate.schemas(
       {input: z.void(), output: z.void()},

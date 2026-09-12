@@ -30,6 +30,12 @@ import type {
   MemoryUpdate,
   MemoryUpdateResult,
 } from "../internal-types.js";
+import {
+  askRetention,
+  coordinationRetention,
+  interactionRetention,
+  noRetention,
+} from "../retention.js";
 import {Sandbox} from "../sandbox/index.js";
 import {discoverAgentTools} from "../session/dynamic-tools.js";
 import {dynamicToolId, selected} from "../session/tool-permissions.js";
@@ -39,10 +45,6 @@ import * as approvals from "./approval.js";
 import * as mcpAuthorization from "./mcp-authorization.js";
 import * as profile from "./profile.js";
 import {subAgentProfile} from "./sub-agent.js";
-
-// Internal coordination handlers are high-volume and their completed
-// invocations carry no information worth retaining.
-const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 
 /** Durable per-Agent controller for turns, routing, profile, and user actions. */
 export const Agent = restate.implement(AgentDefinition, {
@@ -578,18 +580,30 @@ export const Agent = restate.implement(AgentDefinition, {
   options: {
     enableLazyState: true,
     handlers: {
-      // High-volume coordination paths keep no completed-invocation state.
+      initialize: coordinationRetention,
+      createSubAgent: coordinationRetention,
+      deleteSubAgent: coordinationRetention,
+      retire: coordinationRetention,
+      listSubAgents: noRetention,
+      ask: askRetention,
+      interrupt: interactionRetention,
+      steer: interactionRetention,
+      setTools: noRetention,
+      setInstructions: noRetention,
+      setGuardrails: noRetention,
+      setWebSearchEnabled: noRetention,
       ownership: {shared: true, ...noRetention},
       toolCatalog: {shared: true, ...noRetention},
-      resolveMcpAuthorization: noRetention,
+      resolveMcpAuthorization: coordinationRetention,
       onTurnEnd: noRetention,
       updateMemory: noRetention,
-      requestMcpAuthorization: noRetention,
-      cancelMcpAuthorization: noRetention,
+      requestMcpAuthorization: coordinationRetention,
+      cancelMcpAuthorization: coordinationRetention,
       mcpAuthorizations: {shared: true, ...noRetention},
       deliver: noRetention,
-      requestApproval: noRetention,
-      cancelApproval: noRetention,
+      requestApproval: coordinationRetention,
+      cancelApproval: coordinationRetention,
+      resolveApproval: coordinationRetention,
       approvals: {shared: true, ...noRetention},
       profile: {shared: true, ...noRetention},
     },

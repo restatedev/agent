@@ -13,6 +13,7 @@ import {
 } from "@restate-agents/types/services";
 import {rpc, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
+import {coordinationRetention, noRetention} from "../retention.js";
 
 type StoredSchedule = ScheduledMessage & {
   timerId: string;
@@ -20,7 +21,6 @@ type StoredSchedule = ScheduledMessage & {
 
 const SCHEDULES = "schedules";
 const MAX_SCHEDULES = 32;
-const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 
 /** Durable schedule registry and timer lifecycle for one Agent. */
 export const AgentScheduler = restate.implement(AgentSchedulerDefinition, {
@@ -112,10 +112,11 @@ export const AgentScheduler = restate.implement(AgentSchedulerDefinition, {
   },
   options: {
     handlers: {
-      upsert: noRetention,
-      cancel: noRetention,
+      upsert: coordinationRetention,
+      cancel: coordinationRetention,
+      retire: coordinationRetention,
       list: {shared: true, ...noRetention},
-      fire: noRetention,
+      fire: coordinationRetention,
     },
   },
 });

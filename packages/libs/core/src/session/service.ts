@@ -239,6 +239,8 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
         journalRetention: 0,
       },
       doTurn: {
+        journalRetention: {hours: 1},
+        idempotencyRetention: {hours: 1},
         inactivityTimeout: {hours: 1},
         abortTimeout: {minutes: 15},
       },
