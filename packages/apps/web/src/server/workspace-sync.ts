@@ -42,12 +42,21 @@ export async function syncWorkspace<T extends Identity>(
 ): Promise<WorkspaceSyncResponse> {
   const user = await dependencies.authenticate();
   let scope = await dependencies.authorize(user, request.authorization);
-  const owned = new Set(scope.agentIds);
+  let owned = new Set(scope.agentIds);
   // Validate ALL requested IDs before any agent read or notification watch.
   if (
     new Set(request.agents.map((a) => a.agentId)).size !== request.agents.length
   )
     throw new WorkspaceSyncError(400, "Duplicate agent cursor");
+  if (
+    request.authorization &&
+    request.agents.some((a) => !owned.has(a.agentId))
+  ) {
+    // A valid lease can predate agent creation. Revalidate against this user's
+    // directory before rejecting; never trust IDs supplied by the browser.
+    scope = await dependencies.authorize(user, request.authorization, true);
+    owned = new Set(scope.agentIds);
+  }
   if (request.agents.some((a) => !owned.has(a.agentId)))
     throw new WorkspaceSyncError(404, "Agent not found");
   signal.throwIfAborted();

@@ -61,6 +61,31 @@ test("duplicate agent cursors are rejected before reads", async () => {
   await assert.rejects(f.sync(cursor(["alice-a", "alice-a"])), error => error.status === 400);
   assert.deepEqual(f.calls, ["user-profile"]);
 });
+test("a lease issued before agent creation is renewed without a page reload", async () => {
+  const f = fixture();
+  const c = createWorkspaceCache(f.profile);
+  c.ensure("alice-a");
+  c.apply(await f.sync(c.cursor()));
+  const oldAuthorization = c.cursor().authorization;
+  f.profile.agents.push({agentId: "alice-new"});
+  f.notification.revision = 1;
+  f.notification.profileRevision = 1;
+  const request = {...c.cursor(), agents: [...c.cursor().agents, {agentId: "alice-new", nextSequence: 1}]};
+  const update = await f.sync(request);
+  assert.ok(update.agentIds.includes("alice-new"));
+  assert.ok(update.agents.some(a => a.agentId === "alice-new" && a.data.history));
+  assert.notEqual(update.authorization, oldAuthorization);
+});
+test("renewing an old lease never authorizes another user's agent", async () => {
+  const f = fixture();
+  await assert.rejects(f.sync({...cursor(["alice-a", "bob-a"]), authorization: JSON.stringify(["alice-a"])}), error => error.status === 404);
+  assert.deepEqual(f.calls, ["user-profile"]);
+});
+test("a current lease does not cause an extra ownership RPC", async () => {
+  const f = fixture();
+  await f.sync({revision: 0, profileRevision: 0, authorization: JSON.stringify(["alice-a", "alice-b"]), agents: []});
+  assert.ok(!f.calls.includes("user-profile"));
+});
 test("feed records cannot expand ownership or expose another user's agent IDs", async () => {
   const f = fixture();
   f.notification.agents["bob-secret-agent"] = marker(4, {history: 4});
@@ -176,4 +201,17 @@ test("failed sync retains cursors; deletion and session loss evict cached data",
   assert.deepEqual(c.getSnapshot().agents, {});
   assert.deepEqual(c.getSnapshot().profile.memories, []);
   assert.deepEqual(c.getSnapshot().profile.connections, []);
+});
+test("a refreshed profile drops the old lease and wakes sync while retaining conversation data", () => {
+  const c = createWorkspaceCache(profile("alice"));
+  c.ensure("alice-a");
+  c.apply(response("alice", {authorization: "old-lease", agents: [{agentId: "alice-a", reset: true, data: {notification: marker(1), history: history()}}]}));
+  const before = c.getSnapshot().agents["alice-a"];
+  let wakes = 0; c.onWake(() => wakes++);
+  c.setProfile({...profile("alice"), agents: [...profile("alice").agents, {agentId: "alice-new"}]});
+  assert.equal(c.cursor().authorization, undefined);
+  assert.equal(wakes, 1);
+  assert.equal(c.getSnapshot().agents["alice-a"], before);
+  c.ensure("alice-new");
+  assert.ok(c.cursor().agents.some(a => a.agentId === "alice-new"));
 });

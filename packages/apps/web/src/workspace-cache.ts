@@ -146,6 +146,10 @@ export function createWorkspaceCache(profile: UserProfile) {
     setProfile(next: UserProfile) {
       if (next.identity.userId !== userId)
         throw new Error("Workspace identity mismatch");
+      // Profile reads after mutations can know about agents not in our lease.
+      // Abort the old poll so it cannot restore the stale directory or token.
+      authorization = undefined;
+      for (const listener of wake) listener();
       publish({
         ...state,
         profile: next,
