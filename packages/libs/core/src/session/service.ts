@@ -271,6 +271,7 @@ function* executeTurn(
     state.messages.push(mcpAvailabilityMessage(mcpDiscovery.servers));
   }
 
+  let consecutiveModelErrors = 0;
   while (state.steps < MAX_STEPS) {
     // Steering received after the previous step's drain belongs before this
     // model round. This is the stable hand-off boundary between rounds.
@@ -355,12 +356,24 @@ function* executeTurn(
     // during the step. Every other proposal is stale and is replaced by a new
     // model round over the steering update.
     if (steering.length > 0 && step.type !== "tools") {
+      consecutiveModelErrors = 0;
       yield* consumeSteering(state, steering);
       continue;
     }
 
+    if (step.type !== "error") consecutiveModelErrors = 0;
     switch (step.type) {
       case "error":
+        // Output recovery already ran inside ModelGateway. Never restart it
+        // from this loop or spend the remaining 50 steps making no progress.
+        if (step.code === "output_limit")
+          throw new TerminalError(
+            `${step.message} The turn stopped after bounded output recovery; completed tool results remain in the conversation.`,
+          );
+        if (++consecutiveModelErrors >= 3)
+          throw new TerminalError(
+            `The model returned unusable responses three times in a row. Last error: ${step.message}`,
+          );
         state.messages.push({
           role: "user",
           content: `Your last response could not be used (${step.message}). Try again with the available tools or give a final answer.`,

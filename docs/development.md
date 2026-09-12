@@ -40,6 +40,13 @@ Programmatic tool calling (PTC) is enabled by default. To disable it, start the
 core service with `AGENT_PTC_ENABLED=false pnpm dev:service`. See
 [tools.md](tools.md#programmatic-tool-calling-ptc) for the tool and replay contract.
 
+`AGENT_MODEL_MAX_OUTPUT_TOKENS` controls the agent generation budget on the
+core service: default `32000`, valid integers `1024` through `64000`. A truncated
+generation gets at most one recovery attempt at double its recorded budget,
+capped at `64000`. At the ceiling it fails without another attempt. This applies
+to normal agent calls and final summaries; guardrail and compaction budgets are
+unchanged. See [model recovery](turn-runtime.md#model-output-budgets-and-recovery).
+
 Web search is also enabled by default and requires no API key or environment
 variable. Use **Context → Web search** in the UI to save a per-Agent preference
 for future turns. It uses Tavily's free, rate-limited keyless API; see

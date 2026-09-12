@@ -48,7 +48,12 @@ export const ModelResultSchema = z.discriminatedUnion("type", [
     calls: z.array(ToolCallSchema),
     activity: z.string().optional(),
   }),
-  z.object({type: z.literal("error"), message: z.string()}),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+    code: z.literal("output_limit").optional(),
+    maxOutputTokens: z.number().int().positive().optional(),
+  }),
 ]);
 /** Normalized agent-model result consumed by the session state machine. */
 export type ModelResult = z.infer<typeof ModelResultSchema>;
@@ -104,6 +109,23 @@ export type GuardrailDecision = z.infer<typeof GuardrailDecisionSchema>;
 
 export const AGENT_MODEL = "gpt-5.6-luna";
 export const GUARDRAIL_MODEL = "gpt-5.6-terra";
+
+export const MAX_AGENT_OUTPUT_TOKENS = 64_000;
+/** Evaluated inside a journaled inference, never in replayed Turn control flow. */
+export function agentOutputBudget(): number {
+  const raw = process.env.AGENT_MODEL_MAX_OUTPUT_TOKENS ?? "32000";
+  const value = Number(raw);
+  if (
+    !/^\d+$/.test(raw) ||
+    !Number.isSafeInteger(value) ||
+    value < 1024 ||
+    value > MAX_AGENT_OUTPUT_TOKENS
+  )
+    throw new TerminalError(
+      "AGENT_MODEL_MAX_OUTPUT_TOKENS must be an integer between 1024 and 64000",
+    );
+  return value;
+}
 
 const AGENT_SYSTEM = [
   "You are a concise assistant.",
@@ -333,6 +355,7 @@ export async function confirmGuardrailDecision(
 export async function completeAgent(
   request: AgentModelRequest,
   signal: AbortSignal,
+  maxOutputTokens = agentOutputBudget(),
 ): Promise<ModelResult> {
   return withOpenAI(async (openai) => {
     const {messages} = request;
@@ -375,7 +398,7 @@ export async function completeAgent(
         : AGENT_SYSTEM,
       messages,
       ...toolOptions,
-      maxOutputTokens: 2_000,
+      maxOutputTokens,
       maxRetries: 0,
       abortSignal: signal,
       timeout: 120_000,
@@ -387,6 +410,20 @@ export async function completeAgent(
         },
       },
     });
+
+    // Reject the WHOLE truncated generation before inspecting tool calls. Even
+    // a valid-looking call may belong to an incomplete batch/program.
+    if (result.finishReason === "length") {
+      return {
+        type: "error",
+        code: "output_limit",
+        maxOutputTokens,
+        message: `Model generation exceeded its ${maxOutputTokens}-token output budget. No partial response or tool calls were used.`,
+      };
+    }
+    if (result.finishReason === "content-filter") {
+      return {type: "error", message: "model response was filtered"};
+    }
 
     if (result.toolCalls.length > 0) {
       const invalidCalls = result.toolCalls.filter(
@@ -427,16 +464,7 @@ export async function completeAgent(
       };
     }
 
-    if (result.finishReason === "length") {
-      return {
-        type: "error",
-        message: "model response exceeded its token limit",
-      };
-    }
-    if (result.finishReason === "content-filter") {
-      return {type: "error", message: "model response was filtered"};
-    }
-    return result.text
+    return result.text.trim()
       ? {type: "text", content: result.text}
       : {type: "error", message: "model returned neither text nor tool calls"};
   });

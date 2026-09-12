@@ -181,6 +181,36 @@ write history.
 - Text remains only a candidate answer while pending work exists. The run waits
   for completion, steering, or interruption before another step.
 
+### Model output budgets and recovery
+
+The model gateway defaults to 32,000 generated tokens per inference. The core
+service's `AGENT_MODEL_MAX_OUTPUT_TOKENS` override accepts integers from 1,024 to
+64,000; invalid configuration fails explicitly. This is a ceiling, not a target
+answer length. Reasoning tokens share the output budget, so a small cap can be
+exhausted before a visible answer exists ([OpenAI documentation](https://developers.openai.com/api/docs/guides/reasoning#controlling-costs)).
+
+On `finishReason: "length"`, the gateway rejects the entire generation before
+accepting any tool calls and returns a structured `output_limit` error with the
+budget used. `ModelGateway.complete` makes at most one recovery generation in
+`agent-model-output-recovery`, doubling that recorded budget up to 64,000.
+It retains completed tool results, discards the truncated output, and asks for a
+concise response/smaller program. At the ceiling no additional attempt is made.
+Each attempt has its own journaled run and existing bounded transport retries;
+provider SDK retries remain disabled. Recovery derives its budget from the
+first journaled result, not a potentially changed environment on replay, and
+remains inside the same cancellable gateway invocation/admission scope.
+
+An exhausted recovery ends the Turn as failed; it does not enter the generic
+"try again" loop or ask for yet another summary. The existing failure cleanup
+stops pending work, releases the sandbox and records the failure in history.
+Other model errors are limited to three consecutive unusable responses.
+Completed tools remain in history; recovered proposals still pass the normal
+guardrail/approval pipeline. Interruption/step-limit summaries use the same
+bounded gateway recovery with tools disabled and retain final-output guardrails.
+
+Deploy with affected in-flight turns drained/interrupted; changing a replayed
+Turn's failure-control flow is not an in-place migration of old journals.
+
 ### Programmatic tool calling (PTC)
 
 `executeProgram({source})` is a foreground tool available to the model by

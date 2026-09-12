@@ -489,6 +489,13 @@ Requirements:
 - `OPENAI_API_KEY`; and
 - optionally Modal credentials.
 
+Agent generation uses a **32,000-token output budget**, including reasoning.
+Set `AGENT_MODEL_MAX_OUTPUT_TOKENS` on the core service to override it
+(integer 1,024–64,000). Output exhaustion gets at most one separately journaled
+retry with twice the budget, capped at 64,000, then fails clearly instead of
+looping. Truncated answers/tool calls are discarded. This also applies to
+interruption summaries. See [model recovery](docs/turn-runtime.md#model-output-budgets-and-recovery).
+
 Scope-based model flow control currently needs the experimental Restate
 protocol features enabled on a fresh local server:
 

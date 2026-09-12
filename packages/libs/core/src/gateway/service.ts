@@ -16,14 +16,15 @@ import {
   GuardrailDecisionSchema,
   type GuardrailEvaluationRequest,
   GuardrailEvaluationRequestSchema,
+  MAX_AGENT_OUTPUT_TOKENS,
   type ModelResult,
   ModelResultSchema,
 } from "./model.js";
 
 const MODEL_SCOPE = "openai";
 
-// One durable run per handler invocation; Restate owns the retry policy and
-// the AI SDK's internal retries stay disabled.
+// Each provider attempt is a durable run. Restate owns transport retries;
+// a truncated generation gets at most one separately journaled recovery.
 const MODEL_RETRY = {
   maxAttempts: 4,
   initialInterval: 500,
@@ -38,9 +39,41 @@ export const ModelGateway = restate.service({
     complete: restate.schemas(
       {input: AgentModelRequestSchema, output: ModelResultSchema},
       function* (request: AgentModelRequest): restate.Operation<ModelResult> {
-        return yield* restate.run(
+        const result = yield* restate.run(
           ({signal}) => completeAgent(request, signal),
           {name: "agent-model", retry: MODEL_RETRY},
+        );
+        if (
+          result.type !== "error" ||
+          result.code !== "output_limit" ||
+          !result.maxOutputTokens ||
+          result.maxOutputTokens >= MAX_AGENT_OUTPUT_TOKENS
+        )
+          return result;
+        // Derive the recovery budget from the journaled result, not current env.
+        // The Turn's cancellation still cancels this gateway invocation.
+        const budget = Math.min(
+          result.maxOutputTokens * 2,
+          MAX_AGENT_OUTPUT_TOKENS,
+        );
+        return yield* restate.run(
+          ({signal}) =>
+            completeAgent(
+              {
+                ...request,
+                messages: [
+                  ...request.messages,
+                  {
+                    role: "user",
+                    content:
+                      "[Runtime output recovery] The previous generation exhausted its output budget and was discarded; none of its tool calls executed. Retry with a concise answer or a smaller tool/program batch. Use the existing tool results; do not repeat completed work.",
+                  },
+                ],
+              },
+              signal,
+              budget,
+            ),
+          {name: "agent-model-output-recovery", retry: MODEL_RETRY},
         );
       },
     ),
