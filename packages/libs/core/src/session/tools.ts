@@ -18,7 +18,7 @@ import {
   ToolSelectionSchema,
 } from "@restate-agents/types";
 import {AgentSchedulerDefinition} from "@restate-agents/types/services";
-import {CancelledError} from "@restatedev/restate-sdk";
+import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
@@ -778,8 +778,12 @@ const subAgentToolSelectionSchema = z.union(ToolSelectionSchema.options);
 const subAgentToolConfigSchema = SubAgentConfigSchema.extend({
   tools: AgentToolsSchema.omit({mcpDefault: true})
     .extend({
-      builtin: subAgentToolSelectionSchema,
-      dynamic: subAgentToolSelectionSchema,
+      builtin: subAgentToolSelectionSchema.describe(
+        "Built-in tool names, including webSearch. Do not also put these in dynamic.",
+      ),
+      dynamic: subAgentToolSelectionSchema.describe(
+        'Dynamic tools only, using service/handler IDs, not built-in or MCP names. Use {mode: "selected", names: []} for none.',
+      ),
       mcp: z
         .array(
           AgentToolsSchema.shape.mcp.element.extend({
@@ -806,13 +810,27 @@ const createSubAgentTool = defineAgentTool({
   description:
     "Create a persistent sub-agent under this agent, visible in the user's sidebar. It gets its own conversation and separate sandbox/files, and shares the same user's credentials and memories. Instructions, guardrails and current tool access are inherited at creation; you may add instructions/guardrails or narrow tools, never broaden access. Supply initialMessage to start its task asynchronously, or null to leave it idle. Returns the child ID/link, not its result. You do not wait for it, receive its results automatically, or share files. Do not claim it finished. Children cannot create further sub-agents. Use only when a separate agent is useful or requested; do not create duplicates.",
   inputSchema: subAgentToolConfigSchema,
-  summarize: ({name}) => `Created sub-agent: ${name}`,
+  summarize: ({name}) => `Create sub-agent: ${name}`,
   *run(config, context): restate.Operation<ToolExecution> {
-    const agent = yield* restate.client(Agent, context.agentId).createSubAgent({
-      ...config,
-      turnId: context.turnId,
-      toolCallId: context.toolCallId,
-    });
+    let agent;
+    try {
+      agent = yield* restate.client(Agent, context.agentId).createSubAgent({
+        ...config,
+        turnId: context.turnId,
+        toolCallId: context.toolCallId,
+      });
+    } catch (error) {
+      // Invalid configuration/access is feedback for the model to correct.
+      // Cancellation, stale turns (409), and infrastructure errors still escape.
+      if (
+        error instanceof TerminalError &&
+        !(error instanceof CancelledError) &&
+        (error.code === 400 || error.code === 403)
+      ) {
+        return {status: "failed", error: error.message};
+      }
+      throw error;
+    }
     return {
       status: "succeeded",
       result: JSON.stringify({

@@ -584,7 +584,7 @@ export const SubAgentConfigSchema = z.object({
       "Additional guardrails; inherited guardrails cannot be removed or replaced. Null inherits only.",
     ),
   tools: AgentToolsSchema.nullable().describe(
-    "Null inherits the parent's current access. Otherwise supply a complete, narrower selection. Dynamic names use service/handler IDs, MCP names use remote tool names. Omitted MCP connections are disabled.",
+    "Prefer null to inherit the parent's current access unless the task requires narrower permissions. Otherwise supply a complete, narrower selection. Built-in names (including webSearch) belong only in builtin. Dynamic names use service/handler IDs, MCP names use remote tool names. Use selected with an empty names array for no tools in a category. Omitted MCP connections are disabled.",
   ),
   webSearchEnabled: z
     .boolean()

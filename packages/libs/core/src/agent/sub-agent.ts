@@ -22,18 +22,23 @@ export function subAgentProfile(
   builtins: readonly string[],
 ): AgentProfile {
   const tools = structuredClone(config.tools ?? grants);
-  if (
-    !subset(tools.builtin, grants.builtin) ||
-    !subset(tools.dynamic, grants.dynamic) ||
-    tools.mcp.some((grant) => {
-      const allowed = grants.mcp.find(
-        (g) => g.connectionId === grant.connectionId,
-      );
-      return !allowed || !subset(grant.tools, allowed.tools);
-    })
-  )
+  const denied = !subset(tools.builtin, grants.builtin)
+    ? "builtin"
+    : !subset(tools.dynamic, grants.dynamic)
+      ? "dynamic"
+      : tools.mcp.find((grant) => {
+          const allowed = grants.mcp.find(
+            (g) => g.connectionId === grant.connectionId,
+          );
+          return !allowed || !subset(grant.tools, allowed.tools);
+        });
+  if (denied)
     throw new TerminalError(
-      "Sub-agent tools cannot exceed the parent's current access",
+      "Sub-agent tools cannot exceed the parent's current access: " +
+        (typeof denied === "string"
+          ? `${denied} selection is not permitted.`
+          : `MCP connection ${JSON.stringify(denied.connectionId)} or its tool selection is not permitted.`) +
+        " Built-in tools such as webSearch belong in builtin; dynamic names are service/handler IDs. Correct the selection, or use tools: null to inherit current access if no narrower restriction is needed.",
       {errorCode: 403},
     );
   // One level of delegation for now. PTC still sees only these allowed tools.

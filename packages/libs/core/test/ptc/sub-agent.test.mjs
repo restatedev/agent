@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 import * as agentTools from "../../src/session/tools.ts";
 import {Agent} from "../../src/agent/service.ts";
@@ -21,6 +22,8 @@ test("createSubAgent advertises strict-compatible nested tool selections", () =>
   assert.equal(manifest.strict, true);
   const tools = manifest.inputSchema.properties.tools.anyOf.find(s => s.type === "object");
   assert.equal(Object.hasOwn(tools.properties, "mcpDefault"), false);
+  assert.match(tools.properties.builtin.description, /webSearch/);
+  assert.match(tools.properties.dynamic.description, /service\/handler/);
   for (const selection of [tools.properties.builtin, tools.properties.dynamic, tools.properties.mcp.items.properties.tools]) {
     assert.equal(selection.anyOf.length, 2);
     assert.deepEqual(selection.anyOf.map(s => s.properties.mode.const), ["all", "selected"]);
@@ -38,6 +41,55 @@ test("createSubAgent advertises strict-compatible nested tool selections", () =>
     }
   }
   check(manifest.inputSchema);
+  assert.equal(agentTools.summarize({toolName: "createSubAgent", input: config}), "Create sub-agent: Research");
+});
+
+test("misclassified webSearch is recoverable directly and inside PTC without granting extra access", async () => {
+  const current = {...grants, dynamic: selection(), mcp: []};
+  const parent = {...profile, tools: current, webSearchEnabled: true};
+  const wrong = {...config, tools: {builtin: selection("webSearch"), dynamic: selection("webSearch"), mcp: []}};
+  const corrected = {...wrong, tools: {...wrong.tools, dynamic: selection()}};
+  const toolContext = agentTools.createAgentToolContext("parent", "turn", true, current, "alice");
+  const f = context("parent", {}, () => child);
+  const scope = {transcript: {*append() {}}, step: 1, *guard() {}, *cancelPending() {throw new Error("unused");}};
+  const execute = call => f.invoke(ctx => durable.execute({
+    ...ctx,
+    genericCall(opts) {
+      assert.equal(opts.service, "Agent");
+      assert.equal(opts.method, "createSubAgent");
+      // Run the actual permission validator before simulating a successful RPC.
+      const result = subAgentProfile(parent, current, opts.parameter, ["webSearch", ...builtins]);
+      assert.deepEqual(result.tools.dynamic, selection());
+      return ctx.genericCall(opts);
+    },
+  }, agentTools.execute(call, toolContext, [], [], scope)));
+  const failed = await execute({toolName: "createSubAgent", toolCallId: "invalid", input: wrong});
+  assert.equal(failed.status, "failed");
+  assert.match(failed.error, /dynamic selection is not permitted/);
+  assert.match(failed.error, /webSearch belong in builtin/);
+  assert.equal(f.calls.length, 0);
+  const message = agentTools.toModelMessage([failed]);
+  assert.equal(message.content[0].output.value.ok, false);
+  assert.equal(message.content[0].output.value.error, failed.error);
+  assert.equal((await execute({toolName: "createSubAgent", toolCallId: "corrected", input: corrected})).status, "succeeded");
+  const program = await execute({toolName: "executeProgram", toolCallId: "program", input: {source: `async tools => {
+    try { await tools.createSubAgent(${JSON.stringify(wrong)}); }
+    catch (error) { return await tools.createSubAgent(${JSON.stringify(corrected)}); }
+    throw new Error("Invalid permissions were accepted");
+  }`}});
+  assert.equal(program.status, "succeeded");
+  assert.equal(JSON.parse(program.result).agentId, "child");
+  assert.equal(f.calls.length, 2);
+});
+
+test("sub-agent tool does not swallow cancellation, stale-turn or infrastructure failures", async () => {
+  const toolContext = agentTools.createAgentToolContext("parent", "turn", false, grants, "alice");
+  for (const error of [new CancelledError(), new TerminalError("stale turn", {errorCode: 409}), new TerminalError("internal failure", {errorCode: 500})]) {
+    const f = context("parent");
+    await assert.rejects(f.invoke(ctx => durable.execute({
+      ...ctx, genericCall() {throw error;},
+    }, agentTools.execute({toolName: "createSubAgent", toolCallId: "call", input: config}, toolContext, [], []))), {message: error.message});
+  }
 });
 
 test("sub-agent inherits a copy of policy and current access, not future connections or recursion", () => {
