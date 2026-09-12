@@ -100,6 +100,9 @@ importers:
       ai:
         specifier: ^7.0.26
         version: 7.0.26(zod@4.4.3)
+      minisearch:
+        specifier: 7.2.0
+        version: 7.2.0
       modal:
         specifier: ^0.9.0
         version: 0.9.0
@@ -1082,6 +1085,9 @@ packages:
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
+  minisearch@7.2.0:
+    resolution: {integrity: sha512-dqT2XBYUOZOiC5t2HRnwADjhNS2cecp9u+TJRiJ1Qp/f5qjkeT5APcGPjHw+bz89Ms8Jp+cG4AlE+QZ/QnDglg==}
+
   modal@0.9.0:
     resolution: {integrity: sha512-kCXcdJkhbJorf/q/6T9Wdlg6in9JmRnCNQnV6rVBMyeqNV/iXI6BYk4IzY4cvZ6dbauNeDMjk/Q08cbxvoIaXg==}
 
@@ -1970,6 +1976,8 @@ snapshots:
   lucide-react@1.28.0(react@19.2.8):
     dependencies:
       react: 19.2.8
+
+  minisearch@7.2.0: {}
 
   modal@0.9.0:
     dependencies:

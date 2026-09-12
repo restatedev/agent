@@ -54,6 +54,43 @@ That separation keeps these decisions explicit:
 - results are projected back into model messages as observations by
   `session/tools.ts`.
 
+## Turn-local tool search
+
+`searchTools({query: "github unread notifications"})` performs local full-text
+search over the current turn's permitted tool catalog. Built-ins remain visible
+upfront; MCP and dynamic Restate schemas are deferred until a search selects
+them. Each search returns at most five names and short descriptions, and adds
+their complete schemas to the next model request. Loaded schemas remain visible
+for the rest of that turn, without duplicating schemas in the search result.
+
+The MiniSearch index is built lazily in memory from the journaled discovery
+snapshot. It searches names, provider names, descriptions, and parameter names,
+splits camelCase/snake_case identifiers, boosts name/provider matches, and pins
+exact tool-name matches first. Initial matching uses prefixes, not fuzzy or
+semantic search. A miss should prompt different keywords or a provider name,
+not a claim that the user has no connection.
+
+Search selections are journaled in `search-tools-<toolCallId>`. On replay the
+runtime restores those selections without reranking. The index and loaded set
+are private to the turn, not stored in a new VO or shared across users. A new
+turn starts with a fresh loaded set. Only permitted tools are indexed; execution
+still enforces the same grants, guardrails and authorization flows. Tool
+descriptions remain untrusted metadata. Search uses the normal built-in policy
+path and does not execute matched tools.
+
+PTC keeps the full permitted runtime catalog, even for tools whose schemas are
+not yet visible. Search before writing code for unfamiliar tools: a search
+inside a program loads schemas for the next model round, not the running
+program. `manifests()` remains the complete runtime catalog;
+`modelManifests()` provides the smaller inference catalog. If the agent's
+built-in selection disables `searchTools`, inference falls back to the full
+permitted catalog so external tools remain usable.
+
+This reduces tool-schema context, not initial discovery/authentication work.
+It adds a model round when a deferred tool is first needed; repeated searches
+can still accumulate schemas during a long turn. No embeddings, hosted search,
+or new search configuration are required.
+
 ## Built-in tools
 
 Built-ins live in `packages/libs/core/src/session/tools.ts`. A definition owns
@@ -90,6 +127,7 @@ of the model contract, not cosmetic documentation.
 
 | Tool | Purpose | Execution kind |
 | --- | --- | --- |
+| `searchTools` | Find permitted tools and load their schemas for this turn | Foreground journaled local search |
 | `getWeather` | Synthetic weather lookup used to demonstrate parallel calls | Foreground |
 | `webSearch` | Tavily keyless web search with bounded source evidence | Foreground journaled HTTP request |
 | `sleep` | Durable timer | Pending |

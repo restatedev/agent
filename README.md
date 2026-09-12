@@ -80,6 +80,7 @@ chain-of-thought.
 | Agent-scoped sandbox | A `Sandbox` Virtual Object lazily provisions/resumes a local or Modal workspace, lends it to one turn, and suspends it after idle release. |
 | Restate-native dynamic tools | A deployed JSON handler can opt in through `restate.dev/agent` metadata; one journaled catalog snapshot drives both inference and execution. |
 | MCP tools | User-configured stateless 2026-07-28 or stateful 2025-era Streamable HTTP endpoints contribute tools to the same per-turn catalog snapshot, with durable OAuth waits when required. |
+| Turn-local tool search | Built-ins stay visible; `searchTools` loads relevant MCP and dynamic tool schemas on demand using in-memory full-text search. PTC retains full permitted runtime access. See [tool search](docs/tools.md#turn-local-tool-search). |
 | Encrypted credentials | MCP OAuth state, PATs/API keys, and PKCE flow state are encrypted before Restate ingress using AES-256-GCM-SIV and `APP_SECRET_KEY`; state and journal payloads carry ciphertext. |
 | Durable evaluation harness | Concurrent isolated trials drive the public protocol and return code-based assertions plus the observed transcript. |
 
@@ -285,6 +286,7 @@ Current built-ins:
 | Tool | Kind | Purpose |
 | --- | --- | --- |
 | `getWeather` | foreground | Synthetic lookup for parallel-call examples |
+| `searchTools` | foreground | Search the permitted catalog and load up to five tool schemas for the current turn |
 | `webSearch` | foreground | Public web search via Tavily keyless access, with journaled source snippets and URLs |
 | `sleep` | pending | Durable timer |
 | `humanApproval` | pending | Explicit signal-backed human decision |

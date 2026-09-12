@@ -18,6 +18,7 @@ export const programToolManifest: ToolManifest = {
   strict: true,
   inputSchema: z.toJSONSchema(ProgramInputSchema, {target: "draft-7"}),
   description: [
+    "If a needed tool's schema is not yet visible, use searchTools before writing your program. Search loads schemas for the next model step, not into an already-running program. Runtime tool access still includes every permitted tool, even if its schema has not been loaded yet.",
     "Coordinate available tools with a JavaScript program. Use for multi-stage work, parallel lookups, filtering, joins, or aggregation when only a compact final result should enter model context. Direct calls remain suitable for simple actions.",
     "Source must evaluate to async tools => { ... }. Every other available static, dynamic Restate, and MCP tool is a function on tools, called with exactly one input object matching its advertised schema: await tools.getWeather({city: 'Berlin'}). Use tools['exact-name'] for names containing hyphens. executeProgram cannot call itself.",
     "Tool promises resolve to the parsed JSON result when the tool returns JSON, otherwise a text string. MCP results retain the MCP result structure, including structuredContent and content. Failed calls reject with an Error; use try/catch or Promise.allSettled. Inputs and outputs cross the boundary as JSON copies.",

@@ -36,6 +36,7 @@
     "@restatedev/restate-sdk": "1.17.0",
     "@restatedev/restate-sdk-gen": "1.17.0",
     "ai": "^7.0.26",
+    "minisearch": "7.2.0",
     "modal": "^0.9.0",
     "quickjs-emscripten-core": "0.31.0",
     "zod": "^4.4.3"
