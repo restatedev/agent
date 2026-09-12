@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {mock, test} from "node:test";
 import {User} from "../../src/user/service.ts";
 import {Agent} from "../../src/agent/service.ts";
-import {AgentScheduler} from "../../src/scheduler/service.ts";
 import {Sandbox} from "../../src/sandbox/service.ts";
 import {sandboxProvider} from "../../src/sandbox/provider.ts";
 import {context} from "./state-fixture.mjs";
@@ -60,7 +59,6 @@ test("retirement interrupts the turn, drops queued work, and asynchronously reti
   assert.equal(f.state.has("approvals"), false);
   assert.equal(f.state.get("turn").interruptReason, "Agent deleted");
   assert.equal(f.signals[0].id, "turn-1");
-  assert.ok(f.sends.some(s => s.service === "AgentScheduler" && s.method === "retire"));
   assert.ok(f.sends.some(s => s.service === "Sandbox" && s.method === "retire"));
   await assert.rejects(f.invoke(Agent.object.ask, {message: "restart"}), /deleted/);
   await assert.rejects(f.invoke(Agent.object.initialize, {ownerUserId: "alice", name: "A"}), /deleted/);
@@ -97,16 +95,6 @@ test("idle sandbox retirement cancels its timer and destroys its resources", asy
     assert.equal(f.state.has("sandbox"), false);
     assert.equal(f.state.get("deleted"), true);
   } finally { destroy.mock.restore(); }
-});
-
-test("retired scheduler cancels timers and rejects future schedules", async () => {
-  const f = context("a", {schedules: [{scheduleId: "s", timerId: "timer-1"}]});
-  await f.invoke(AgentScheduler.object.retire);
-  assert.deepEqual(f.cancelled, ["timer-1"]);
-  assert.equal(f.state.has("schedules"), false);
-  assert.equal((await f.invoke(AgentScheduler.object.upsert, {})).accepted, false);
-  await f.invoke(AgentScheduler.object.fire, {scheduleId: "s"});
-  assert.ok(!f.sends.some(s => s.method === "deliver"));
 });
 
 test("borrowed sandbox is destroyed only after its turn releases it", async () => {

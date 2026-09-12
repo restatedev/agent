@@ -5,7 +5,6 @@ import type {
 import type {
   AgentDefinition,
   AgentNotificationsDefinition,
-  AgentSchedulerDefinition,
   AgentSessionDefinition,
   UserDefinition,
   UserNotificationsDefinition,
@@ -16,7 +15,6 @@ import type {
 export const AGENT_SERVICE_NAME = "Agent";
 export const AGENT_SESSION_SERVICE_NAME = "AgentSession";
 export const AGENT_NOTIFICATIONS_SERVICE_NAME = "AgentNotifications";
-export const AGENT_SCHEDULER_SERVICE_NAME = "AgentScheduler";
 export const UserIngressDefinition: VirtualObjectDefinition<
   "User",
   IngressHandlers<typeof UserDefinition>
@@ -59,10 +57,6 @@ export type AgentSessionIngressHandlers = IngressHandlers<
 export type AgentNotificationsIngressHandlers = IngressHandlers<
   typeof AgentNotificationsDefinition
 >;
-export type AgentSchedulerIngressHandlers = IngressHandlers<
-  typeof AgentSchedulerDefinition
->;
-
 export const AgentIngressDefinition: VirtualObjectDefinition<
   typeof AGENT_SERVICE_NAME,
   AgentIngressHandlers
@@ -77,8 +71,3 @@ export const AgentNotificationsIngressDefinition: VirtualObjectDefinition<
   typeof AGENT_NOTIFICATIONS_SERVICE_NAME,
   AgentNotificationsIngressHandlers
 > = {name: AGENT_NOTIFICATIONS_SERVICE_NAME};
-
-export const AgentSchedulerIngressDefinition: VirtualObjectDefinition<
-  typeof AGENT_SCHEDULER_SERVICE_NAME,
-  AgentSchedulerIngressHandlers
-> = {name: AGENT_SCHEDULER_SERVICE_NAME};

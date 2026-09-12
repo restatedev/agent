@@ -138,9 +138,9 @@ of the model contract, not cosmetic documentation.
 | `messageSubAgent` | Ask a direct child a follow-up and return its answer | Durable child-turn wait |
 | `listSubAgents` | Find existing direct children by name, ID and link | Foreground Agent → User RPC |
 | `deleteSubAgent` | Delete a direct child's entire subtree | Foreground Agent → User RPC |
-| `scheduleMessage` | Create or replace a per-Agent durable schedule | Foreground AgentScheduler RPC |
-| `cancelSchedule` | Idempotently cancel a schedule | Foreground AgentScheduler RPC |
-| `listSchedules` | Read active schedules for this Agent | Foreground AgentScheduler RPC |
+| `createSchedule` | Create or replace a user-owned schedule with fresh agents per run | Foreground Agent → User RPC |
+| `cancelSchedule` | Idempotently cancel a schedule | Foreground Agent → User RPC |
+| `listSchedules` | Read schedules for this user | Foreground Agent → User RPC |
 | `listFiles` | List an agent sandbox directory | Foreground sandbox operation |
 | `readFile` | Read a UTF-8 sandbox file | Foreground sandbox operation |
 | `writeFile` | Replace a UTF-8 sandbox file | Foreground sandbox operation |
@@ -178,7 +178,7 @@ reading their conversations or credentials. Use it to resolve an existing
 child's ID rather than guessing or recreating it in a later turn.
 
 `deleteSubAgent({agentId})` accepts only the calling agent's direct children.
-It removes the child's entire subtree, durably retires turns, schedules and
+It removes the child's entire subtree, durably retires turns and
 sandboxes, and preserves shared user credentials/memories. History remains
 internally; deletion is not a permanent data purge. Use only for user-authorized
 deletion. Delegation handlers reject stale or interrupting parent turns. Parent
@@ -456,7 +456,8 @@ The internal call context also contains `toolCallId`. Use:
 - `sandbox.client()` for a lazy, shared turn lease on the agent's sandbox.
 
 The context intentionally does not expose general orchestration hooks.
-Schedule mutations use `agentId` to address `AgentScheduler` directly. Once an
+Schedule creation validates the active turn through Agent and then addresses its
+immutable owning User. Cancellation and listing use that same User. Once an
 upsert completes, the schedule is an independent durable side effect and is
 not rolled back if the originating turn later ends or is interrupted.
 

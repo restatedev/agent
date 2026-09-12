@@ -6,7 +6,7 @@
 import {type HistoryPage, HistoryPageSchema} from "@restate-agents/types";
 import {
   AgentNotificationsDefinition,
-  AgentSchedulerDefinition,
+  UserNotificationsDefinition,
   UserDefinition,
 } from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
@@ -293,90 +293,68 @@ function* basicTurn({
 
 function* scheduling({
   agentId,
-  history,
 }: EvalContext): restate.Operation<EvalAssertion[]> {
-  const scheduler = restate.client(AgentSchedulerDefinition, agentId);
-  const pending = yield* scheduler.upsert({
+  const owner = yield* restate.client(Agent, agentId).ownership();
+  if (!owner) throw new Error("Evaluation agent has no owner");
+  const user = restate.client(UserDefinition, owner.ownerUserId);
+  const notifications = restate.client(
+    UserNotificationsDefinition,
+    owner.ownerUserId,
+  );
+  const spec = {
     scheduleId: "cancelled-reminder",
-    message: "This message must never be delivered.",
+    name: "Reminder",
+    message: "Reply briefly. Do not use tools.",
     delaySeconds: 60,
     repeatEverySeconds: null,
-    whenBusy: "queue",
-  });
-  const beforeCancel = yield* scheduler.list();
-  const cancellation = yield* scheduler.cancel({
-    scheduleId: "cancelled-reminder",
-  });
-  const afterCancel = yield* scheduler.list();
-
-  const scheduled = yield* scheduler.upsert({
+    tools: null,
+  };
+  yield* user.upsertSchedule(spec);
+  const before = yield* user.schedules();
+  const cancelled = yield* user.cancelSchedule({scheduleId: spec.scheduleId});
+  const after = yield* user.schedules();
+  yield* user.upsertSchedule({
+    ...spec,
     scheduleId: "one-shot",
-    message:
-      "Reply briefly that the scheduled delivery was received. Do not call tools.",
     delaySeconds: 1,
-    repeatEverySeconds: null,
-    whenBusy: "queue",
   });
-  const fired = yield* waitForHistory(
-    history,
-    "the one-shot schedule to fire",
-    ({entry}) =>
-      entry.role === "event" &&
-      entry.type === "delivery" &&
-      entry.source === "schedule" &&
-      entry.sourceId === "one-shot",
-  );
-  const terminal = yield* waitForHistory(
-    history,
-    "the scheduled turn to finish",
-    ({sequence, entry}) =>
-      sequence > fired.sequence && entry.role === "assistant",
-  );
-  const remaining = yield* scheduler.list();
-  const delivered = history.entries.find(
-    ({sequence, entry}) =>
-      sequence === fired.sequence + 1 &&
-      entry.role === "user" &&
-      entry.text.includes("scheduled delivery was received"),
-  );
-
-  return [
-    assertion(
-      "a schedule can be created and listed",
-      pending.accepted &&
-        beforeCancel.some(
-          ({scheduleId}) => scheduleId === "cancelled-reminder",
+  for (;;) {
+    const watermark = yield* notifications.snapshot();
+    const profile = yield* user.profile();
+    const run = profile.agents.find(
+      (a) => a.scheduleRun?.scheduleId === "one-shot",
+    );
+    if (run?.scheduleRun && run.scheduleRun.status !== "running") {
+      return [
+        assertion(
+          "user schedule can be created and listed",
+          before.some((s) => s.scheduleId === spec.scheduleId),
         ),
-    ),
-    assertion(
-      "cancellation removes the durable schedule",
-      cancellation.accepted &&
-        cancellation.cancelled &&
-        !afterCancel.some(
-          ({scheduleId}) => scheduleId === "cancelled-reminder",
+        assertion(
+          "cancellation removes the schedule",
+          cancelled && !after.some((s) => s.scheduleId === spec.scheduleId),
         ),
-    ),
-    assertion("a one-shot schedule is accepted", scheduled.accepted),
-    assertion(
-      "an idle scheduled delivery starts a turn",
-      fired.entry.role === "event" &&
-        fired.entry.type === "delivery" &&
-        fired.entry.routing === "start",
-    ),
-    assertion(
-      "the due message immediately follows its firing event",
-      delivered !== undefined,
-    ),
-    assertion(
-      "the scheduled turn completes",
-      terminal.entry.role === "assistant" &&
-        terminal.entry.status === "completed",
-    ),
-    assertion(
-      "the one-shot schedule is removed before delivery",
-      !remaining.some(({scheduleId}) => scheduleId === "one-shot"),
-    ),
-  ];
+        assertion(
+          "a fresh owned agent runs each occurrence",
+          run.agentId !== agentId && !run.parentAgentId,
+        ),
+        assertion(
+          "the scheduled run completes",
+          run.scheduleRun.status === "completed",
+        ),
+        assertion(
+          "one-shot definition remains with no future invocation",
+          profile.schedules.some(
+            (s) => s.scheduleId === "one-shot" && s.nextRunAt === null,
+          ),
+        ),
+      ];
+    }
+    yield* notifications.watch({
+      afterRevision: watermark.revision,
+      timeoutSeconds: 25,
+    });
+  }
 }
 
 function* steering({

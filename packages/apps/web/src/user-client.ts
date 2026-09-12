@@ -1,4 +1,6 @@
 import type {
+  UserSchedule,
+  UserScheduleSpec,
   McpAuthorizationRequest,
   McpServer,
   McpServerMutationResult,
@@ -21,6 +23,10 @@ export const userClient = {
       {signal},
     ),
   profile: () => request<UserProfile>("/api/user/profile"),
+  upsertSchedule: (spec: UserScheduleSpec) =>
+    write<UserSchedule>("schedule", spec),
+  cancelSchedule: (scheduleId: string) =>
+    write<boolean>("cancel-schedule", {scheduleId}),
   createAgent: (name: string, creationId: string) =>
     write<UserAgent>("agent", {name, creationId}),
   deleteAgent: (agentId: string) => write<boolean>("delete-agent", {agentId}),

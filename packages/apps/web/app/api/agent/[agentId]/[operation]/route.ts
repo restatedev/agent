@@ -1,4 +1,3 @@
-import type {ScheduleSpecInput} from "@restate-agents/client";
 import type {
   AgentNotificationSnapshot,
   ApprovalResolution,
@@ -126,8 +125,6 @@ export async function GET(request: Request, context: RouteContext) {
         return json(await client.approvals());
       case "mcp-authorizations":
         return json(await client.mcpAuthorizations());
-      case "schedules":
-        return json(await client.schedules());
       default:
         throw new BffError(404, `Unknown agent read operation: ${operation}`);
     }
@@ -219,14 +216,6 @@ export async function POST(request: Request, context: RouteContext) {
             await input<ApprovalResolution>(request),
           ),
         );
-      case "schedule":
-        return json(
-          await client.scheduleMessage(await input<ScheduleSpecInput>(request)),
-        );
-      case "cancel-schedule": {
-        const body = await input<{scheduleId: string}>(request);
-        return json(await client.cancelSchedule(body.scheduleId));
-      }
       default:
         throw new BffError(
           404,

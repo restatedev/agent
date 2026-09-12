@@ -27,7 +27,7 @@ type Scope = {
 };
 const empty: AgentNotificationSnapshot = {
   revision: 0,
-  versions: {history: 0, profile: 0, approvals: 0, mcpAuth: 0, schedules: 0},
+  versions: {history: 0, profile: 0, approvals: 0, mcpAuth: 0},
 };
 
 /** Authentication is supplied by the BFF's cookie/session boundary, never input. */

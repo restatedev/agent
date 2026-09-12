@@ -50,14 +50,13 @@ Virtual Objects:
 POST <ingress>/Agent/<agentId>/<handler>
 POST <ingress>/AgentSession/<agentId>/<handler>
 POST <ingress>/AgentNotifications/<agentId>/<handler>
-POST <ingress>/AgentScheduler/<agentId>/<handler>
+POST <ingress>/User/<userId>/<handler>
 ```
 
 `Agent` is the controller and profile/approval API. `AgentSession` owns history
 and executes turns. `AgentNotifications` owns invalidation subscriptions, and
-`AgentScheduler` owns schedules and timers. The typed client in
-`packages/libs/client/src/index.ts` wraps all four, so normal callers do not
-need to manage this split.
+`User` owns schedules and delayed invocations. The typed agent client is in
+`packages/libs/client/src/index.ts`; the user client is in `src/user.ts`.
 
 All non-void requests use JSON. A void-input handler must receive an empty body
 without `content-type`; `{}` with `application/json` is not equivalent. Use an
@@ -223,7 +222,6 @@ type AgentNotificationSnapshot = {
     profile: number;
     approvals: number;
     mcpAuth: number;
-    schedules: number;
   };
 };
 ```
@@ -377,41 +375,17 @@ non-interrupting turn and the signal is delivered. Agent removes pending state
 and publishes an `approvals` notification. AgentSession appends the complete
 decision when the waiting turn consumes the signal.
 
-## Scheduled messages
+## User-owned schedules
 
-### `AgentScheduler.upsert`
+`User.upsertSchedule` accepts `{scheduleId, name, message, delaySeconds,
+repeatEverySeconds, tools}` and returns the saved schedule with `nextRunAt`.
+`User.cancelSchedule({scheduleId})` returns whether a definition was removed.
+`User.schedules()` lists definitions; they are also in `User.profile()`.
 
-Input:
-
-```ts
-{
-  scheduleId: string; // 1..64 chars
-  message: string;
-  delaySeconds: number; // 1..31,536,000
-  repeatEverySeconds: number | null;
-  whenBusy: "queue" | "steer" | "interrupt";
-}
-```
-
-Reusing `scheduleId` replaces the existing timer. Success returns
-`{accepted: true, replaced, schedule}` with `nextRunAt` as epoch milliseconds.
-The high-level client defaults an omitted `whenBusy` to `queue` before calling
-the Restate handler.
-
-Schedule tools call AgentScheduler directly. Once `upsert` completes, the
-schedule is a durable side effect independent of the originating turn; a
-later interruption does not roll it back.
-
-### `AgentScheduler.cancel`
-
-Input is `{scheduleId}`. Success is idempotent and returns
-`{accepted: true, cancelled: boolean}`.
-
-### `AgentScheduler.list`
-
-Void input. Returns the authoritative list of active schedules. Schedule
-mutation publishes a `schedules` notification. Delivery appends a generic
-`delivery` event with `source: "schedule"` to the transcript.
+The BFF exposes authenticated, same-origin `POST /api/user/schedule` and
+`/api/user/cancel-schedule`. It derives the User key from the session.
+Agents use `createSchedule`, with active-turn permission attenuation before
+User persists the definition. See [Schedules](schedules.md).
 
 ### `Agent.deliver`
 
@@ -429,7 +403,7 @@ External producers route messages through:
 
 An idle Agent starts a turn. A busy Agent queues, steers, or interrupts. An
 already-interrupting Agent always queues. The handler is source-agnostic;
-AgentScheduler is currently its only built-in producer. The typed client
+Schedules do not use this route; each run starts a fresh agent. The typed client
 exposes the same contract as `agent.deliver(...)`.
 
 ## Internal coordination handlers
@@ -461,15 +435,17 @@ These are ingress-visible for inspection but are not normal client operations.
 
 | Handler | Caller | Purpose |
 | --- | --- | --- |
-| `publish` | AgentSession, Agent, or AgentScheduler | Advance one topic watermark and wake subscribers |
+| `publish` | AgentSession or Agent | Advance one topic watermark and wake subscribers |
 | `subscribe` | `watch` | Re-check the revision and register a caller awakeable |
 | `unsubscribe` | timed-out/cancelled `watch` | Remove an abandoned subscription |
 
-### AgentScheduler
+### User schedule coordination
 
-| Handler | Caller | Purpose |
-| --- | --- | --- |
-| `fire` | delayed AgentScheduler self-send | Verify timer ID, advance recurrence, and call `Agent.deliver` |
+| Handler | Purpose |
+| --- | --- |
+| `fireSchedule` | Delayed User self-call; reject stale IDs, advance recurrence, skip overlaps, initialize fresh agent |
+| `executeSchedule` | Shared handler; start scheduled turn and attach to its outcome |
+| `finishSchedule` | Record outcome and clear only the matching active run |
 
 ### AgentSession
 
@@ -619,7 +595,6 @@ while (!stopped) {
   if (next.versions.profile > snapshot.versions.profile) await refreshProfile();
   if (next.versions.approvals > snapshot.versions.approvals) await refreshApprovals();
   if (next.versions.mcpAuth > snapshot.versions.mcpAuth) await refreshMcpAuthorizations();
-  if (next.versions.schedules > snapshot.versions.schedules) await refreshSchedules();
   snapshot = next;
 }
 ```

@@ -7,6 +7,7 @@ import type {
   McpTurnCredential,
   UserAgent,
   UserIdentity,
+  UserScheduleSpec,
 } from "@restate-agents/types";
 import {
   UserIngressDefinition,
@@ -46,6 +47,8 @@ export function createUserClient({
       ),
     register: (identity: UserIdentity) => user.register(identity),
     profile: () => user.profile(rpc.opts({input: serde.empty})),
+    upsertSchedule: (spec: UserScheduleSpec) => user.upsertSchedule(spec),
+    cancelSchedule: (scheduleId: string) => user.cancelSchedule({scheduleId}),
     connections: () => user.connections(rpc.opts({input: serde.empty})),
     createAgent: (agent: UserAgent) => user.createAgent(agent),
     deleteAgent: (agentId: string) => user.deleteAgent({agentId}),

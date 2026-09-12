@@ -29,12 +29,11 @@ map.
 | Term | Meaning in this repository |
 | --- | --- |
 | Agent | The model and harness operating together for one `agentId` |
-| `User` Virtual Object | Verified identity, agent directory, shared MCP connections and encrypted credentials |
+| `User` Virtual Object | Verified identity, agent directory, shared memories/connections, encrypted credentials, and user-owned schedules |
 | `UserSession` Virtual Object | Backing browser sessions with five-minute, locally verified BFF authorization leases |
 | `Agent` Virtual Object | The deterministic controller for active work, queued input, profile, approvals, MCP authorization, and externally delivered messages |
 | `AgentSession` Virtual Object | The transcript owner and durable turn executor for the same `agentId` |
-| `AgentNotifications` Virtual Object | The per-Agent invalidation stream for history, profile, approvals, MCP authorization actions, and schedules |
-| `AgentScheduler` Virtual Object | The per-Agent owner of durable schedules, delayed invocations, and recurrence |
+| `AgentNotifications` Virtual Object | The per-Agent invalidation stream for history, profile, approvals, MCP authorization actions |
 | Agent run | One `AgentSession.doTurn` invocation; its invocation ID is the `turnId` |
 | Agent loop | The repeated model-action-observation cycle inside that run |
 | Loop iteration | One `agentStep`: model proposal, policy evaluation, and optional tool batch |
@@ -75,7 +74,7 @@ chain-of-thought.
 | Workspace notifications and caching | One `UserNotifications/{userId}` feed synchronizes all agents and shared user state. Visited conversations, drafts, and expanded details stay cached when switching agents; the BFF fetches only changed data. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
-| Durable schedules | `AgentScheduler/{agentId}` owns durable one-shot and fixed-interval messages and delivers them through the Agent's generic `queue`, `steer`, or `interrupt` router. |
+| Durable schedules | `User/{userId}` uses delayed Restate calls to create a fresh agent per occurrence, skips overlaps, and groups results in the user Schedules screen. See [Schedules](docs/schedules.md). |
 | Inference admission control | Model calls use a Restate scope with provider-, model-, and agent-level concurrency keys, bounded retries, and cancellation propagation. |
 | Agent-scoped sandbox | A `Sandbox` Virtual Object lazily provisions/resumes a local or Modal workspace, lends it to one turn, and suspends it after idle release. |
 | Restate-native dynamic tools | A deployed JSON handler can opt in through `restate.dev/agent` metadata; one journaled catalog snapshot drives both inference and execution. |
@@ -123,8 +122,8 @@ recovers missed steering, clears abandoned approvals and MCP authorization
 actions, and dispatches queued work.
 
 At most one task is active per Agent. Tracking is event-driven, not a polling
-loop: the task calls `onTurnEnd`. Scheduled input is simply another external
-delivery through `Agent.deliver`; its timing belongs to `AgentScheduler`.
+loop: the task calls `onTurnEnd`. User schedules create separate agents per
+run rather than injecting messages into an existing conversation.
 
 ### 2. AgentSession.doTurn: execute the task
 
@@ -190,7 +189,7 @@ sequenceDiagram
 ```
 
 “State owner” stands for AgentSession (history), Agent (profile, approvals, MCP
-authorization actions), or AgentScheduler (schedules), not another service.
+authorization actions). User schedules use the user-level notification feed.
 AgentNotifications is keyed by the same `agentId` and stores only revision
 watermarks and waiting subscriptions. It does not store or return domain data.
 The registration re-check catches changes that arrive before the watch starts.
@@ -206,7 +205,7 @@ the individual control sequences.
 | `steer(message)` | Returns `false`. | Moves pending entries plus the new instruction into the active turn after the current step settles. Running tools are not cancelled. |
 | `interrupt(reason, message?)` | Returns `false`. | Stops and joins unfinished work, finalizes completed work, and optionally queues a replacement request. |
 | `cancelOperation(id)` | Not a controller action. | A model tool stops one pending operation while the rest of the run continues. |
-| Scheduled message | Starts a turn. | Uses its `queue`, `steer`, or `interrupt` policy; an already-interrupting turn always falls back to queue. |
+| Scheduled occurrence | Creates a fresh run agent. | Skipped if that schedule already has an active run. |
 | External cancellation | Nothing to cancel. | Records cancellation, releases owned resources, reconciles Agent, and rethrows to Restate without model finalization. |
 
 Queueing changes *when* input runs. Steering changes the active request without
@@ -236,7 +235,6 @@ type AgentNotificationSnapshot = {
     profile: number;
     approvals: number;
     mcpAuth: number;
-    schedules: number;
   };
 };
 ```
@@ -246,7 +244,7 @@ The client-facing `watchNotifications` method targets
 version changes or its bounded wait expires. The notification contains no
 domain data.
 Clients drain history and re-read profile, approvals, MCP authorization
-actions, or schedules when their watermark advances. The internal registration
+actions when their watermark advances. The internal registration
 re-check closes the read/watch race, and timeout/cancellation withdraws
 abandoned subscriptions.
 
@@ -260,7 +258,7 @@ there is no shared cross-user conversation cache.
 
 History contains user/assistant messages, control boundaries, resolved
 approvals, progress, concise activity, tool lifecycle, memory metadata,
-approval lifecycle, and scheduled delivery. Raw provider reasoning, tool
+approval lifecycle, and scheduled runs. Raw provider reasoning, tool
 arguments, and tool results stay out of the public log.
 
 ## Compaction and context engineering
@@ -296,7 +294,7 @@ Current built-ins:
 | `messageSubAgent` | durable child-turn wait | Ask a direct child a follow-up in its existing conversation and return its answer |
 | `listSubAgents` | foreground Agent → User RPC | Find this agent's existing direct children by name and ID |
 | `deleteSubAgent` | foreground Agent → User RPC | Delete a direct child and all descendants, stopping work and retiring private resources |
-| `scheduleMessage` / `cancelSchedule` / `listSchedules` | foreground AgentScheduler RPC | Manage durable scheduled input independently of the current turn |
+| `createSchedule` / `cancelSchedule` / `listSchedules` | foreground Agent → User RPC | Manage durable scheduled input independently of the current turn |
 | `listFiles` / `readFile` / `writeFile` / `executeCommand` | foreground sandbox | Work in the Agent-scoped workspace |
 | `executeProgram` | foreground orchestration | Coordinate available tools in JavaScript, filter intermediate results, and return a compact JSON value |
 
@@ -466,7 +464,7 @@ configuration.
 ## Durable evaluation harness
 
 `Evals/all` spawns all selected trials concurrently. Every trial gets a fresh
-`agentId`, drives Agent, AgentSession, AgentScheduler, and AgentNotifications
+`agentId`, drives Agent, AgentSession, and AgentNotifications
 through their public handlers, waits on notification revisions, and returns
 code-based assertions over transcript structure, ordering, IDs, profile state,
 and terminal outcomes.
@@ -634,8 +632,7 @@ Production systems should add deadline-based reconciliation.
   profile, and approvals
 - `packages/libs/core/src/notifications/` — invalidation revisions,
   awakeables, and long-poll subscriptions
-- `packages/libs/core/src/scheduler/` — schedule state, durable timers,
-  recurrence, and delivery
+- `packages/libs/core/src/user/` — user identity, schedules, delayed calls, and fresh-run creation
 - `packages/libs/core/src/session/` — transcript owner, turn state machine,
   model-context projection, tools, steering, and pending operations
 - `packages/libs/core/src/gateway/` — AI SDK provider integration, model

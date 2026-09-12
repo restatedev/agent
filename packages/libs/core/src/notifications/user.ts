@@ -13,7 +13,6 @@ const emptyVersions = {
   profile: 0,
   approvals: 0,
   mcpAuth: 0,
-  schedules: 0,
 };
 export const UserNotifications = restate.implement(
   UserNotificationsDefinition,

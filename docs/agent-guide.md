@@ -31,7 +31,7 @@ Use executable contracts before prose:
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
    internal handlers, and `src/gateway/model.ts`;
 2. handler code in `src/agent/service.ts`, `src/session/service.ts`,
-   `src/notifications/service.ts`, `src/scheduler/service.ts`,
+   `src/notifications/service.ts`, `src/user/schedules.ts`,
    `src/gateway/service.ts`, and `src/sandbox/service.ts`;
 3. focused ownership modules;
 4. docs.
@@ -98,11 +98,11 @@ Preserve these unless the requested change explicitly replaces them:
     execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
     iteration, and the model plus harness/runtime is the operational agent.
 19. `AgentNotifications` carries invalidation only. `AgentSession`, `Agent`,
-    and `AgentScheduler` remain authoritative for history, profile/approvals,
+    and `User` remain authoritative for history, profile/approvals,
     and schedules respectively.
-20. `AgentScheduler` owns schedule state and timers. Once `upsert` completes,
-    that durable side effect outlives the originating turn; due messages enter
-    conversation control only through source-agnostic `Agent.deliver`.
+20. `User` owns schedules and delayed calls. Each occurrence creates a fresh
+    agent; overlaps are skipped. The shared run waiter does not hold User's
+    exclusive lock. See [Schedules](schedules.md).
 
 The detailed turn-runtime list lives in
 [turn-runtime.md#refactoring-constraints](turn-runtime.md#refactoring-constraints).
@@ -164,7 +164,7 @@ The detailed turn-runtime list lives in
 | Instructions, guardrails | `agent/profile.ts` |
 | Shared user memories | `user/memory.ts` |
 | Pending approval state and decision signal | `agent/approval.ts` |
-| Durable scheduled-message state, timers, and delivery | `scheduler/service.ts` |
+| Durable scheduled-message state, timers, and delivery | `user/schedules.ts` |
 | Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |

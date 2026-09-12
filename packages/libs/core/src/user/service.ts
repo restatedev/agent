@@ -23,6 +23,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import {coordinationRetention, noRetention} from "../retention.js";
 import {discoverConnectionTools} from "../session/mcp-tools.js";
 import * as memory from "./memory.js";
+import * as schedules from "./schedules.js";
 
 type Connection = {
   server: ResolvedMcpServer;
@@ -41,6 +42,28 @@ type Authorization = {
 
 export const User = restate.implement(UserDefinition, {
   handlers: {
+    *upsertSchedule(spec) {
+      return yield* schedules.upsert(spec);
+    },
+    *saveAgentSchedule({agentId, spec, profile}) {
+      yield* requireAgent(agentId);
+      return yield* schedules.upsert(spec, profile);
+    },
+    *cancelSchedule({scheduleId}) {
+      return yield* schedules.cancel(scheduleId);
+    },
+    *schedules() {
+      return yield* schedules.list();
+    },
+    *fireSchedule({scheduleId}) {
+      yield* schedules.fire(scheduleId);
+    },
+    *executeSchedule({agentId}) {
+      yield* schedules.execute(agentId);
+    },
+    *finishSchedule({agentId, status, error}) {
+      yield* schedules.finish(agentId, status, error);
+    },
     *register(identity) {
       if (identity.userId !== key())
         throw new TerminalError("User identity key mismatch", {errorCode: 400});
@@ -67,6 +90,7 @@ export const User = restate.implement(UserDefinition, {
         agents: yield* agents(),
         connections: (yield* connections()).map(publicConnection),
         memories: yield* memory.read(),
+        schedules: yield* schedules.list(),
       };
     },
     *createAgent(agent) {
@@ -419,6 +443,13 @@ export const User = restate.implement(UserDefinition, {
   options: {
     enableLazyState: true,
     handlers: {
+      upsertSchedule: coordinationRetention,
+      saveAgentSchedule: coordinationRetention,
+      cancelSchedule: coordinationRetention,
+      schedules: {shared: true, ...noRetention},
+      fireSchedule: coordinationRetention,
+      executeSchedule: {shared: true, ...coordinationRetention},
+      finishSchedule: coordinationRetention,
       createAgent: coordinationRetention,
       createSubAgent: coordinationRetention,
       deleteAgent: coordinationRetention,

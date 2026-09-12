@@ -28,9 +28,6 @@ import type {
   Guardrail,
   HistoryPage,
   McpAuthorizationRequest,
-  ScheduleCancellationResult,
-  ScheduledMessage,
-  ScheduleMutationResult,
 } from "@restate-agents/types";
 
 export {HttpCallError as IngressClientError} from "@restatedev/restate-sdk-clients";
@@ -41,8 +38,6 @@ import {
   type AgentIngressHandlers,
   AgentNotificationsIngressDefinition,
   type AgentNotificationsIngressHandlers,
-  AgentSchedulerIngressDefinition,
-  type AgentSchedulerIngressHandlers,
   AgentSessionIngressDefinition,
   type AgentSessionIngressHandlers,
   DEFAULT_ASK,
@@ -56,17 +51,6 @@ import {
 } from "@restatedev/restate-sdk-clients";
 
 export type SequencedEntry = HistoryPage["entries"][number];
-export type ScheduleWhenBusy = ScheduledMessage["whenBusy"];
-
-// ScheduleSpec's wire schema defaults whenBusy, so callers may omit it.
-export type ScheduleSpecInput = {
-  scheduleId: string;
-  message: string;
-  delaySeconds: number;
-  repeatEverySeconds: number | null;
-  whenBusy?: ScheduleWhenBusy;
-};
-
 export type FollowOptions = {
   /** Inclusive cursor to start from. Defaults to the beginning. */
   fromSequence?: number;
@@ -121,11 +105,6 @@ export function createAgentClient({
     AgentNotificationsIngressDefinition,
     agentId,
   );
-  const scheduler = ingress.objectClient<AgentSchedulerIngressHandlers>(
-    AgentSchedulerIngressDefinition,
-    agentId,
-  );
-
   async function invoke<T>(operation: PromiseLike<T>): Promise<T> {
     try {
       return await operation;
@@ -317,31 +296,6 @@ export function createAgentClient({
      */
     async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
       return invoke(agent.resolveApproval(resolution));
-    },
-
-    // ---- scheduled messages ----
-
-    async schedules(): Promise<ScheduledMessage[]> {
-      return invoke(
-        scheduler.list(
-          rpc.opts<void, ScheduledMessage[]>({input: serde.empty}),
-        ),
-      );
-    },
-
-    /** Creates or replaces one schedule through the administrative path. */
-    async scheduleMessage(
-      schedule: ScheduleSpecInput,
-    ): Promise<ScheduleMutationResult> {
-      return invoke(
-        scheduler.upsert({...schedule, whenBusy: schedule.whenBusy ?? "queue"}),
-      );
-    },
-
-    async cancelSchedule(
-      scheduleId: string,
-    ): Promise<ScheduleCancellationResult> {
-      return invoke(scheduler.cancel({scheduleId}));
     },
   };
 }

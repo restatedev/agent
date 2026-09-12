@@ -16,7 +16,7 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 - `User` owns identity, shared MCP connections and encrypted credentials/flows;
   `UserSession` owns browser-session expiry and revocation.
 - `AgentNotifications` owns invalidation revisions and subscriptions;
-  `AgentScheduler` owns schedules and durable timers.
+  `User` owns schedules and durable delayed calls.
 - `AgentSession`, keyed by the same `agentId`, owns the append-only transcript
   and compaction checkpoint. Its exclusive `doTurn` handler owns transient
   cross-step execution state.
@@ -43,7 +43,7 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
   One turn borrows lazily and releases on every handled exit.
 
 Built-in tool mechanics execute inside `doTurn`; they are not services merely
-for durability. Tools call Agent only for Agent-owned state, AgentScheduler for
+for durability. Tools call Agent only for Agent-owned state for
 durable schedules, Sandbox for serialized resource lifecycle, and independently
 deployed dynamic handlers as ordinary durable RPCs.
 
@@ -165,7 +165,7 @@ write history.
 - `manageMemory` atomically updates the User's collection (at most 32 entries).
   Agent accepts only the active, non-interrupting `turnId`, forwards to its
   immutable owner, and User checks the agent's membership before writing.
-- Schedule tools call AgentScheduler directly. Once an upsert completes, that
+- Schedule creation validates access through Agent, then persists on User. Once saved, that
   durable side effect survives the turn that created it and is not a pending
   turn operation.
 - Assistant tool-call and matching tool-result messages are committed together
@@ -273,9 +273,10 @@ appropriate.
 
 Profile setters do not append transcript events; Agent publishes profile
 versions to AgentNotifications. Every transcript append one-way publishes the
-`history` topic, and AgentScheduler publishes schedule changes. Consumers use
+`history` topic, and User publishes schedule changes. Consumers use
 history for ordered conversation data, Agent for `profile` and `approvals`,
-AgentScheduler for schedules, and AgentNotifications for invalidation state.
+User for schedules, and AgentNotifications for conversation invalidations.
+Schedule/run changes use the UserNotifications profile watermark instead.
 
 Every `completed`, `interrupted`, `stopped`, or `failed` outcome includes
 `consumedSteering`.

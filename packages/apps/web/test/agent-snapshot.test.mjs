@@ -37,7 +37,7 @@ test("startup captures the watermark before fetching all data in parallel", asyn
   const pending = loadAgentSnapshot(client, options().signal);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(calls.map(c => c.name), [
-    "notifications", "profile", "approvals", "mcpAuthorizations", "schedules", "history",
+    "notifications", "profile", "approvals", "mcpAuthorizations", "history",
   ]);
   release();
   const result = await pending;

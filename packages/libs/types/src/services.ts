@@ -49,11 +49,7 @@ import {
   MemoryUpdateSchema,
   MessageSchema,
   ResolvedMcpServerSchema,
-  ScheduleCancellationResultSchema,
-  ScheduledMessageSchema,
   ScheduleIdRequestSchema,
-  ScheduleMutationResultSchema,
-  ScheduleSpecSchema,
   SetGuardrailsSchema,
   SetInstructionsSchema,
   SetWebSearchEnabledSchema,
@@ -63,16 +59,26 @@ import {
   UserIdentitySchema,
   UserNotificationSnapshotSchema,
   UserProfileSchema,
+  UserScheduleSpecSchema,
+  UserScheduleSchema,
+  ScheduleRunSchema,
 } from "./index.js";
 import {
   AGENT_NOTIFICATIONS_SERVICE_NAME,
-  AGENT_SCHEDULER_SERVICE_NAME,
   AGENT_SERVICE_NAME,
   AGENT_SESSION_SERVICE_NAME,
 } from "./targets.js";
 
 /** Restate contract implemented by core and consumed by external clients. */
 export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
+  startScheduledTurn: iface.schemas({
+    input: z.object({ownerUserId: z.string()}),
+    output: z.object({turnId: z.string()}),
+  }),
+  createSchedule: iface.schemas({
+    input: UserScheduleSpecSchema.extend({turnId: z.string()}),
+    output: UserScheduleSchema,
+  }),
   retire: iface.schemas({
     input: z.object({ownerUserId: z.string()}),
     output: z.void(),
@@ -260,27 +266,6 @@ export const UserNotificationsDefinition = iface.object("UserNotifications", {
   }),
 });
 
-/** Per-Agent durable schedule registry and timer lifecycle. */
-export const AgentSchedulerDefinition = iface.object(
-  AGENT_SCHEDULER_SERVICE_NAME,
-  {
-    retire: iface.schemas({input: z.void(), output: z.void()}),
-    upsert: iface.schemas({
-      input: ScheduleSpecSchema,
-      output: ScheduleMutationResultSchema,
-    }),
-    cancel: iface.schemas({
-      input: ScheduleIdRequestSchema,
-      output: ScheduleCancellationResultSchema,
-    }),
-    list: iface.schemas({
-      input: z.void(),
-      output: z.array(ScheduledMessageSchema),
-    }),
-    fire: iface.schemas({input: ScheduleIdRequestSchema, output: z.void()}),
-  },
-);
-
 /** AgentSession contract implemented by core and consumed by clients. */
 export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
   lastTurnSequence: iface.schemas({
@@ -307,6 +292,42 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
 
 /** Private per-user account, agent directory, shared memories and MCP credentials. */
 export const UserDefinition = iface.object("User", {
+  upsertSchedule: iface.schemas({
+    input: UserScheduleSpecSchema,
+    output: UserScheduleSchema,
+  }),
+  saveAgentSchedule: iface.schemas({
+    input: z.object({
+      agentId: z.string(),
+      spec: UserScheduleSpecSchema,
+      profile: AgentProfileSchema,
+    }),
+    output: UserScheduleSchema,
+  }),
+  cancelSchedule: iface.schemas({
+    input: ScheduleIdRequestSchema,
+    output: z.boolean(),
+  }),
+  schedules: iface.schemas({
+    input: z.void(),
+    output: z.array(UserScheduleSchema),
+  }),
+  fireSchedule: iface.schemas({
+    input: ScheduleIdRequestSchema,
+    output: z.void(),
+  }),
+  executeSchedule: iface.schemas({
+    input: z.object({agentId: z.string()}),
+    output: z.void(),
+  }),
+  finishSchedule: iface.schemas({
+    input: z.object({
+      agentId: z.string(),
+      status: ScheduleRunSchema.shape.status,
+      error: z.string().optional(),
+    }),
+    output: z.void(),
+  }),
   updateMemory: iface.schemas({
     input: z.object({
       agentId: z.string().min(1),
@@ -317,7 +338,7 @@ export const UserDefinition = iface.object("User", {
   register: iface.schemas({input: UserIdentitySchema, output: z.void()}),
   profile: iface.schemas({input: z.void(), output: UserProfileSchema}),
   createAgent: iface.schemas({
-    input: UserAgentSchema.omit({parentAgentId: true}),
+    input: UserAgentSchema.omit({parentAgentId: true, scheduleRun: true}),
     output: UserAgentSchema,
   }),
   createSubAgent: iface.schemas({

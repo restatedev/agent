@@ -13,14 +13,10 @@ export type ApprovalRequest = Awaited<
 export type McpAuthorizationRequest = Awaited<
   ReturnType<AgentClient["mcpAuthorizations"]>
 >[number];
-export type ScheduledMessage = Awaited<
-  ReturnType<AgentClient["schedules"]>
->[number];
 export type AgentConnection = {agentId: string};
 const emptyEntries: SequencedEntry[] = [];
 const emptyApprovals: ApprovalRequest[] = [];
 const emptyAuth: McpAuthorizationRequest[] = [];
-const emptySchedules: ScheduledMessage[] = [];
 
 /** Views subscribe to a retained workspace cache; they never start a poll. */
 export function useAgent(connection: AgentConnection) {
@@ -43,11 +39,6 @@ export function useAgent(connection: AgentConnection) {
     cache.patchAgent(id, {mcpAuthorizations});
     return mcpAuthorizations;
   }, [cache, client, id]);
-  const refreshSchedules = useCallback(async () => {
-    const schedules = await client.schedules();
-    cache.patchAgent(id, {schedules});
-    return schedules;
-  }, [cache, client, id]);
   const status =
     state.status === "connected" && !cached?.history
       ? "connecting"
@@ -58,13 +49,11 @@ export function useAgent(connection: AgentConnection) {
     profile: cached?.profile,
     approvals: cached?.approvals ?? emptyApprovals,
     mcpAuthorizations: cached?.mcpAuthorizations ?? emptyAuth,
-    schedules: cached?.schedules ?? emptySchedules,
     connected: status === "connected",
     connectionStatus: status,
     connectionError: state.error,
     refreshProfile,
     refreshApprovals,
     refreshMcpAuthorizations,
-    refreshSchedules,
   };
 }

@@ -2,7 +2,6 @@
 
 import {
   Activity,
-  AlarmClock,
   Ban,
   Check,
   CircleAlert,
@@ -30,11 +29,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type {
-  AgentClient,
-  ScheduleSpecInput,
-  SequencedEntry,
-} from "./agent-client";
+import type {AgentClient, SequencedEntry} from "./agent-client";
 import {lastTurnSequence} from "./agent-inbox";
 import {AgentToolsPanel} from "./agent-tools-panel";
 import {Transcript} from "./transcript";
@@ -43,7 +38,6 @@ import {
   type AgentProfile,
   type ApprovalRequest,
   type McpAuthorizationRequest,
-  type ScheduledMessage,
   useAgent,
 } from "./use-agent";
 
@@ -95,29 +89,6 @@ function shortTurn(turnId: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-function formatDuration(totalSeconds: number) {
-  const units: Array<[number, string]> = [
-    [86_400, "d"],
-    [3_600, "h"],
-    [60, "m"],
-    [1, "s"],
-  ];
-  const parts: string[] = [];
-  let rest = Math.max(0, Math.round(totalSeconds));
-  for (const [size, label] of units) {
-    if (rest >= size && parts.length < 2) {
-      parts.push(`${Math.floor(rest / size)}${label}`);
-      rest %= size;
-    }
-  }
-  return parts.length ? parts.join(" ") : "0s";
-}
-
-function nextRunLabel(epochMs: number) {
-  const deltaMs = epochMs - Date.now();
-  return deltaMs <= 0 ? "due now" : `in ${formatDuration(deltaMs / 1_000)}`;
 }
 
 function activeTurn(
@@ -962,95 +933,22 @@ function GuardrailEditor({
   );
 }
 
-function ScheduleList({
-  schedules,
-  client,
-  notify,
-  refresh,
-}: {
-  schedules: ScheduledMessage[];
-  client: AgentClient;
-  notify: (message: string, error?: boolean) => void;
-  refresh: () => Promise<unknown>;
-}) {
-  if (schedules.length === 0) {
-    return <p className="empty-copy">No durable schedules.</p>;
-  }
-  return (
-    <div className="schedule-list">
-      {[...schedules]
-        .sort((left, right) => left.nextRunAt - right.nextRunAt)
-        .map((schedule) => (
-          <article className="compact-card" key={schedule.scheduleId}>
-            <div>
-              <strong>{schedule.message}</strong>
-              <span>
-                {schedule.scheduleId} · {nextRunLabel(schedule.nextRunAt)} ·{" "}
-                {schedule.whenBusy}
-                {schedule.repeatEverySeconds
-                  ? ` · every ${formatDuration(schedule.repeatEverySeconds)}`
-                  : " · once"}
-              </span>
-            </div>
-            <button
-              aria-label={`Cancel ${schedule.scheduleId}`}
-              className="icon-button danger"
-              onClick={async () => {
-                try {
-                  const result = await client.cancelSchedule(
-                    schedule.scheduleId,
-                  );
-                  notify(
-                    result.accepted
-                      ? result.cancelled
-                        ? `Cancelled ${schedule.scheduleId}`
-                        : "Schedule was already gone"
-                      : result.error,
-                    !result.accepted,
-                  );
-                  await refresh();
-                } catch (error) {
-                  notify(errorMessage(error), true);
-                }
-              }}
-              type="button"
-            >
-              <Trash2 />
-            </button>
-          </article>
-        ))}
-    </div>
-  );
-}
-
 function ProfilePanel({
   client,
   profile,
-  schedules,
   notify,
   refreshProfile,
-  refreshSchedules,
 }: {
   client: AgentClient;
   profile?: AgentProfile;
-  schedules: ScheduledMessage[];
   notify: (message: string, error?: boolean) => void;
   refreshProfile: () => Promise<AgentProfile>;
-  refreshSchedules: () => Promise<unknown>;
 }) {
   const [instructions, setInstructions] = useState("");
   const [guardrails, setGuardrails] = useState<Guardrail[]>([]);
   const [instructionsDirty, setInstructionsDirty] = useState(false);
   const [guardrailsDirty, setGuardrailsDirty] = useState(false);
   const [savingWebSearch, setSavingWebSearch] = useState(false);
-  const [schedule, setSchedule] = useState({
-    scheduleId: "",
-    message: "",
-    delaySeconds: "",
-    repeatEverySeconds: "",
-    whenBusy: "queue" as ScheduleSpecInput["whenBusy"],
-  });
-
   useEffect(() => {
     if (!profile) return;
     if (!instructionsDirty) setInstructions(profile.instructions ?? "");
@@ -1217,130 +1115,6 @@ function ProfilePanel({
         </p>
         <GuardrailEditor guardrails={guardrails} onChange={changeGuardrails} />
       </section>
-
-      <section className="settings-section">
-        <div className="section-heading">
-          <div>
-            <AlarmClock />
-            <span>
-              <strong>Schedules</strong>
-              <small>Durable message delivery</small>
-            </span>
-          </div>
-        </div>
-        <ScheduleList
-          client={client}
-          notify={notify}
-          refresh={refreshSchedules}
-          schedules={schedules}
-        />
-        <form
-          className="schedule-form"
-          onSubmit={async (event: FormEvent) => {
-            event.preventDefault();
-            const delaySeconds = Number.parseInt(schedule.delaySeconds, 10);
-            const repeatEverySeconds = schedule.repeatEverySeconds
-              ? Number.parseInt(schedule.repeatEverySeconds, 10)
-              : null;
-            if (
-              !schedule.scheduleId.trim() ||
-              !schedule.message.trim() ||
-              delaySeconds < 1
-            ) {
-              notify(
-                "Schedule id, message, and positive delay are required",
-                true,
-              );
-              return;
-            }
-            try {
-              const result = await client.scheduleMessage({
-                scheduleId: schedule.scheduleId.trim(),
-                message: schedule.message.trim(),
-                delaySeconds,
-                repeatEverySeconds,
-                whenBusy: schedule.whenBusy,
-              });
-              if (!result.accepted) {
-                notify(result.error, true);
-                return;
-              }
-              notify(
-                result.replaced
-                  ? `Replaced ${result.schedule.scheduleId}`
-                  : `Scheduled ${result.schedule.scheduleId}`,
-              );
-              setSchedule({
-                scheduleId: "",
-                message: "",
-                delaySeconds: "",
-                repeatEverySeconds: "",
-                whenBusy: "queue",
-              });
-              await refreshSchedules();
-            } catch (error) {
-              notify(errorMessage(error), true);
-            }
-          }}
-        >
-          <div className="form-grid two">
-            <input
-              onChange={(event) =>
-                setSchedule({...schedule, scheduleId: event.target.value})
-              }
-              placeholder="Schedule id"
-              value={schedule.scheduleId}
-            />
-            <select
-              aria-label="Behavior when agent is busy"
-              onChange={(event) =>
-                setSchedule({
-                  ...schedule,
-                  whenBusy: event.target.value as ScheduleSpecInput["whenBusy"],
-                })
-              }
-              value={schedule.whenBusy}
-            >
-              <option value="queue">Queue when busy</option>
-              <option value="steer">Steer when busy</option>
-              <option value="interrupt">Interrupt when busy</option>
-            </select>
-          </div>
-          <input
-            onChange={(event) =>
-              setSchedule({...schedule, message: event.target.value})
-            }
-            placeholder="Message to deliver"
-            value={schedule.message}
-          />
-          <div className="form-grid two">
-            <input
-              min="1"
-              onChange={(event) =>
-                setSchedule({...schedule, delaySeconds: event.target.value})
-              }
-              placeholder="Delay seconds"
-              type="number"
-              value={schedule.delaySeconds}
-            />
-            <input
-              min="1"
-              onChange={(event) =>
-                setSchedule({
-                  ...schedule,
-                  repeatEverySeconds: event.target.value,
-                })
-              }
-              placeholder="Repeat seconds (optional)"
-              type="number"
-              value={schedule.repeatEverySeconds}
-            />
-          </div>
-          <button className="button secondary small" type="submit">
-            <AlarmClock /> Create schedule
-          </button>
-        </form>
-      </section>
     </div>
   );
 }
@@ -1351,22 +1125,18 @@ function Inspector({
   approvals,
   mcpAuthorizations,
   profile,
-  schedules,
   client,
   notify,
   refreshProfile,
-  refreshSchedules,
 }: {
   tab: Tab;
   setTab: (tab: Tab) => void;
   approvals: ApprovalRequest[];
   mcpAuthorizations: McpAuthorizationRequest[];
   profile?: AgentProfile;
-  schedules: ScheduledMessage[];
   client: AgentClient;
   notify: (message: string, error?: boolean) => void;
   refreshProfile: () => Promise<AgentProfile>;
-  refreshSchedules: () => Promise<unknown>;
 }) {
   const tabs: Array<{id: Tab; label: string; icon: typeof Activity}> = [
     {id: "approvals", label: "Approvals", icon: ShieldCheck},
@@ -1407,8 +1177,6 @@ function Inspector({
             notify={notify}
             profile={profile}
             refreshProfile={refreshProfile}
-            refreshSchedules={refreshSchedules}
-            schedules={schedules}
           />
         )}
       </div>
@@ -1648,8 +1416,6 @@ export function App({
             notify={notify}
             profile={agent.profile}
             refreshProfile={agent.refreshProfile}
-            refreshSchedules={agent.refreshSchedules}
-            schedules={agent.schedules}
             setTab={setTab}
             tab={tab}
           />

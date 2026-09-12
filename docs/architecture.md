@@ -19,7 +19,7 @@ run.
 
 1. **Durable ownership is explicit.** `Agent` owns control state,
    `AgentSession` owns conversation state and turn execution,
-   `AgentNotifications` owns invalidation delivery, `AgentScheduler` owns
+   `AgentNotifications` owns invalidation delivery owns
    schedules, and `Sandbox` owns external workspace lifecycle.
 2. **The conversation event log is authoritative.** Summaries and model
    messages are derived context; they never replace the append-only log.
@@ -33,7 +33,7 @@ run.
 5. **Concurrency stays structured.** Spawned work is owned and joined by one
    step, the pending registry, or the `doTurn` supervisor.
 6. **Notifications carry invalidation, not data.** Consumers always re-read
-   AgentSession, Agent, or AgentScheduler after an AgentNotifications wake-up.
+   AgentSession or Agent after an AgentNotifications wake-up.
 
 ## Service boundaries
 
@@ -167,7 +167,9 @@ sequenceDiagram
 | --- | --- |
 | `history` | AgentSession |
 | `profile`, `approvals`, `mcpAuth` | Agent |
-| `schedules` | AgentScheduler |
+
+User schedules are read from `User.profile()` and invalidated by the separate
+`UserNotifications` profile watermark, not an AgentNotifications topic.
 
 `AgentNotifications`, keyed by `agentId`, is the invalidation plane. It owns a
 global revision, per-topic watermarks, caller awakeables, and subscriptions.
@@ -194,18 +196,11 @@ updates are returned. Views stay mounted across switching, including drafts and
 expanded sections; hidden views cannot clear unread badges. The BFF is stateless,
 so correctness does not depend on Cloud Run instance affinity.
 
-### AgentScheduler Virtual Object
+### User-owned schedules
 
-`AgentScheduler`, keyed by `agentId`, owns the bounded schedule registry,
-delayed invocation IDs, replacement, cancellation, and fixed-delay
-recurrence. It uses eager state because every operation reads the small
-schedule collection. A timer acts only when its invocation ID matches the
-stored record, advances state before delivery, and calls generic
-`Agent.deliver` with its message and busy-turn policy.
-
-Schedule tools and external clients call AgentScheduler directly. Once an
-upsert completes, the schedule is an independent durable side effect rather
-than active-turn state.
+User owns schedule definitions, delayed invocation IDs, and run metadata. Each
+occurrence creates a fresh agent. A shared handler awaits its turn without
+holding the User lock. See [Schedules](schedules.md) for lifecycle and cleanup.
 
 ### ModelGateway service
 
@@ -229,7 +224,7 @@ VO stores only lifecycle state and the opaque provider reference.
 
 `Evals/all` is the evaluation harness. It spawns selected trials concurrently,
 uses a fresh `agentId` for every trial, calls the same Agent, AgentSession,
-AgentNotifications, and AgentScheduler handlers as a real client, and applies
+AgentNotifications, and User handlers as a real client, and applies
 code-based graders to the resulting conversation event log and state.
 
 ## State ownership matrix
@@ -244,7 +239,7 @@ code-based graders to the resulting conversation event log and state.
 | Instructions, guardrails | Agent | Lazy VO state | Shared profile read; snapshotted at turn start |
 | Semantic memories | User | Lazy VO state | User profile read; entire collection fetched by Agent at turn start |
 | Pending approvals | Agent | Lazy VO state | Shared list; exclusive mutation |
-| Schedules and timer IDs | AgentScheduler | Eager VO state | Shared list; exclusive mutation/timer delivery |
+| Schedules and delayed invocation IDs | User | Lazy VO state | Shared list/run waiter; exclusive mutation/delivery |
 | Notification revision, topic versions, subscriptions | AgentNotifications | Lazy VO state + caller awakeables | Notification handlers |
 | Transcript chunks and next sequence | AgentSession | VO state | Exclusive writer; shared history reader |
 | Conversation summary and compaction reservation | AgentSession | VO state | Turn start and compaction handlers |
@@ -447,7 +442,7 @@ model-relevant.
 AgentNotifications exposes a general invalidation protocol:
 
 - `snapshot()` returns `{revision, versions}` for `history`, `profile`,
-  `approvals`, `mcpAuth`, and `schedules`;
+  `approvals`, and `mcpAuth`;
 - `watch({afterRevision, timeoutSeconds})` parks until a newer
   revision or returns the current snapshot at timeout;
 - an internal subscribe handler re-checks the revision before registering a
@@ -456,7 +451,7 @@ AgentNotifications exposes a general invalidation protocol:
 
 Each AgentSession transcript append one-way publishes `history` to
 AgentNotifications. Agent publishes profile, approval, and MCP authorization
-changes, while AgentScheduler publishes schedule changes. Notifications carry
+changes. User publishes schedule/run changes to UserNotifications. Notifications carry
 no state payload: clients compare topic versions and re-read the authoritative
 owner.
 
@@ -504,23 +499,11 @@ remain unchanged.
 A later turn receives the summary plus exact model-relevant entries after its
 `through` cursor.
 
-## Scheduled messages
+## User-owned schedules
 
-Schedules belong to AgentScheduler. Creating one journals a delayed
-AgentScheduler self-send and returns immediately. A valid due timer advances
-schedule state and calls source-agnostic `Agent.deliver`, which routes:
-
-- idle → start a turn;
-- busy + `queue` → append to pending input;
-- busy + `steer` → send it as steering;
-- busy + `interrupt` → queue it and interrupt active work; and
-- already interrupting → always queue.
-
-One-shot state is removed before delivery. Repeating schedules install their
-next fixed-delay timer before routing the current message. Stored invocation
-IDs reject stale delayed sends. A derived `delivery` transcript event records
-`source: "schedule"`, its source ID, policy, and selected route beside the
-delivered user entry.
+Schedules use delayed Restate self-calls on User. Each occurrence creates a
+fresh agent; overlapping occurrences are skipped. Completed conversations are
+kept, and deleting a schedule stops future runs only. See [Schedules](schedules.md).
 
 ## Why these boundaries matter
 

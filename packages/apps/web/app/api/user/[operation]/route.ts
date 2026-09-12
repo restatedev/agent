@@ -2,6 +2,8 @@ import {createHash} from "node:crypto";
 import {
   McpServerSchema,
   WorkspaceSyncRequestSchema,
+  UserScheduleSpecSchema,
+  ScheduleIdRequestSchema,
 } from "@restate-agents/types";
 import {completeMcpBearerAuthorization} from "../../../../src/server/mcp-bearer";
 import {startMcpOAuth} from "../../../../src/server/mcp-oauth";
@@ -105,6 +107,18 @@ export async function POST(request: Request, context: Context) {
     const {client} = user;
     const body = await request.json();
     switch (operation) {
+      case "schedule": {
+        const parsed = UserScheduleSpecSchema.safeParse(body);
+        if (!parsed.success) throw new BffError(400, "Invalid schedule");
+        return Response.json(await client.upsertSchedule(parsed.data));
+      }
+      case "cancel-schedule": {
+        const parsed = ScheduleIdRequestSchema.safeParse(body);
+        if (!parsed.success) throw new BffError(400, "Schedule ID required");
+        return Response.json(
+          await client.cancelSchedule(parsed.data.scheduleId),
+        );
+      }
       case "delete-agent": {
         if (
           typeof body.agentId !== "string" ||

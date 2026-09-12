@@ -8,7 +8,6 @@ type SnapshotClient = Pick<
   | "profile"
   | "approvals"
   | "mcpAuthorizations"
-  | "schedules"
   | "history"
 >;
 
@@ -23,21 +22,18 @@ export async function loadAgentSnapshot(
   // still wake the browser's first watch. This is not an atomic VO snapshot.
   const notification = watermark ?? (await client.notifications());
   signal.throwIfAborted();
-  const [profile, approvals, mcpAuthorizations, schedules, history] =
-    await Promise.all([
-      client.profile(),
-      client.approvals(),
-      client.mcpAuthorizations(),
-      client.schedules(),
-      readHistory(client, signal, 1),
-    ]);
+  const [profile, approvals, mcpAuthorizations, history] = await Promise.all([
+    client.profile(),
+    client.approvals(),
+    client.mcpAuthorizations(),
+    readHistory(client, signal, 1),
+  ]);
   signal.throwIfAborted();
   return {
     notification,
     profile,
     approvals,
     mcpAuthorizations,
-    schedules,
     history,
   };
 }
@@ -88,10 +84,6 @@ export async function readAgentSnapshotUpdate(
     changed("mcpAuth") &&
       client.mcpAuthorizations().then((value) => {
         result.mcpAuthorizations = value;
-      }),
-    changed("schedules") &&
-      client.schedules().then((value) => {
-        result.schedules = value;
       }),
     changed("history") &&
       readHistory(client, signal, fromSequence).then((value) => {

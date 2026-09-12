@@ -1,8 +1,8 @@
 // Per-Agent invalidation stream for conversation consumers.
 //
 // Authoritative data remains with its owning Virtual Object: AgentSession owns
-// history, while Agent owns profile, approvals, and MCP authorization state and
-// AgentScheduler owns schedules. This object only records revision watermarks
+// history, while Agent owns profile, approvals, and MCP authorization state.
+// User-owned schedules notify through UserNotifications. This object records watermarks
 // and parks watchers.
 // Producers can therefore notify readers without coupling their state to the
 // conversation controller.
@@ -31,7 +31,6 @@ const EMPTY_SNAPSHOT: AgentNotificationSnapshot = {
     profile: 0,
     approvals: 0,
     mcpAuth: 0,
-    schedules: 0,
   },
 };
 

@@ -14,11 +14,11 @@ import {
   type McpServer,
   type MemoryChange,
   ScheduleIdRequestSchema,
-  ScheduleSpecSchema,
+  UserScheduleSpecSchema,
   SubAgentConfigSchema,
   ToolSelectionSchema,
 } from "@restate-agents/types";
-import {AgentSchedulerDefinition} from "@restate-agents/types/services";
+import {UserDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
@@ -1006,46 +1006,37 @@ const manageMemoryTool = defineAgentTool({
   },
 });
 
-const scheduleMessageTool = defineAgentTool({
-  name: "scheduleMessage",
+const createScheduleTool = defineAgentTool({
+  name: "createSchedule",
   description:
-    "Create or replace a durable schedule for this Agent that will deliver a future user request. Once accepted, the schedule persists independently of this Turn. Reuse a scheduleId to update it. Use queue unless the user explicitly asks the due message to steer or interrupt active work.",
-  inputSchema: ScheduleSpecSchema,
+    "Create or replace a USER-owned schedule, only when the user asks for future or recurring work. Each occurrence creates a fresh independent agent/conversation with shared user memories and separate sandbox. Runs appear under Schedules, not in this conversation. Overlapping occurrences are skipped. Instructions must be self-contained; no conversation history or files are inherited. Null tools inherits this agent's current access; otherwise narrow it. Inherited guardrails still apply. Use listSchedules before replacing an existing ID; never replace unrelated work without the user's request. Deleting this agent does not cancel user schedules.",
+  inputSchema: UserScheduleSpecSchema,
   *run(schedule, context): restate.Operation<ToolExecution> {
-    const result = yield* restate
-      .client(AgentSchedulerDefinition, context.agentId)
-      .upsert(schedule);
-    if (!result.accepted) {
-      return {status: "failed", error: result.error};
+    try {
+      const result = yield* restate
+        .client(Agent, context.agentId)
+        .createSchedule({...schedule, turnId: context.turnId});
+      return {status: "succeeded", result: JSON.stringify(result)};
+    } catch (error) {
+      if (error instanceof TerminalError && !(error instanceof CancelledError))
+        return {status: "failed", error: error.message};
+      throw error;
     }
-    return {
-      status: "succeeded",
-      result: JSON.stringify({
-        ...result,
-        schedule: {
-          ...result.schedule,
-          nextRunAt: new Date(result.schedule.nextRunAt).toISOString(),
-        },
-      }),
-    };
   },
 });
 
 const cancelScheduleTool = defineAgentTool({
   name: "cancelSchedule",
   description:
-    "Cancel one durable message scheduled for this Agent by its scheduleId. This is idempotent; cancelling an unknown schedule succeeds without changing anything.",
+    "Delete a user-owned schedule by its scheduleId, only when requested. Stops future occurrences but keeps running agents and completed conversations. Use listSchedules to identify it first. Idempotent.",
   inputSchema: ScheduleIdRequestSchema,
   *run({scheduleId}, context): restate.Operation<ToolExecution> {
     const result = yield* restate
-      .client(AgentSchedulerDefinition, context.agentId)
-      .cancel({scheduleId});
-    if (!result.accepted) {
-      return {status: "failed", error: result.error};
-    }
+      .client(UserDefinition, context.ownerUserId)
+      .cancelSchedule({scheduleId});
     return {
       status: "succeeded",
-      result: result.cancelled
+      result: result
         ? `Cancelled schedule ${scheduleId}`
         : `Schedule ${scheduleId} was not active`,
     };
@@ -1055,18 +1046,21 @@ const cancelScheduleTool = defineAgentTool({
 const listSchedulesTool = defineAgentTool({
   name: "listSchedules",
   description:
-    "List the Agent's active scheduled messages, including their next delivery time, recurrence, and busy-turn policy.",
+    "List this user's schedules across all agents, including next run, recurrence, skipped occurrences and scheduling errors. Each run creates a fresh agent.",
   inputSchema: z.object({}),
   *run(_input, context): restate.Operation<ToolExecution> {
     const active = yield* restate
-      .client(AgentSchedulerDefinition, context.agentId)
-      .list();
+      .client(UserDefinition, context.ownerUserId)
+      .schedules();
     return {
       status: "succeeded",
       result: JSON.stringify(
         active.map((schedule) => ({
           ...schedule,
-          nextRunAt: new Date(schedule.nextRunAt).toISOString(),
+          nextRunAt:
+            schedule.nextRunAt === null
+              ? null
+              : new Date(schedule.nextRunAt).toISOString(),
         })),
       ),
     };
@@ -1211,7 +1205,7 @@ const definitions = [
   messageSubAgentTool,
   deleteSubAgentTool,
   listSubAgentsTool,
-  scheduleMessageTool,
+  createScheduleTool,
   cancelScheduleTool,
   listSchedulesTool,
   listFilesTool,

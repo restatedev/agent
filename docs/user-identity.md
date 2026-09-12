@@ -43,7 +43,7 @@ or injected into new turns.
 
 A child is a normal agent owned by the same user, with immutable `parentAgentId`
 in its ownership state and the User's directory. It has its own AgentSession,
-schedules, approvals, and sandbox keyed by its new ID. The sidebar nests children
+approvals and sandbox keyed by its new ID; schedules remain user-owned. The sidebar nests children
 under their parent, supports collapsing, and keeps per-agent unread state and
 conversation caches. Sub-agents are not a new authorization principal.
 
@@ -85,7 +85,7 @@ call `deleteSubAgent`, limited to its own direct children and their subtrees—n
 siblings, unrelated agents, itself, or another user's agents. User serializes
 directory removal with creation, tombstones every removed ID, removes pending
 authorization waiters and durably sends retirement to each agent. Cleanup is
-asynchronous: turns interrupt, schedules cancel, and borrowed sandboxes are
+asynchronous: turns interrupt and borrowed sandboxes are
 destroyed after release. Completed deletion cannot be undone by a delayed create
 retry. Shared user credentials and memories survive. Conversation records remain
 internally; this operation is not a data-purge API.
@@ -295,7 +295,7 @@ Refresh/registration/PKCE material never enters a turn. Only
 There is no anonymous fallback, agent claiming, sharing, organization model,
 agent transfer, or migration of old Agent-owned credentials. Use newly created
 agents and reconnect accounts; no existing state is automatically deleted.
-Each agent is one conversation, with its own sandbox and schedules.
+Each agent is one conversation, with its own sandbox; schedules belong to the user.
 
 Authorization is not process isolation. Local sandbox commands run with the
 core process's OS privileges, dynamic handlers use their own server privileges,

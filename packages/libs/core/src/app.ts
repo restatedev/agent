@@ -7,7 +7,6 @@ import {serve} from "@restatedev/restate-sdk";
 import {
   Agent,
   AgentNotifications,
-  AgentScheduler,
   AgentSession,
   Evals,
   ModelGateway,
@@ -24,7 +23,6 @@ serve({
     UserSession,
     AgentNotifications,
     UserNotifications,
-    AgentScheduler,
     AgentSession,
     ModelGateway,
     Sandbox,

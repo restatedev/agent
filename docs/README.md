@@ -27,7 +27,7 @@ agent. The implementation keeps the important control flow visible:
 - explicit queue, steer, interrupt, and selective-cancellation semantics;
 - user instructions, shared user memories, runtime guardrails, and approvals;
 - non-destructive conversation compaction;
-- scheduler-owned durable messages and an agent-scoped sandbox;
+- user-owned schedules with fresh agents per run and an agent-scoped sandbox;
 - annotation-driven discovery of Restate handlers and configured stateless or
   stateful MCP tools; and
 - a durable black-box evaluation harness.
@@ -55,18 +55,17 @@ not additional boxes in the Agent controller view.
 
 | Service | Shape | Identity | Responsibility |
 | --- | --- | --- | --- |
-| `User` | Virtual Object | issuer + subject hash | Identity, agent directory, shared MCP configuration and encrypted authorization |
+| `User` | Virtual Object | issuer + subject hash | Identity, agent directory, shared MCP configuration, encrypted authorization, and user-owned schedules |
 | `UserSession` | Virtual Object | random session identifier hash | Backing expiry/revocation for five-minute BFF cookie leases |
 | `Agent` | Virtual Object | `agentId` | Serialized routing, active invocation, queued input, profile, approvals, and external deliveries |
 | `AgentSession` | Virtual Object | same `agentId` | Authoritative transcript, summary checkpoint, and one exclusive `doTurn` agent-run state machine at a time |
 | `AgentNotifications` | Virtual Object | same `agentId` | Revision watermarks, caller awakeables, and invalidation long-polls |
 | `UserNotifications` | Virtual Object | `userId` | Shared workspace invalidations and one browser long poll across all owned agents |
-| `AgentScheduler` | Virtual Object | same `agentId` | Schedule registry, delayed invocations, recurrence, cancellation, and delivery |
 | `ModelGateway` | scoped Service | scope `openai` + limit key | Admission control, retries, cancellation propagation, and provider-call boundary |
 | `Sandbox` | Virtual Object | same `agentId` | Serialized lifecycle and one-turn lease for the agent's external workspace |
 | `Evals` | Service | suite invocation | Concurrent black-box trials against fresh agent instances |
 
-`User`, `UserSession`, `Agent`, `AgentSession`, `AgentNotifications`, `AgentScheduler`, and `Sandbox`
+`User`, `UserSession`, `Agent`, `AgentSession`, `AgentNotifications`, and `Sandbox`
 own Virtual Object state.
 `ModelGateway` and `Evals` are stateless services. The invocation ID of
 `AgentSession.doTurn` is the stable `turnId` and signal target.
@@ -115,10 +114,10 @@ differ. Use this order:
    [`agent/service.ts`](../packages/libs/core/src/agent/service.ts),
    [`session/service.ts`](../packages/libs/core/src/session/service.ts),
    [`notifications/service.ts`](../packages/libs/core/src/notifications/service.ts),
-   [`scheduler/service.ts`](../packages/libs/core/src/scheduler/service.ts), and
+   [`user/schedules.ts`](../packages/libs/core/src/user/schedules.ts), and
    [`sandbox/service.ts`](../packages/libs/core/src/sandbox/service.ts);
 3. focused component modules under `agent/`, `session/`, `notifications/`,
-   `scheduler/`, `gateway/`, and `sandbox/`;
+   `user/`, `gateway/`, and `sandbox/`;
 4. these documents.
 
 When behavior changes, update the schema, implementation, relevant eval, and
@@ -131,7 +130,7 @@ documentation together.
 conversation log. `AgentSession.doTurn` is one durable agent run; `agentStep`
 is one model → guardrail → optional tool-batch iteration. `agentTools` owns tool
 schemas and mechanics. `ModelGateway` owns inference admission and retry
-behavior. `AgentNotifications` owns invalidation delivery, `AgentScheduler`
+behavior. `AgentNotifications` owns invalidation delivery
 owns scheduled input, and `Sandbox` owns the external execution environment
 lifecycle.
 
@@ -142,7 +141,7 @@ authorization and policy gates.
 
 History reads and turn execution share the same `AgentSession/{agentId}` state.
 AgentNotifications is only the invalidation broker: AgentSession owns history,
-Agent owns profile, approvals, and MCP authorization state, and AgentScheduler
+Agent owns profile, approvals, and MCP authorization state, and User
 owns schedules. A client therefore drains `AgentSession.history`, then parks on
 `AgentNotifications.watch`, and re-reads whichever area has a newer version.
 

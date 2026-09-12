@@ -8,9 +8,6 @@ import type {
   Guardrail,
   HistoryPage,
   McpAuthorizationRequest,
-  ScheduleCancellationResult,
-  ScheduledMessage,
-  ScheduleMutationResult,
   ToolDescriptor,
 } from "@restate-agents/types";
 
@@ -20,21 +17,10 @@ export type AgentSnapshot = {
   profile: AgentProfile;
   approvals: ApprovalRequest[];
   mcpAuthorizations: McpAuthorizationRequest[];
-  schedules: ScheduledMessage[];
   history: HistoryPage;
 };
 export type AgentSnapshotUpdate = Pick<AgentSnapshot, "notification"> &
   Partial<Omit<AgentSnapshot, "notification">>;
-export type ScheduleWhenBusy = ScheduledMessage["whenBusy"];
-
-export type ScheduleSpecInput = {
-  scheduleId: string;
-  message: string;
-  delaySeconds: number;
-  repeatEverySeconds: number | null;
-  whenBusy?: ScheduleWhenBusy;
-};
-
 type RequestOptions = {
   headers?: Record<string, string>;
   onResponse?: (response: Response) => void;
@@ -210,19 +196,6 @@ export function createAgentClient(
     },
     async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
       return write("resolve-approval", resolution);
-    },
-    async schedules(): Promise<ScheduledMessage[]> {
-      return read("schedules");
-    },
-    async scheduleMessage(
-      schedule: ScheduleSpecInput,
-    ): Promise<ScheduleMutationResult> {
-      return write("schedule", schedule);
-    },
-    async cancelSchedule(
-      scheduleId: string,
-    ): Promise<ScheduleCancellationResult> {
-      return write("cancel-schedule", {scheduleId});
     },
   };
 }

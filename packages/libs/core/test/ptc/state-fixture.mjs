@@ -22,6 +22,7 @@ export function context(key, initial = {}, call = () => { throw new Error("Unexp
     cancel: id => cancelled.push(id),
     resolveAwakeable: (id, value) => signals.push({id, value}),
     run: (name, action) => real.run(name, action),
+    date: {now: () => real.run(`date-${sequence++}`, () => 1700000000000)},
   };
   async function invoke(handler, input) {
     const {output} = await runHandler(async actual => {

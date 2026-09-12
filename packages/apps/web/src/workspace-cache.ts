@@ -163,7 +163,13 @@ export function createWorkspaceCache(profile: UserProfile) {
         ...state,
         agents: {},
         completions: [],
-        profile: {...state.profile, agents: [], memories: [], connections: []},
+        profile: {
+          ...state.profile,
+          agents: [],
+          memories: [],
+          connections: [],
+          schedules: [],
+        },
         status: "failed",
       });
     },

@@ -20,7 +20,6 @@ import type {
 import {
   AgentDefinition,
   AgentNotificationsDefinition,
-  AgentSchedulerDefinition,
   UserDefinition,
 } from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
@@ -49,7 +48,36 @@ import {subAgentProfile} from "./sub-agent.js";
 /** Durable per-Agent controller for turns, routing, profile, and user actions. */
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
-    *initialize({profile: initialProfile, ...owner}) {
+    *createSchedule({turnId, ...spec}) {
+      const owner = yield* requireOwner();
+      const current = yield* activeTurn.current();
+      if (current?.id !== turnId || current.interruptReason !== undefined)
+        throw new TerminalError("Schedule creation requires the active Turn", {
+          errorCode: 409,
+        });
+      if (!selected(current.tools.builtin, "createSchedule"))
+        throw new TerminalError("Schedule creation is not permitted", {
+          errorCode: 403,
+        });
+      const inherited = subAgentProfile(
+        yield* profile.read(),
+        current.tools,
+        {
+          name: spec.name,
+          instructions: null,
+          guardrails: null,
+          tools: spec.tools,
+          webSearchEnabled: null,
+          initialMessage: null,
+        },
+        agentTools.names,
+        true,
+      );
+      return yield* restate
+        .client(UserDefinition, owner.ownerUserId)
+        .saveAgentSchedule({agentId: agentKey(), spec, profile: inherited});
+    },
+    *initialize({profile: initialProfile, scheduledMessage, ...owner}) {
       yield* requireNotDeleted();
       const existing = yield* restate.state().get<typeof owner>("ownership");
       if (
@@ -62,6 +90,8 @@ export const Agent = restate.implement(AgentDefinition, {
         });
       if (!existing) {
         restate.state().set("ownership", owner);
+        if (scheduledMessage)
+          restate.state().set("scheduled-message", scheduledMessage);
         if (initialProfile) {
           profile.setInstructions(initialProfile.instructions ?? null);
           profile.setGuardrails(initialProfile.guardrails);
@@ -69,6 +99,28 @@ export const Agent = restate.implement(AgentDefinition, {
           profile.setWebSearchEnabled(initialProfile.webSearchEnabled);
         }
       }
+    },
+    *startScheduledTurn({ownerUserId}) {
+      const owner = yield* requireOwner();
+      if (owner.ownerUserId !== ownerUserId)
+        throw new TerminalError("Scheduled run owner mismatch", {
+          errorCode: 403,
+        });
+      const previous = yield* restate.state().get<string>("scheduled-turn");
+      if (previous) return {turnId: previous};
+      const message = yield* restate.state().get<string>("scheduled-message");
+      if (!message)
+        throw new TerminalError("Not a scheduled run", {errorCode: 409});
+      if (yield* activeTurn.current())
+        throw new TerminalError("Scheduled agent already busy", {
+          errorCode: 409,
+        });
+      const turnId = yield* startTurn(agentKey(), [
+        {role: "user", text: message, delivery: "turn"},
+      ]);
+      restate.state().set("scheduled-turn", turnId);
+      restate.state().clear("scheduled-message");
+      return {turnId};
     },
     *createSubAgent({turnId, toolCallId, ...config}) {
       yield* requireNotDeleted();
@@ -270,9 +322,8 @@ export const Agent = restate.implement(AgentDefinition, {
         yield* mcpAuthorization.cancelTurn(current.id, "Agent deleted");
         yield* approvals.clearTurn(current.id);
       }
-      // Neither cleanup call may hold Agent's lock while waiting for a caller
-      // (a schedule delivery or the active turn) to finish.
-      yield* restate.sendClient(AgentSchedulerDefinition, agentKey()).retire();
+      // Do not wait for sandbox cleanup while holding Agent's lock: the active
+      // turn may need this controller. User schedules are independent.
       yield* restate.sendClient(Sandbox, agentKey()).retire();
       yield* publishNotification("profile");
     },
@@ -340,6 +391,11 @@ export const Agent = restate.implement(AgentDefinition, {
     *ask({message}): restate.Operation<AskResult> {
       yield* requireNotDeleted();
       yield* requireTopLevelConversation();
+      if (yield* restate.state().get("scheduled-message"))
+        throw new TerminalError(
+          "Scheduled run is starting; try again shortly",
+          {errorCode: 409},
+        );
       const agentId = agentKey();
       const current = yield* activeTurn.current();
       if (current) {
@@ -706,6 +762,8 @@ export const Agent = restate.implement(AgentDefinition, {
     enableLazyState: true,
     handlers: {
       initialize: coordinationRetention,
+      startScheduledTurn: coordinationRetention,
+      createSchedule: coordinationRetention,
       createSubAgent: coordinationRetention,
       startSubAgentTask: coordinationRetention,
       startDelegatedTurn: coordinationRetention,

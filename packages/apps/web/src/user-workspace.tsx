@@ -1,6 +1,7 @@
 "use client";
 import type {McpServer, UserProfile} from "@restate-agents/types";
 import {
+  AlarmClock,
   Check,
   ChevronDown,
   ChevronRight,
@@ -18,6 +19,7 @@ import {useAgentInbox} from "./use-agent-inbox";
 import {useWorkspace, WorkspaceCacheContext} from "./use-workspace";
 import {userClient} from "./user-client";
 import {UserContext, useUser} from "./user-context";
+import {UserSchedules} from "./user-schedules";
 
 export function UserWorkspace({
   initialUser,
@@ -27,6 +29,7 @@ export function UserWorkspace({
   initialAgentId?: string;
 }) {
   const [selected, setSelected] = useState<string>();
+  const [page, setPage] = useState<"profile" | "schedules">("profile");
   const [selectionReady, setSelectionReady] = useState(false);
   const selectionKey = `restate:selected-agent:${initialUser.identity.userId}`;
   const {cache, state} = useWorkspace(initialUser, selected);
@@ -60,6 +63,7 @@ export function UserWorkspace({
     }
     // Links and OAuth returns are one-time entry points, not navigation state.
     const requested = initialAgentId ?? remembered;
+    setPage(requested === ":schedules" ? "schedules" : "profile");
     setSelected(
       initialUser.agents.some((a) => a.agentId === requested)
         ? (requested ?? undefined)
@@ -79,11 +83,13 @@ export function UserWorkspace({
     try {
       if (selected && owned)
         window.sessionStorage.setItem(selectionKey, selected);
+      else if (page === "schedules")
+        window.sessionStorage.setItem(selectionKey, ":schedules");
       else window.sessionStorage.removeItem(selectionKey);
     } catch {
       // Selection still works in memory when browser storage is unavailable.
     }
-  }, [selected, selectionReady, selectionKey, profile.agents]);
+  }, [selected, page, selectionReady, selectionKey, profile.agents]);
   useEffect(() => {
     // Reveal a restored child even when its parent was folded.
     if (selected)
@@ -97,6 +103,7 @@ export function UserWorkspace({
       });
   }, [selected, profile.agents]);
   function select(id?: string) {
+    setPage("profile");
     // A direct child link/navigation should reveal its row even in a folded tree.
     if (id)
       setCollapsed(
@@ -110,6 +117,23 @@ export function UserWorkspace({
     setSelected(id);
   }
   const agent = profile.agents.find((agent) => agent.agentId === selected);
+  const scheduledIds = new Set(
+    profile.agents
+      .filter((a) => a.scheduleRun)
+      .flatMap((a) => [...agentSubtree(profile.agents, a.agentId)]),
+  );
+  const selectedRun = profile.agents.find(
+    (a) =>
+      a.scheduleRun &&
+      selected &&
+      agentSubtree(profile.agents, a.agentId).has(selected),
+  );
+  const visibleRunIds = selectedRun
+    ? agentSubtree(profile.agents, selectedRun.agentId)
+    : new Set<string>();
+  const sidebarAgents = profile.agents.filter(
+    (a) => !scheduledIds.has(a.agentId) || visibleRunIds.has(a.agentId),
+  );
   async function deleteAgent(agentId: string, agentName: string) {
     if (
       deleting ||
@@ -147,10 +171,10 @@ export function UserWorkspace({
             </div>
             <div className="agents-heading">
               <p className="eyebrow">Agents</p>
-              <span className="agent-count">{profile.agents.length}</span>
+              <span className="agent-count">{sidebarAgents.length}</span>
             </div>
             <nav aria-label="Your agents">
-              {agentTree(profile.agents, collapsed).map(
+              {agentTree(sidebarAgents, collapsed).map(
                 ({agent, depth, children}) => (
                   <div
                     className="agent-list-row"
@@ -214,6 +238,11 @@ export function UserWorkspace({
                         {agent.name}
                         {agent.parentAgentId && (
                           <small className="sub-agent-label">Sub-agent</small>
+                        )}
+                        {agent.scheduleRun && (
+                          <small className="sub-agent-label">
+                            Scheduled run
+                          </small>
                         )}
                       </span>
                     </button>
@@ -312,11 +341,28 @@ export function UserWorkspace({
             <button
               type="button"
               className="button ghost small"
-              data-active={!selected}
+              data-active={!selected && page === "profile"}
               onClick={() => select()}
             >
               <Plug />
               Profile &amp; connectors
+            </button>
+            <button
+              type="button"
+              className="button ghost small"
+              data-active={!selected && page === "schedules"}
+              onClick={() => {
+                setSelected(undefined);
+                setPage("schedules");
+              }}
+            >
+              <AlarmClock /> Schedules
+              {[...scheduledIds].some((id) => unread.has(id)) && (
+                <span
+                  className="schedule-unread"
+                  aria-label="New scheduled run results"
+                />
+              )}
             </button>
             <p className="empty-copy">
               Each agent has its own conversation and tool access.
@@ -365,6 +411,12 @@ export function UserWorkspace({
                   <h1>Agent not found</h1>
                   <p>Select one of your agents from the sidebar.</p>
                 </div>
+              ) : page === "schedules" ? (
+                <UserSchedules
+                  onOpenAgent={select}
+                  onDeleteAgent={deleteAgent}
+                  unread={unread}
+                />
               ) : (
                 <ProfileAndConnectors />
               ))}

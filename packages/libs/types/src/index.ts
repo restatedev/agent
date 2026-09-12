@@ -85,6 +85,34 @@ export const AgentToolsSchema = z.object({
     ),
 });
 export type AgentTools = z.infer<typeof AgentToolsSchema>;
+/** User-owned schedule; each occurrence starts an independent conversation. */
+export const UserScheduleSpecSchema = z.object({
+  scheduleId: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(100),
+  message: z.string().trim().min(1).max(32000),
+  delaySeconds: z.number().int().min(1).max(31_536_000),
+  repeatEverySeconds: z.number().int().min(1).max(31_536_000).nullable(),
+  tools: AgentToolsSchema.nullable().describe(
+    "Null inherits current access; otherwise restrict tools. Never broaden access.",
+  ),
+});
+export type UserScheduleSpec = z.infer<typeof UserScheduleSpecSchema>;
+export const UserScheduleSchema = UserScheduleSpecSchema.omit({
+  delaySeconds: true,
+}).extend({
+  nextRunAt: z.number().nullable(),
+  skippedRuns: z.number().int().nonnegative(),
+  lastError: z.string().optional(),
+});
+export type UserSchedule = z.infer<typeof UserScheduleSchema>;
+export const ScheduleRunSchema = z.object({
+  scheduleId: z.string(),
+  scheduleName: z.string(),
+  startedAt: z.number(),
+  status: z.enum(["running", "completed", "failed", "interrupted", "stopped"]),
+  finishedAt: z.number().optional(),
+  error: z.string().optional(),
+});
 export const DEFAULT_AGENT_TOOLS: AgentTools = {
   builtin: {mode: "all"},
   dynamic: {mode: "selected", names: []},
@@ -107,6 +135,7 @@ export const UserAgentSchema = z.object({
   agentId: z.string().min(1),
   name: z.string().trim().min(1).max(100),
   parentAgentId: z.string().min(1).optional(),
+  scheduleRun: ScheduleRunSchema.optional(),
 });
 export type UserAgent = z.infer<typeof UserAgentSchema>;
 export const ToolDescriptorSchema = z.object({
@@ -134,6 +163,7 @@ export const UserProfileSchema = z.object({
   agents: z.array(UserAgentSchema),
   connections: z.array(UserConnectionSchema),
   memories: z.array(MemoryEntrySchema),
+  schedules: z.array(UserScheduleSchema).default([]),
 });
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 
@@ -347,88 +377,10 @@ const DeliveryWhenBusySchema = z
     "How a delivered message enters the conversation when a Turn is active.",
   );
 
-const ScheduleIdSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(64)
-  .describe(
-    "A stable human-readable identifier. Reusing it replaces the existing schedule.",
-  );
-
-export const ScheduleSpecSchema = z.object({
-  scheduleId: ScheduleIdSchema,
-  message: z
-    .string()
-    .trim()
-    .min(1)
-    .describe("The user request to deliver when the schedule becomes due."),
-  delaySeconds: z
-    .number()
-    .int()
-    .min(1)
-    .max(31_536_000)
-    .describe("Seconds from now until the first delivery."),
-  repeatEverySeconds: z
-    .number()
-    .int()
-    .min(1)
-    .max(31_536_000)
-    .nullable()
-    .describe(
-      "Fixed delay between later deliveries, or null for a one-shot schedule.",
-    ),
-  whenBusy: DeliveryWhenBusySchema,
-});
-
-export const ScheduleIdRequestSchema = ScheduleSpecSchema.pick({
+export const ScheduleIdRequestSchema = UserScheduleSpecSchema.pick({
   scheduleId: true,
 });
 
-export const ScheduledMessageSchema = ScheduleSpecSchema.omit({
-  delaySeconds: true,
-}).extend({
-  nextRunAt: z
-    .number()
-    .int()
-    .nonnegative()
-    .describe("Unix epoch milliseconds for the next delivery."),
-});
-export type ScheduledMessage = z.infer<typeof ScheduledMessageSchema>;
-
-export const ScheduleMutationResultSchema = z.discriminatedUnion("accepted", [
-  z.object({
-    accepted: z.literal(true),
-    replaced: z.boolean(),
-    schedule: ScheduledMessageSchema,
-  }),
-  z.object({
-    accepted: z.literal(false),
-    error: z.string(),
-  }),
-]);
-export type ScheduleMutationResult = z.infer<
-  typeof ScheduleMutationResultSchema
->;
-
-export const ScheduleCancellationResultSchema = z.discriminatedUnion(
-  "accepted",
-  [
-    z.object({
-      accepted: z.literal(true),
-      cancelled: z.boolean(),
-    }),
-    z.object({
-      accepted: z.literal(false),
-      error: z.string(),
-    }),
-  ],
-);
-export type ScheduleCancellationResult = z.infer<
-  typeof ScheduleCancellationResultSchema
->;
-
-/** A source-attributed message entering the Agent's serialized router. */
 export const AgentDeliverySchema = z.object({
   source: z
     .string()
@@ -564,6 +516,7 @@ export type AgentProfile = z.infer<typeof AgentProfileSchema>;
 
 export const AgentInitializationSchema = AgentOwnershipSchema.extend({
   profile: AgentProfileSchema.optional(),
+  scheduledMessage: MessageSchema.optional(),
 });
 export const SubAgentConfigSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -731,7 +684,6 @@ const AgentNotificationVersionsSchema = z.object({
   profile: z.number().int().nonnegative(),
   approvals: z.number().int().nonnegative(),
   mcpAuth: z.number().int().nonnegative(),
-  schedules: z.number().int().nonnegative(),
 });
 
 export const AgentNotificationSnapshotSchema = z.object({
@@ -790,7 +742,6 @@ export const AgentNotificationTopicSchema = z.enum([
   "profile",
   "approvals",
   "mcpAuth",
-  "schedules",
 ]);
 export type AgentNotificationTopic = z.infer<
   typeof AgentNotificationTopicSchema

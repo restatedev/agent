@@ -20,6 +20,7 @@ export function subAgentProfile(
   grants: AgentTools,
   config: SubAgentConfig,
   builtins: readonly string[],
+  allowSubAgents = false,
 ): AgentProfile {
   const tools = structuredClone(config.tools ?? grants);
   const denied = !subset(tools.builtin, grants.builtin)
@@ -47,7 +48,7 @@ export function subAgentProfile(
     names: (tools.builtin.mode === "all"
       ? [...builtins]
       : tools.builtin.names
-    ).filter((name) => name !== "createSubAgent"),
+    ).filter((name) => allowSubAgents || name !== "createSubAgent"),
   };
   tools.mcpDefault = "disabled";
   const guardrails = structuredClone(parent.guardrails);
