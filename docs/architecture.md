@@ -68,7 +68,7 @@ exclusive handlers own decisions about:
 - the active `AgentSession.doTurn` invocation ID;
 - the FIFO of input waiting for the next turn;
 - steering batches accepted by the active invocation;
-- persistent instructions, memories, guardrails, and tool grants;
+- persistent instructions, guardrails, and tool grants;
 - immutable User ownership and per-turn authorization actions;
 - pending human approvals; and
 - source-attributed external-message routing.
@@ -84,7 +84,7 @@ State logic is grouped into handler-scoped namespaces:
 
 - `agent/active-turn.ts` — active invocation, pending input, steering
   bookkeeping, and signal delivery;
-- `agent/profile.ts` — instructions, memories, guardrails, and tool grants;
+- `agent/profile.ts` — instructions, guardrails, and tool grants;
 - `agent/mcp-authorization.ts` — pending Agent actions, User waiter cancellation,
   and Turn signals;
 - `agent/approval.ts` — pending approval records and decision signals.
@@ -224,7 +224,8 @@ code-based graders to the resulting conversation event log and state.
 | Tool grants and immutable owner | Agent | Lazy VO state | BFF, turn snapshot |
 | Active turn ID, interrupt reason, steering batches | Agent | Lazy VO state | Exclusive Agent handlers |
 | Pending user/event entries | Agent | Lazy VO state | Exclusive Agent handlers |
-| Instructions, memories, guardrails | Agent | Lazy VO state | Shared profile read; snapshotted at turn start |
+| Instructions, guardrails | Agent | Lazy VO state | Shared profile read; snapshotted at turn start |
+| Semantic memories | User | Lazy VO state | User profile read; entire collection fetched by Agent at turn start |
 | Pending approvals | Agent | Lazy VO state | Shared list; exclusive mutation |
 | Schedules and timer IDs | AgentScheduler | Eager VO state | Shared list; exclusive mutation/timer delivery |
 | Notification revision, topic versions, subscriptions | AgentNotifications | Lazy VO state + caller awakeables | Notification handlers |
@@ -444,8 +445,8 @@ owner.
 
 ## Profile and guardrails
 
-Instructions, memories, guardrails, and tool grants belong to Agent.
-User owns MCP configuration and encrypted credentials. Agent holds per-turn
+Instructions, guardrails, and tool grants belong to Agent.
+User owns shared memories, MCP configuration and encrypted credentials. Agent holds per-turn
 authorization actions; User coalesces shared connection flows. The BFF binds
 OAuth to the signed-in browser session and encrypts credentials before ingress.
 User stores ciphertext, then sends completion to each attached Agent, which
@@ -457,10 +458,12 @@ receives only `{serverId, encryptedToken}`; MCP execution decrypts inside its
 HTTP run. See [user identity](user-identity.md) and
 [credential encryption](credential-encryption.md).
 
-Each turn receives one profile snapshot. Profile mutations publish a `profile`
-notification; they are not themselves transcript entries. A successful
-`manageMemory` tool also emits a metadata-only `memory` transcript event from
-the active session.
+Each turn receives one Agent profile snapshot and the full User memory collection.
+Agent profile mutations publish a `profile` notification; they are not themselves
+transcript entries. Shared memory writes go through Agent's active-turn check
+to User, which merges keyed changes atomically. A successful `manageMemory`
+tool emits a metadata-only `memory` transcript event from the active session.
+The user page displays memories through its existing User profile refresh.
 
 Guardrails are not sent to the main agent model. A dedicated evaluator gates
 the exact proposed text or complete tool batch with `allow`, `deny`, or

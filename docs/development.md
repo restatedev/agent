@@ -383,7 +383,8 @@ behavior can be tested without manufacturing many full agent runs.
 | Change active-turn bookkeeping/signals | `src/agent/active-turn.ts` |
 | Change transcript storage | `src/session/history.ts` |
 | Change invalidation subscriptions | `src/notifications/service.ts` |
-| Change instructions/memories/guardrails | `src/agent/profile.ts` |
+| Change instructions/guardrails | `src/agent/profile.ts` |
+| Change shared user memories | `src/user/memory.ts` |
 | Change approvals | `src/agent/approval.ts` |
 | Change schedules and timer delivery | `src/scheduler/service.ts` |
 | Change the turn state machine | `src/session/service.ts` |

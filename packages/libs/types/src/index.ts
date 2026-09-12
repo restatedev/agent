@@ -117,10 +117,16 @@ export const UserConnectionSchema = z.object({
   tools: z.array(ToolDescriptorSchema),
 });
 export type UserConnection = z.infer<typeof UserConnectionSchema>;
+export const MemoryEntrySchema = z.object({
+  key: z.string().trim().min(1),
+  content: z.string().trim().min(1),
+});
+export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
 export const UserProfileSchema = z.object({
   identity: UserIdentitySchema,
   agents: z.array(UserAgentSchema),
   connections: z.array(UserConnectionSchema),
+  memories: z.array(MemoryEntrySchema),
 });
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 
@@ -475,15 +481,8 @@ const ToolEventSchema = z.object({
   ),
 });
 
-// Durable prompt context owned by one Agent. Instructions are authoritative
-// user configuration, memories are model-managed data, and guardrails are
-// natural-language policies enforced against proposed agent actions.
-const MemoryEntrySchema = z.object({
-  key: z.string().trim().min(1),
-  content: z.string().trim().min(1),
-});
-export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
-
+// Keyed updates to shared User memories: model-managed context data, not
+// authoritative instructions or policy. Agent configuration remains separate.
 export const MemoryChangeSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("set"),
@@ -550,7 +549,6 @@ export const SetGuardrailsSchema = z.object({
 
 export const AgentProfileSchema = z.object({
   instructions: z.string().optional(),
-  memories: z.array(MemoryEntrySchema),
   guardrails: z.array(GuardrailSchema),
   tools: AgentToolsSchema.default(DEFAULT_AGENT_TOOLS),
   webSearchEnabled: z.boolean().default(true),
@@ -760,6 +758,7 @@ export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
 export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;
 
 export const AgentTurnRequestSchema = AgentProfileSchema.extend({
+  memories: z.array(MemoryEntrySchema),
   ownerUserId: z.string().min(1),
   mcpServers: z.array(ResolvedMcpServerSchema),
   mcpCredentials: z.array(McpTurnCredentialSchema),

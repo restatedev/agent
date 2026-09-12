@@ -10,7 +10,6 @@ import {
   GitBranch,
   Globe,
   KeyRound,
-  MemoryStick,
   MessageSquareText,
   Plus,
   RefreshCw,
@@ -1217,30 +1216,6 @@ function ProfilePanel({
           are published.
         </p>
         <GuardrailEditor guardrails={guardrails} onChange={changeGuardrails} />
-      </section>
-
-      <section className="settings-section">
-        <div className="section-heading">
-          <div>
-            <MemoryStick />
-            <span>
-              <strong>Memories</strong>
-              <small>Model-managed agent context</small>
-            </span>
-          </div>
-        </div>
-        {profile?.memories.length ? (
-          <div className="memory-list">
-            {profile.memories.map((memory) => (
-              <div className="memory-row" key={memory.key}>
-                <code>{memory.key}</code>
-                <span>{memory.content}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="empty-copy">No memories stored by the model.</p>
-        )}
       </section>
 
       <section className="settings-section">

@@ -99,6 +99,13 @@
 .account-pane h1 {margin:0 0 12px;}
 .account-pane .mcp-preset-list {margin:24px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));}
 .account-connections {display:grid;gap:12px;margin:24px 0;}
+.user-memories {margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-raised);}
+.user-memories summary {cursor:pointer;font-weight:600;}
+.user-memories summary span {color:var(--text-muted);font-weight:400;}
+.user-memories .memory-list {margin-top:12px;}
+.user-memories .memory-row {padding:12px;overflow-wrap:anywhere;}
+.user-memories .memory-row code {font-size:11px;}
+.user-memories .memory-row span {font-size:13px;}
 .account-pane .account-connection {display:flex;flex-direction:column;align-items:stretch;gap:14px;padding:18px;}
 .account-pane .account-connection>div:first-child {display:grid;gap:4px;overflow-wrap:anywhere;}
 .account-pane .account-connection strong {font-size:14px;}

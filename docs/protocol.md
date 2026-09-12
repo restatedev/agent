@@ -188,7 +188,6 @@ Void input. Output:
 type AgentProfile = {
   instructions?: string;
   webSearchEnabled: boolean; // defaults to true
-  memories: Array<{key: string; content: string}>;
   guardrails: Array<{id: string; rule: string}>;
   tools: {
     builtin: ToolSelection;
@@ -368,7 +367,7 @@ These are ingress-visible for inspection but are not normal client operations.
 
 | Handler | Caller | Purpose |
 | --- | --- | --- |
-| `updateMemory` | `manageMemory` tool | Apply one active-turn memory batch |
+| `updateMemory` | `manageMemory` tool | Validate active turn and forward a shared memory batch to its owning User |
 | `requestApproval` | tool or policy gate | Register a pending request for the active turn |
 | `cancelApproval` | interrupted waiter | Remove abandoned approval state |
 | `requestMcpAuthorization` | MCP discovery or tool invocation | Register or coalesce a pending OAuth/bearer action |
@@ -410,7 +409,7 @@ Input:
 ```ts
 type AgentTurnRequest = {
   instructions?: string;
-  memories: Array<{key: string; content: string}>;
+  memories: Array<{key: string; content: string}>; // full User snapshot, fetched by Agent
   guardrails: Array<{id: string; rule: string}>;
   ownerUserId: string;
   tools: AgentTools;
@@ -490,7 +489,7 @@ interrupt event without a model-authored assistant entry.
 
 | Type | Purpose |
 | --- | --- |
-| `memory` | Memory keys changed; re-read profile |
+| `memory` | Shared memory keys changed; re-read User profile |
 | `approval_request` | A pending approval was registered |
 | `approval_cancelled` | An abandoned approval was removed |
 | `delivery` | An external source delivered a message and how it was routed |

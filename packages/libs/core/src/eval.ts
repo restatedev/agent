@@ -697,7 +697,11 @@ function* memory({
       entry.type === "memory" &&
       entry.turnId === ask.turnId,
   );
-  const profile = yield* restate.client(Agent, agentId).profile();
+  const owner = yield* restate.client(Agent, agentId).ownership();
+  if (!owner) throw new Error("Memory evaluation agent has no owner");
+  const profile = yield* restate
+    .client(UserDefinition, owner.ownerUserId)
+    .profile();
   const stored = profile.memories.some(({key, content}) =>
     `${key} ${content}`.toLowerCase().includes("fahrenheit"),
   );

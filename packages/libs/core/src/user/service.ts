@@ -19,6 +19,7 @@ import {
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {discoverConnectionTools} from "../session/mcp-tools.js";
+import * as memory from "./memory.js";
 
 type Connection = {
   server: ResolvedMcpServer;
@@ -62,6 +63,7 @@ export const User = restate.implement(UserDefinition, {
         identity,
         agents: yield* agents(),
         connections: (yield* connections()).map(publicConnection),
+        memories: yield* memory.read(),
       };
     },
     *createAgent(agent) {
@@ -85,6 +87,10 @@ export const User = restate.implement(UserDefinition, {
     },
     *ownsAgent({agentId}) {
       return (yield* agents()).some((agent) => agent.agentId === agentId);
+    },
+    *updateMemory({agentId, changes}) {
+      yield* requireAgent(agentId);
+      return yield* memory.apply(changes);
     },
     *deleteAgent({agentId}) {
       const list = yield* agents();
@@ -163,6 +169,7 @@ export const User = restate.implement(UserDefinition, {
         .filter((g) => g.tools.mode === "all" || g.tools.names.length > 0)
         .flatMap((g) => list.filter((c) => c.server.id === g.connectionId));
       return {
+        memories: yield* memory.read(),
         servers: selected.map((c) => c.server),
         credentials: selected.flatMap((c) =>
           c.credential ? [c.credential] : [],
@@ -351,6 +358,7 @@ export const User = restate.implement(UserDefinition, {
     enableLazyState: true,
     handlers: {
       profile: {shared: true, ...noRetention},
+      updateMemory: noRetention,
       ownsAgent: {shared: true, ...noRetention},
       connections: {shared: true, ...noRetention},
       snapshot: {shared: true, ...noRetention},

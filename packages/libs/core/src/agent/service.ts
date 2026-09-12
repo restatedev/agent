@@ -269,7 +269,7 @@ export const Agent = restate.implement(AgentDefinition, {
     },
 
     /**
-     * Returns the durable instructions, memories, guardrails, and tool grants
+     * Returns the durable instructions, guardrails, and tool grants
      * that the next Turn will snapshot.
      */
     *profile(): restate.Operation<AgentProfile> {
@@ -353,7 +353,7 @@ export const Agent = restate.implement(AgentDefinition, {
     /**
      * Applies one atomic model-requested memory batch.
      *
-     * Only the active, non-interrupting Turn may mutate its Agent's memories.
+     * Only the active, non-interrupting Turn may mutate its owner's memories.
      */
     *updateMemory({
       turnId,
@@ -367,11 +367,13 @@ export const Agent = restate.implement(AgentDefinition, {
         };
       }
 
-      const result = yield* profile.applyMemory(changes);
-      if (result.applied) {
-        yield* publishNotification("profile");
-      }
-      return result;
+      const owner = yield* requireOwner();
+      return yield* restate
+        .client(UserDefinition, owner.ownerUserId)
+        .updateMemory({
+          agentId: agentKey(),
+          changes,
+        });
     },
 
     /**
@@ -524,6 +526,7 @@ function* startTurn(
   return yield* activeTurn.start(agentId, {
     ...agentProfile,
     ownerUserId: owner.ownerUserId,
+    memories: snapshot.memories,
     mcpServers: snapshot.servers,
     mcpCredentials: snapshot.credentials,
     entries,

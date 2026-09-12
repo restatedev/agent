@@ -5,38 +5,7 @@ import {Agent} from "../../src/agent/service.ts";
 import {AgentScheduler} from "../../src/scheduler/service.ts";
 import {Sandbox} from "../../src/sandbox/service.ts";
 import {sandboxProvider} from "../../src/sandbox/provider.ts";
-import {runHandler} from "./harness.mjs";
-
-// Exercise the real generator handlers with isolated state and recorded RPCs.
-// No live Restate state, credentials, filesystem or provider is touched.
-function context(key, initial = {}) {
-  const state = new Map(Object.entries(structuredClone(initial)));
-  const sends = [], signals = [], cancelled = [];
-  let real, sequence;
-  const ctx = {
-    key,
-    request: () => ({id: "inv-test", attemptCompletedSignal: new AbortController().signal}),
-    get: name => real.run(`get-${sequence++}`, () => structuredClone(state.get(name) ?? null)),
-    set: (name, value) => state.set(name, structuredClone(value)),
-    clear: name => state.delete(name),
-    genericSend: opts => { sends.push(opts); return {invocationId: real.run(`send-${sequence++}`, () => `send-${sends.length}`)}; },
-    genericCall: () => { throw new Error("Unexpected blocking RPC"); },
-    invocation: id => ({signal: name => ({resolve: value => signals.push({id, name, value})})}),
-    cancel: id => cancelled.push(id),
-    run: (name, action) => real.run(name, action),
-  };
-  async function invoke(handler, input) {
-    const {output} = await runHandler(async actual => {
-      real = actual;
-      sequence = 0;
-      try { return {result: (await handler(ctx, input)) ?? null}; }
-      catch (error) { return {error: error.message}; }
-    });
-    if (output.error) throw new Error(output.error);
-    return output.result;
-  }
-  return {invoke, state, sends, signals, cancelled};
-}
+import {context} from "./state-fixture.mjs";
 
 test("deleting an owned agent revokes membership, retains connections and queues cleanup", async () => {
   const f = context("alice", {agents: [{agentId: "a", name: "A"}, {agentId: "b", name: "B"}], connections: [{server: {id: "notion"}}]});

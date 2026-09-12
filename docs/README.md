@@ -25,7 +25,7 @@ agent. The implementation keeps the important control flow visible:
 - programmatic tool calling (PTC): model-written JavaScript coordinates tools
   with replay-safe promise completion and compact results for model context;
 - explicit queue, steer, interrupt, and selective-cancellation semantics;
-- user instructions, model-managed memory, runtime guardrails, and approvals;
+- user instructions, shared user memories, runtime guardrails, and approvals;
 - non-destructive conversation compaction;
 - scheduler-owned durable messages and an agent-scoped sandbox;
 - annotation-driven discovery of Restate handlers and configured stateless or

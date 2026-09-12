@@ -322,6 +322,28 @@ function Connections() {
         Authorize an account once, then choose which tools each agent may use.
         Disconnecting here revokes access for all your agents.
       </p>
+      <details className="user-memories">
+        <summary>
+          🧠 Memories <span>({profile.memories.length})</span>
+        </summary>
+        <p className="section-copy">
+          Shared across all your agents. Useful preferences, projects and
+          context are remembered selectively. Ask any agent to remember, correct
+          or forget something.
+        </p>
+        {profile.memories.length ? (
+          <div className="memory-list">
+            {profile.memories.map((memory) => (
+              <div className="memory-row" key={memory.key}>
+                <code>{memory.key}</code>
+                <span>{memory.content}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-copy">Nothing remembered yet.</p>
+        )}
+      </details>
       {notice && <p role="status">{notice}</p>}
       {error && (
         <p className="inline-error" role="alert">

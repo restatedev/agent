@@ -95,7 +95,7 @@ of the model contract, not cosmetic documentation.
 | `sleep` | Durable timer | Pending |
 | `humanApproval` | Signal-backed human decision | Pending |
 | `cancelOperation` | Cancel one pending operation by ID | Foreground control |
-| `manageMemory` | Atomically set or delete Agent memories | Foreground Agent RPC |
+| `manageMemory` | Atomically set or delete shared user memories | Foreground Agent → User RPC |
 | `scheduleMessage` | Create or replace a per-Agent durable schedule | Foreground AgentScheduler RPC |
 | `cancelSchedule` | Idempotently cancel a schedule | Foreground AgentScheduler RPC |
 | `listSchedules` | Read active schedules for this Agent | Foreground AgentScheduler RPC |

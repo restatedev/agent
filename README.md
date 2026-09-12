@@ -70,7 +70,7 @@ chain-of-thought.
 | Runtime guardrails | A separate policy pass gates the exact proposed text or complete tool batch before it runs. Non-allow decisions receive an independent confirmation pass. |
 | Human-in-the-loop approval | Policy gates and the explicit approval tool register durable Agent state and resume through turn-scoped signals. |
 | User identity and ownership | Google Workspace sign-in restricted to `restate.dev` through the BFF, private per-user agents, account-level connections, and per-agent tool grants. See [setup](docs/user-identity.md). |
-| Persistent profile | User instructions, model-managed semantic memory, user-defined guardrails, per-agent tool grants, and web search availability are durable per Agent and snapshotted at turn start. |
+| Persistent context | Instructions, guardrails, tool grants, and web search availability are durable per Agent. Semantic memories are shared per User; Agent includes the entire collection in each turn. |
 | General change notifications | `AgentNotifications/{agentId}` maintains revisioned `history`, `profile`, `approvals`, `mcpAuth`, and `schedules` watermarks that wake clients to re-read authoritative state. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
@@ -106,7 +106,7 @@ Agent owns only the state that must remain responsive while a run is active:
 
 - active `doTurn` invocation ID and accepted interrupt reason;
 - pending user/event entries and steering reconciliation batches;
-- instructions, memories, guardrails, per-agent tool grants, and web search availability;
+- instructions, guardrails, per-agent tool grants, and web search availability;
 - immutable user ownership and per-turn authorization actions (credentials belong to User);
 - pending approvals; and
 - routing of external deliveries according to their busy-turn policy.
@@ -280,7 +280,7 @@ Current built-ins:
 | `sleep` | pending | Durable timer |
 | `humanApproval` | pending | Explicit signal-backed human decision |
 | `cancelOperation` | foreground control | Stop one pending task by operation ID |
-| `manageMemory` | foreground Agent RPC | Set or delete persistent memory entries |
+| `manageMemory` | foreground Agent → User RPC | Set or delete shared user memories for personalization across agents |
 | `scheduleMessage` / `cancelSchedule` / `listSchedules` | foreground AgentScheduler RPC | Manage durable scheduled input independently of the current turn |
 | `listFiles` / `readFile` / `writeFile` / `executeCommand` | foreground sandbox | Work in the Agent-scoped workspace |
 | `executeProgram` | foreground orchestration | Coordinate available tools in JavaScript, filter intermediate results, and return a compact JSON value |

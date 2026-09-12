@@ -55,7 +55,7 @@ Preserve these unless the requested change explicitly replaces them:
    existing user entry to explain later routing.
 3. At most one `AgentSession.doTurn` invocation is active for an Agent. Its
    Restate invocation ID is the stable `turnId` and signal target.
-4. A turn receives a stable profile snapshot. Instructions, memories,
+4. A turn receives a stable Agent profile and shared User memory snapshot. Instructions, memories,
    guardrails, and tool grants changed during that turn affect the next turn.
    The session loads its conversation context once at the beginning of
    `doTurn`.
@@ -149,7 +149,7 @@ The detailed turn-runtime list lives in
   or schedules.
 - `activity` and `progress` are status communication, not chain-of-thought or
   model reasoning.
-- The per-Agent `memories` collection is persistent semantic/profile memory.
+- The per-User `memories` collection is persistent semantic memory shared across agents.
   Active-turn messages are working context, and conversation history is a separate
   canonical log.
 
@@ -161,7 +161,8 @@ The detailed turn-runtime list lives in
 | Active turn ID, pending user queue, signal delivery/reconciliation | `agent/active-turn.ts` |
 | History chunks, cursor, writer, summary checkpoint | `session/history.ts` |
 | Notification revisions, subscriptions, and awakeables | `notifications/service.ts` |
-| Instructions, memories, guardrails | `agent/profile.ts` |
+| Instructions, guardrails | `agent/profile.ts` |
+| Shared user memories | `user/memory.ts` |
 | Pending approval state and decision signal | `agent/approval.ts` |
 | Durable scheduled-message state, timers, and delivery | `scheduler/service.ts` |
 | Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |

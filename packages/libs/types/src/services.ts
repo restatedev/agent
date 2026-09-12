@@ -40,6 +40,8 @@ import {
   McpServerRemovalResultSchema,
   McpServerSchema,
   McpTurnCredentialSchema,
+  MemoryChangeSchema,
+  MemoryEntrySchema,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
   MessageSchema,
@@ -216,8 +218,15 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
   doTurn: iface.schemas({input: AgentTurnRequestSchema, output: z.void()}),
 });
 
-/** Private per-user account, agent directory and shared MCP credentials. */
+/** Private per-user account, agent directory, shared memories and MCP credentials. */
 export const UserDefinition = iface.object("User", {
+  updateMemory: iface.schemas({
+    input: z.object({
+      agentId: z.string().min(1),
+      changes: z.array(MemoryChangeSchema).min(1),
+    }),
+    output: MemoryUpdateResultSchema,
+  }),
   register: iface.schemas({input: UserIdentitySchema, output: z.void()}),
   profile: iface.schemas({input: z.void(), output: UserProfileSchema}),
   createAgent: iface.schemas({input: UserAgentSchema, output: UserAgentSchema}),
@@ -248,6 +257,7 @@ export const UserDefinition = iface.object("User", {
   snapshot: iface.schemas({
     input: z.object({agentId: z.string(), tools: AgentToolsSchema}),
     output: z.object({
+      memories: z.array(MemoryEntrySchema),
       servers: z.array(ResolvedMcpServerSchema),
       credentials: z.array(McpTurnCredentialSchema),
     }),

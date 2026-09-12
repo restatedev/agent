@@ -17,7 +17,7 @@ function fixture(overrides = {}) {
   const implementations = {
     notifications: async () => notification(),
     watchNotifications: async () => notification(),
-    profile: async () => ({memories: [], guardrails: [], tools: {}, webSearchEnabled: true}),
+    profile: async () => ({guardrails: [], tools: {}, webSearchEnabled: true}),
     approvals: async () => [],
     mcpAuthorizations: async () => [],
     schedules: async () => [],
@@ -33,7 +33,7 @@ function fixture(overrides = {}) {
 test("startup captures the watermark before fetching all data in parallel", async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  const {client, calls} = fixture({profile: async () => { await gate; return {memories: []}; }});
+  const {client, calls} = fixture({profile: async () => { await gate; return {guardrails: []}; }});
   const pending = loadAgentSnapshot(client, options().signal);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(calls.map(c => c.name), [
@@ -86,7 +86,7 @@ test("changes during initial reads remain visible to the first watch", async () 
   let current = notification();
   const {client} = fixture({
     notifications: async () => current,
-    profile: async () => { current = notification(2, {profile: 1}); return {memories: []}; },
+    profile: async () => { current = notification(2, {profile: 1}); return {guardrails: []}; },
     watchNotifications: async (revision) => { assert.equal(revision, 1); return current; },
   });
   const initial = await loadAgentSnapshot(client, options().signal);
@@ -99,7 +99,7 @@ test("failed sync can retry the same cursor and window key without losing change
   let fail = true;
   const {client, calls} = fixture({
     watchNotifications: async () => notification(2, {profile: 1}),
-    profile: async () => { if (fail) throw new Error("temporary"); return {memories: []}; },
+    profile: async () => { if (fail) throw new Error("temporary"); return {guardrails: []}; },
   });
   const since = notification();
   const opts = options();

@@ -70,7 +70,7 @@ deployed dynamic handlers as ordinary durable RPCs.
   bounded to 128 child calls plus source, output, memory, and computation limits.
 - Each step receives a copy of the complete live model context accumulated by
   the run.
-- Persistent memories are injected once as data before conversation context;
+- The entire shared user memory snapshot fetched by Agent is injected once as data before conversation context;
   user instructions are supplied to every agent-model call.
 - A normal iteration returns text, tool outcomes, a recoverable model error, or
   a guardrail block.
@@ -162,8 +162,9 @@ write history.
 - Parallel sandbox calls share one in-flight borrow; dependent operations must
   either be proposed in separate loop iterations or awaited in order inside a
   PTC program.
-- `manageMemory` atomically mutates at most 32 Agent memory entries and is
-  accepted only for the active, non-interrupting `turnId`.
+- `manageMemory` atomically updates the User's collection (at most 32 entries).
+  Agent accepts only the active, non-interrupting `turnId`, forwards to its
+  immutable owner, and User checks the agent's membership before writing.
 - Schedule tools call AgentScheduler directly. Once an upsert completes, that
   durable side effect survives the turn that created it and is not a pending
   turn operation.

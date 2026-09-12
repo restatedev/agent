@@ -7,10 +7,32 @@ application, not a sandbox for arbitrary internet users.
 | Component | Responsibility |
 | --- | --- |
 | Google + BFF | Sign in, verify identity, manage browser cookies, enforce ownership and same-origin writes |
-| User VO | Verified identity, agent directory, MCP connections and encrypted credentials/flows |
+| User VO | Verified identity, agent directory, shared memories, MCP connections and encrypted credentials/flows |
 | UserSession VO | Expiry and revocation of a browser session, keyed by a hash of its opaque cookie |
 | Agent VO | Immutable owner, one conversation, profile/tool grants, approvals and per-turn authorization actions |
 | AgentSession.doTurn | Execute the snapshotted allowed tools; wait durably for authorization |
+
+## Shared memories
+
+Memories belong to the user, not an agent. At each turn start, Agent fetches
+`User.snapshot` and passes the entire memory collection to `AgentSession.doTurn`.
+There is no memory search or per-agent selection. Already-running turns retain
+their original snapshot; newly started turns see the latest saved memories.
+
+`manageMemory` goes through Agent's active, non-interrupting turn check and then
+`User.updateMemory({agentId, changes})`. User verifies membership and serializes
+keyed changes, preserving unrelated updates from other agents. The collection
+is limited to 32 entries; corrections to the same key use the last accepted write.
+
+The prompt encourages relevant personalization and selective end-of-turn saves:
+ongoing projects, useful decisions, and stable preferences, not an automatic
+summary of every conversation. Memories are context data, never instructions.
+
+The user Connections page has a collapsed **Memories** section, refreshed with
+the User profile on the existing polling/focus cycle. Ask any agent to remember,
+correct, or forget something. Deleting an agent does not delete user memories.
+Old agent-local memory state is left untouched but is not automatically migrated
+or injected into new turns.
 
 ## Google setup
 
