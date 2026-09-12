@@ -13,6 +13,7 @@ import {
   type MemoryChange,
   ScheduleIdRequestSchema,
   ScheduleSpecSchema,
+  SubAgentConfigSchema,
 } from "@restate-agents/types";
 import {AgentSchedulerDefinition} from "@restate-agents/types/services";
 import {CancelledError} from "@restatedev/restate-sdk";
@@ -721,6 +722,63 @@ const cancelOperationTool = defineAgentTool({
   },
 });
 
+const createSubAgentTool = defineAgentTool({
+  name: "createSubAgent",
+  description:
+    "Create a persistent sub-agent under this agent, visible in the user's sidebar. It gets its own conversation and separate sandbox/files, and shares the same user's credentials and memories. Instructions, guardrails and current tool access are inherited at creation; you may add instructions/guardrails or narrow tools, never broaden access. Supply initialMessage to start its task asynchronously, or null to leave it idle. Returns the child ID/link, not its result. You do not wait for it, receive its results automatically, or share files. Do not claim it finished. Children cannot create further sub-agents. Use only when a separate agent is useful or requested; do not create duplicates.",
+  inputSchema: SubAgentConfigSchema,
+  summarize: ({name}) => `Created sub-agent: ${name}`,
+  *run(config, context): restate.Operation<ToolExecution> {
+    const agent = yield* restate.client(Agent, context.agentId).createSubAgent({
+      ...config,
+      turnId: context.turnId,
+      toolCallId: context.toolCallId,
+    });
+    return {
+      status: "succeeded",
+      result: JSON.stringify({
+        ...agent,
+        url: `/?agent=${encodeURIComponent(agent.agentId)}`,
+        taskSubmitted: config.initialMessage !== null,
+      }),
+    };
+  },
+});
+const deleteSubAgentTool = defineAgentTool({
+  name: "deleteSubAgent",
+  description:
+    "Delete one of this agent's direct sub-agents and ALL its descendants. Use listSubAgents to resolve its ID first if needed. Stops their work, cancels their schedules and deletes their separate sandbox files. Shared user credentials/memories are kept. Conversation records remain internally; this is not a permanent data purge. Cannot delete the parent, unrelated agents or another user's agents. This is destructive: use only when the user's request authorizes deletion.",
+  inputSchema: z.object({agentId: z.string().min(1).max(256)}),
+  summarize: () => "Deleted sub-agent subtree",
+  *run({agentId}, context): restate.Operation<ToolExecution> {
+    const deleted = yield* restate
+      .client(Agent, context.agentId)
+      .deleteSubAgent({turnId: context.turnId, agentId});
+    return {status: "succeeded", result: JSON.stringify({agentId, deleted})};
+  },
+});
+const listSubAgentsTool = defineAgentTool({
+  name: "listSubAgents",
+  description:
+    "List this agent's direct sub-agents by name, ID and link. Use to find existing children before creating duplicates or deleting one. Does not read their conversations, results or credentials.",
+  inputSchema: z.object({}),
+  summarize: () => "Listed sub-agents",
+  *run(_input, context): restate.Operation<ToolExecution> {
+    const agents = yield* restate
+      .client(Agent, context.agentId)
+      .listSubAgents({turnId: context.turnId});
+    return {
+      status: "succeeded",
+      result: JSON.stringify(
+        agents.map((agent) => ({
+          ...agent,
+          url: `/?agent=${encodeURIComponent(agent.agentId)}`,
+        })),
+      ),
+    };
+  },
+});
+
 const manageMemoryTool = defineAgentTool({
   name: "manageMemory",
   description:
@@ -957,6 +1015,9 @@ const definitions = [
   humanApprovalTool,
   cancelOperationTool,
   manageMemoryTool,
+  createSubAgentTool,
+  deleteSubAgentTool,
+  listSubAgentsTool,
   scheduleMessageTool,
   cancelScheduleTool,
   listSchedulesTool,

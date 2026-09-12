@@ -149,8 +149,9 @@ export function AgentToolsPanel({
         <strong>Tool access</strong>
       </div>
       <p className="empty-copy">
-        Authorized connectors are enabled automatically each turn. Switch off
-        any this agent should not use; your opt-outs are remembered.
+        {permissions.mcpDefault === "disabled"
+          ? "This sub-agent starts with its parent's tool access at creation. New connectors stay off until you enable them."
+          : "Authorized connectors are enabled automatically each turn. Switch off any this agent should not use; your opt-outs are remembered."}
       </p>
       <div className="agent-tool-list">
         {user.profile.connections.map((connection) => {

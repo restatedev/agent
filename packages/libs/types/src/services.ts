@@ -14,6 +14,9 @@ import {
   AgentOwnershipSchema,
   AgentProfileSchema,
   AgentToolsSchema,
+  AgentInitializationSchema,
+  SubAgentConfigSchema,
+  UserCreateSubAgentSchema,
   AgentTurnOutcomeSchema,
   AgentTurnRequestSchema,
   ApprovalCancellationSchema,
@@ -91,7 +94,25 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     input: SetWebSearchEnabledSchema,
     output: z.void(),
   }),
-  initialize: iface.schemas({input: AgentOwnershipSchema, output: z.void()}),
+  initialize: iface.schemas({
+    input: AgentInitializationSchema,
+    output: z.void(),
+  }),
+  createSubAgent: iface.schemas({
+    input: SubAgentConfigSchema.extend({
+      turnId: z.string().min(1),
+      toolCallId: z.string().min(1),
+    }),
+    output: UserAgentSchema,
+  }),
+  deleteSubAgent: iface.schemas({
+    input: z.object({turnId: z.string().min(1), agentId: z.string().min(1)}),
+    output: z.boolean(),
+  }),
+  listSubAgents: iface.schemas({
+    input: z.object({turnId: z.string().min(1)}),
+    output: z.array(UserAgentSchema),
+  }),
   ownership: iface.schemas({
     input: z.void(),
     output: AgentOwnershipSchema.nullable(),
@@ -261,10 +282,28 @@ export const UserDefinition = iface.object("User", {
   }),
   register: iface.schemas({input: UserIdentitySchema, output: z.void()}),
   profile: iface.schemas({input: z.void(), output: UserProfileSchema}),
-  createAgent: iface.schemas({input: UserAgentSchema, output: UserAgentSchema}),
+  createAgent: iface.schemas({
+    input: UserAgentSchema.omit({parentAgentId: true}),
+    output: UserAgentSchema,
+  }),
+  createSubAgent: iface.schemas({
+    input: UserCreateSubAgentSchema,
+    output: UserAgentSchema,
+  }),
+  deleteSubAgent: iface.schemas({
+    input: z.object({
+      parentAgentId: z.string().min(1),
+      agentId: z.string().min(1),
+    }),
+    output: z.boolean(),
+  }),
   deleteAgent: iface.schemas({
     input: z.object({agentId: z.string().min(1)}),
     output: z.boolean(),
+  }),
+  listSubAgents: iface.schemas({
+    input: z.object({parentAgentId: z.string().min(1)}),
+    output: z.array(UserAgentSchema),
   }),
   ownsAgent: iface.schemas({
     input: z.object({agentId: z.string()}),

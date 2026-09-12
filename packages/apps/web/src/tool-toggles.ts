@@ -18,7 +18,9 @@ export function toggleTool(
 
 export function connectionEnabled(tools: AgentTools, connectionId: string) {
   const grant = tools.mcp.find((g) => g.connectionId === connectionId);
-  return !grant || grant.tools.mode === "all" || grant.tools.names.length > 0;
+  return grant
+    ? grant.tools.mode === "all" || grant.tools.names.length > 0
+    : tools.mcpDefault !== "disabled";
 }
 
 /** Off must be explicit: omission means default-on for authorized connections. */

@@ -8,6 +8,7 @@
 // invocation, external producers use `deliver` to enter those same routing
 // decisions, and `onTurnEnd` accepts the invocation's high-level outcome.
 
+import {createHash} from "node:crypto";
 import type {
   AgentDelivery,
   AgentNotificationTopic,
@@ -31,12 +32,13 @@ import type {
 } from "../internal-types.js";
 import {Sandbox} from "../sandbox/index.js";
 import {discoverAgentTools} from "../session/dynamic-tools.js";
-import {dynamicToolId} from "../session/tool-permissions.js";
+import {dynamicToolId, selected} from "../session/tool-permissions.js";
 import * as agentTools from "../session/tools.js";
 import * as activeTurn from "./active-turn.js";
 import * as approvals from "./approval.js";
 import * as mcpAuthorization from "./mcp-authorization.js";
 import * as profile from "./profile.js";
+import {subAgentProfile} from "./sub-agent.js";
 
 // Internal coordination handlers are high-volume and their completed
 // invocations carry no information worth retaining.
@@ -45,14 +47,99 @@ const noRetention = {idempotencyRetention: 0, journalRetention: 0};
 /** Durable per-Agent controller for turns, routing, profile, and user actions. */
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
-    *initialize(owner) {
+    *initialize({profile: initialProfile, ...owner}) {
       yield* requireNotDeleted();
       const existing = yield* restate.state().get<typeof owner>("ownership");
-      if (existing && existing.ownerUserId !== owner.ownerUserId)
+      if (
+        existing &&
+        (existing.ownerUserId !== owner.ownerUserId ||
+          existing.parentAgentId !== owner.parentAgentId)
+      )
         throw new TerminalError("Agent ownership is immutable", {
           errorCode: 409,
         });
-      if (!existing) restate.state().set("ownership", owner);
+      if (!existing) {
+        restate.state().set("ownership", owner);
+        if (initialProfile) {
+          profile.setInstructions(initialProfile.instructions ?? null);
+          profile.setGuardrails(initialProfile.guardrails);
+          profile.setTools(initialProfile.tools);
+          profile.setWebSearchEnabled(initialProfile.webSearchEnabled);
+        }
+      }
+    },
+    *createSubAgent({turnId, toolCallId, ...config}) {
+      yield* requireNotDeleted();
+      const owner = yield* requireOwner();
+      const current = yield* activeTurn.current();
+      if (current?.id !== turnId || current.interruptReason !== undefined)
+        throw new TerminalError(
+          "Sub-agent creation requires the active, non-interrupting Turn",
+          {errorCode: 409},
+        );
+      if (
+        owner.parentAgentId ||
+        !selected(current.tools.builtin, "createSubAgent")
+      )
+        throw new TerminalError("This agent cannot create sub-agents", {
+          errorCode: 403,
+        });
+      const inherited = subAgentProfile(
+        yield* profile.read(),
+        current.tools,
+        config,
+        agentTools.names,
+      );
+      const agentId = createHash("sha256")
+        .update(
+          JSON.stringify([
+            "sub-agent",
+            owner.ownerUserId,
+            agentKey(),
+            turnId,
+            toolCallId,
+          ]),
+        )
+        .digest("hex");
+      return yield* restate
+        .client(UserDefinition, owner.ownerUserId)
+        .createSubAgent({
+          agent: {agentId, name: config.name, parentAgentId: agentKey()},
+          profile: inherited,
+          initialMessage: config.initialMessage,
+        });
+    },
+    *deleteSubAgent({turnId, agentId}) {
+      const owner = yield* requireOwner();
+      const current = yield* activeTurn.current();
+      if (current?.id !== turnId || current.interruptReason !== undefined)
+        throw new TerminalError(
+          "Sub-agent deletion requires the active, non-interrupting Turn",
+          {errorCode: 409},
+        );
+      if (!selected(current.tools.builtin, "deleteSubAgent"))
+        throw new TerminalError("This agent cannot delete sub-agents", {
+          errorCode: 403,
+        });
+      return yield* restate
+        .client(UserDefinition, owner.ownerUserId)
+        .deleteSubAgent({parentAgentId: agentKey(), agentId});
+    },
+    *listSubAgents({turnId}) {
+      const owner = yield* requireOwner();
+      const current = yield* activeTurn.current();
+      if (current?.id !== turnId || current.interruptReason !== undefined)
+        throw new TerminalError(
+          "Listing sub-agents requires the active, non-interrupting Turn",
+          {errorCode: 409},
+        );
+      if (!selected(current.tools.builtin, "listSubAgents"))
+        throw new TerminalError("This agent cannot list sub-agents", {
+          errorCode: 403,
+        });
+      return yield* restate
+        .client(UserDefinition, owner.ownerUserId)
+        .listSubAgents({parentAgentId: agentKey()});
     },
     *retire({ownerUserId}) {
       const owner = yield* restate
@@ -80,7 +167,9 @@ export const Agent = restate.implement(AgentDefinition, {
       return (
         (yield* restate
           .sharedState()
-          .get<{ownerUserId: string; name: string}>("ownership")) ?? null
+          .get<{ownerUserId: string; name: string; parentAgentId?: string}>(
+            "ownership",
+          )) ?? null
       );
     },
     *setTools(tools) {
@@ -571,11 +660,14 @@ function agentKey(): string {
 function* requireOwner(): restate.Operation<{
   ownerUserId: string;
   name: string;
+  parentAgentId?: string;
 }> {
   yield* requireNotDeleted();
   const owner = yield* restate
     .sharedState()
-    .get<{ownerUserId: string; name: string}>("ownership");
+    .get<{ownerUserId: string; name: string; parentAgentId?: string}>(
+      "ownership",
+    );
   if (!owner)
     throw new TerminalError(
       "Create this agent through its user account first",

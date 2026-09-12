@@ -1,8 +1,18 @@
 "use client";
 import type {McpServer, UserProfile} from "@restate-agents/types";
-import {Check, LogOut, Plug, Plus, Trash2, X} from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  LogOut,
+  Plug,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {App} from "./app";
+import {agentSubtree, agentTree} from "./agent-tree";
 import {MCP_SERVER_PRESETS} from "./mcp-presets";
 import {useAgentInbox} from "./use-agent-inbox";
 import {useWorkspace, WorkspaceCacheContext} from "./use-workspace";
@@ -24,6 +34,7 @@ export function UserWorkspace({
   const [creating, setCreating] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [deleting, setDeleting] = useState<string>();
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const refreshVersion = useRef(0);
@@ -46,7 +57,29 @@ export function UserWorkspace({
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
+  useEffect(() => {
+    // Also reveal children selected through browser back/forward navigation.
+    if (selected)
+      setCollapsed((previous) => {
+        const next = new Set(
+          [...previous].filter(
+            (parent) => !agentSubtree(profile.agents, parent).has(selected),
+          ),
+        );
+        return next.size === previous.size ? previous : next;
+      });
+  }, [selected, profile.agents]);
   function select(id?: string) {
+    // A direct child link/navigation should reveal its row even in a folded tree.
+    if (id)
+      setCollapsed(
+        (previous) =>
+          new Set(
+            [...previous].filter(
+              (parent) => !agentSubtree(profile.agents, parent).has(id),
+            ),
+          ),
+      );
     setSelected(id);
     const url = new URL(window.location.href);
     if (id) url.searchParams.set("agent", id);
@@ -58,7 +91,7 @@ export function UserWorkspace({
     if (
       deleting ||
       !window.confirm(
-        `Delete “${agentName}”?\n\nThis removes the agent, stops its work, cancels its schedules and deletes its sandbox files. Your shared connections are kept. Conversation records remain stored internally; this is not a permanent data purge.`,
+        `Delete “${agentName}” and all its sub-agents?\n\nThis removes the entire subtree, stops their work, cancels their schedules and deletes their sandbox files. Your shared connections and memories are kept. Conversation records remain stored internally; this is not a permanent data purge.`,
       )
     )
       return;
@@ -68,11 +101,12 @@ export function UserWorkspace({
       await userClient.deleteAgent(agentId);
       ++refreshVersion.current; // Ignore profile reads started before deletion.
       const current = cache.getSnapshot().profile;
+      const removed = agentSubtree(current.agents, agentId);
       cache.setProfile({
         ...current,
-        agents: current.agents.filter((a) => a.agentId !== agentId),
+        agents: current.agents.filter((a) => !removed.has(a.agentId)),
       });
-      if (selectedRef.current === agentId) select();
+      if (selectedRef.current && removed.has(selectedRef.current)) select();
     } catch (error) {
       setError(String(error));
     } finally {
@@ -93,52 +127,88 @@ export function UserWorkspace({
               <span className="agent-count">{profile.agents.length}</span>
             </div>
             <nav aria-label="Your agents">
-              {profile.agents.map((agent) => (
-                <div
-                  className="agent-list-row"
-                  key={agent.agentId}
-                  data-active={selected === agent.agentId}
-                >
-                  <button
-                    type="button"
-                    className="agent-select"
+              {agentTree(profile.agents, collapsed).map(
+                ({agent, depth, children}) => (
+                  <div
+                    className="agent-list-row"
+                    key={agent.agentId}
                     data-active={selected === agent.agentId}
-                    data-unread={unread.has(agent.agentId)}
-                    aria-label={
-                      unread.has(agent.agentId)
-                        ? `${agent.name} — new response`
-                        : agent.name
-                    }
-                    title={
-                      unread.has(agent.agentId)
-                        ? "Turn finished — new response"
-                        : agent.name
-                    }
-                    onClick={() => select(agent.agentId)}
+                    style={{marginLeft: Math.min(depth, 8) * 16}}
                   >
-                    <span className="agent-avatar" aria-hidden="true">
-                      🤖
-                    </span>
-                    <span className="agent-name">{agent.name}</span>
-                    {unread.has(agent.agentId) && (
-                      <span className="agent-unread-badge" aria-hidden="true">
-                        <span className="agent-unread-dot" />
-                        New
-                      </span>
+                    {children.length > 0 && (
+                      <button
+                        type="button"
+                        className="agent-tree-toggle"
+                        aria-label={`${collapsed.has(agent.agentId) ? "Expand" : "Collapse"} ${agent.name} sub-agents`}
+                        aria-expanded={!collapsed.has(agent.agentId)}
+                        title={
+                          children.some((id) => unread.has(id))
+                            ? "Sub-agent has a new response"
+                            : "Show or hide sub-agents"
+                        }
+                        data-unread={children.some((id) => unread.has(id))}
+                        onClick={() =>
+                          setCollapsed((previous) => {
+                            const next = new Set(previous);
+                            if (next.has(agent.agentId))
+                              next.delete(agent.agentId);
+                            else next.add(agent.agentId);
+                            return next;
+                          })
+                        }
+                      >
+                        {collapsed.has(agent.agentId) ? (
+                          <ChevronRight size={14} />
+                        ) : (
+                          <ChevronDown size={14} />
+                        )}
+                      </button>
                     )}
-                  </button>
-                  <button
-                    type="button"
-                    className="agent-delete"
-                    aria-label={`Delete ${agent.name}`}
-                    title={`Delete ${agent.name}`}
-                    disabled={deleting !== undefined}
-                    onClick={() => void deleteAgent(agent.agentId, agent.name)}
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              ))}
+                    <button
+                      type="button"
+                      className="agent-select"
+                      data-active={selected === agent.agentId}
+                      data-unread={unread.has(agent.agentId)}
+                      aria-label={
+                        unread.has(agent.agentId)
+                          ? `${agent.name} — new response`
+                          : agent.name
+                      }
+                      title={
+                        unread.has(agent.agentId)
+                          ? "Turn finished — new response"
+                          : agent.name
+                      }
+                      onClick={() => select(agent.agentId)}
+                    >
+                      <span className="agent-avatar" aria-hidden="true">
+                        🤖
+                        {unread.has(agent.agentId) && (
+                          <span className="agent-unread-dot" />
+                        )}
+                      </span>
+                      <span className="agent-name">
+                        {agent.name}
+                        {agent.parentAgentId && (
+                          <small className="sub-agent-label">Sub-agent</small>
+                        )}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="agent-delete"
+                      aria-label={`Delete ${agent.name}`}
+                      title={`Delete ${agent.name}`}
+                      disabled={deleting !== undefined}
+                      onClick={() =>
+                        void deleteAgent(agent.agentId, agent.name)
+                      }
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ),
+              )}
             </nav>
             {unavailable && (
               <small role="status" className="agent-notification-warning">

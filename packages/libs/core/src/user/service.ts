@@ -89,6 +89,60 @@ export const User = restate.implement(UserDefinition, {
       yield* notifyUser();
       return agent;
     },
+    *createSubAgent({agent, profile, initialMessage}) {
+      // Never call the parent while holding User: Agent -> User -> parent
+      // would deadlock. The parent handler already checked its active Turn.
+      yield* requireAgent(agent.parentAgentId);
+      if (yield* restate.state().get<boolean>(`deleted-agent:${agent.agentId}`))
+        throw new TerminalError("Agent has been deleted", {errorCode: 410});
+      const list = yield* agents();
+      const existing = list.find((a) => a.agentId === agent.agentId);
+      if (existing) {
+        if (existing.parentAgentId !== agent.parentAgentId)
+          throw new TerminalError("Agent parent cannot be reassigned", {
+            errorCode: 409,
+          });
+        return existing;
+      }
+      if (list.find((a) => a.agentId === agent.parentAgentId)?.parentAgentId)
+        throw new TerminalError("Nested sub-agents are not supported yet", {
+          errorCode: 403,
+        });
+      if (list.length >= 100)
+        throw new TerminalError("Limit of 100 agents reached", {
+          errorCode: 400,
+        });
+      yield* restate.client(AgentDefinition, agent.agentId).initialize({
+        ownerUserId: key(),
+        name: agent.name,
+        parentAgentId: agent.parentAgentId,
+        profile,
+      });
+      restate.state().set("agents", [...list, agent]);
+      // Send rather than wait: child's ask reads this User's credentials.
+      if (initialMessage)
+        yield* restate
+          .sendClient(AgentDefinition, agent.agentId)
+          .ask({message: initialMessage});
+      yield* notifyUser();
+      return agent;
+    },
+    *deleteSubAgent({parentAgentId, agentId}) {
+      yield* requireAgent(parentAgentId);
+      const child = (yield* agents()).find((a) => a.agentId === agentId);
+      if (!child) return false;
+      if (child.parentAgentId !== parentAgentId)
+        throw new TerminalError("Agent is not a direct child of this parent", {
+          errorCode: 403,
+        });
+      return yield* deleteAgentTree(agentId);
+    },
+    *listSubAgents({parentAgentId}) {
+      yield* requireAgent(parentAgentId);
+      return (yield* agents()).filter(
+        (agent) => agent.parentAgentId === parentAgentId,
+      );
+    },
     *ownsAgent({agentId}) {
       return (yield* agents()).some((agent) => agent.agentId === agentId);
     },
@@ -99,29 +153,7 @@ export const User = restate.implement(UserDefinition, {
       return result;
     },
     *deleteAgent({agentId}) {
-      const list = yield* agents();
-      if (!list.some((agent) => agent.agentId === agentId)) return false;
-      restate.state().set(`deleted-agent:${agentId}`, true);
-      restate.state().set(
-        "agents",
-        list.filter((agent) => agent.agentId !== agentId),
-      );
-      // Durable one-way cleanup avoids a User -> Agent -> User lock cycle.
-      yield* restate
-        .sendClient(AgentDefinition, agentId)
-        .retire({ownerUserId: key()});
-      const pending = yield* authorizations();
-      for (const auth of pending) {
-        auth.waiters = auth.waiters.filter(
-          (waiter) => waiter.agentId !== agentId,
-        );
-      }
-      restate.state().set(
-        "authorizations",
-        pending.filter((auth) => auth.manual || auth.waiters.length > 0),
-      );
-      yield* notifyUser();
-      return true;
+      return yield* deleteAgentTree(agentId);
     },
     *connections() {
       return (yield* connections()).map(publicConnection);
@@ -176,6 +208,11 @@ export const User = restate.implement(UserDefinition, {
       // this User. Explicit per-agent selections (including empty/off) win.
       const grants: AgentTools["mcp"] = list
         .filter((c) => c.server.auth.type === "none" || Boolean(c.credential))
+        .filter(
+          (c) =>
+            tools.mcpDefault !== "disabled" ||
+            tools.mcp.some((g) => g.connectionId === c.server.id),
+        )
         .map(
           (c) =>
             tools.mcp.find((g) => g.connectionId === c.server.id) ?? {
@@ -399,6 +436,35 @@ function key(): string {
 }
 function* agents(): restate.Operation<UserAgent[]> {
   return (yield* restate.sharedState().get<UserAgent[]>("agents")) ?? [];
+}
+function* deleteAgentTree(agentId: string): restate.Operation<boolean> {
+  const list = yield* agents();
+  if (!list.some((a) => a.agentId === agentId)) return false;
+  const removed = new Set([agentId]);
+  for (let size = 0; size !== removed.size; ) {
+    size = removed.size;
+    for (const agent of list)
+      if (agent.parentAgentId && removed.has(agent.parentAgentId))
+        removed.add(agent.agentId);
+  }
+  for (const id of removed) restate.state().set(`deleted-agent:${id}`, true);
+  restate.state().set(
+    "agents",
+    list.filter((a) => !removed.has(a.agentId)),
+  );
+  // One-way cleanup stops each Turn, schedules and private sandbox without
+  // holding User's lock while waiting on agents that may call back into User.
+  for (const id of removed)
+    yield* restate.sendClient(AgentDefinition, id).retire({ownerUserId: key()});
+  const pending = yield* authorizations();
+  for (const auth of pending)
+    auth.waiters = auth.waiters.filter((w) => !removed.has(w.agentId));
+  restate.state().set(
+    "authorizations",
+    pending.filter((a) => a.manual || a.waiters.length > 0),
+  );
+  yield* notifyUser();
+  return true;
 }
 function* connections(): restate.Operation<Connection[]> {
   return (yield* restate.sharedState().get<Connection[]>("connections")) ?? [];

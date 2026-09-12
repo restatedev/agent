@@ -35,6 +35,43 @@ correct, or forget something. Deleting an agent does not delete user memories.
 Old agent-local memory state is left untouched but is not automatically migrated
 or injected into new turns.
 
+## Sub-agents
+
+A child is a normal agent owned by the same user, with immutable `parentAgentId`
+in its ownership state and the User's directory. It has its own AgentSession,
+schedules, approvals, and sandbox keyed by its new ID. The sidebar nests children
+under their parent, supports collapsing, and keeps per-agent unread state and
+conversation caches. Sub-agents are not a new authorization principal.
+
+`createSubAgent` inherits a creation-time copy of the parent's instructions,
+guardrails and active-turn tool grants. Additional guardrails cannot replace
+inherited IDs, tool access can only narrow, and disabled web search cannot be
+enabled by the tool. Parent configuration edits do not propagate afterward.
+The user may edit a child's configuration normally. Children share the owner's
+memories and authorized credentials through the existing User snapshot, not
+through copies of secrets in their profile. Their MCP grants use
+`mcpDefault: "disabled"`, so newly connected services require explicit opt-in;
+ordinary agents retain default-on authorized connections. Revoked connections
+remain unavailable. Child creation is currently limited to one level.
+
+The Agent derives owner and parent IDs from durable ownership, checks its active
+turn/tool permission, then calls that owner's User object. User checks parent
+membership, initializes the child before exposing it, and optionally sends its
+first task without waiting for completion. No parent lock is reacquired from
+User, and child initialization does not call User. Creation/deletion publishes
+the existing user-level profile notification; the BFF's ownership checks apply
+to children exactly as to other agents.
+
+Deleting any agent from the UI deletes all its descendants. The parent can also
+call `deleteSubAgent`, limited to its own direct children and their subtrees—not
+siblings, unrelated agents, itself, or another user's agents. User serializes
+directory removal with creation, tombstones every removed ID, removes pending
+authorization waiters and durably sends retirement to each agent. Cleanup is
+asynchronous: turns interrupt, schedules cancel, and borrowed sandboxes are
+destroyed after release. Completed deletion cannot be undone by a delayed create
+retry. Shared user credentials and memories survive. Conversation records remain
+internally; this operation is not a data-purge API.
+
 ## Google setup
 
 1. Create a Google OAuth client of type **Web application** and configure its

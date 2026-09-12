@@ -96,6 +96,9 @@ of the model contract, not cosmetic documentation.
 | `humanApproval` | Signal-backed human decision | Pending |
 | `cancelOperation` | Cancel one pending operation by ID | Foreground control |
 | `manageMemory` | Atomically set or delete shared user memories | Foreground Agent → User RPC |
+| `createSubAgent` | Create a persistent child with inherited configuration and optional first task | Foreground Agent → User RPC |
+| `listSubAgents` | Find existing direct children by name, ID and link | Foreground Agent → User RPC |
+| `deleteSubAgent` | Delete a direct child's entire subtree | Foreground Agent → User RPC |
 | `scheduleMessage` | Create or replace a per-Agent durable schedule | Foreground AgentScheduler RPC |
 | `cancelSchedule` | Idempotently cancel a schedule | Foreground AgentScheduler RPC |
 | `listSchedules` | Read active schedules for this Agent | Foreground AgentScheduler RPC |
@@ -104,6 +107,34 @@ of the model contract, not cosmetic documentation.
 | `writeFile` | Replace a UTF-8 sandbox file | Foreground sandbox operation |
 | `executeCommand` | Run one shell command to completion | Foreground sandbox operation |
 | `executeProgram` | Coordinate tools in JavaScript and return a compact result | Foreground, with supervised child calls |
+
+## Sub-agents
+
+`createSubAgent` accepts `name`, plus nullable `instructions`, `guardrails`,
+`tools`, `webSearchEnabled`, and `initialMessage`. Use `null` to inherit
+configuration or omit a first task. Instructions and guardrails are additive;
+tool selections can only narrow the parent's active turn grants. Guardrail IDs
+cannot replace inherited rules. The child gets a separate sandbox and empty
+conversation, so its first task must be self-contained. Parent history and
+files are not copied. Existing tool policy enforcement applies both directly
+and through `executeProgram`.
+
+Creation returns `{agentId, name, parentAgentId, url, taskSubmitted}`. The first
+task is sent asynchronously: this is not a join/wait tool and does not deliver
+results to the parent automatically. Child IDs derive from the parent, user,
+turn and tool-call ID, making retries idempotent. A new tool call creates a new
+child. This version allows one level of children and at most 100 agents per user.
+
+`listSubAgents({})` returns the caller's direct children with links, without
+reading their conversations or credentials. Use it to resolve an existing
+child's ID rather than guessing or recreating it in a later turn.
+
+`deleteSubAgent({agentId})` accepts only the calling agent's direct children.
+It removes the child's entire subtree, durably retires turns, schedules and
+sandboxes, and preserves shared user credentials/memories. History remains
+internally; deletion is not a permanent data purge. Use only for user-authorized
+deletion. All three handlers reject stale or interrupting turns. See
+[sub-agent ownership](user-identity.md#sub-agents).
 
 ## Web search
 

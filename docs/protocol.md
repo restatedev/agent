@@ -408,6 +408,9 @@ These are ingress-visible for inspection but are not normal client operations.
 | Handler | Caller | Purpose |
 | --- | --- | --- |
 | `updateMemory` | `manageMemory` tool | Validate active turn and forward a shared memory batch to its owning User |
+| `createSubAgent` | `createSubAgent` tool | Validate active turn, inherit/restrict configuration, and register a child through its owning User |
+| `listSubAgents` | `listSubAgents` tool | Validate active turn and list only this agent's direct children through User |
+| `deleteSubAgent` | `deleteSubAgent` tool | Validate active turn and ask User to delete a direct child's subtree |
 | `requestApproval` | tool or policy gate | Register a pending request for the active turn |
 | `cancelApproval` | interrupted waiter | Remove abandoned approval state |
 | `requestMcpAuthorization` | MCP discovery or tool invocation | Register or coalesce a pending OAuth/bearer action |

@@ -66,6 +66,9 @@ export const ToolSelectionSchema = z.discriminatedUnion("mode", [
 ]);
 export type ToolSelection = z.infer<typeof ToolSelectionSchema>;
 export const AgentToolsSchema = z.object({
+  // Omission preserves ordinary agents' automatic authorized-connector access.
+  // Sub-agents pin their creation-time connector grants instead.
+  mcpDefault: z.enum(["authorized", "disabled"]).optional(),
   builtin: ToolSelectionSchema,
   dynamic: ToolSelectionSchema,
   // Profile entries are overrides. At turn start User resolves omitted,
@@ -98,10 +101,12 @@ export type UserIdentity = z.infer<typeof UserIdentitySchema>;
 export const AgentOwnershipSchema = z.object({
   ownerUserId: z.string().min(1),
   name: z.string().trim().min(1).max(100),
+  parentAgentId: z.string().min(1).optional(),
 });
 export const UserAgentSchema = z.object({
   agentId: z.string().min(1),
   name: z.string().trim().min(1).max(100),
+  parentAgentId: z.string().min(1).optional(),
 });
 export type UserAgent = z.infer<typeof UserAgentSchema>;
 export const ToolDescriptorSchema = z.object({
@@ -556,6 +561,53 @@ export const AgentProfileSchema = z.object({
   webSearchEnabled: z.boolean().default(true),
 });
 export type AgentProfile = z.infer<typeof AgentProfileSchema>;
+
+export const AgentInitializationSchema = AgentOwnershipSchema.extend({
+  profile: AgentProfileSchema.optional(),
+});
+export const SubAgentConfigSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  instructions: z
+    .string()
+    .trim()
+    .min(1)
+    .max(16000)
+    .nullable()
+    .describe(
+      "Additional task-specific instructions, or null to inherit only.",
+    ),
+  guardrails: z
+    .array(GuardrailSchema)
+    .max(32)
+    .nullable()
+    .describe(
+      "Additional guardrails; inherited guardrails cannot be removed or replaced. Null inherits only.",
+    ),
+  tools: AgentToolsSchema.nullable().describe(
+    "Null inherits the parent's current access. Otherwise supply a complete, narrower selection. Dynamic names use service/handler IDs, MCP names use remote tool names. Omitted MCP connections are disabled.",
+  ),
+  webSearchEnabled: z
+    .boolean()
+    .nullable()
+    .describe(
+      "Null inherits; false disables web search. Cannot enable it if the parent has disabled it.",
+    ),
+  initialMessage: z
+    .string()
+    .trim()
+    .min(1)
+    .max(16000)
+    .nullable()
+    .describe(
+      "Optional first task to start asynchronously, or null to create an idle agent.",
+    ),
+});
+export type SubAgentConfig = z.infer<typeof SubAgentConfigSchema>;
+export const UserCreateSubAgentSchema = z.object({
+  agent: UserAgentSchema.extend({parentAgentId: z.string().min(1)}),
+  profile: AgentProfileSchema,
+  initialMessage: z.string().nullable(),
+});
 
 export const SetWebSearchEnabledSchema = z.object({enabled: z.boolean()});
 
