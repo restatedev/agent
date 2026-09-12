@@ -128,10 +128,7 @@ export function* fire(scheduleId: string): restate.Operation<void> {
     : undefined;
   const directory = yield* agents();
   if (active) schedule.skippedRuns++;
-  else if (directory.length >= 100) {
-    schedule.lastError =
-      "Agent limit reached. Delete old run conversations to allow new runs.";
-  } else {
+  else {
     // Stable per durable occurrence, including retries/replays.
     const agentId = createHash("sha256")
       .update(JSON.stringify(["schedule-run", key(), scheduleId, occurrenceId]))

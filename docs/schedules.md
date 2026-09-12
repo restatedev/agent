@@ -64,10 +64,8 @@ follow-up turns do not block future scheduled occurrences.
 - Deleting the agent that created a schedule does not delete the schedule.
 - Replacing or deleting/recreating a schedule does not bypass overlap checks.
 
-Limits: 32 schedule definitions and the existing 100-agent directory limit.
-At the agent limit, the occurrence records a visible scheduling error; recurring
-schedules try again on their next delayed invocation. Old conversations are
-not automatically deleted. The former per-agent `AgentScheduler` service and
+There is a limit of 32 schedule definitions, but no fixed agent-count cap.
+Old run conversations are not automatically deleted. The former per-agent `AgentScheduler` service and
 `scheduleMessage` tool are removed; old schedule state is not migrated. Deploy
 the core service and BFF together, with old delayed work drained/cancelled or
 fresh development state before upgrading.

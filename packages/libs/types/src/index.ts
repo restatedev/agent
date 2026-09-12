@@ -709,17 +709,15 @@ export const WorkspaceSyncRequestSchema = z
     authorization: z.string().max(48_000).optional(),
     revision: z.number().int().nonnegative().nullable(),
     profileRevision: z.number().int().nonnegative().nullable(),
-    agents: z
-      .array(
-        z
-          .object({
-            agentId: z.string().min(1).max(256),
-            notification: AgentNotificationSnapshotSchema.optional(),
-            nextSequence: z.number().int().min(1),
-          })
-          .strict(),
-      )
-      .max(100),
+    agents: z.array(
+      z
+        .object({
+          agentId: z.string().min(1).max(256),
+          notification: AgentNotificationSnapshotSchema.optional(),
+          nextSequence: z.number().int().min(1),
+        })
+        .strict(),
+    ),
   })
   .strict();
 export type WorkspaceSyncRequest = z.infer<typeof WorkspaceSyncRequestSchema>;

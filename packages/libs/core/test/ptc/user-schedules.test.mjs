@@ -9,6 +9,17 @@ const spec = {scheduleId: "news", name: "Daily news", message: "Summarize news",
 const profile = {guardrails: [], tools, webSearchEnabled: true};
 const initial = () => ({identity: {userId: "alice"}, agents: [], "user-schedules": [{schedule: {...spec, nextRunAt: 1, skippedRuns: 0}, profile, invocationId: "inv-test"}]});
 
+test("ordinary agents, sub-agents and scheduled runs can grow a directory past 100 agents", async () => {
+  const directory = Array.from({length: 100}, (_, i) => ({agentId: `existing-${i}`, name: "Existing"}));
+  const f = context("alice", {...initial(), agents: directory}, () => {});
+  await f.invoke(User.object.createAgent, {agentId: "new", name: "New"});
+  await f.invoke(User.object.createSubAgent, {agent: {agentId: "child", name: "Child", parentAgentId: "new"}, profile});
+  await f.invoke(User.object.fireSchedule, {scheduleId: "news"});
+  assert.equal(f.state.get("agents").length, 103);
+  assert.equal(f.state.get("agents")[102].scheduleRun.status, "running");
+  assert.equal(f.state.get("user-schedules")[0].schedule.lastError, undefined);
+});
+
 test("user schedule uses a delayed Restate self-send; replacing cancels the prior invocation", async () => {
   const f = context("alice", {identity: {userId: "alice"}});
   await f.invoke(User.object.upsertSchedule, spec);

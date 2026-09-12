@@ -101,10 +101,6 @@ export const User = restate.implement(UserDefinition, {
       const list = yield* agents();
       const existing = list.find((item) => item.agentId === agent.agentId);
       if (existing) return existing;
-      if (list.length >= 100)
-        throw new TerminalError("Limit of 100 agents reached", {
-          errorCode: 400,
-        });
       // initialize never calls back into User; ownership is immutable.
       yield* restate
         .client(AgentDefinition, agent.agentId)
@@ -131,10 +127,6 @@ export const User = restate.implement(UserDefinition, {
       if (list.find((a) => a.agentId === agent.parentAgentId)?.parentAgentId)
         throw new TerminalError("Nested sub-agents are not supported yet", {
           errorCode: 403,
-        });
-      if (list.length >= 100)
-        throw new TerminalError("Limit of 100 agents reached", {
-          errorCode: 400,
         });
       yield* restate.client(AgentDefinition, agent.agentId).initialize({
         ownerUserId: key(),

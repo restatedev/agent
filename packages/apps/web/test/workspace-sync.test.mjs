@@ -39,10 +39,11 @@ function fixture() {
   return f;
 }
 
-test("sync rejects caller-selected identities, malformed cursors, and oversized agent lists", () => {
-  for (const input of [{...cursor(), userId: "bob"}, {...cursor(), revision: -1}, cursor(Array.from({length: 101}, (_, i) => String(i)))]) {
+test("sync rejects caller-selected identities and malformed cursors, but allows more than 100 agents", () => {
+  for (const input of [{...cursor(), userId: "bob"}, {...cursor(), revision: -1}]) {
     assert.equal(WorkspaceSyncRequestSchema.safeParse(input).success, false);
   }
+  assert.equal(WorkspaceSyncRequestSchema.safeParse(cursor(Array.from({length: 101}, (_, i) => String(i)))).success, true);
 });
 test("unauthenticated sync does not read notifications or session data", async () => {
   const f = fixture();

@@ -190,7 +190,6 @@ test("User rejects foreign parents, grandchildren, conflicting parents and resur
     [{agents: directory}, {...request, agent: {...child, agentId: "new", parentAgentId: "child"}}, /Nested/],
     [{agents: directory}, {...request, agent: {...child, parentAgentId: "other"}}, /reassigned/],
     [{agents: [directory[0]], "deleted-agent:child": true}, request, /deleted/],
-    [{agents: [directory[0], ...Array.from({length: 99}, (_, i) => ({agentId: `a${i}`, name: "A"}))]}, request, /100 agents/],
   ]) {
     const f = context("alice", state);
     await assert.rejects(f.invoke(User.object.createSubAgent, input), error);

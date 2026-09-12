@@ -164,7 +164,7 @@ Failures, stopped turns and interruptions return recoverable tool errors.
 With `initialMessage: null`, creation returns an idle child's ID/name/link.
 Child IDs derive from the parent, user,
 turn and tool-call ID, making retries idempotent. A new tool call creates a new
-child. This version allows one level of children and at most 100 agents per user.
+child. This version allows one level of children, with no fixed agent-count cap per user.
 
 `messageSubAgent({agentId, message})` uses the same wait/result path while keeping
 the child's conversation and sandbox. A busy child rejects overlapping tasks;
