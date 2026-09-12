@@ -16,6 +16,30 @@ const agentState = {ownership: {ownerUserId: "alice", name: "Parent"}, turn: {id
 const child = {agentId: "child", name: "Research", parentAgentId: "parent"};
 const directory = [{agentId: "parent", name: "Parent"}, child, {agentId: "grandchild", name: "Grandchild", parentAgentId: "child"}, {agentId: "other", name: "Other"}];
 
+test("createSubAgent advertises strict-compatible nested tool selections", () => {
+  const manifest = agentTools.manifests([], [], {webSearchEnabled: false, permissions: grants}).find(m => m.name === "createSubAgent");
+  assert.equal(manifest.strict, true);
+  const tools = manifest.inputSchema.properties.tools.anyOf.find(s => s.type === "object");
+  assert.equal(Object.hasOwn(tools.properties, "mcpDefault"), false);
+  for (const selection of [tools.properties.builtin, tools.properties.dynamic, tools.properties.mcp.items.properties.tools]) {
+    assert.equal(selection.anyOf.length, 2);
+    assert.deepEqual(selection.anyOf.map(s => s.properties.mode.const), ["all", "selected"]);
+  }
+  function check(schema) {
+    if (!schema || typeof schema !== "object") return;
+    assert.equal(Object.hasOwn(schema, "oneOf"), false);
+    if (schema.type === "object") {
+      assert.equal(schema.additionalProperties, false);
+      assert.deepEqual([...(schema.required ?? [])].sort(), Object.keys(schema.properties ?? {}).sort());
+    }
+    for (const value of Object.values(schema)) {
+      if (Array.isArray(value)) value.forEach(check);
+      else check(value);
+    }
+  }
+  check(manifest.inputSchema);
+});
+
 test("sub-agent inherits a copy of policy and current access, not future connections or recursion", () => {
   const result = subAgentProfile(profile, grants, {...config, instructions: "Research the weather"}, builtins);
   assert.equal(result.instructions, "Be concise\n\n[Sub-agent task instructions]\nResearch the weather");

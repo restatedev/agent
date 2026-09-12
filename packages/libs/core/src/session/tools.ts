@@ -7,6 +7,7 @@
 import {setTimeout} from "node:timers/promises";
 import {
   type AgentTools,
+  AgentToolsSchema,
   type ApprovalDecision,
   type ConversationEntry,
   type McpServer,
@@ -14,6 +15,7 @@ import {
   ScheduleIdRequestSchema,
   ScheduleSpecSchema,
   SubAgentConfigSchema,
+  ToolSelectionSchema,
 } from "@restate-agents/types";
 import {AgentSchedulerDefinition} from "@restate-agents/types/services";
 import {CancelledError} from "@restatedev/restate-sdk";
@@ -722,11 +724,41 @@ const cancelOperationTool = defineAgentTool({
   },
 });
 
+// Profile schemas are not necessarily valid strict model schemas. A regular
+// union emits anyOf (supported by OpenAI); the distinct mode literals still
+// make the choices exclusive. mcpDefault is set by the runtime, not the model.
+const subAgentToolSelectionSchema = z.union(ToolSelectionSchema.options);
+const subAgentToolConfigSchema = SubAgentConfigSchema.extend({
+  tools: AgentToolsSchema.omit({mcpDefault: true})
+    .extend({
+      builtin: subAgentToolSelectionSchema,
+      dynamic: subAgentToolSelectionSchema,
+      mcp: z
+        .array(
+          AgentToolsSchema.shape.mcp.element.extend({
+            tools: subAgentToolSelectionSchema,
+          }),
+        )
+        .max(32)
+        .refine(
+          (items) =>
+            new Set(items.map((item) => item.connectionId)).size ===
+            items.length,
+          "Connection IDs must be unique",
+        ),
+    })
+    .nullable()
+    .describe(
+      SubAgentConfigSchema.shape.tools.description ??
+        "A complete, narrower tool selection, or null to inherit current access.",
+    ),
+});
+
 const createSubAgentTool = defineAgentTool({
   name: "createSubAgent",
   description:
     "Create a persistent sub-agent under this agent, visible in the user's sidebar. It gets its own conversation and separate sandbox/files, and shares the same user's credentials and memories. Instructions, guardrails and current tool access are inherited at creation; you may add instructions/guardrails or narrow tools, never broaden access. Supply initialMessage to start its task asynchronously, or null to leave it idle. Returns the child ID/link, not its result. You do not wait for it, receive its results automatically, or share files. Do not claim it finished. Children cannot create further sub-agents. Use only when a separate agent is useful or requested; do not create duplicates.",
-  inputSchema: SubAgentConfigSchema,
+  inputSchema: subAgentToolConfigSchema,
   summarize: ({name}) => `Created sub-agent: ${name}`,
   *run(config, context): restate.Operation<ToolExecution> {
     const agent = yield* restate.client(Agent, context.agentId).createSubAgent({
