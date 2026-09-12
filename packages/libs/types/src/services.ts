@@ -45,6 +45,7 @@ import {
   McpTurnCredentialSchema,
   MemoryChangeSchema,
   MemoryEntrySchema,
+  MemoryKeyRequestSchema,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
   MessageSchema,
@@ -292,6 +293,10 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
 
 /** Private per-user account, agent directory, shared memories and MCP credentials. */
 export const UserDefinition = iface.object("User", {
+  deleteMemory: iface.schemas({
+    input: MemoryKeyRequestSchema,
+    output: z.boolean(),
+  }),
   upsertSchedule: iface.schemas({
     input: UserScheduleSpecSchema,
     output: UserScheduleSchema,

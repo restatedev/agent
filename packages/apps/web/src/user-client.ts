@@ -23,6 +23,7 @@ export const userClient = {
       {signal},
     ),
   profile: () => request<UserProfile>("/api/user/profile"),
+  deleteMemory: (key: string) => write<boolean>("delete-memory", {key}),
   upsertSchedule: (spec: UserScheduleSpec) =>
     write<UserSchedule>("schedule", spec),
   cancelSchedule: (scheduleId: string) =>

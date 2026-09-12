@@ -2,6 +2,7 @@
 import type {McpServer, UserProfile} from "@restate-agents/types";
 import {
   AlarmClock,
+  Brain,
   Check,
   ChevronDown,
   ChevronRight,
@@ -20,6 +21,7 @@ import {useWorkspace, WorkspaceCacheContext} from "./use-workspace";
 import {userClient} from "./user-client";
 import {UserContext, useUser} from "./user-context";
 import {UserSchedules} from "./user-schedules";
+import {UserMemories} from "./user-memories";
 
 export function UserWorkspace({
   initialUser,
@@ -29,7 +31,9 @@ export function UserWorkspace({
   initialAgentId?: string;
 }) {
   const [selected, setSelected] = useState<string>();
-  const [page, setPage] = useState<"profile" | "schedules">("profile");
+  const [page, setPage] = useState<"profile" | "schedules" | "memories">(
+    "profile",
+  );
   const [selectionReady, setSelectionReady] = useState(false);
   const selectionKey = `restate:selected-agent:${initialUser.identity.userId}`;
   const {cache, state} = useWorkspace(initialUser, selected);
@@ -63,7 +67,13 @@ export function UserWorkspace({
     }
     // Links and OAuth returns are one-time entry points, not navigation state.
     const requested = initialAgentId ?? remembered;
-    setPage(requested === ":schedules" ? "schedules" : "profile");
+    setPage(
+      requested === ":schedules"
+        ? "schedules"
+        : requested === ":memories"
+          ? "memories"
+          : "profile",
+    );
     setSelected(
       initialUser.agents.some((a) => a.agentId === requested)
         ? (requested ?? undefined)
@@ -83,8 +93,8 @@ export function UserWorkspace({
     try {
       if (selected && owned)
         window.sessionStorage.setItem(selectionKey, selected);
-      else if (page === "schedules")
-        window.sessionStorage.setItem(selectionKey, ":schedules");
+      else if (page !== "profile")
+        window.sessionStorage.setItem(selectionKey, `:${page}`);
       else window.sessionStorage.removeItem(selectionKey);
     } catch {
       // Selection still works in memory when browser storage is unavailable.
@@ -349,6 +359,17 @@ export function UserWorkspace({
             </button>
             <button
               type="button"
+              className="button ghost small user-profile-link"
+              data-active={!selected && page === "memories"}
+              onClick={() => {
+                setSelected(undefined);
+                setPage("memories");
+              }}
+            >
+              <Brain /> Memories
+            </button>
+            <button
+              type="button"
               className="button ghost small"
               data-active={!selected && page === "schedules"}
               onClick={() => {
@@ -411,6 +432,8 @@ export function UserWorkspace({
                   <h1>Agent not found</h1>
                   <p>Select one of your agents from the sidebar.</p>
                 </div>
+              ) : page === "memories" ? (
+                <UserMemories />
               ) : page === "schedules" ? (
                 <UserSchedules
                   onOpenAgent={select}
@@ -418,7 +441,9 @@ export function UserWorkspace({
                   unread={unread}
                 />
               ) : (
-                <ProfileAndConnectors />
+                <ProfileAndConnectors
+                  onOpenMemories={() => setPage("memories")}
+                />
               ))}
           </div>
         </div>
@@ -427,7 +452,7 @@ export function UserWorkspace({
   );
 }
 
-function ProfileAndConnectors() {
+function ProfileAndConnectors({onOpenMemories}: {onOpenMemories: () => void}) {
   const {profile, refresh} = useUser();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -481,32 +506,16 @@ function ProfileAndConnectors() {
       <p className="eyebrow">Your account</p>
       <h1>Profile &amp; connectors</h1>
       <p>
-        Manage shared memories and authorize accounts, then choose which tools
-        each agent may use. Disconnecting here revokes access for all your
-        agents.
+        Authorize accounts, then choose which tools each agent may use.
+        Disconnecting here revokes access for all your agents.
       </p>
-      <details className="user-memories">
-        <summary>
-          🧠 Memories <span>({profile.memories.length})</span>
-        </summary>
-        <p className="section-copy">
-          Shared across all your agents. Useful preferences, projects and
-          context are remembered selectively. Ask any agent to remember, correct
-          or forget something.
-        </p>
-        {profile.memories.length ? (
-          <div className="memory-list">
-            {profile.memories.map((memory) => (
-              <div className="memory-row" key={memory.key}>
-                <code>{memory.key}</code>
-                <span>{memory.content}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="empty-copy">Nothing remembered yet.</p>
-        )}
-      </details>
+      <button
+        type="button"
+        className="button secondary small"
+        onClick={onOpenMemories}
+      >
+        <Brain /> Manage memories ({profile.memories.length})
+      </button>
       {notice && <p role="status">{notice}</p>}
       {error && (
         <p className="inline-error" role="alert">

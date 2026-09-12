@@ -165,6 +165,13 @@ export const User = restate.implement(UserDefinition, {
       if (result.applied) yield* notifyUser();
       return result;
     },
+    *deleteMemory({key}) {
+      if (!(yield* memory.read()).some((entry) => entry.key === key))
+        return false;
+      yield* memory.apply([{operation: "delete", key}]);
+      yield* notifyUser();
+      return true;
+    },
     *deleteAgent({agentId}) {
       if (
         (yield* agents()).find((agent) => agent.agentId === agentId)
@@ -449,6 +456,7 @@ export const User = restate.implement(UserDefinition, {
       listSubAgents: noRetention,
       profile: {shared: true, ...noRetention},
       updateMemory: noRetention,
+      deleteMemory: coordinationRetention,
       ownsAgent: {shared: true, ...noRetention},
       connections: {shared: true, ...noRetention},
       snapshot: {shared: true, ...noRetention},

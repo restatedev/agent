@@ -158,6 +158,9 @@ export const MemoryEntrySchema = z.object({
   content: z.string().trim().min(1),
 });
 export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
+export const MemoryKeyRequestSchema = MemoryEntrySchema.pick({
+  key: true,
+}).strict();
 export const UserProfileSchema = z.object({
   identity: UserIdentitySchema,
   agents: z.array(UserAgentSchema),

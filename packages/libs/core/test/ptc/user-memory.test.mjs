@@ -4,9 +4,31 @@ import {User} from "../../src/user/service.ts";
 import {Agent} from "../../src/agent/service.ts";
 import {context} from "./state-fixture.mjs";
 import {buildModelContext} from "../../src/session/context.ts";
+import {MemoryKeyRequestSchema} from "@restate-agents/types";
 
 const agents = [{agentId: "a", name: "A"}, {agentId: "b", name: "B"}];
 const set = (key, content) => ({operation: "set", key, content});
+
+test("user memory deletion is keyed, idempotent, account-scoped and notifies the workspace", async () => {
+  const memories = [{key: "project", content: "Runtime"}, {key: "style", content: "Concise"}];
+  const alice = context("alice", {agents, memories}), bob = context("bob", {memories});
+  assert.equal(await alice.invoke(User.object.deleteMemory, {key: "project"}), true);
+  assert.deepEqual(alice.state.get("memories"), [memories[1]]);
+  assert.deepEqual(bob.state.get("memories"), memories);
+  assert.ok(alice.sends.some(s => s.service === "UserNotifications" && s.key === "alice" && s.parameter.kind === "profile"));
+  const notifications = alice.sends.length;
+  assert.equal(await alice.invoke(User.object.deleteMemory, {key: "project"}), false);
+  assert.equal(alice.sends.length, notifications);
+  assert.deepEqual((await alice.invoke(User.object.snapshot, {agentId: "b", tools: {mcp: []}})).memories, [memories[1]]);
+  await alice.invoke(User.object.deleteMemory, {key: "style"});
+  assert.equal(alice.state.has("memories"), false);
+});
+
+test("memory deletion input cannot select a user or replace the memory collection", () => {
+  assert.deepEqual(MemoryKeyRequestSchema.parse({key: "project"}), {key: "project"});
+  for (const input of [{key: " "}, {}, {key: "project", userId: "bob"}, {key: "project", memories: []}])
+    assert.equal(MemoryKeyRequestSchema.safeParse(input).success, false);
+});
 
 test("the entire shared collection is model context, not instructions or guardrail input", () => {
   const memories = [{key: "project", content: "Runtime"}, {key: "style", content: "Concise"}];

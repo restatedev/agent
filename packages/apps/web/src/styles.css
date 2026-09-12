@@ -23,6 +23,8 @@
   --radius: 12px;
   --radius-lg: 18px;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --conversation-font: "Source Sans 3 Variable", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-family: system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
   font-synthesis: none;
@@ -103,6 +105,14 @@
 .agent-workspace .topbar {justify-content:space-between;}
 .account-pane {height:100%;overflow:auto;padding:32px;max-width:1100px;margin:auto;}
 .account-pane h1 {margin:0 0 12px;}
+.agents-sidebar .user-profile-link {margin-left:16px;}
+.user-memory-list {display:grid;gap:14px;margin-top:24px;}
+.user-memory-card {display:flex;align-items:flex-start;gap:16px;padding:20px;border:1px solid var(--border);border-radius:14px;background:var(--surface);}
+.user-memory-card>div {flex:1;min-width:0;overflow-wrap:anywhere;}
+.user-memory-card h2 {font-size:14px;margin:0 0 8px;color:var(--text-muted);}
+.user-memory-card p {font-family:var(--conversation-font);font-size:17px;line-height:1.6;white-space:pre-wrap;margin:0;}
+.user-memory-card button {flex:none;}
+.memories-empty {text-align:center;padding:60px 20px;color:var(--text-muted);}
 .schedules-heading {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;}
 .schedules-heading h2 {margin:0; font-size:18px;}
 .schedule-editor {display:grid;gap:16px;padding:24px;margin:24px 0;border:1px solid var(--border);border-radius:16px;background:var(--surface);}
@@ -124,13 +134,6 @@
 .schedule-unread {display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--primary-bright);margin-left:8px;flex:none;}
 .account-pane .mcp-preset-list {margin:24px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));}
 .account-connections {display:grid;gap:12px;margin:24px 0;}
-.user-memories {margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-raised);}
-.user-memories summary {cursor:pointer;font-weight:600;}
-.user-memories summary span {color:var(--text-muted);font-weight:400;}
-.user-memories .memory-list {margin-top:12px;}
-.user-memories .memory-row {padding:12px;overflow-wrap:anywhere;}
-.user-memories .memory-row code {font-size:11px;}
-.user-memories .memory-row span {font-size:13px;}
 .account-pane .account-connection {display:flex;flex-direction:column;align-items:stretch;gap:14px;padding:18px;}
 .account-pane .account-connection>div:first-child {display:grid;gap:4px;overflow-wrap:anywhere;}
 .account-pane .account-connection strong {font-size:14px;}
@@ -877,6 +880,16 @@ svg {
   align-self: flex-end;
 }
 
+.bubble-content,
+.turn-continuation-copy,
+.composer-box textarea {
+  font-family: var(--conversation-font);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: normal;
+}
+
 .bubble-content {
   width: fit-content;
   max-width: 100%;
@@ -886,8 +899,6 @@ svg {
   border-radius: 14px;
   padding: 10px 13px;
   overflow-wrap: break-word;
-  font-size: 16px;
-  line-height: 1.7;
 }
 
 .bubble[data-variant="tinted"] .bubble-content {
@@ -1193,8 +1204,6 @@ svg {
 .turn-continuation-copy {
   padding: 3px;
   color: var(--text);
-  font-size: 16px;
-  line-height: 1.7;
   overflow-wrap: break-word;
 }
 
@@ -1471,7 +1480,6 @@ svg {
   background: transparent;
   padding: 4px 5px;
   box-shadow: none;
-  line-height: 1.5;
   resize: none;
 }
 

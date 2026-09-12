@@ -1,6 +1,7 @@
 import {createHash} from "node:crypto";
 import {
   McpServerSchema,
+  MemoryKeyRequestSchema,
   WorkspaceSyncRequestSchema,
   UserScheduleSpecSchema,
   ScheduleIdRequestSchema,
@@ -107,6 +108,12 @@ export async function POST(request: Request, context: Context) {
     const {client} = user;
     const body = await request.json();
     switch (operation) {
+      case "delete-memory": {
+        const parsed = MemoryKeyRequestSchema.safeParse(body);
+        if (!parsed.success) throw new BffError(400, "Memory key required");
+        // The authenticated User client supplies the scope, never request JSON.
+        return Response.json(await client.deleteMemory(parsed.data.key));
+      }
       case "schedule": {
         const parsed = UserScheduleSpecSchema.safeParse(body);
         if (!parsed.success) throw new BffError(400, "Invalid schedule");

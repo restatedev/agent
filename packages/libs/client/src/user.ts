@@ -47,6 +47,7 @@ export function createUserClient({
       ),
     register: (identity: UserIdentity) => user.register(identity),
     profile: () => user.profile(rpc.opts({input: serde.empty})),
+    deleteMemory: (key: string) => user.deleteMemory({key}),
     upsertSchedule: (spec: UserScheduleSpec) => user.upsertSchedule(spec),
     cancelSchedule: (scheduleId: string) => user.cancelSchedule({scheduleId}),
     connections: () => user.connections(rpc.opts({input: serde.empty})),

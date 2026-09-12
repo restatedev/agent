@@ -33,9 +33,14 @@ The prompt encourages relevant personalization and selective end-of-turn saves:
 ongoing projects, useful decisions, and stable preferences, not an automatic
 summary of every conversation. Memories are context data, never instructions.
 
-The user **Profile & connectors** page has a collapsed **Memories** section, refreshed through
-the shared workspace notification feed. Ask any agent to remember,
-correct, or forget something. Deleting an agent does not delete user memories.
+The dedicated **Memories** screen sits beneath **Profile & connectors** and is
+refreshed through the shared workspace notification feed. Delete individual
+memories there, or ask any agent to remember, correct, or forget something.
+`POST /api/user/delete-memory` accepts only `{key}` and uses the authenticated
+User client after same-origin validation. `User.deleteMemory` deletes that key
+idempotently and publishes a user profile notification. Deletion affects future
+turns; it does not erase historical conversation entries or in-progress snapshots.
+Deleting an agent does not delete user memories.
 Old agent-local memory state is left untouched but is not automatically migrated
 or injected into new turns.
 
