@@ -7,7 +7,6 @@ import {
   ListTodo,
   MessageSquareText,
   Shapes,
-  Sparkles,
 } from "lucide-react";
 export const MCP_SERVER_PRESETS = [
   {
@@ -81,14 +80,5 @@ export const MCP_SERVER_PRESETS = [
     authType: "oauth",
     setup: "One-click OAuth",
     icon: Bug,
-  },
-  {
-    id: "lovable",
-    label: "Lovable",
-    url: "https://mcp.lovable.dev",
-    protocol: "stateful",
-    authType: "oauth",
-    setup: "One-click OAuth",
-    icon: Sparkles,
   },
 ] as const;

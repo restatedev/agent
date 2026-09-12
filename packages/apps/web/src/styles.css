@@ -2046,11 +2046,6 @@ svg {
   color: #6c5fc7;
 }
 
-.mcp-preset-icon[data-provider="lovable"] {
-  background: rgba(232, 76, 137, 0.12);
-  color: #e84c89;
-}
-
 .schedule-form,
 .mcp-server-form {
   display: flex;
