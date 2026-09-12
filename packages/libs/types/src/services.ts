@@ -58,6 +58,7 @@ import {
   UserAgentSchema,
   UserConnectionSchema,
   UserIdentitySchema,
+  UserNotificationSnapshotSchema,
   UserProfileSchema,
 } from "./index.js";
 import {
@@ -176,6 +177,37 @@ export const AgentNotificationsDefinition = iface.object(
   },
 );
 
+/** Private workspace invalidation feed, keyed only by the owning user ID. */
+export const UserNotificationsDefinition = iface.object("UserNotifications", {
+  publish: iface.schemas({
+    input: z.discriminatedUnion("kind", [
+      z.object({kind: z.literal("profile")}),
+      z.object({
+        kind: z.literal("agent"),
+        agentId: z.string(),
+        topic: AgentNotificationTopicSchema,
+      }),
+    ]),
+    output: z.void(),
+  }),
+  snapshot: iface.schemas({
+    input: z.void(),
+    output: UserNotificationSnapshotSchema,
+  }),
+  watch: iface.schemas({
+    input: AgentNotificationWatchRequestSchema,
+    output: UserNotificationSnapshotSchema,
+  }),
+  subscribe: iface.schemas({
+    input: AgentNotificationSubscriptionSchema,
+    output: UserNotificationSnapshotSchema.nullable(),
+  }),
+  unsubscribe: iface.schemas({
+    input: AgentNotificationUnsubscribeSchema,
+    output: z.void(),
+  }),
+});
+
 /** Per-Agent durable schedule registry and timer lifecycle. */
 export const AgentSchedulerDefinition = iface.object(
   AGENT_SCHEDULER_SERVICE_NAME,
@@ -258,6 +290,7 @@ export const UserDefinition = iface.object("User", {
     input: z.object({agentId: z.string(), tools: AgentToolsSchema}),
     output: z.object({
       memories: z.array(MemoryEntrySchema),
+      tools: AgentToolsSchema,
       servers: z.array(ResolvedMcpServerSchema),
       credentials: z.array(McpTurnCredentialSchema),
     }),

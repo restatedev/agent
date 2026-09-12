@@ -36,6 +36,40 @@ const bff=await import(`data:text/javascript;base64,${Buffer.from(built.outputFi
 const hash=value=>createHash("sha256").update(value).digest("hex");
 const sessionKey=token=>hash(JSON.stringify(["google-workspace","restate.dev",token]));
 
+test("workspace sync binds its feed to the authenticated session and rejects cross-user selectors", async t=>{
+  const calls=[];
+  let revoked=false, revokeOnWatch=false;
+  const marker={revision:0,profileRevision:0,agents:{}};
+  t.mock.method(globalThis,"fetch",async(url,init)=>{
+    const req=new Request(url,init); calls.push(req.url);
+    if(req.url.endsWith("/read"))return Response.json(revoked?null:{userId:"user-a",expiresAt:Date.now()+10000});
+    if(req.url.endsWith("/User/user-a/profile"))return Response.json({identity:{userId:"user-a"},agents:[],memories:[],connections:[]});
+    if(req.url.endsWith("/UserNotifications/user-a/snapshot"))return Response.json(marker);
+    if(req.url.endsWith("/UserNotifications/user-a/watch")){if(revokeOnWatch)revoked=true;return Response.json(marker);}
+    throw Error("Unexpected RPC: "+req.url);
+  });
+  const context={params:Promise.resolve({operation:"sync"})};
+  const input={revision:null,profileRevision:null,agents:[]};
+  const invoke=(body=input,origin="https://app.example")=>bff.postUser(new Request("https://app.example/api/user/sync?userId=user-b",{method:"POST",headers:{origin,"content-type":"application/json"},body:JSON.stringify(body)}),context);
+  jar.clear();
+  assert.equal((await invoke()).status,401);
+  assert.equal(calls.length,0);
+  jar.set("restate-session","A".repeat(43));
+  assert.equal((await invoke(input,"https://attacker.example")).status,403);
+  assert.equal(calls.length,0);
+  assert.equal((await invoke({...input,userId:"user-b"})).status,400);
+  assert.equal((await invoke({...input,agents:[{agentId:"foreign-agent",nextSequence:1}]})).status,404);
+  assert.ok(!calls.some(url=>url.includes("foreign-agent")||url.includes("user-b")));
+  const result=await invoke();
+  assert.equal(result.status,200);
+  assert.equal((await result.json()).userId,"user-a");
+  assert.equal(result.headers.get("cache-control"),"private, no-store");
+  assert.ok(calls.some(url=>url.includes("/UserNotifications/user-a/")));
+  revokeOnWatch=true;
+  assert.equal((await invoke({revision:0,profileRevision:0,agents:[]})).status,401);
+  jar.clear();
+});
+
 test("completion list requires login and reads only owned agents, with partial failure isolation", async t=>{
   const calls=[];
   let allUnavailable=false;

@@ -5,12 +5,16 @@ import type {
   ToolDescriptor,
   UserAgent,
   UserProfile,
+  WorkspaceSyncRequest,
 } from "@restate-agents/types";
 import {request} from "./agent-client";
+import type {WorkspaceSyncResponse} from "./workspace-sync-types";
 
 const write = <T>(operation: string, body: unknown) =>
   request<T>(`/api/user/${operation}`, {body});
 export const userClient = {
+  sync: (body: WorkspaceSyncRequest, signal: AbortSignal) =>
+    request<WorkspaceSyncResponse>("/api/user/sync", {body, signal}),
   agentCompletions: (signal: AbortSignal) =>
     request<Array<{agentId: string; sequence: number}>>(
       "/api/user/agent-completions",

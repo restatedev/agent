@@ -22,7 +22,7 @@ test("memories are shared across a user's agents even without MCP grants", async
   const f = context("alice", {agents, identity: {userId: "alice"}});
   await f.invoke(User.object.updateMemory, {agentId: "a", changes: [set("project", "Building a runtime")]});
   const snapshot = await f.invoke(User.object.snapshot, {agentId: "b", tools: {mcp: []}});
-  assert.deepEqual(snapshot, {memories: [{key: "project", content: "Building a runtime"}], servers: [], credentials: []});
+  assert.deepEqual(snapshot, {tools: {mcp: []}, memories: [{key: "project", content: "Building a runtime"}], servers: [], credentials: []});
   assert.deepEqual((await f.invoke(User.object.profile)).memories, snapshot.memories);
   await f.invoke(User.object.deleteAgent, {agentId: "a"});
   assert.deepEqual(f.state.get("memories"), snapshot.memories);
@@ -67,7 +67,7 @@ test("Agent routes memory writes to its immutable owner only for the active non-
 
 test("Agent fetches the full user memory snapshot for every newly dispatched turn", async () => {
   const memories = [{key: "project", content: "Runtime"}, {key: "style", content: "Concise"}];
-  const f = context("a", {ownership: {ownerUserId: "alice", name: "A"}}, () => ({memories, servers: [], credentials: []}));
+  const f = context("a", {ownership: {ownerUserId: "alice", name: "A"}}, opts => ({tools: opts.parameter.tools, memories, servers: [], credentials: []}));
   await f.invoke(Agent.object.ask, {message: "Continue my project"});
   assert.equal(f.calls[0].service, "User");
   assert.equal(f.calls[0].key, "alice");

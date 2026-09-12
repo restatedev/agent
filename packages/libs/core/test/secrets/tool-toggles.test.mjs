@@ -6,8 +6,9 @@ import {connectionEnabled, toggleConnection, toggleTool, toolEnabled} from "../.
 import {toolAllowed} from "../../src/session/tool-permissions.ts";
 
 const defaults=()=>({builtin:{mode:"all"},dynamic:{mode:"selected",names:[]},mcp:[]});
-test("a connection switch immediately grants real MCP tools and off removes only that grant",()=>{
+test("authorized connections default on and off persists an explicit opt-out",()=>{
   const original=defaults();
+  assert.equal(connectionEnabled(original,"notion"),true);
   const github=toggleConnection(original,"github",true);
   const enabled=toggleConnection(github,"notion",true);
   AgentToolsSchema.parse(enabled);
@@ -17,7 +18,8 @@ test("a connection switch immediately grants real MCP tools and off removes only
   assert.equal(toolAllowed("mcp_notion_search",enabled,[],remote,[]),true);
   const disabled=toggleConnection(enabled,"notion",false);
   assert.equal(toolAllowed("mcp_notion_search",disabled,[],remote,[]),false);
-  assert.deepEqual(disabled,github);
+  assert.deepEqual(disabled,{...github,mcp:[...github.mcp,{connectionId:"notion",tools:{mode:"selected",names:[]}}]});
+  assert.equal(connectionEnabled(disabled,"notion"),false);
   assert.deepEqual(original,defaults(),"other agents' profiles must not be mutated");
   assert.deepEqual(toggleConnection(enabled,"notion",true),enabled,"enabling twice must not duplicate a grant");
 });
@@ -51,7 +53,7 @@ test("agent UI renders name-only connection switches with account-level authoriz
   assert.ok(!html.includes('type="checkbox"'));
   assert.match(html,/aria-checked="false"/);
   assert.match(html,/>Disabled<\/button>/);
-  assert.match(html,/Authorize GitHub in Connections/);
+  assert.match(html,/Authorize GitHub in Profile &amp; connectors/);
   assert.match(html,/disabled=""/);
   for(const text of ["<select","Load available tools","Selected tools only","VERY LONG DESCRIPTION MUST NOT APPEAR"])assert.ok(!html.includes(text),text);
   const on=render({tools:toggleConnection(defaults(),"notion",true)},{connections:[connection("notion",true)]});

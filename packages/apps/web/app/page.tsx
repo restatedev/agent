@@ -32,6 +32,7 @@ export default async function Page({
   const requested = (await searchParams).agent;
   return (
     <UserWorkspace
+      key={profile.identity.userId}
       initialUser={profile}
       initialAgentId={typeof requested === "string" ? requested : undefined}
     />

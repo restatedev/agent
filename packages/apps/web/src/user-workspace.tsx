@@ -5,6 +5,7 @@ import {useCallback, useEffect, useRef, useState} from "react";
 import {App} from "./app";
 import {MCP_SERVER_PRESETS} from "./mcp-presets";
 import {useAgentInbox} from "./use-agent-inbox";
+import {useWorkspace, WorkspaceCacheContext} from "./use-workspace";
 import {userClient} from "./user-client";
 import {UserContext, useUser} from "./user-context";
 
@@ -15,8 +16,9 @@ export function UserWorkspace({
   initialUser: UserProfile;
   initialAgentId?: string;
 }) {
-  const [profile, setProfile] = useState(initialUser);
   const [selected, setSelected] = useState(initialAgentId);
+  const {cache, state} = useWorkspace(initialUser, selected);
+  const profile = state.profile;
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -28,23 +30,14 @@ export function UserWorkspace({
   const creationId = useRef<string | undefined>(undefined);
   const {unread, markSeen, unavailable} = useAgentInbox(
     profile.identity.userId,
+    state.completions,
+    state.status === "failed",
   );
   const refresh = useCallback(async () => {
     const version = ++refreshVersion.current;
     const next = await userClient.profile();
-    if (version === refreshVersion.current) setProfile(next);
-  }, []);
-  useEffect(() => {
-    const reload = () => {
-      void refresh().catch((error) => setError(String(error)));
-    };
-    const timer = window.setInterval(reload, 15000);
-    window.addEventListener("focus", reload);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", reload);
-    };
-  }, [refresh]);
+    if (version === refreshVersion.current) cache.setProfile(next);
+  }, [cache]);
   useEffect(() => {
     const read = () => {
       const id = new URL(window.location.href).searchParams.get("agent");
@@ -74,10 +67,11 @@ export function UserWorkspace({
     try {
       await userClient.deleteAgent(agentId);
       ++refreshVersion.current; // Ignore profile reads started before deletion.
-      setProfile((current) => ({
+      const current = cache.getSnapshot().profile;
+      cache.setProfile({
         ...current,
         agents: current.agents.filter((a) => a.agentId !== agentId),
-      }));
+      });
       if (selectedRef.current === agentId) select();
     } catch (error) {
       setError(String(error));
@@ -86,186 +80,202 @@ export function UserWorkspace({
     }
   }
   return (
-    <UserContext.Provider value={{profile, refresh}}>
-      <div className="user-workspace">
-        <aside className="agents-sidebar">
-          <div className="account-identity">
-            <strong>{profile.identity.displayName}</strong>
-            <small>{profile.identity.email}</small>
-          </div>
-          <div className="agents-heading">
-            <p className="eyebrow">Agents</p>
-            <span className="agent-count">{profile.agents.length}</span>
-          </div>
-          <nav aria-label="Your agents">
-            {profile.agents.map((agent) => (
-              <div
-                className="agent-list-row"
-                key={agent.agentId}
-                data-active={selected === agent.agentId}
-              >
-                <button
-                  type="button"
-                  className="agent-select"
+    <WorkspaceCacheContext.Provider value={cache}>
+      <UserContext.Provider value={{profile, refresh}}>
+        <div className="user-workspace">
+          <aside className="agents-sidebar">
+            <div className="account-identity">
+              <strong>{profile.identity.displayName}</strong>
+              <small>{profile.identity.email}</small>
+            </div>
+            <div className="agents-heading">
+              <p className="eyebrow">Agents</p>
+              <span className="agent-count">{profile.agents.length}</span>
+            </div>
+            <nav aria-label="Your agents">
+              {profile.agents.map((agent) => (
+                <div
+                  className="agent-list-row"
+                  key={agent.agentId}
                   data-active={selected === agent.agentId}
-                  data-unread={unread.has(agent.agentId)}
-                  aria-label={
-                    unread.has(agent.agentId)
-                      ? `${agent.name} — new response`
-                      : agent.name
-                  }
-                  title={
-                    unread.has(agent.agentId)
-                      ? "Turn finished — new response"
-                      : agent.name
-                  }
-                  onClick={() => select(agent.agentId)}
                 >
-                  <span className="agent-avatar" aria-hidden="true">
-                    🤖
-                  </span>
-                  <span className="agent-name">{agent.name}</span>
-                  {unread.has(agent.agentId) && (
-                    <span className="agent-unread-badge" aria-hidden="true">
-                      <span className="agent-unread-dot" />
-                      New
+                  <button
+                    type="button"
+                    className="agent-select"
+                    data-active={selected === agent.agentId}
+                    data-unread={unread.has(agent.agentId)}
+                    aria-label={
+                      unread.has(agent.agentId)
+                        ? `${agent.name} — new response`
+                        : agent.name
+                    }
+                    title={
+                      unread.has(agent.agentId)
+                        ? "Turn finished — new response"
+                        : agent.name
+                    }
+                    onClick={() => select(agent.agentId)}
+                  >
+                    <span className="agent-avatar" aria-hidden="true">
+                      🤖
                     </span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className="agent-delete"
-                  aria-label={`Delete ${agent.name}`}
-                  title={`Delete ${agent.name}`}
-                  disabled={deleting !== undefined}
-                  onClick={() => void deleteAgent(agent.agentId, agent.name)}
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            ))}
-          </nav>
-          {unavailable && (
-            <small role="status" className="agent-notification-warning">
-              Checking for new responses… reconnecting
-            </small>
-          )}
-          {!showCreate ? (
+                    <span className="agent-name">{agent.name}</span>
+                    {unread.has(agent.agentId) && (
+                      <span className="agent-unread-badge" aria-hidden="true">
+                        <span className="agent-unread-dot" />
+                        New
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="agent-delete"
+                    aria-label={`Delete ${agent.name}`}
+                    title={`Delete ${agent.name}`}
+                    disabled={deleting !== undefined}
+                    onClick={() => void deleteAgent(agent.agentId, agent.name)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+            </nav>
+            {unavailable && (
+              <small role="status" className="agent-notification-warning">
+                Checking for new responses… reconnecting
+              </small>
+            )}
+            {!showCreate ? (
+              <button
+                type="button"
+                className="new-agent-button"
+                onClick={() => setShowCreate(true)}
+              >
+                <Plus size={17} /> New agent
+              </button>
+            ) : (
+              <form
+                className="new-agent-form"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  if (creating || !name.trim()) return;
+                  setCreating(true);
+                  setError("");
+                  creationId.current ??= crypto.randomUUID();
+                  try {
+                    const created = await userClient.createAgent(
+                      name.trim(),
+                      creationId.current,
+                    );
+                    await refresh();
+                    setName("");
+                    creationId.current = undefined;
+                    setShowCreate(false);
+                    select(created.agentId);
+                  } catch (error) {
+                    setError(String(error));
+                  } finally {
+                    setCreating(false);
+                  }
+                }}
+              >
+                <input
+                  ref={(input) => {
+                    input?.focus();
+                  }}
+                  aria-label="New agent name"
+                  placeholder="Name your agent…"
+                  maxLength={100}
+                  value={name}
+                  disabled={creating}
+                  onChange={(event) => {
+                    setName(event.target.value);
+                    creationId.current = undefined;
+                  }}
+                />
+                <div className="new-agent-actions">
+                  <button
+                    type="submit"
+                    className="button secondary small"
+                    disabled={creating || !name.trim()}
+                  >
+                    <span aria-hidden="true">🤖</span>
+                    {creating ? "Creating…" : "Create agent"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button ghost small"
+                    aria-label="Cancel creating agent"
+                    disabled={creating}
+                    onClick={() => setShowCreate(false)}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              </form>
+            )}
             <button
               type="button"
-              className="new-agent-button"
-              onClick={() => setShowCreate(true)}
+              className="button ghost small"
+              data-active={!selected}
+              onClick={() => select()}
             >
-              <Plus size={17} /> New agent
+              <Plug />
+              Profile &amp; connectors
             </button>
-          ) : (
-            <form
-              className="new-agent-form"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                if (creating || !name.trim()) return;
-                setCreating(true);
-                setError("");
-                creationId.current ??= crypto.randomUUID();
-                try {
-                  const created = await userClient.createAgent(
-                    name.trim(),
-                    creationId.current,
-                  );
-                  await refresh();
-                  setName("");
-                  creationId.current = undefined;
-                  setShowCreate(false);
-                  select(created.agentId);
-                } catch (error) {
-                  setError(String(error));
-                } finally {
-                  setCreating(false);
-                }
-              }}
-            >
-              <input
-                ref={(input) => {
-                  input?.focus();
-                }}
-                aria-label="New agent name"
-                placeholder="Name your agent…"
-                maxLength={100}
-                value={name}
-                disabled={creating}
-                onChange={(event) => {
-                  setName(event.target.value);
-                  creationId.current = undefined;
-                }}
-              />
-              <div className="new-agent-actions">
-                <button
-                  type="submit"
-                  className="button secondary small"
-                  disabled={creating || !name.trim()}
-                >
-                  <span aria-hidden="true">🤖</span>
-                  {creating ? "Creating…" : "Create agent"}
-                </button>
-                <button
-                  type="button"
-                  className="button ghost small"
-                  aria-label="Cancel creating agent"
-                  disabled={creating}
-                  onClick={() => setShowCreate(false)}
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </form>
-          )}
-          <button
-            type="button"
-            className="button ghost small"
-            data-active={!selected}
-            onClick={() => select()}
-          >
-            <Plug />
-            Connections
-          </button>
-          <p className="empty-copy">
-            Each agent has its own conversation and tool access.
-          </p>
-          {error && (
-            <p role="alert" className="inline-error">
-              {error}
+            <p className="empty-copy">
+              Each agent has its own conversation and tool access.
             </p>
-          )}
-          <form action="/api/auth/logout" method="post">
-            <button type="submit" className="button ghost small">
-              <LogOut />
-              Sign out
-            </button>
-          </form>
-        </aside>
-        <div className="agent-workspace">
-          {agent ? (
-            <App
-              key={agent.agentId}
-              initialAgentId={agent.agentId}
-              agentName={agent.name}
-              onTurnSeen={markSeen}
-            />
-          ) : selected ? (
-            <div className="account-pane">
-              <h1>Agent not found</h1>
-              <p>Select one of your agents from the sidebar.</p>
-            </div>
-          ) : (
-            <Connections />
-          )}
+            {error && (
+              <p role="alert" className="inline-error">
+                {error}
+              </p>
+            )}
+            <form action="/api/auth/logout" method="post">
+              <button type="submit" className="button ghost small">
+                <LogOut />
+                Sign out
+              </button>
+            </form>
+          </aside>
+          <div className="agent-workspace">
+            {profile.agents
+              .filter(
+                (a) =>
+                  a.agentId === selected ||
+                  Object.hasOwn(state.agents, a.agentId),
+              )
+              .map((a) => (
+                <div
+                  key={a.agentId}
+                  hidden={a.agentId !== selected}
+                  className="retained-agent-view"
+                >
+                  <App
+                    initialAgentId={a.agentId}
+                    agentName={a.name}
+                    active={a.agentId === selected}
+                    onTurnSeen={markSeen}
+                  />
+                </div>
+              ))}
+            {!agent &&
+              (selected ? (
+                <div className="account-pane">
+                  <h1>Agent not found</h1>
+                  <p>Select one of your agents from the sidebar.</p>
+                </div>
+              ) : (
+                <ProfileAndConnectors />
+              ))}
+          </div>
         </div>
-      </div>
-    </UserContext.Provider>
+      </UserContext.Provider>
+    </WorkspaceCacheContext.Provider>
   );
 }
 
-function Connections() {
+function ProfileAndConnectors() {
   const {profile, refresh} = useUser();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -317,10 +327,11 @@ function Connections() {
   return (
     <main className="account-pane">
       <p className="eyebrow">Your account</p>
-      <h1>Connections</h1>
+      <h1>Profile &amp; connectors</h1>
       <p>
-        Authorize an account once, then choose which tools each agent may use.
-        Disconnecting here revokes access for all your agents.
+        Manage shared memories and authorize accounts, then choose which tools
+        each agent may use. Disconnecting here revokes access for all your
+        agents.
       </p>
       <details className="user-memories">
         <summary>

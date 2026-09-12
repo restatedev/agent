@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.mjs",
+    "test": "node --import tsx --test test/*.test.mjs",
     "build": "next build",
     "dev": "next dev",
     "start": "next start"
@@ -23,6 +23,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "tsx": "^4.19.2",
     "@types/node": "^22",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",

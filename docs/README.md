@@ -60,6 +60,7 @@ not additional boxes in the Agent controller view.
 | `Agent` | Virtual Object | `agentId` | Serialized routing, active invocation, queued input, profile, approvals, and external deliveries |
 | `AgentSession` | Virtual Object | same `agentId` | Authoritative transcript, summary checkpoint, and one exclusive `doTurn` agent-run state machine at a time |
 | `AgentNotifications` | Virtual Object | same `agentId` | Revision watermarks, caller awakeables, and invalidation long-polls |
+| `UserNotifications` | Virtual Object | `userId` | Shared workspace invalidations and one browser long poll across all owned agents |
 | `AgentScheduler` | Virtual Object | same `agentId` | Schedule registry, delayed invocations, recurrence, cancellation, and delivery |
 | `ModelGateway` | scoped Service | scope `openai` + limit key | Admission control, retries, cancellation propagation, and provider-call boundary |
 | `Sandbox` | Virtual Object | same `agentId` | Serialized lifecycle and one-turn lease for the agent's external workspace |

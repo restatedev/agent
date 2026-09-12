@@ -8,6 +8,7 @@ import type {
   AgentSchedulerDefinition,
   AgentSessionDefinition,
   UserDefinition,
+  UserNotificationsDefinition,
   UserSessionDefinition,
 } from "./services.js";
 
@@ -24,6 +25,13 @@ export const UserSessionIngressDefinition: VirtualObjectDefinition<
   "UserSession",
   IngressHandlers<typeof UserSessionDefinition>
 > = {name: "UserSession"};
+export type UserNotificationsIngressHandlers = IngressHandlers<
+  typeof UserNotificationsDefinition
+>;
+export const UserNotificationsIngressDefinition: VirtualObjectDefinition<
+  "UserNotifications",
+  UserNotificationsIngressHandlers
+> = {name: "UserNotifications"};
 
 export const DEFAULT_ASK =
   "What is the weather in the top 10 European capitals? Also sleep for 4 minutes.";

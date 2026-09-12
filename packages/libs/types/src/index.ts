@@ -68,6 +68,8 @@ export type ToolSelection = z.infer<typeof ToolSelectionSchema>;
 export const AgentToolsSchema = z.object({
   builtin: ToolSelectionSchema,
   dynamic: ToolSelectionSchema,
+  // Profile entries are overrides. At turn start User resolves omitted,
+  // authorized connections to all; selected/[] is a persistent opt-out.
   mcp: z
     .array(
       z.object({connectionId: McpServerIdSchema, tools: ToolSelectionSchema}),
@@ -687,6 +689,35 @@ export const AgentNotificationSnapshotSchema = z.object({
 export type AgentNotificationSnapshot = z.infer<
   typeof AgentNotificationSnapshotSchema
 >;
+
+export const UserNotificationSnapshotSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  profileRevision: z.number().int().nonnegative(),
+  agents: z.record(z.string(), AgentNotificationSnapshotSchema),
+});
+export type UserNotificationSnapshot = z.infer<
+  typeof UserNotificationSnapshotSchema
+>;
+
+// No caller-selected user identity. These are cache positions, not authority.
+export const WorkspaceSyncRequestSchema = z
+  .object({
+    revision: z.number().int().nonnegative().nullable(),
+    profileRevision: z.number().int().nonnegative().nullable(),
+    agents: z
+      .array(
+        z
+          .object({
+            agentId: z.string().min(1).max(256),
+            notification: AgentNotificationSnapshotSchema.optional(),
+            nextSequence: z.number().int().min(1),
+          })
+          .strict(),
+      )
+      .max(100),
+  })
+  .strict();
+export type WorkspaceSyncRequest = z.infer<typeof WorkspaceSyncRequestSchema>;
 
 export const AgentNotificationWatchRequestSchema = z.object({
   afterRevision: z.number().int().nonnegative(),

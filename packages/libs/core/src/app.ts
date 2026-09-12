@@ -13,6 +13,7 @@ import {
   ModelGateway,
   Sandbox,
   User,
+  UserNotifications,
   UserSession,
 } from "./index.js";
 
@@ -22,6 +23,7 @@ serve({
     User,
     UserSession,
     AgentNotifications,
+    UserNotifications,
     AgentScheduler,
     AgentSession,
     ModelGateway,

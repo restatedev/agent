@@ -1420,9 +1420,11 @@ export function App({
   initialAgentId,
   agentName,
   onTurnSeen,
+  active,
 }: {
   initialAgentId: string;
   agentName: string;
+  active: boolean;
   onTurnSeen: (agentId: string, sequence: number) => void;
 }) {
   const [connection] = useState<AgentConnection>({
@@ -1437,7 +1439,11 @@ export function App({
   const lastResponse = lastTurnSequence(agent.entries);
   useEffect(() => {
     const markVisibleResponse = () => {
-      if (document.visibilityState === "visible" && document.hasFocus()) {
+      if (
+        active &&
+        document.visibilityState === "visible" &&
+        document.hasFocus()
+      ) {
         onTurnSeen(connection.agentId, lastResponse);
       }
     };
@@ -1448,7 +1454,7 @@ export function App({
       window.removeEventListener("focus", markVisibleResponse);
       document.removeEventListener("visibilitychange", markVisibleResponse);
     };
-  }, [connection.agentId, lastResponse, onTurnSeen]);
+  }, [active, connection.agentId, lastResponse, onTurnSeen]);
   const pendingTurnId =
     agent.mcpAuthorizations[0]?.turnId ?? agent.approvals[0]?.turnId;
   const turn = useMemo(
@@ -1472,9 +1478,10 @@ export function App({
     if (!turn) setProvisionalTurn(undefined);
   }, [turn]);
   useEffect(() => {
-    document.title = `Restate Agent · ${connection.agentId}`;
-  }, [connection.agentId]);
+    if (active) document.title = `Restate Agent · ${connection.agentId}`;
+  }, [active, connection.agentId]);
   useEffect(() => {
+    if (!active) return;
     const url = new URL(window.location.href);
     const oauthResult = url.searchParams.get("mcpAuth");
     if (!oauthResult) return;
@@ -1486,7 +1493,7 @@ export function App({
     );
     url.searchParams.delete("mcpAuth");
     window.history.replaceState(null, "", url);
-  }, [notify]);
+  }, [active, notify]);
 
   async function sendMessage(message: string, replacement?: string) {
     try {

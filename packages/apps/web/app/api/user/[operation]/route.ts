@@ -1,5 +1,8 @@
 import {createHash} from "node:crypto";
-import {McpServerSchema} from "@restate-agents/types";
+import {
+  McpServerSchema,
+  WorkspaceSyncRequestSchema,
+} from "@restate-agents/types";
 import {completeMcpBearerAuthorization} from "../../../../src/server/mcp-bearer";
 import {startMcpOAuth} from "../../../../src/server/mcp-oauth";
 import {
@@ -8,6 +11,10 @@ import {
   errorResponse,
 } from "../../../../src/server/restate";
 import {requireSameOrigin, requireUser} from "../../../../src/server/user-auth";
+import {
+  syncWorkspace,
+  WorkspaceSyncError,
+} from "../../../../src/server/workspace-sync";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 type Context = {params: Promise<{operation: string}>};
@@ -57,10 +64,38 @@ export async function GET(request: Request, context: Context) {
 export async function POST(request: Request, context: Context) {
   try {
     requireSameOrigin(request);
+    const {operation} = await context.params;
+    if (operation === "sync") {
+      await requireUser();
+      const text = await request.text();
+      if (text.length > 64_000)
+        throw new BffError(400, "Sync request too large");
+      let body: unknown;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new BffError(400, "Invalid sync request");
+      }
+      const parsed = WorkspaceSyncRequestSchema.safeParse(body);
+      if (!parsed.success) throw new BffError(400, "Invalid sync request");
+      try {
+        const update = await syncWorkspace(
+          parsed.data,
+          {authenticate: requireUser, agent: agentClient},
+          request.signal,
+        );
+        return Response.json(update, {
+          headers: {"Cache-Control": "private, no-store", Vary: "Cookie"},
+        });
+      } catch (error) {
+        if (error instanceof WorkspaceSyncError)
+          throw new BffError(error.status, error.message);
+        throw error;
+      }
+    }
     const user = await requireUser();
     const {client} = user;
     const body = await request.json();
-    const {operation} = await context.params;
     switch (operation) {
       case "delete-agent": {
         if (

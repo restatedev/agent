@@ -20,6 +20,7 @@ export function context(key, initial = {}, call = () => { throw new Error("Unexp
     },
     invocation: id => ({signal: name => ({resolve: value => signals.push({id, name, value})})}),
     cancel: id => cancelled.push(id),
+    resolveAwakeable: (id, value) => signals.push({id, value}),
     run: (name, action) => real.run(name, action),
   };
   async function invoke(handler, input) {

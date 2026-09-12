@@ -36,6 +36,37 @@ below is intended for application clients.
 
 ## Supported conversation API
 
+### Public browser workspace sync
+
+The browser uses `POST /api/user/sync` on the authenticated BFF, not direct
+Restate ingress. Input:
+
+```ts
+{
+  revision: number | null; // null for bootstrap
+  profileRevision: number | null;
+  agents: Array<{
+    agentId: string;
+    notification?: AgentNotificationSnapshot; // omitted on first opening
+    nextSequence: number;
+  }>;
+}
+```
+
+The BFF derives the user identity from its session. It returns the user ID,
+global/profile revisions, current owned agent IDs, optional changed User profile,
+per-agent state deltas (`reset: true` for first load), and changed completion
+cursors. A single UserNotifications watch waits up to 25 seconds. Only opened
+agents need full data. Deleted agents are evicted; failures retain retry cursors
+and return generic per-agent errors without leaking provider details. Never
+advance cursors until the response data has been applied. A reset/future cursor
+requires a fresh snapshot. Responses are private and non-cacheable by HTTP caches.
+
+Internal `UserNotifications/{userId}` exposes `snapshot`, `watch`, `publish`,
+`subscribe`, and `unsubscribe`. Like other ingress handlers, these must remain
+behind the trusted BFF boundary. The existing per-agent API below remains usable
+by trusted internal clients; the web UI does not open per-agent watches.
+
 ### `Agent.ask`
 
 Input:
@@ -231,6 +262,10 @@ contact Tavily or Restate directly.
 
 Input is the complete `AgentTools` object above. Connection IDs must exist on
 the owner User. Saves grants for future turns and publishes `profile`.
+Omitted MCP connections default to all tools when authorized on that User;
+`{mode:"selected",names:[]}` explicitly opts this agent out. At turn start
+`User.snapshot` returns resolved `tools` alongside memories, servers, and
+credentials. Agent passes and stores these concrete grants for that turn.
 `Agent.toolCatalog` returns selectable built-in names and dynamic
 `service/handler` identities.
 

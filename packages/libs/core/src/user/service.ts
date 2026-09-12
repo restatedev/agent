@@ -1,5 +1,6 @@
 // The User owns external accounts. Agents hold grants, never refresh tokens.
 import type {
+  AgentTools,
   EncryptedSecret,
   McpAuthorizationRequest,
   McpAuthorizationResolution,
@@ -14,6 +15,7 @@ import {
   AgentDefinition,
   AgentNotificationsDefinition,
   UserDefinition,
+  UserNotificationsDefinition,
   UserSessionDefinition,
 } from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
@@ -52,6 +54,7 @@ export const User = restate.implement(UserDefinition, {
           errorCode: 409,
         });
       restate.state().set("identity", identity);
+      yield* notifyUser();
     },
     *profile(): restate.Operation<UserProfile> {
       const identity = yield* restate
@@ -83,6 +86,7 @@ export const User = restate.implement(UserDefinition, {
         .client(AgentDefinition, agent.agentId)
         .initialize({ownerUserId: key(), name: agent.name});
       restate.state().set("agents", [...list, agent]);
+      yield* notifyUser();
       return agent;
     },
     *ownsAgent({agentId}) {
@@ -90,7 +94,9 @@ export const User = restate.implement(UserDefinition, {
     },
     *updateMemory({agentId, changes}) {
       yield* requireAgent(agentId);
-      return yield* memory.apply(changes);
+      const result = yield* memory.apply(changes);
+      if (result.applied) yield* notifyUser();
+      return result;
     },
     *deleteAgent({agentId}) {
       const list = yield* agents();
@@ -114,6 +120,7 @@ export const User = restate.implement(UserDefinition, {
         "authorizations",
         pending.filter((auth) => auth.manual || auth.waiters.length > 0),
       );
+      yield* notifyUser();
       return true;
     },
     *connections() {
@@ -165,10 +172,22 @@ export const User = restate.implement(UserDefinition, {
     *snapshot({agentId, tools}) {
       yield* requireAgent(agentId);
       const list = yield* connections();
-      const selected = tools.mcp
+      // Unspecified connections default on, but only after authorization on
+      // this User. Explicit per-agent selections (including empty/off) win.
+      const grants: AgentTools["mcp"] = list
+        .filter((c) => c.server.auth.type === "none" || Boolean(c.credential))
+        .map(
+          (c) =>
+            tools.mcp.find((g) => g.connectionId === c.server.id) ?? {
+              connectionId: c.server.id,
+              tools: {mode: "all" as const},
+            },
+        );
+      const selected = grants
         .filter((g) => g.tools.mode === "all" || g.tools.names.length > 0)
         .flatMap((g) => list.filter((c) => c.server.id === g.connectionId));
       return {
+        tools: {...tools, mcp: grants},
         memories: yield* memory.read(),
         servers: selected.map((c) => c.server),
         credentials: selected.flatMap((c) =>
@@ -216,6 +235,7 @@ export const User = restate.implement(UserDefinition, {
       if (!connection) return false;
       connection.tools = tools;
       restate.state().set("connections", list);
+      yield* notifyUser();
       return true;
     },
     *requestMcpAuthorization({agentId, request}) {
@@ -408,10 +428,16 @@ function* nextRevision(): restate.Operation<number> {
   return revision;
 }
 function* notifyAgents(): restate.Operation<void> {
+  yield* notifyUser();
   for (const agent of yield* agents())
     yield* restate
       .sendClient(AgentNotificationsDefinition, agent.agentId)
       .publish("profile");
+}
+function* notifyUser(): restate.Operation<void> {
+  yield* restate
+    .sendClient(UserNotificationsDefinition, key())
+    .publish({kind: "profile"});
 }
 function* deliver(
   waiter: Waiter,

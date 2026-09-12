@@ -177,6 +177,23 @@ authoritative owner. The subscription re-check catches changes that happen
 before watch registration. See the [client protocol](protocol.md#following-state-correctly)
 for initial reads, cursors, and subsequent long-polls.
 
+### UserNotifications Virtual Object
+
+`UserNotifications`, keyed by user ID, aggregates workspace invalidations.
+AgentNotifications resolves an agent's immutable owner once, retains that
+binding, and relays changed topics by durable one-way send. User publishes
+shared profile changes directly. This object has a global revision, user-profile
+revision, per-agent topic watermarks, and awakeable subscriptions—not domain data.
+
+The browser has one `/api/user/sync` loop and an account-local workspace cache.
+The BFF authenticates, validates all requested IDs against the owned directory,
+captures the watermark before fetching changed state, and rechecks the session.
+History resumes at each cached agent's sequence; unopened agents load only
+completion metadata. A failed agent preserves the retry cursor while successful
+updates are returned. Views stay mounted across switching, including drafts and
+expanded sections; hidden views cannot clear unread badges. The BFF is stateless,
+so correctness does not depend on Cloud Run instance affinity.
+
 ### AgentScheduler Virtual Object
 
 `AgentScheduler`, keyed by `agentId`, owns the bounded schedule registry,
@@ -463,7 +480,7 @@ Agent profile mutations publish a `profile` notification; they are not themselve
 transcript entries. Shared memory writes go through Agent's active-turn check
 to User, which merges keyed changes atomically. A successful `manageMemory`
 tool emits a metadata-only `memory` transcript event from the active session.
-The user page displays memories through its existing User profile refresh.
+The user page refreshes memories through the UserNotifications feed.
 
 Guardrails are not sent to the main agent model. A dedicated evaluator gates
 the exact proposed text or complete tool batch with `allow`, `deny`, or

@@ -8,6 +8,7 @@ application, not a sandbox for arbitrary internet users.
 | --- | --- |
 | Google + BFF | Sign in, verify identity, manage browser cookies, enforce ownership and same-origin writes |
 | User VO | Verified identity, agent directory, shared memories, MCP connections and encrypted credentials/flows |
+| UserNotifications VO | Per-user revision feed for shared state and every owned agent; no transcripts or credentials |
 | UserSession VO | Expiry and revocation of a browser session, keyed by a hash of its opaque cookie |
 | Agent VO | Immutable owner, one conversation, profile/tool grants, approvals and per-turn authorization actions |
 | AgentSession.doTurn | Execute the snapshotted allowed tools; wait durably for authorization |
@@ -28,8 +29,8 @@ The prompt encourages relevant personalization and selective end-of-turn saves:
 ongoing projects, useful decisions, and stable preferences, not an automatic
 summary of every conversation. Memories are context data, never instructions.
 
-The user Connections page has a collapsed **Memories** section, refreshed with
-the User profile on the existing polling/focus cycle. Ask any agent to remember,
+The user **Profile & connectors** page has a collapsed **Memories** section, refreshed through
+the shared workspace notification feed. Ask any agent to remember,
 correct, or forget something. Deleting an agent does not delete user memories.
 Old agent-local memory state is left untouched but is not automatically migrated
 or injected into new turns.
@@ -90,9 +91,9 @@ through trusted internal Restate ingress.
 ## Account connections, agent grants
 
 The **Agents** sidebar shows a **New** badge when a turn finishes with a new
-response. While the page is visible, the browser polls the BFF every three
-seconds for lightweight completion cursors from the authenticated user's
-agents (bounded parallel reads, no conversation downloads). The badge clears
+response. One user-level long poll returns changed completion cursors alongside
+conversation and account updates. Unopened agents do not download conversation
+history; visited agents keep their conversation and UI state cached. The badge clears
 once that response is loaded in the focused, visible conversation. Switching
 agents, reconnecting and refreshing preserve unread status. Read receipts
 are scoped to the user and agent in browser local storage and synchronized
@@ -100,18 +101,41 @@ across tabs; they are not shared across devices. If browser storage is blocked,
 receipts fall back to memory for that page lifetime. This is an in-app indicator,
 not an OS notification or a browser-permission prompt.
 
-Use **Connections** in the sidebar to add presets/custom endpoints and authorize
+### Workspace synchronization and isolation
+
+`POST /api/user/sync` accepts only cache revisions and up to 100 agent cursors,
+never a user ID, session ID, service name, or arbitrary handler. The BFF derives
+the notification key from the authenticated cookie/session, checks every
+requested agent against that User's directory before any agent read, and rejects
+mixed owned/foreign IDs. It rechecks the session after waiting and before
+releasing data. Feed entries never confer ownership: reads enumerate only the
+authenticated directory, and deleted agents are removed from the response/cache.
+Responses use `Cache-Control: private, no-store`; same-origin checks also apply.
+
+Browser caches belong to one mounted user workspace, not module-global state
+or local storage. Logout/session loss clears loaded data; an account change
+remounts the workspace. Only read receipts are persisted, under user-scoped keys.
+Switching agents retains drafts and expanded transcript details. Hidden views
+never mark responses as read. A page refresh rebuilds the cache from the server.
+
+The BFF holds no cross-request authorization or conversation cache. Restate
+ingress (including UserNotifications and AgentSession) must remain private;
+internal handlers trust the BFF/operator and are not public authentication APIs.
+
+Use **Profile & connectors** in the sidebar to add presets/custom endpoints and authorize
 OAuth or save a bearer token. Credentials and PKCE state are encrypted before
 Restate ingress. A saved credential does not prove it is valid; **Test
 connection** checks the remote server.
 
 Create an agent by name, then use **Context → Tool access**:
 
-- Authorize connections once on the account's **Connections** page.
-- Each agent has one on/off switch per connection. On grants all of that
-  connection's tools (including future tools); off removes only this agent's
-  grant, without disconnecting the account or changing other agents.
-- Unauthenticated connections link back to **Connections** for authorization.
+- Authorize connections once on the account's **Profile & connectors** page.
+- Authorized connections are enabled automatically at every new turn, including
+  newly authorized accounts and newly discovered tools. No per-agent opt-in is needed.
+- Each agent has one on/off switch per connection. Off saves an explicit empty
+  selection, without disconnecting the account or changing other agents. That
+  opt-out survives later turns and reconnects. On grants all of its tools again.
+- Unauthenticated connections link back to **Profile & connectors** for authorization.
 - Built-in and dynamic tools have compact name-only switches in expandable
   groups. No per-agent discovery step, access-mode dropdown, or tool-description
   list is required. Changes apply to the next turn.
@@ -134,7 +158,10 @@ Built-in selections use tool names. Dynamic selections use stable
 qualified model aliases. “All” explicitly includes future discovered tools;
 “selected” with an empty list grants nothing.
 
-New agents allow built-ins, but no dynamic or MCP tools. The model catalog,
+New agents allow built-ins and their owner's authorized MCP connections, but
+no dynamic tools. An omitted MCP entry defaults to all only when User resolves
+the turn snapshot; an explicit selection still restricts it. Connections without
+credentials are excluded unless they require no authentication. The model catalog,
 direct dispatcher and PTC child dispatcher enforce the same grants. Existing
 guardrails and approvals still apply to the allowed concrete calls. Per-agent
 changes publish profile invalidation and apply to the next turn.

@@ -600,8 +600,11 @@ once per turn. Their execution remains distinct:
 
 ### Configuration
 
-Add each trusted server to the user's Connections page or trusted
-`User.upsertConnection`, then grant its tools through `Agent.setTools`:
+Add each trusted server to the user's **Profile & connectors** page or trusted
+`User.upsertConnection`, then authorize it. Each new turn automatically includes
+the owner's authorized connections unless explicitly opted out in Agent tool
+access. `Agent.setTools` can save an empty selection to disable a connection or
+a nonempty selection to restrict its tools:
 
 ```json
 {
@@ -624,7 +627,8 @@ Fields:
 | `auth.type` | yes | `none`, `oauth`, or `bearer` for a user-supplied access token |
 
 Server IDs are unique per User. Configuration is credential-free and User-owned;
-the Agent profile holds only tool grants. The User snapshots permitted
+the Agent profile holds only tool overrides. User resolves default-on access
+and explicit overrides into concrete grants, and snapshots permitted
 connections into each turn with a durable connection revision. Credentials stay
 encrypted in User state and only `{serverId, encryptedToken}` enters a turn.
 Full OAuth state remains on the User/BFF boundary. See

@@ -18,18 +18,19 @@ export function toggleTool(
 
 export function connectionEnabled(tools: AgentTools, connectionId: string) {
   const grant = tools.mcp.find((g) => g.connectionId === connectionId);
-  return Boolean(
-    grant && (grant.tools.mode === "all" || grant.tools.names.length),
-  );
+  return !grant || grant.tools.mode === "all" || grant.tools.names.length > 0;
 }
 
-/** One opt-in grants the connection's tools; off removes only this Agent's grant. */
+/** Off must be explicit: omission means default-on for authorized connections. */
 export function toggleConnection(
   tools: AgentTools,
   connectionId: string,
   enabled: boolean,
 ): AgentTools {
   const mcp = tools.mcp.filter((g) => g.connectionId !== connectionId);
-  if (enabled) mcp.push({connectionId, tools: {mode: "all"}});
+  mcp.push({
+    connectionId,
+    tools: enabled ? {mode: "all"} : {mode: "selected", names: []},
+  });
   return {...tools, mcp};
 }

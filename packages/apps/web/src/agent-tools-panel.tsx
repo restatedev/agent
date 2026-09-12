@@ -149,16 +149,17 @@ export function AgentToolsPanel({
         <strong>Tool access</strong>
       </div>
       <p className="empty-copy">
-        Enable tools for this agent. Changes apply to the next turn.
+        Authorized connectors are enabled automatically each turn. Switch off
+        any this agent should not use; your opt-outs are remembered.
       </p>
       <div className="agent-tool-list">
         {user.profile.connections.map((connection) => {
           const id = connection.server.id;
           const label =
             MCP_SERVER_PRESETS.find((preset) => preset.id === id)?.label ?? id;
-          const enabled = connectionEnabled(permissions, id);
           const ready =
             connection.connected || connection.server.auth.type === "none";
+          const enabled = ready && connectionEnabled(permissions, id);
           return (
             <div key={id}>
               <ToolSwitch
@@ -171,7 +172,7 @@ export function AgentToolsPanel({
               />
               {!ready && (
                 <a className="agent-tool-connect" href="/">
-                  Authorize {label} in Connections
+                  Authorize {label} in Profile &amp; connectors
                 </a>
               )}
             </div>
@@ -182,7 +183,7 @@ export function AgentToolsPanel({
         <p className="empty-copy">No connections yet.</p>
       )}
       <a className="agent-tool-connect" href="/">
-        Manage account connections
+        Manage profile &amp; connectors
       </a>
       {permissions.mcp
         .filter(

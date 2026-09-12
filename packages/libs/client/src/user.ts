@@ -11,6 +11,8 @@ import type {
 import {
   UserIngressDefinition,
   type UserIngressHandlers,
+  UserNotificationsIngressDefinition,
+  type UserNotificationsIngressHandlers,
   UserSessionIngressDefinition,
   type UserSessionIngressHandlers,
 } from "@restate-agents/types/targets";
@@ -25,7 +27,23 @@ export function createUserClient({
     url: options.ingressUrl,
     headers: options.headers,
   }).objectClient<UserIngressHandlers>(UserIngressDefinition, userId);
+  const notifications = connect({
+    url: options.ingressUrl,
+    headers: options.headers,
+  }).objectClient<UserNotificationsIngressHandlers>(
+    UserNotificationsIngressDefinition,
+    userId,
+  );
   return {
+    notifications: () => notifications.snapshot(rpc.opts({input: serde.empty})),
+    watchNotifications: (
+      afterRevision: number,
+      options?: {signal?: AbortSignal; idempotencyKey?: string},
+    ) =>
+      notifications.watch(
+        {afterRevision, timeoutSeconds: 25},
+        rpc.opts(options ?? {}),
+      ),
     register: (identity: UserIdentity) => user.register(identity),
     profile: () => user.profile(rpc.opts({input: serde.empty})),
     connections: () => user.connections(rpc.opts({input: serde.empty})),

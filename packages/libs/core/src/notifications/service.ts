@@ -11,7 +11,11 @@ import type {
   AgentNotificationSnapshot,
   AgentNotificationSubscription,
 } from "@restate-agents/types";
-import {AgentNotificationsDefinition} from "@restate-agents/types/services";
+import {
+  AgentDefinition,
+  AgentNotificationsDefinition,
+  UserNotificationsDefinition,
+} from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {raceBranches} from "../race.js";
@@ -45,6 +49,21 @@ export const AgentNotifications = restate.implement(
           versions: {...current.versions, [topic]: revision},
         };
         restate.state().set(SNAPSHOT, snapshot);
+
+        // Route by immutable ownership, never a caller-provided user ID. Cache
+        // only successful ownership lookups (also covers already-existing agents).
+        let owner = yield* restate.state().get<string>("owner");
+        if (!owner) {
+          owner =
+            (yield* restate
+              .client(AgentDefinition, notificationKey())
+              .ownership())?.ownerUserId ?? null;
+          if (owner) restate.state().set("owner", owner);
+        }
+        if (owner)
+          yield* restate
+            .sendClient(UserNotificationsDefinition, owner)
+            .publish({kind: "agent", agentId: notificationKey(), topic});
 
         const subscriptions = yield* readSubscriptions();
         const ready = subscriptions.filter(

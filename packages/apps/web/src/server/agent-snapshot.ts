@@ -16,11 +16,12 @@ type SnapshotClient = Pick<
 export async function loadAgentSnapshot(
   client: SnapshotClient,
   signal: AbortSignal,
+  watermark?: AgentSnapshot["notification"],
 ): Promise<AgentSnapshot> {
   signal.throwIfAborted();
   // Capture the watermark BEFORE reading data: changes during loading must
   // still wake the browser's first watch. This is not an atomic VO snapshot.
-  const notification = await client.notifications();
+  const notification = watermark ?? (await client.notifications());
   signal.throwIfAborted();
   const [profile, approvals, mcpAuthorizations, schedules, history] =
     await Promise.all([
@@ -55,6 +56,23 @@ export async function syncAgentSnapshot(
     options,
   );
   options.signal.throwIfAborted();
+  return readAgentSnapshotUpdate(
+    client,
+    since,
+    notification,
+    fromSequence,
+    options.signal,
+  );
+}
+
+export async function readAgentSnapshotUpdate(
+  client: SnapshotClient,
+  since: AgentSnapshot["notification"],
+  notification: AgentSnapshot["notification"],
+  fromSequence: number,
+  signal: AbortSignal,
+): Promise<AgentSnapshotUpdate> {
+  signal.throwIfAborted();
   const result: AgentSnapshotUpdate = {notification};
   const changed = (topic: keyof typeof since.versions) =>
     notification.versions[topic] !== since.versions[topic];
@@ -76,11 +94,11 @@ export async function syncAgentSnapshot(
         result.schedules = value;
       }),
     changed("history") &&
-      readHistory(client, options.signal, fromSequence).then((value) => {
+      readHistory(client, signal, fromSequence).then((value) => {
         result.history = value;
       }),
   ]);
-  options.signal.throwIfAborted();
+  signal.throwIfAborted();
   return result;
 }
 

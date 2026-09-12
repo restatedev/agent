@@ -13,10 +13,10 @@ test("deleting an owned agent revokes membership, retains connections and queues
   assert.deepEqual(f.state.get("agents"), [{agentId: "b", name: "B"}]);
   assert.equal(f.state.get("connections").length, 1);
   assert.equal(f.state.get("deleted-agent:a"), true);
-  assert.deepEqual(f.sends.map(({service, key, method, parameter}) => ({service, key, method, parameter})), [{service: "Agent", key: "a", method: "retire", parameter: {ownerUserId: "alice"}}]);
+  assert.deepEqual(f.sends.map(({service, key, method, parameter}) => ({service, key, method, parameter})), [{service: "Agent", key: "a", method: "retire", parameter: {ownerUserId: "alice"}}, {service: "UserNotifications", key: "alice", method: "publish", parameter: {kind: "profile"}}]);
   assert.equal(await f.invoke(User.object.ownsAgent, {agentId: "a"}), false);
   assert.equal(await f.invoke(User.object.deleteAgent, {agentId: "a"}), false);
-  assert.equal(f.sends.length, 1);
+  assert.equal(f.sends.length, 2);
 });
 
 test("deletion cannot target another user's agent", async () => {

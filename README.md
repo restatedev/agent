@@ -69,9 +69,9 @@ chain-of-thought.
 | Selective cancellation | The model can cancel one pending operation by stable ID without stopping unrelated work. |
 | Runtime guardrails | A separate policy pass gates the exact proposed text or complete tool batch before it runs. Non-allow decisions receive an independent confirmation pass. |
 | Human-in-the-loop approval | Policy gates and the explicit approval tool register durable Agent state and resume through turn-scoped signals. |
-| User identity and ownership | Google Workspace sign-in restricted to `restate.dev` through the BFF, private per-user agents, account-level connections, and per-agent tool grants. See [setup](docs/user-identity.md). |
+| User identity and ownership | Google Workspace sign-in restricted to `restate.dev` through the BFF, private per-user agents, and account-level connections. Authorized MCP tools are enabled each turn by default, with persistent per-agent opt-outs. See [setup](docs/user-identity.md). |
 | Persistent context | Instructions, guardrails, tool grants, and web search availability are durable per Agent. Semantic memories are shared per User; Agent includes the entire collection in each turn. |
-| General change notifications | `AgentNotifications/{agentId}` maintains revisioned `history`, `profile`, `approvals`, `mcpAuth`, and `schedules` watermarks that wake clients to re-read authoritative state. |
+| Workspace notifications and caching | One `UserNotifications/{userId}` feed synchronizes all agents and shared user state. Visited conversations, drafts, and expanded details stay cached when switching agents; the BFF fetches only changed data. |
 | Non-destructive compaction | Older conversation prefixes are summarized for model context without rewriting or deleting transcript entries. |
 | Semantic activity | Progress, concise model-authored activity, and structured tool lifecycle make multi-step runs readable without exposing chain-of-thought or raw tool data. |
 | Durable schedules | `AgentScheduler/{agentId}` owns durable one-shot and fixed-interval messages and delivers them through the Agent's generic `queue`, `steer`, or `interrupt` router. |
@@ -247,6 +247,14 @@ Clients drain history and re-read profile, approvals, MCP authorization
 actions, or schedules when their watermark advances. The internal registration
 re-check closes the read/watch race, and timeout/cancellation withdraws
 abandoned subscriptions.
+
+The web UI uses a single authenticated `POST /api/user/sync` instead of one
+watch per agent. `AgentNotifications` relays topic changes to the immutable
+owner's `UserNotifications`; User publishes changes to memories, connections,
+and the directory there too. The browser retains visited conversations and
+uses incremental history cursors. Unopened agents need only completion markers
+for sidebar badges. The BFF is stateless and verifies ownership before reads;
+there is no shared cross-user conversation cache.
 
 History contains user/assistant messages, control boundaries, resolved
 approvals, progress, concise activity, tool lifecycle, memory metadata,

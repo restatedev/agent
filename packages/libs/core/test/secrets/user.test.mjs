@@ -71,10 +71,10 @@ test("OAuth compare-and-set rejects concurrent starts and superseded completions
   assert.equal(f.state.get("connections")[0].credential,undefined);
 });
 
-test("cross-user agent access, removed generations and empty grants fail closed",async()=>{
+test("cross-user agent access, removed generations and unauthorized connections fail closed",async()=>{
   const f=await setup();
   assert.match((await f.invoke("snapshot",{agentId:"foreign-agent",tools:permissions})).output.error,/does not belong/);
-  assert.deepEqual((await f.invoke("snapshot",{agentId:"agent-a",tools:{...permissions,mcp:[]}})).output.value,{servers:[],credentials:[]});
+  assert.deepEqual((await f.invoke("snapshot",{agentId:"agent-a",tools:{...permissions,mcp:[]}})).output.value,{tools:{...permissions,mcp:[]},memories:[],servers:[],credentials:[]});
   await f.invoke("requestMcpAuthorization",{agentId:"agent-a",request:request("first")});
   await f.invoke("removeConnection",{id:"notion"});
   await f.invoke("upsertConnection",server);
@@ -108,7 +108,7 @@ test("next turn receives the owner's ciphertext and immutable grant snapshot",as
   const credential=sealMcpToken("user-a","notion","turn-token");
   const f=objectFixture(Agent,{key:"agent-a",state:new Map([["ownership",{ownerUserId:"user-a",name:"A"}],["profile/tools",permissions]]),rpc:opts=>{
     assert.equal(opts.service,"User");assert.equal(opts.key,"user-a");assert.equal(opts.method,"snapshot");
-    return {servers:[{...server,revision:1}],credentials:[credential]};
+    return {tools:permissions,memories:[],servers:[{...server,revision:1}],credentials:[credential]};
   }});
   assert.equal((await f.invoke("ask",{message:"Hello"})).output.value.decision,"start");
   const request=f.effects.find(e=>e.method==="doTurn").parameter;
