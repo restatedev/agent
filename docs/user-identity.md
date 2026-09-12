@@ -189,9 +189,19 @@ Responses use `Cache-Control: private, no-store`; same-origin checks also apply.
 
 Browser caches belong to one mounted user workspace, not module-global state
 or local storage. Logout/session loss clears loaded data; an account change
-remounts the workspace. Only read receipts are persisted, under user-scoped keys.
+remounts the workspace. Read receipts are persisted under user-scoped keys.
 Switching agents retains drafts and expanded transcript details. Hidden views
 never mark responses as read. A page refresh rebuilds the cache from the server.
+
+The selected agent lives in React state, with only its ID remembered in
+user-scoped `sessionStorage` for this tab. Refresh restores it only if it is
+still in the authenticated user's agent directory; deleted or foreign IDs are
+discarded. Choosing **Profile & connectors** clears the remembered selection.
+Blocked browser storage falls back to in-memory navigation. Agent switching
+does not change the URL or create browser history entries. Incoming `?agent=`
+links (including OAuth returns) are consumed once and removed from the address
+bar, preserving other query parameters and the hash. Stored selection is a UI
+preference, never authorization; all BFF ownership checks remain in place.
 
 The BFF holds no process-local cross-request authorization or conversation cache;
 authorization leases travel encrypted through the browser. Restate

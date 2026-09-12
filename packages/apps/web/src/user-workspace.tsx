@@ -11,8 +11,8 @@ import {
   X,
 } from "lucide-react";
 import {useCallback, useEffect, useRef, useState} from "react";
-import {App} from "./app";
 import {agentSubtree, agentTree} from "./agent-tree";
+import {App} from "./app";
 import {MCP_SERVER_PRESETS} from "./mcp-presets";
 import {useAgentInbox} from "./use-agent-inbox";
 import {useWorkspace, WorkspaceCacheContext} from "./use-workspace";
@@ -26,7 +26,9 @@ export function UserWorkspace({
   initialUser: UserProfile;
   initialAgentId?: string;
 }) {
-  const [selected, setSelected] = useState(initialAgentId);
+  const [selected, setSelected] = useState<string>();
+  const [selectionReady, setSelectionReady] = useState(false);
+  const selectionKey = `restate:selected-agent:${initialUser.identity.userId}`;
   const {cache, state} = useWorkspace(initialUser, selected);
   const profile = state.profile;
   const [name, setName] = useState("");
@@ -50,15 +52,40 @@ export function UserWorkspace({
     if (version === refreshVersion.current) cache.setProfile(next);
   }, [cache]);
   useEffect(() => {
-    const read = () => {
-      const id = new URL(window.location.href).searchParams.get("agent");
-      setSelected(id ?? undefined);
-    };
-    window.addEventListener("popstate", read);
-    return () => window.removeEventListener("popstate", read);
-  }, []);
+    let remembered: string | null = null;
+    try {
+      remembered = window.sessionStorage.getItem(selectionKey);
+    } catch {
+      // Private browsing/storage restrictions must not prevent navigation.
+    }
+    // Links and OAuth returns are one-time entry points, not navigation state.
+    const requested = initialAgentId ?? remembered;
+    setSelected(
+      initialUser.agents.some((a) => a.agentId === requested)
+        ? (requested ?? undefined)
+        : undefined,
+    );
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("agent")) {
+      url.searchParams.delete("agent");
+      window.history.replaceState(window.history.state, "", url);
+    }
+    setSelectionReady(true);
+  }, [initialAgentId, initialUser, selectionKey]);
   useEffect(() => {
-    // Also reveal children selected through browser back/forward navigation.
+    if (!selectionReady) return;
+    const owned = profile.agents.some((a) => a.agentId === selected);
+    if (selected && !owned) setSelected(undefined);
+    try {
+      if (selected && owned)
+        window.sessionStorage.setItem(selectionKey, selected);
+      else window.sessionStorage.removeItem(selectionKey);
+    } catch {
+      // Selection still works in memory when browser storage is unavailable.
+    }
+  }, [selected, selectionReady, selectionKey, profile.agents]);
+  useEffect(() => {
+    // Reveal a restored child even when its parent was folded.
     if (selected)
       setCollapsed((previous) => {
         const next = new Set(
@@ -81,10 +108,6 @@ export function UserWorkspace({
           ),
       );
     setSelected(id);
-    const url = new URL(window.location.href);
-    if (id) url.searchParams.set("agent", id);
-    else url.searchParams.delete("agent");
-    window.history.pushState(null, "", url);
   }
   const agent = profile.agents.find((agent) => agent.agentId === selected);
   async function deleteAgent(agentId: string, agentName: string) {
@@ -329,7 +352,11 @@ export function UserWorkspace({
                   />
                 </div>
               ))}
-            {!agent &&
+            {!selectionReady && (
+              <p className="empty-copy">Loading workspace…</p>
+            )}
+            {selectionReady &&
+              !agent &&
               (selected ? (
                 <div className="account-pane">
                   <h1>Agent not found</h1>
