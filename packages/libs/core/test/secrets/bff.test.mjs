@@ -49,6 +49,10 @@ const result = await build({
       export const computeScopeUnion = (...scopes) => scopes.filter(Boolean).join(' ');
       export const isStrictScopeSuperset = () => false;
       export async function auth(provider, options) {
+        // Match Attio's registration requirement rather than silently accepting
+        // incomplete client metadata in the OAuth stub.
+        if (JSON.stringify(provider.clientMetadata.response_types) !== '["code"]')
+          throw Error('OAuth registration must explicitly request the code response type');
         if (options.authorizationCode) {
           if (provider.codeVerifier() !== 'fixture-pkce-secret') throw Error('PKCE was not restored');
           if (provider.clientInformation().client_secret !== 'fixture-client-secret') throw Error('Client was not restored');

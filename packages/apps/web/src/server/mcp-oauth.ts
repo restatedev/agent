@@ -326,6 +326,8 @@ class OAuthProvider implements OAuthClientProvider {
     return {
       client_name: "Restate Agent",
       redirect_uris: [this.redirectUrl],
+      // Attio requires this explicitly during dynamic client registration.
+      response_types: ["code"],
     };
   }
 
