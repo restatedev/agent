@@ -1,5 +1,6 @@
 import {
   Bug,
+  ContactRound,
   FileText,
   GitBranch,
   HardDrive,
@@ -9,6 +10,15 @@ import {
   Shapes,
 } from "lucide-react";
 export const MCP_SERVER_PRESETS = [
+  {
+    id: "attio",
+    label: "Attio",
+    url: "https://mcp.attio.com/mcp",
+    protocol: "stateful",
+    authType: "oauth",
+    setup: "One-click OAuth",
+    icon: ContactRound,
+  },
   {
     id: "slack",
     label: "Slack",

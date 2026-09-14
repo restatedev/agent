@@ -236,6 +236,12 @@ OAuth or save a bearer token. Credentials and PKCE state are encrypted before
 Restate ingress. A saved credential does not prove it is valid; **Test
 connection** checks the remote server.
 
+The **Attio** preset uses the official `https://mcp.attio.com/mcp` endpoint,
+the stateful/initialize MCP protocol, and OAuth with dynamic client registration.
+Add Attio, authorize your workspace, then use **Test connection**. No Attio API
+key or preconfigured OAuth client is required. See
+[Attio's MCP setup guide](https://docs.attio.com/mcp/overview).
+
 Create an agent by name, then use **Context → Tool access**:
 
 - Authorize connections once on the account's **Profile & connectors** page.

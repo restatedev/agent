@@ -2061,6 +2061,11 @@ svg {
   color: #c42874;
 }
 
+.mcp-preset-icon[data-provider="attio"] {
+  background: rgba(88, 166, 255, 0.12);
+  color: #79b8ff;
+}
+
 .mcp-preset-icon[data-provider="notion"] {
   background: rgba(24, 24, 24, 0.1);
   color: var(--text);
