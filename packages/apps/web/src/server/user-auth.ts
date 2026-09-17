@@ -16,7 +16,12 @@ import {
   sealWorkspaceAccess,
   verifyAgentAccess,
 } from "./auth-tokens";
+import {developmentIdentity, developmentIdentityLoader} from "./dev-auth";
 import {agentClient, BffError, userClient, userSessionClient} from "./restate";
+
+const loadDevelopmentIdentity = developmentIdentityLoader((identity) =>
+  userClient(identity.userId).register(identity),
+);
 
 const SESSION_COOKIE = "restate-session";
 const LOGIN_COOKIE = "restate-login";
@@ -110,7 +115,12 @@ function tokenAudience() {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
     .sort();
-  return JSON.stringify([appOrigin(), GOOGLE_HOSTED_DOMAIN, allowed]);
+  return JSON.stringify([
+    appOrigin(),
+    GOOGLE_HOSTED_DOMAIN,
+    allowed,
+    ...(developmentIdentity() ? ["development-bypass"] : []),
+  ]);
 }
 function sessionClaims(
   sessionId: string,
@@ -129,6 +139,21 @@ export async function currentUser({
 }: {
   renewCookie?: boolean;
 } = {}) {
+  const development = await loadDevelopmentIdentity();
+  if (development) {
+    // No browser cookie or Google identity is used in this mode. A stable
+    // synthetic session keeps MCP OAuth callbacks and workspace sync coherent.
+    const claims = sessionClaims("development-session-v1", {
+      userId: development.userId,
+      expiresAt: Date.now() + SESSION_TTL * 1000,
+    });
+    return {
+      userId: claims.userId,
+      sessionId: claims.sessionId,
+      claims,
+      client: userClient(claims.userId),
+    };
+  }
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -219,6 +244,7 @@ export async function authorizeWorkspace(
   };
 }
 export async function startGoogleLogin(): Promise<NextResponse> {
+  if (developmentIdentity()) return NextResponse.redirect(appOrigin());
   const client = google();
   const {codeVerifier, codeChallenge} =
     await client.generateCodeVerifierAsync();
@@ -251,6 +277,7 @@ export async function startGoogleLogin(): Promise<NextResponse> {
 export async function finishGoogleLogin(
   request: Request,
 ): Promise<NextResponse> {
+  if (developmentIdentity()) return NextResponse.redirect(appOrigin());
   const value = (await cookies()).get(LOGIN_COOKIE)?.value;
   if (!value) throw new BffError(400, "Login expired; sign in again");
   let flow: {
@@ -364,7 +391,8 @@ export async function finishGoogleLogin(
 export async function logout(request: Request): Promise<NextResponse> {
   requireSameOrigin(request);
   const user = await currentUser({renewCookie: false});
-  if (user) await userSessionClient(user.sessionId).revoke();
+  if (user && !developmentIdentity())
+    await userSessionClient(user.sessionId).revoke();
   const response = NextResponse.redirect(appOrigin(), 303);
   response.cookies.set(SESSION_COOKIE, "", cookieOptions(0));
   return response;

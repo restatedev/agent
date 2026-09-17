@@ -393,12 +393,14 @@ export function UserWorkspace({
                 {error}
               </p>
             )}
-            <form action="/api/auth/logout" method="post">
-              <button type="submit" className="button ghost small">
-                <LogOut />
-                Sign out
-              </button>
-            </form>
+            {profile.identity.issuer !== "urn:restate:development" && (
+              <form action="/api/auth/logout" method="post">
+                <button type="submit" className="button ghost small">
+                  <LogOut />
+                  Sign out
+                </button>
+              </form>
+            )}
           </aside>
           <div className="agent-workspace">
             {profile.agents

@@ -20,6 +20,21 @@ pnpm install
 
 ## Start the stack
 
+For local development without Google sign-in, set `AUTH_DEV_BYPASS=true` on
+the web/BFF process (for example, `AUTH_DEV_BYPASS=true pnpm --filter
+@restate-agents/web dev`). It defaults to off and is rejected outside
+`NODE_ENV=development` or `test`. No Google client credentials are needed in
+this mode. The app opens as **Development User**, user ID `dev-user`, email
+`developer@example.test`, with a separate development issuer—not an existing
+Google account. Sign out is hidden while the bypass is enabled.
+
+Anyone who can reach that BFF shares this account and its agents/connectors:
+use only on a trusted local development instance, never a public tunnel.
+Agent ownership, same-origin checks, and MCP connector authorization still
+apply. Disable the flag and restart the BFF to restore normal Google login;
+development data remains separate. User registration is cached per BFF process,
+so restart the BFF after wiping Restate state.
+
 Scope-based model flow control is used by the example. Enable its Restate
 protocol features when starting a fresh local server:
 

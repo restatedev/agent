@@ -120,7 +120,7 @@ export const DEFAULT_AGENT_TOOLS: AgentTools = {
 };
 export const UserIdentitySchema = z.object({
   userId: z.string().min(1),
-  issuer: z.literal("https://accounts.google.com"),
+  issuer: z.enum(["https://accounts.google.com", "urn:restate:development"]),
   subject: z.string().min(1),
   displayName: z.string(),
   email: z.string(),
