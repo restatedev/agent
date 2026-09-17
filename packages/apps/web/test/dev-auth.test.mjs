@@ -21,13 +21,14 @@ test("development identity is fixed, isolated from Google, and valid", () => {
   assert.equal(developmentIdentity({NODE_ENV: "test", AUTH_DEV_BYPASS: "true"}).userId, "dev-user");
 });
 
-test("production and unspecified environments refuse enabled bypass", () => {
-  for (const mode of ["production", undefined, "staging"]) {
-    assert.throws(() => developmentIdentity({NODE_ENV: mode, AUTH_DEV_BYPASS: "true"}), /only allowed in development or test/);
+test("explicit bypass works in every environment, including next start production mode", () => {
+  for (const mode of ["development", "test", "production", undefined, "staging"]) {
+    assert.equal(developmentIdentity({NODE_ENV: mode, AUTH_DEV_BYPASS: "true"}).userId, "dev-user");
+    assert.equal(developmentIdentity({NODE_ENV: mode}), null);
   }
 });
 
-test("registration coalesces, retries failure, and never skips the environment check", async t => {
+test("registration coalesces, retries failure, and always checks the bypass flag", async t => {
   const oldFlag = process.env.AUTH_DEV_BYPASS, oldMode = process.env.NODE_ENV;
   t.after(() => {
     if (oldFlag === undefined) delete process.env.AUTH_DEV_BYPASS; else process.env.AUTH_DEV_BYPASS = oldFlag;
@@ -48,7 +49,8 @@ test("registration coalesces, retries failure, and never skips the environment c
   assert.equal(calls, 2);
   assert.ok(identities.every(i => i.userId === "dev-user"));
   process.env.NODE_ENV = "production";
-  await assert.rejects(load(), /only allowed in development or test/);
+  assert.equal((await load()).userId, "dev-user");
+  assert.equal(calls, 2);
   process.env.AUTH_DEV_BYPASS = "false";
   assert.equal(await load(), null);
 });

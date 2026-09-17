@@ -22,8 +22,9 @@ pnpm install
 
 For local development without Google sign-in, set `AUTH_DEV_BYPASS=true` on
 the web/BFF process (for example, `AUTH_DEV_BYPASS=true pnpm --filter
-@restate-agents/web dev`). It defaults to off and is rejected outside
-`NODE_ENV=development` or `test`. No Google client credentials are needed in
+@restate-agents/web dev`). It defaults to off and also works with production
+builds started via `AUTH_DEV_BYPASS=true pnpm --filter @restate-agents/web start`
+(`next start`), regardless of `NODE_ENV`. No Google client credentials are needed in
 this mode. The app opens as **Development User**, user ID `dev-user`, email
 `developer@example.test`, with a separate development issuer—not an existing
 Google account. Sign out is hidden while the bypass is enabled.

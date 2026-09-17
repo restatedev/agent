@@ -11,10 +11,6 @@ const IDENTITY: UserIdentity = {
 /** Server configuration only; never accept a caller-selected identity. */
 export function developmentIdentity(env = process.env): UserIdentity | null {
   if (env.AUTH_DEV_BYPASS !== "true") return null;
-  if (env.NODE_ENV !== "development" && env.NODE_ENV !== "test")
-    throw new Error(
-      "AUTH_DEV_BYPASS is only allowed in development or test; disable it in production.",
-    );
   return {...IDENTITY};
 }
 
