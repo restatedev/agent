@@ -9,7 +9,7 @@ import {
   type ConversationCompactionInput,
   isDerivedConversationEvent,
 } from "../internal-types.js";
-import {withOpenAI} from "./model.js";
+import {withOpenAI} from "./provider.js";
 
 const COMPACTOR_MODEL = "gpt-4o-mini";
 

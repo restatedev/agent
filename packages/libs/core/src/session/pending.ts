@@ -76,7 +76,7 @@
 
 import * as restate from "@restatedev/restate-sdk-gen";
 
-import type {ToolCall} from "../gateway/index.js";
+import type {ToolCall} from "../model/index.js";
 import {raceBranches} from "../race.js";
 import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";

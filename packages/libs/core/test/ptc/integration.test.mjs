@@ -4,6 +4,7 @@ import * as durable from "@restatedev/restate-sdk-gen";
 import {agentStep, settleStep} from "../../src/session/step.ts";
 import * as agentTools from "../../src/session/tools.ts";
 import {createPendingOperations} from "../../src/session/pending.ts";
+import {modelProvider} from "../../src/model/provider.ts";
 import {runHandler} from "./harness.mjs";
 
 const dynamic = {
@@ -78,6 +79,14 @@ function contextWithFixtures(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+}
+
+// Model calls are journaled runs inside the turn; replace the provider so the
+// run records a fixture result instead of calling OpenAI.
+function stubModel(t, {complete, guardrails = () => ({decision: "allow"})}) {
+  t.mock.method(modelProvider, "completeAgent", async (request) => complete(request));
+  t.mock.method(modelProvider, "evaluateGuardrails", async (request) => guardrails(request));
+  t.mock.method(modelProvider, "confirmGuardrailDecision", async () => true);
 }
 
 function toolContext() {
@@ -229,7 +238,7 @@ test("PTC dispatches static, dynamic and MCP tools with environment credentials 
 
 test("only concrete subtools are policy checked, with normal human approval and pending completion", {
   timeout: 8000,
-}, async () => {
+}, async (t) => {
   const source = `async tools => {
     const decision = await tools.humanApproval({question: 'May I continue?'});
     if (!decision.startsWith('Human approved')) return {decision};
@@ -261,26 +270,26 @@ test("only concrete subtools are policy checked, with normal human approval and 
         {toolCallId: "program", toolName: "executeProgram", input: {source}},
       ],
     };
+    stubModel(t, {
+      complete() {
+        effects.push("complete");
+        return action;
+      },
+      guardrails(request) {
+        effects.push("evaluateGuardrails");
+        const calls = request.action.calls;
+        policies.push(...calls);
+        assert.ok(calls.every((call) => call.toolName !== "executeProgram"));
+        return calls.some((call) => call.input.city === "Paris")
+          ? {decision: "deny", guardrailId: "cities", reason: "Paris is blocked"}
+          : {decision: "allow"};
+      },
+    });
     const result = await runHandler(
       (ctx) =>
         durable.execute(
           contextWithFixtures(ctx, (opts) => {
             effects.push(opts.method);
-            if (opts.method === "complete") return action;
-            if (opts.method === "evaluateGuardrails") {
-              const calls = opts.parameter.action.calls;
-              policies.push(...calls);
-              assert.ok(
-                calls.every((call) => call.toolName !== "executeProgram"),
-              );
-              return calls.some((call) => call.input.city === "Paris")
-                ? {
-                    decision: "deny",
-                    guardrailId: "cities",
-                    reason: "Paris is blocked",
-                  }
-                : {decision: "allow"};
-            }
             if (opts.method === "requestApproval") {
               approvals.push(opts.parameter);
               return true;
@@ -405,7 +414,7 @@ test("PTC routes cancelOperation to the existing turn operation supervisor", asy
 
 test("turn interruption cancels a nested approval even between registration and its wait", {
   timeout: 8000,
-}, async () => {
+}, async (t) => {
   const entries = [],
     cancellations = [];
   const source = "async tools => tools.humanApproval({question: 'Continue?'})";
@@ -414,18 +423,16 @@ test("turn interruption cancels a nested approval even between registration and 
     toolName: "executeProgram",
     input: {source},
   };
+  stubModel(t, {
+    complete: () => ({
+      type: "tool_calls",
+      calls: [call],
+      message: {role: "assistant", content: [{type: "tool-call", ...call}]},
+    }),
+  });
   const result = await runHandler((ctx) =>
     durable.execute(
       contextWithFixtures(ctx, (opts) => {
-        if (opts.method === "complete")
-          return {
-            type: "tool_calls",
-            calls: [call],
-            message: {
-              role: "assistant",
-              content: [{type: "tool-call", ...call}],
-            },
-          };
         if (opts.method === "requestApproval") return true;
         if (opts.method === "cancelApproval") {
           cancellations.push(opts.parameter);

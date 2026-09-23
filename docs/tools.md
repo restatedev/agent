@@ -40,7 +40,7 @@ type ToolCall = {
 };
 ```
 
-`gateway/model.ts` reconstructs AI SDK tool declarations from the manifests.
+`model/provider.ts` reconstructs AI SDK tool declarations from the manifests.
 It does not receive tool executors. `session/tools.ts` owns execution, and
 `session/step.ts` owns batch policy and concurrency.
 

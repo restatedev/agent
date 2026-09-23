@@ -1,6 +1,6 @@
 import MiniSearch from "minisearch";
 
-import type {ToolManifest} from "../gateway/model.js";
+import type {ToolManifest} from "../model/provider.js";
 
 export const TOOL_SEARCH_NAME = "searchTools";
 const RESULT_LIMIT = 5;

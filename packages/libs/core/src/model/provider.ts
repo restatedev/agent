@@ -1,114 +1,88 @@
-// Provider-specific model inference and its shared wire contracts.
+// Provider-specific model inference and the contracts the turn consumes.
 
 import {createOpenAI, type OpenAIProvider} from "@ai-sdk/openai";
-import {GuardrailSchema} from "@restate-agents/types";
+import type {Guardrail} from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
   APICallError,
   type AssistantModelMessage,
-  assistantModelMessageSchema,
   generateText,
   jsonSchema,
-  modelMessageSchema,
+  type ModelMessage,
   Output,
   type ToolSet,
 } from "ai";
 import {z} from "zod";
 
-const ToolManifestSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-  inputSchema: z.record(z.string(), z.unknown()),
-  strict: z.boolean().optional(),
-});
 /** Provider-neutral model description of one executable agent tool. */
-export type ToolManifest = z.infer<typeof ToolManifestSchema>;
+export type ToolManifest = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  strict?: boolean;
+};
 
-export const AgentModelRequestSchema = z.object({
-  instructions: z.string().optional(),
-  messages: z.array(modelMessageSchema),
-  tools: z.array(ToolManifestSchema),
-});
 /** Complete input for one agent-model inference step. */
-export type AgentModelRequest = z.infer<typeof AgentModelRequestSchema>;
+export type AgentModelRequest = {
+  instructions?: string;
+  messages: ModelMessage[];
+  tools: ToolManifest[];
+};
 
-const ToolCallSchema = z.object({
-  toolCallId: z.string(),
-  toolName: z.string(),
-  input: z.unknown(),
-});
 /** One validated tool call emitted by the model. */
-export type ToolCall = z.infer<typeof ToolCallSchema>;
+export type ToolCall = {toolCallId: string; toolName: string; input: unknown};
 
-export const ModelResultSchema = z.discriminatedUnion("type", [
-  z.object({type: z.literal("text"), content: z.string()}),
-  z.object({
-    type: z.literal("tool_calls"),
-    message: assistantModelMessageSchema,
-    calls: z.array(ToolCallSchema),
-    activity: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("error"),
-    message: z.string(),
-    code: z.literal("output_limit").optional(),
-    maxOutputTokens: z.number().int().positive().optional(),
-  }),
-]);
 /** Normalized agent-model result consumed by the session state machine. */
-export type ModelResult = z.infer<typeof ModelResultSchema>;
+export type ModelResult =
+  | {type: "text"; content: string}
+  | {
+      type: "tool_calls";
+      message: AssistantModelMessage;
+      calls: ToolCall[];
+      activity?: string;
+    }
+  | {
+      type: "error";
+      message: string;
+      code?: "output_limit";
+      maxOutputTokens?: number;
+    };
 
-const ProposedActionSchema = z.discriminatedUnion("type", [
-  z.object({type: z.literal("text"), content: z.string()}),
-  z.object({
-    type: z.literal("tool_calls"),
-    calls: z.array(ToolCallSchema),
-    activity: z.string().optional(),
-  }),
-]);
 /** Text or tool action evaluated by runtime guardrails before commitment. */
-export type ProposedAction = z.infer<typeof ProposedActionSchema>;
+export type ProposedAction =
+  | {type: "text"; content: string}
+  | {type: "tool_calls"; calls: ToolCall[]; activity?: string};
 
-const GuardrailApprovalSchema = z.object({
-  guardrailId: z.string(),
-  question: z.string(),
-  action: ProposedActionSchema,
-});
 /** Human authorization retained for scope checks later in the same Turn. */
-export type GuardrailApproval = z.infer<typeof GuardrailApprovalSchema>;
+export type GuardrailApproval = {
+  guardrailId: string;
+  question: string;
+  action: ProposedAction;
+};
 
-export const GuardrailEvaluationRequestSchema = z.object({
-  instructions: z.string().optional(),
-  guardrails: z.array(GuardrailSchema),
-  approvedActions: z.array(GuardrailApprovalSchema),
-  rejectedGuardrailIds: z.array(z.string()),
-  messages: z.array(modelMessageSchema),
-  action: ProposedActionSchema,
-});
 /** Full evidence supplied to one guardrail evaluation. */
-export type GuardrailEvaluationRequest = z.infer<
-  typeof GuardrailEvaluationRequestSchema
->;
+export type GuardrailEvaluationRequest = {
+  instructions?: string;
+  guardrails: Guardrail[];
+  approvedActions: GuardrailApproval[];
+  rejectedGuardrailIds: string[];
+  messages: ModelMessage[];
+  action: ProposedAction;
+};
 
-export const GuardrailDecisionSchema = z.discriminatedUnion("decision", [
-  z.object({decision: z.literal("allow")}),
-  z.object({
-    decision: z.literal("deny"),
-    guardrailId: z.string(),
-    reason: z.string(),
-  }),
-  z.object({
-    decision: z.literal("require_approval"),
-    guardrailId: z.string(),
-    reason: z.string(),
-    question: z.string(),
-  }),
-]);
 /** Runtime policy outcome for one proposed model action. */
-export type GuardrailDecision = z.infer<typeof GuardrailDecisionSchema>;
+export type GuardrailDecision =
+  | {decision: "allow"}
+  | {decision: "deny"; guardrailId: string; reason: string}
+  | {
+      decision: "require_approval";
+      guardrailId: string;
+      reason: string;
+      question: string;
+    };
 
-export const AGENT_MODEL = "gpt-5.6-luna";
-export const GUARDRAIL_MODEL = "gpt-5.6-terra";
+const AGENT_MODEL = "gpt-5.6-luna";
+const GUARDRAIL_MODEL = "gpt-5.6-terra";
 
 export const MAX_AGENT_OUTPUT_TOKENS = 64_000;
 /** Evaluated inside a journaled inference, never in replayed Turn control flow. */
@@ -469,3 +443,10 @@ export async function completeAgent(
       : {type: "error", message: "model returned neither text nor tool calls"};
   });
 }
+
+/** The provider calls made by the turn, grouped so tests can replace them. */
+export const modelProvider = {
+  completeAgent,
+  evaluateGuardrails,
+  confirmGuardrailDecision,
+};

@@ -29,10 +29,10 @@ Use executable contracts before prose:
 
 1. Public Zod schemas in `packages/libs/types/src/index.ts`, shared Restate
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
-   internal handlers, and `src/gateway/model.ts`;
+   internal handlers, and `src/model/provider.ts`;
 2. handler code in `src/agent/service.ts`, `src/session/service.ts`,
    `src/notifications/service.ts`, `src/scheduler/service.ts`,
-   `src/gateway/service.ts`, and `src/sandbox/service.ts`;
+   and `src/sandbox/service.ts`;
 3. focused ownership modules;
 4. docs.
 
@@ -174,8 +174,8 @@ The detailed turn-runtime list lives in
 | Transcript-to-model projection | `session/context.ts` |
 | Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
 | MCP tool discovery and invocation | `session/mcp-tools.ts` |
-| AI SDK provider behavior and model contracts | `gateway/model.ts` |
-| Restate model admission, limit keys, retries | `gateway/service.ts` |
+| AI SDK provider behavior and model contracts | `model/provider.ts` |
+| Journaled model calls, retries, output recovery | `model/inference.ts` |
 | Agent sandbox lifecycle | `sandbox/service.ts` |
 | Provider contract and provider selection | `sandbox/provider.ts` |
 | Local filesystem demo adapter | `sandbox/local-provider.ts` |
@@ -222,7 +222,7 @@ state and transcript effects, and add protocol coverage.
 
 Update `ConversationEventSchema`, then make an explicit exhaustive decision in
 `isDerivedConversationEvent`. Update `session/context.ts`,
-`gateway/compactor.ts`, external consumers, protocol docs, and test
+`model/compactor.ts`, external consumers, protocol docs, and test
 assertions as applicable. Never let different consumers silently invent their
 own relevance policy.
 

@@ -9,12 +9,12 @@ import {
 import type {ModelMessage} from "ai";
 
 import {Agent} from "../agent/index.js";
+import {approvalSignalName} from "../internal-types.js";
 import {
   callGuardrailModel,
   type GuardrailApproval,
   type ProposedAction,
-} from "../gateway/index.js";
-import {approvalSignalName} from "../internal-types.js";
+} from "../model/index.js";
 import type {TurnHistory} from "./history.js";
 import type {AgentToolContext} from "./tools.js";
 
@@ -73,7 +73,6 @@ export function* guardAction({
     }
 
     const decision = yield* callGuardrailModel({
-      agentId: context.agentId,
       instructions,
       guardrails: remaining,
       approvedActions: [...approvedActions, ...newlyApproved],

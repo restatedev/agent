@@ -18,16 +18,16 @@ import type {ModelMessage} from "ai";
 
 import {Agent} from "../agent/index.js";
 import {
-  callGuardrailModel,
-  callModel,
-  compactConversation,
-  type GuardrailApproval,
-} from "../gateway/index.js";
-import {
   AGENT_SESSION_SIGNALS,
   type AgentTurnOutcome,
   type AgentTurnRequest,
 } from "../internal-types.js";
+import {
+  callGuardrailModel,
+  callModel,
+  compactConversation,
+  type GuardrailApproval,
+} from "../model/index.js";
 import {Sandbox} from "../sandbox/index.js";
 import {
   buildModelContext,
@@ -358,7 +358,7 @@ function* executeTurn(
     if (step.type !== "error") consecutiveModelErrors = 0;
     switch (step.type) {
       case "error":
-        // Output recovery already ran inside ModelGateway. Never restart it
+        // Output recovery already ran inside callModel. Never restart it
         // from this loop or spend the remaining 50 steps making no progress.
         if (step.code === "output_limit")
           throw new TerminalError(
@@ -648,7 +648,6 @@ function* finalizeEarlyExit(
   let response: string;
   try {
     const final = yield* callModel({
-      agentId: state.context.agentId,
       instructions: state.instructions,
       messages: state.messages,
       tools: [],
@@ -658,7 +657,6 @@ function* finalizeEarlyExit(
         response = final.content;
       } else {
         const decision = yield* callGuardrailModel({
-          agentId: state.context.agentId,
           instructions: state.instructions,
           guardrails: state.guardrails,
           approvedActions: state.approvedActions,

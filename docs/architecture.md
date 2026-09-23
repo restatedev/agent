@@ -13,7 +13,6 @@ send `Agent/{agentId}/ask` immediately. No account registration is required.
 | `AgentNotifications` | Revision and per-topic versions, subscriptions |
 | `AgentScheduler` | Schedule registry, next delayed invocation and recurrence |
 | `Sandbox` | Workspace reference and borrow/release/suspend/retire lifecycle |
-| `ModelGateway` | Scoped model admission, retries, provider call |
 
 A turn is one `AgentSession.doTurn` invocation. Its invocation ID is its
 `turnId`. The model plus harness form the operational agent; `Agent` is the

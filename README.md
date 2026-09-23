@@ -27,9 +27,7 @@ You need Node.js 22+, pnpm, the Restate server and CLI, and an OpenAI API key.
 2. Start Restate in its own terminal, with the SDK features this example uses:
 
    ```sh
-   RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true \
-   RESTATE_EXPERIMENTAL_ENABLE_VQUEUES=true \
-   restate-server
+   RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true restate-server
    ```
 
 3. Start the agent service on port 9080 and register it with Restate:
@@ -87,7 +85,7 @@ flowchart LR
   Client[CLI or UI] --> Agent[Agent: route and control]
   Agent -->|start, with profile snapshot| Session[AgentSession: durable turn]
   Agent -.->|steer / interrupt / approve| Session
-  Session --> Model[ModelGateway]
+  Session -->|journaled run| Model[OpenAI]
   Session --> Tools[Tools and Sandbox]
   Session -->|onTurnEnd| Agent
   Scheduler[AgentScheduler] -->|deliver| Agent
@@ -123,7 +121,8 @@ signals addressed to its invocation ID, so they cannot land in the wrong turn.
   the turn, and completion order is journaled, so even promise races in
   generated programs replay deterministically.
 - **Ordinary code.** Most tools are plain functions inside the turn. Only
-  independent components (sandbox, scheduler, model gateway) are services.
+  independent components (sandbox, scheduler) are services, and model calls are
+  journaled runs inside the turn.
 
 Replay does not make external side effects exactly-once: a crash between an
 MCP call completing and its result being recorded can repeat that call.
@@ -141,7 +140,7 @@ MCP call completing and its result being recorded can repeat that call.
 | Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `ptc/runtime.ts` |
 | Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/tool-search.ts` |
 | Sandbox | Ask it to write and run a script | `sandbox/service.ts` |
-| Compaction | Long conversations are summarized without rewriting the log | `session/history.ts`, `gateway/compactor.ts` |
+| Compaction | Long conversations are summarized without rewriting the log | `session/history.ts`, `model/compactor.ts` |
 
 Paths are relative to `packages/libs/core/src`.
 
@@ -229,7 +228,7 @@ debugging. `docker/` holds runnable Dockerfiles for the service and the UI.
 
 | Path | Contents |
 | --- | --- |
-| `packages/libs/core` | The durable runtime: agent, session, scheduler, sandbox, model gateway |
+| `packages/libs/core` | The durable runtime: agent, session, scheduler, sandbox, model calls |
 | `packages/libs/types` | Zod wire schemas and Restate service contracts |
 | `packages/libs/client` | Typed ingress client for one agent |
 | `packages/apps/web` | Optional Next.js conversation UI and its thin server adapter |

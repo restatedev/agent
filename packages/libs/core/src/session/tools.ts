@@ -28,8 +28,8 @@ import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 
 import {Agent} from "../agent/index.js";
-import type {ToolCall, ToolManifest} from "../gateway/index.js";
 import {approvalSignalName} from "../internal-types.js";
+import type {ToolCall, ToolManifest} from "../model/index.js";
 import {PROGRAM_TOOL_NAME, programToolManifest} from "../ptc/definition.js";
 import {
   Sandbox,

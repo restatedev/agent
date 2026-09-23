@@ -267,11 +267,10 @@ When changing transcript storage or consumption:
 When changing a request or schema:
 
 1. update Zod wire schemas and inferred types together;
-2. preserve serializable manifests across the gateway;
+2. keep tool manifests serializable, since model results are journaled;
 3. use `instructions` for system-level prompt material;
 4. disable hidden provider retries where Restate owns retry;
-5. preserve cancellation propagation;
-6. consider model and per-Agent flow-control keys.
+5. pass the run signal through to the provider call.
 
 ## Where to make a change
 
@@ -289,8 +288,8 @@ When changing a request or schema:
 | Change one inference/tool step | `src/session/step.ts` |
 | Add a built-in tool | `src/session/tools.ts` |
 | Change dynamic discovery | `src/session/dynamic-tools.ts` |
-| Change provider inference | `src/gateway/model.ts` |
-| Change model admission/retries | `src/gateway/service.ts` |
+| Change provider inference | `src/model/provider.ts` |
+| Change model retries/output recovery | `src/model/inference.ts` |
 | Change sandbox lifecycle | `src/sandbox/service.ts` |
 | Add a sandbox provider | `src/sandbox/provider.ts` and an adapter module |
 | Change public wire/domain schemas | `packages/libs/types/src/index.ts` |

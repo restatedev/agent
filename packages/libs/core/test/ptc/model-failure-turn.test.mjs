@@ -18,7 +18,7 @@ const stubs = {
   dynamic: `export function* discoverAgentTools(){return [];}`,
   mcp: `export function* discoverMcpTools(){return {tools:[],servers:[]};}
     export function* releaseMcpSessions(){} export function releaseMcpSessionsAfterCancellation(){}`,
-  gateway: `import * as r from ${JSON.stringify(import.meta.resolve("@restatedev/restate-sdk-gen"))};
+  model: `import * as r from ${JSON.stringify(import.meta.resolve("@restatedev/restate-sdk-gen"))};
     export function* callModel(request){return yield* r.run(()=>{
       const f=globalThis.__turnFailureFixture; f.finalRequests.push(request);
       if(!f.final)throw Error("Unexpected finalizer"); return f.final;
@@ -30,7 +30,7 @@ const compiled = await build({
   stdin: {contents: 'export {executeTurn, finalizeEarlyExit} from "./src/session/service.ts";', resolveDir: process.cwd()},
   bundle: true, platform: "node", format: "esm", write: false,
   plugins: [{name: "turn-boundaries", setup(b) {
-    b.onResolve({filter: /gateway\/index\.js$/}, () => ({path: "gateway", namespace: "fixture"}));
+    b.onResolve({filter: /model\/index\.js$/}, () => ({path: "model", namespace: "fixture"}));
     b.onResolve({filter: /^\.\/(step|dynamic-tools|mcp-tools)\.js$/}, args => args.importer.endsWith("/session/service.ts") ? {path: {"./step.js":"step","./dynamic-tools.js":"dynamic","./mcp-tools.js":"mcp"}[args.path], namespace: "fixture"} : undefined);
     b.onLoad({filter: /.*/, namespace: "fixture"}, args => ({contents: stubs[args.path]}));
     b.onLoad({filter: /\/session\/service\.ts$/}, async args => ({contents: (await readFile(args.path,"utf8"))+"\nexport {executeTurn, finalizeEarlyExit};", loader: "ts"}));
@@ -63,7 +63,7 @@ async function run({finalize=false, guardrails=[], replay}={}) {
   })),{replay});
 }
 
-test("an exhausted gateway budget exits the Turn rather than restarting recovery", async () => {
+test("an exhausted model output budget exits the Turn rather than restarting recovery", async () => {
   globalThis.__turnFailureFixture.steps=[{...error,code:"output_limit",maxOutputTokens:64000}];
   const {output}=await run();
   assert.match(output.error,/bounded output recovery/);

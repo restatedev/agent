@@ -34,8 +34,8 @@ Paths below are relative to `packages/libs/core/src`.
    agent-local state. `agent/sub-agent.ts` attenuates child configuration;
    delegation coordination stays in `agent/service.ts`.
 8. `scheduler/service.ts` owns per-agent timers. `sandbox/service.ts` owns
-   resource lifecycle. `gateway/service.ts` and `gateway/model.ts` own model
-   admission and provider behavior.
+   resource lifecycle. `model/inference.ts` makes the journaled model
+   calls and `model/provider.ts` owns provider behavior.
 9. `ptc/runtime.ts` and `ptc/guest.ts` implement replay-safe programmatic tools.
 
 `Agent`, `AgentSession`, `AgentNotifications`, `AgentScheduler`, and `Sandbox`

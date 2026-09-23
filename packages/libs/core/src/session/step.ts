@@ -19,8 +19,8 @@ import type {
   GuardrailApproval,
   ModelResult,
   ProposedAction,
-} from "../gateway/index.js";
-import {callModel} from "../gateway/index.js";
+} from "../model/index.js";
+import {callModel} from "../model/index.js";
 import {PROGRAM_TOOL_NAME} from "../ptc/definition.js";
 import {raceBranches} from "../race.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
@@ -98,7 +98,6 @@ export function* agentStep({
 
   try {
     const action = yield* callModel({
-      agentId: context.agentId,
       instructions,
       messages,
       tools: agentTools.modelManifests(discoveredTools, mcpTools, context),
