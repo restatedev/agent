@@ -177,3 +177,24 @@ test("a coalescing delivery is skipped while its previous run is queued or activ
   assert.equal(f.state.get("turn").interruptReason, undefined, "the scheduled run is not interrupted by its own next firing");
   assert.equal(userMessages(f), 0);
 });
+
+test("a successor that cannot start keeps its queued input and the finished outcome", async t => {
+  const before = process.env.MCP_SERVERS_JSON;
+  t.after(() => { if (before === undefined) delete process.env.MCP_SERVERS_JSON; else process.env.MCP_SERVERS_JSON = before; });
+  const queued = {role: "user", text: "queued while busy", delivery: "queued"};
+  const f = context("demo", {turn: {id: "turn", tools, steeringBatches: []}, pending: [queued]});
+  process.env.MCP_SERVERS_JSON = "not json";
+  const outcome = {turnId: "turn", status: "completed", response: "done", consumedSteering: 0};
+  assert.deepEqual(await f.invoke(Agent.object.onTurnEnd, outcome), outcome);
+  assert.equal(f.state.has("turn"), false);
+  assert.deepEqual(f.state.get("pending"), [queued]);
+  assert.equal(f.sends.filter(send => send.method === "doTurn").length, 0);
+  await assert.rejects(f.invoke(Agent.object.ask, {message: "still broken"}), /MCP_SERVERS_JSON/);
+  assert.deepEqual(f.state.get("pending"), [queued], "a failed start must not consume parked input");
+
+  process.env.MCP_SERVERS_JSON = "[]";
+  assert.equal((await f.invoke(Agent.object.ask, {message: "fixed"})).decision, "start");
+  const run = f.sends.find(send => send.method === "doTurn");
+  assert.deepEqual(run.parameter.entries.map(entry => entry.text), ["queued while busy", "fixed"]);
+  assert.equal(f.state.has("pending"), false);
+});

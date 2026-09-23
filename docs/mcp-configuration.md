@@ -24,6 +24,10 @@ token; endpoints that require interactive OAuth are outside this example.
 unique IDs, HTTP(S) URLs without embedded username/password, and optional
 uppercase environment-variable references. Do not put secrets in endpoint URLs.
 Malformed configuration produces a generic error without echoing the input.
+A turn cannot start while the configuration is malformed. If that happens when
+a finished turn would start its queued successor, the finished outcome is still
+recorded and the queued input stays pending; it opens the next turn that starts
+after the configuration is fixed.
 
 At turn start the configuration is read inside a durable effect. Its **reference
 metadata**, not token values, is part of the turn snapshot. Effective tool grants

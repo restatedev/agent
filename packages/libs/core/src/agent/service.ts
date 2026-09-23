@@ -24,7 +24,7 @@ import {
   AgentNotificationsDefinition,
   AgentSchedulerDefinition,
 } from "@restate-agents/types/services";
-import {TerminalError} from "@restatedev/restate-sdk";
+import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {
   AgentTurnOutcome,
@@ -640,14 +640,27 @@ export const Agent = restate.implement(AgentDefinition, {
         queuedMessages > 0 &&
         !(yield* restate.state().get<boolean>("deleted"))
       ) {
-        yield* startTurn(agentKey(), [
-          ...finished.queuedEntries,
-          {
-            role: "event",
-            type: "dispatch",
-            queuedMessages,
-          },
-        ]);
+        try {
+          yield* startTurn(agentKey(), [
+            ...finished.queuedEntries,
+            {
+              role: "event",
+              type: "dispatch",
+              queuedMessages,
+            },
+          ]);
+        } catch (error) {
+          // `finish` already cleared `turn` and `pending`, and failing here
+          // would also stop AgentSession from appending this outcome. A
+          // successor that cannot start (invalid MCP_SERVERS_JSON) parks its
+          // input in `pending` instead; the next turn start picks it up.
+          if (
+            !(error instanceof TerminalError) ||
+            error instanceof CancelledError
+          )
+            throw error;
+          yield* activeTurn.enqueue(...finished.queuedEntries);
+        }
       }
       return finished.outcome;
     },
@@ -777,11 +790,16 @@ function* startTurn(
 ): restate.Operation<string> {
   const agentProfile = yield* profile.read();
   const metadata = yield* readMetadata();
+  // Read configuration before any state change: an invalid configuration
+  // throws, and state written by a failed invocation is not rolled back.
   const servers = yield* configuredMcpServers();
   // Direct ask implicitly creates the agent; persist its default metadata so
   // later initialization cannot change its parent.
   if (!(yield* restate.state().get("metadata")))
     restate.state().set("metadata", metadata);
+  // Normally empty while idle. It holds a successor's input that onTurnEnd
+  // could not start, which must open the next turn ahead of the new input.
+  const parked = yield* activeTurn.drainPending();
   const tools = resolveMcpGrants(agentProfile.tools, servers);
   return yield* activeTurn.start(agentId, {
     ...agentProfile,
@@ -794,7 +812,7 @@ function* startTurn(
           (grant.tools.mode === "all" || grant.tools.names.length > 0),
       ),
     ),
-    entries,
+    entries: [...parked, ...entries],
   });
 }
 

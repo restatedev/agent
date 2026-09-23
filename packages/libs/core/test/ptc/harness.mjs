@@ -103,6 +103,12 @@ export async function runHandler(handler, {replay = [], onProposal} = {}) {
         if (type === 0x411) journal.push(Buffer.from(f));
         else if (type === 5) {
           const id = data.get(1) ?? 0;
+          if (data.has(15)) {
+            // A terminal run failure is journaled as a failure notification.
+            journal.push(frame(0x8011, pb([1, id], [6, data.get(15)])));
+            controller.enqueue(frame(7, pb([1, id])));
+            continue;
+          }
           assert.ok(data.has(14), "run should return a recorded value");
           journal.push(frame(0x8011, pb([1, id], [5, pb([1, data.get(14)])])));
           controller.enqueue(frame(7, pb([1, id])));

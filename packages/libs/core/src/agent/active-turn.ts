@@ -108,6 +108,14 @@ export function* enqueue(
   return pending.filter(({role}) => role === "user").length;
 }
 
+/** Removes and returns every pending entry. */
+export function* drainPending(): restate.Operation<ConversationEntry[]> {
+  const pending =
+    (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
+  if (pending.length > 0) restate.state().clear("pending");
+  return pending;
+}
+
 /**
  * Signals the active invocation to interrupt and marks it as winding down.
  *
