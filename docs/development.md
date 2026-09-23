@@ -20,7 +20,7 @@ pnpm install
 
 ## Start the stack
 
-Follow [the root quickstart](../README.md#run-it) to start a fresh private
+Follow [the root quickstart](../README.md#quickstart) to start a fresh private
 Restate server, the core endpoint, and the optional localhost UI. There is no
 Google configuration, login bypass, account registration or application secret
 key. Existing standalone-app state is not migrated.
