@@ -1,7 +1,7 @@
 {
   "name": "@restate-agents/web",
   "version": "0.0.1",
-  "description": "Demonstration-only Next.js UI and BFF for the Restate agent reference implementation.",
+  "description": "Demonstration-only Next.js UI and UI proxy for the Restate agent reference implementation.",
   "private": true,
   "type": "module",
   "scripts": {

@@ -37,10 +37,10 @@ test("child rejects foreign parents, direct user messages, and overlapping tasks
   for (const wrong of [{parentAgentId: "other"}])
     await assert.rejects(f.invoke(Agent.object.startDelegatedTurn, {...input, ...wrong}), /owning parent/);
   await assert.rejects(f.invoke(Agent.object.startDelegatedTurn, input), /busy/);
-  await assert.rejects(f.invoke(Agent.object.ask, {message: "Bypass parent"}), /Only the parent/);
-  await assert.rejects(f.invoke(Agent.object.steer, "Bypass parent"), /Only the parent/);
+  await assert.rejects(f.invoke(Agent.object.ask, {message: "Bypass parent"}), /top-level agent/);
+  await assert.rejects(f.invoke(Agent.object.steer, "Bypass parent"), /top-level agent/);
   await assert.rejects(f.invoke(Agent.object.interrupt, {reason: "stop", message: "Replacement"}), /read-only/);
-  await assert.rejects(f.invoke(Agent.object.deliver, {message: "Bypass", whenBusy: "queue", source: "schedule"}), /Only the parent/);
+  await assert.rejects(f.invoke(Agent.object.deliver, {message: "Bypass", whenBusy: "queue", source: "schedule"}), /top-level agent/);
   assert.equal(await f.invoke(Agent.object.interrupt, {reason: "User injected instruction"}), true);
   assert.equal(f.state.get("turn").interruptReason, "Interrupted by the user");
   assert.equal(f.calls.length, 0);

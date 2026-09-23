@@ -1,7 +1,7 @@
 // Per-Agent invalidation stream for conversation consumers.
 //
 // Authoritative data remains with its owning Virtual Object: AgentSession owns
-// history, while Agent owns profile, approvals, and MCP authorization state.
+// history, while Agent owns profile and approvals.
 // AgentScheduler owns schedules. This object records watermarks
 // and parks watchers.
 // Producers can therefore notify readers without coupling their state to the
@@ -66,7 +66,11 @@ export const AgentNotifications = restate.implement(
         return yield* readSnapshot();
       },
 
-      /** Waits until any topic advances beyond the supplied revision. */
+      /**
+       * Wait outside this object's exclusive lock. Subscribe rechecks the
+       * watermark so a publish between the caller's read and registration
+       * still wakes the reader.
+       */
       *watch(request): restate.Operation<AgentNotificationSnapshot> {
         const changed = restate.awakeable<AgentNotificationSnapshot>();
         const available = yield* restate

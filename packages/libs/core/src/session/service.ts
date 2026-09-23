@@ -77,10 +77,6 @@ const MAX_STEPS = 50;
  */
 export const AgentSession = restate.implement(AgentSessionDefinition, {
   handlers: {
-    /** Lightweight terminal-response cursor for the account's agent list. */
-    *lastTurnSequence(): restate.Operation<number> {
-      return yield* history.lastTurnSequence();
-    },
     /** Returns one page from this AgentSession's authoritative transcript. */
     *history({fromSequence, limit}): restate.Operation<HistoryPage> {
       return yield* history.page(fromSequence, limit);
@@ -124,6 +120,8 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
       let transcript: TurnHistory | undefined;
       let outcome: AgentTurnOutcome;
       try {
+        // History is opened once for the whole invocation. The controller
+        // already chose the starting entries and immutable turn profile.
         transcript = yield* history.openTurn();
         yield* transcript.append(...req.entries);
         const conversation = transcript.context();
@@ -201,6 +199,8 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
       if (state?.mcpServers.some(({protocol}) => protocol === "stateful")) {
         yield* releaseMcpSessions(turnId);
       }
+      // The controller reconciles late steering/interruption before the
+      // session records the terminal outcome in the public transcript.
       yield* restate.client(Sandbox, agentId).release({turnId});
       const reconciled = yield* restate
         .client(Agent, agentId)
@@ -217,11 +217,6 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
   },
   options: {
     handlers: {
-      lastTurnSequence: {
-        shared: true,
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
       history: {
         shared: true,
         idempotencyRetention: 0,

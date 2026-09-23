@@ -37,13 +37,6 @@ export function* current(): restate.Operation<ActiveTurnState | undefined> {
 }
 
 /**
- * Handler-scoped access to active-turn state for the current Agent object.
- *
- * These functions must run inside an Agent handler. They use Restate's current
- * context and hold no process-local state. Mutations rely on exclusive handler
- * serialization; history remains a separate concern.
- */
-/**
  * Starts an AgentSession invocation and records it as the active turn.
  *
  * The exclusive Agent caller is responsible for ensuring no turn is active.

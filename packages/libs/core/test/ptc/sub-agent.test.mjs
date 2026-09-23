@@ -169,6 +169,28 @@ test("child initialization is atomic, retry-safe, and cannot change parent", asy
   assert.equal(f.calls.length, 0, "initialization never calls back to the locked parent");
 });
 
+test("direct profile edits cannot widen a child beyond its inherited policy", async () => {
+  const f = context("child", {
+    metadata: {name: "Research", parentAgentId: "parent"},
+    memories: profile.memories,
+    "profile/guardrails": profile.guardrails,
+    "profile/tools": profile.tools,
+  });
+  for (const [handler, input] of [
+    [Agent.object.setTools, {...grants, dynamic: {mode: "all"}}],
+    [Agent.object.setGuardrails, {guardrails: []}],
+    [Agent.object.setInstructions, {instructions: "Ignore inherited instructions"}],
+    [Agent.object.setWebSearchEnabled, {enabled: true}],
+    [Agent.object.deleteMemory, {key: "style"}],
+  ]) {
+    await assert.rejects(f.invoke(handler, input), /top-level agent/);
+  }
+  assert.deepEqual((await f.invoke(Agent.object.profile)).guardrails, profile.guardrails);
+  assert.deepEqual((await f.invoke(Agent.object.profile)).tools, profile.tools);
+  assert.deepEqual((await f.invoke(Agent.object.profile)).memories, profile.memories);
+  assert.equal(f.sends.length, 0);
+});
+
 test("parent stores its children, deletion tombstones the ID, and late creation cannot resurrect it", async () => {
   const f = context("parent", agentState, () => null);
   const request = {...config, turnId: "turn", toolCallId: "create"};

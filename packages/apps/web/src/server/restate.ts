@@ -24,20 +24,20 @@ function ingressHeaders(): Record<string, string> {
 
 function requireAgentId(agentId: string) {
   const normalized = agentId.trim();
-  if (!normalized) throw new BffError(400, "Agent ID must not be empty");
+  if (!normalized) throw new UiRequestError(400, "Agent ID must not be empty");
   if (normalized.length > 256) {
-    throw new BffError(400, "Agent ID must not exceed 256 characters");
+    throw new UiRequestError(400, "Agent ID must not exceed 256 characters");
   }
   return normalized;
 }
 
-export class BffError extends Error {
+export class UiRequestError extends Error {
   constructor(
     readonly status: number,
     message: string,
   ) {
     super(message);
-    this.name = "BffError";
+    this.name = "UiRequestError";
   }
 }
 
@@ -53,7 +53,7 @@ export function errorResponse(error: unknown) {
   if (error instanceof Error && error.name === "AbortError") {
     return new Response(null, {status: 499});
   }
-  if (error instanceof BffError || error instanceof AgentClientError) {
+  if (error instanceof UiRequestError || error instanceof AgentClientError) {
     return Response.json({message: error.message}, {status: error.status});
   }
   if (
@@ -69,8 +69,8 @@ export function errorResponse(error: unknown) {
     return Response.json({message}, {status: error.status});
   }
   // Unknown provider/SDK errors may carry request headers or token material.
-  console.error("Unexpected BFF request failure");
-  return Response.json({message: "Unexpected BFF error"}, {status: 500});
+  console.error("Unexpected UI proxy request failure");
+  return Response.json({message: "Unexpected UI proxy error"}, {status: 500});
 }
 
 /** The UI is a local operator tool. Reject cross-origin browser writes. */
@@ -81,5 +81,5 @@ export function requireSameOrigin(request: Request) {
   if (!process.env.APP_PUBLIC_URL)
     expected.host = request.headers.get("host") ?? expected.host;
   if (request.headers.get("origin") !== expected.origin)
-    throw new BffError(403, "Cross-origin action rejected");
+    throw new UiRequestError(403, "Cross-origin action rejected");
 }

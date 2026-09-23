@@ -149,7 +149,7 @@ races the watch against its durable case deadline.
 The code-based graders assert event-log structure, event ordering,
 correlations, and durable outcome state rather than exact model prose.
 
-Evals have no web UI or BFF endpoint. Trusted operators can invoke the complete
+Evals have no web UI or UI proxy endpoint. Trusted operators can invoke the complete
 suite through private Restate ingress:
 
 ```sh

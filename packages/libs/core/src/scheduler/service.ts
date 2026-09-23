@@ -78,7 +78,10 @@ export const AgentScheduler = restate.implement(AgentSchedulerDefinition, {
       return (yield* readSchedules()).map(toPublicSchedule);
     },
 
-    /** Advances one valid timer and delivers its message to Agent. */
+    /**
+     * Advance the schedule before delivery. A replayed or cancelled timer
+     * cannot send the same message again or revive an obsolete recurrence.
+     */
     *fire({scheduleId}): restate.Operation<void> {
       const schedule = yield* getSchedule(scheduleId);
       if (schedule?.timerId !== restate.handlerRequest().id) {

@@ -179,10 +179,6 @@ svg {
   isolation: isolate;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
-  animation: restate-tile-breathe 2.8s ease-in-out infinite;
-  transition: background 220ms ease, border-color 220ms ease,
-    filter 220ms ease;
-  will-change: transform, box-shadow;
 }
 
 .brand-mark::after {
@@ -195,143 +191,14 @@ svg {
   pointer-events: none;
 }
 
-.restate-mark-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
-  border-radius: 9px;
-}
-
-.brand-mark[data-state="offline"] {
-  border-color: var(--border-strong);
-  background: linear-gradient(145deg, #343944, #4b5260 55%, #2d333d);
-  filter: saturate(0.45);
-  animation: none;
-}
-
-.brand-mark[data-state="connecting"] {
-  border-color: rgba(110, 231, 255, 0.72);
-  background: linear-gradient(145deg, #2537ba, #755ff0 52%, #278fc8);
-  animation: restate-thinking-shell 0.85s ease-in-out infinite;
-}
-
-.brand-mark[data-state="thinking"] {
-  background: linear-gradient(145deg, #4431d1, #8a52ea 52%, #3d8ae8);
-  animation: restate-thinking-shell 1.15s ease-in-out infinite;
-}
-
-.brand-mark[data-state="working"] {
-  background: linear-gradient(145deg, #1558b0, #526cf1 48%, #14a6bd);
-  animation: restate-working-shell 0.9s ease-in-out infinite;
-}
-
-.brand-mark[data-state="waiting"] {
-  border-color: rgba(230, 185, 105, 0.7);
-  background: linear-gradient(145deg, #68431d, #bd7628 52%, #7a5925);
-  animation: restate-waiting-shell 1.8s ease-in-out infinite;
-}
-
-.brand-mark[data-state="finalizing"] {
-  background: linear-gradient(145deg, #5b31c9, #b348cf 52%, #576ee7);
-  animation: restate-finalizing-shell 0.8s ease-in-out infinite alternate;
-}
-
-.brand-mark[data-state="done"] {
-  border-color: rgba(88, 201, 143, 0.78);
-  background: linear-gradient(145deg, #16704b, #39b879 52%, #238c85);
-  animation: restate-done-shell 1.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
-.brand-mark[data-state="interrupted"] {
-  border-color: rgba(232, 137, 63, 0.76);
-}
-
-.brand-mark[data-state="stopped"] {
-  border-color: rgba(154, 164, 180, 0.68);
-}
-
-.brand-mark[data-state="failed"] {
-  border-color: rgba(216, 84, 104, 0.78);
-}
-
-@keyframes restate-tile-breathe {
-  0%,
-  100% {
-    box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.38),
-      0 4px 13px rgba(98, 86, 225, 0.22);
-  }
-  50% {
-    box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.5),
-      0 6px 20px rgba(105, 91, 255, 0.48);
-  }
-}
-
-@keyframes restate-thinking-shell {
-  0%,
-  100% {
-    box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.38),
-      0 4px 14px rgba(124, 91, 255, 0.3);
-  }
-  50% {
-    box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.56),
-      0 7px 23px rgba(153, 93, 255, 0.62);
-  }
-}
-
-@keyframes restate-working-shell {
-  0%,
-  100% {
-    box-shadow: 0 4px 13px rgba(63, 120, 245, 0.28);
-  }
-  50% {
-    box-shadow: 0 6px 22px rgba(58, 206, 232, 0.62);
-  }
-}
-
-@keyframes restate-waiting-shell {
-  0%,
-  100% {
-    box-shadow: 0 4px 12px rgba(187, 118, 40, 0.22);
-  }
-  50% {
-    box-shadow: 0 6px 20px rgba(230, 185, 105, 0.52);
-  }
-}
-
-@keyframes restate-finalizing-shell {
-  from {
-    box-shadow: 0 4px 14px rgba(140, 74, 221, 0.32);
-  }
-  to {
-    box-shadow: 0 7px 24px rgba(204, 80, 215, 0.62);
-  }
-}
-
-@keyframes restate-done-shell {
-  0% {
-    box-shadow: 0 0 0 rgba(88, 201, 143, 0);
-    transform: scale(0.92);
-  }
-  35% {
-    box-shadow: 0 0 24px rgba(88, 201, 143, 0.72);
-    transform: scale(1.1);
-  }
-  100% {
-    box-shadow: 0 5px 16px rgba(88, 201, 143, 0.34);
-    transform: scale(1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .brand-mark {
-    animation: none !important;
-  }
+.brand-mark > svg {
+  position: relative;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  margin: 7px;
+  color: white;
+  stroke-width: 2;
 }
 
 .brand > div:last-child {

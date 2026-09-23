@@ -14,9 +14,9 @@ import {
 } from "../../../../../src/server/agent-snapshot";
 import {
   agentClient,
-  BffError,
   errorResponse,
   requireSameOrigin,
+  UiRequestError,
 } from "../../../../../src/server/restate";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +42,7 @@ function integerParameter(
   if (raw === null) return fallback;
   const value = Number.parseInt(raw, 10);
   if (!Number.isInteger(value) || value < 0) {
-    throw new BffError(400, `${name} must be a non-negative integer`);
+    throw new UiRequestError(400, `${name} must be a non-negative integer`);
   }
   return value;
 }
@@ -51,7 +51,7 @@ async function input<T>(request: Request): Promise<T> {
   try {
     return (await request.json()) as T;
   } catch {
-    throw new BffError(400, "Expected a JSON request body");
+    throw new UiRequestError(400, "Expected a JSON request body");
   }
 }
 
@@ -73,11 +73,11 @@ export async function GET(request: Request, context: RouteContext) {
             JSON.parse(searchParams.get("since") ?? "null"),
           );
         } catch {
-          throw new BffError(400, "Invalid notification cursor");
+          throw new UiRequestError(400, "Invalid notification cursor");
         }
         const fromSequence = integerParameter(searchParams, "fromSequence", 1);
         if (fromSequence < 1)
-          throw new BffError(400, "fromSequence must be positive");
+          throw new UiRequestError(400, "fromSequence must be positive");
         return json(
           await syncAgentSnapshot(client, since, fromSequence, {
             signal: request.signal,
@@ -118,7 +118,10 @@ export async function GET(request: Request, context: RouteContext) {
       case "children":
         return json(await client.children());
       default:
-        throw new BffError(404, `Unknown agent read operation: ${operation}`);
+        throw new UiRequestError(
+          404,
+          `Unknown agent read operation: ${operation}`,
+        );
     }
   } catch (error) {
     return errorResponse(error);
@@ -130,13 +133,6 @@ export async function POST(request: Request, context: RouteContext) {
     requireSameOrigin(request);
     const {agentId, operation} = await context.params;
     const client = agentClient(agentId);
-    const agent = await client.metadata();
-    if (
-      agent.parentAgentId &&
-      operation !== "interrupt" &&
-      operation !== "resolve-approval"
-    )
-      throw new BffError(403, "Only the parent can modify a child agent");
 
     switch (operation) {
       case "ask": {
@@ -149,14 +145,6 @@ export async function POST(request: Request, context: RouteContext) {
       }
       case "interrupt": {
         const body = await input<{reason: string; message?: string}>(request);
-        if (agent.parentAgentId) {
-          if (body.message !== undefined)
-            throw new BffError(
-              403,
-              "Cannot send a replacement message to a sub-agent",
-            );
-          return json(await client.interrupt("Interrupted by the user"));
-        }
         return json(await client.interrupt(body.reason, body.message));
       }
       case "instructions": {
@@ -174,7 +162,7 @@ export async function POST(request: Request, context: RouteContext) {
           await input<unknown>(request),
         );
         if (!parsed.success)
-          throw new BffError(400, "enabled must be a boolean");
+          throw new UiRequestError(400, "enabled must be a boolean");
         await client.setWebSearchEnabled(parsed.data.enabled);
         return json(null);
       }
@@ -182,7 +170,8 @@ export async function POST(request: Request, context: RouteContext) {
         const parsed = AgentToolsSchema.safeParse(
           await input<unknown>(request),
         );
-        if (!parsed.success) throw new BffError(400, "Invalid tool selection");
+        if (!parsed.success)
+          throw new UiRequestError(400, "Invalid tool selection");
         await client.setTools(parsed.data);
         return json(null);
       }
@@ -201,7 +190,7 @@ export async function POST(request: Request, context: RouteContext) {
           ),
         );
       default:
-        throw new BffError(
+        throw new UiRequestError(
           404,
           `Unknown agent mutation operation: ${operation}`,
         );

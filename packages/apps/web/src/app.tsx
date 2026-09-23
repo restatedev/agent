@@ -41,23 +41,6 @@ import {
 type Mode = "ask" | "steer" | "interrupt";
 type Tab = "approvals" | "profile";
 type Guardrail = AgentProfile["guardrails"][number];
-type TurnTerminalStatus = Extract<
-  SequencedEntry["entry"],
-  {role: "assistant"}
->["status"];
-type AgentMarkState =
-  | "offline"
-  | "connecting"
-  | "idle"
-  | "thinking"
-  | "working"
-  | "waiting"
-  | "finalizing"
-  | "done"
-  | "interrupted"
-  | "stopped"
-  | "failed";
-
 type Toast = {
   id: number;
   message: string;
@@ -88,6 +71,9 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+// Reconstruct the visible turn from the append-only transcript. A newly
+// accepted turn or pending approval can lead the next history poll, so both
+// serve as temporary hints until its events arrive.
 function activeTurn(
   entries: SequencedEntry[],
   provisional?: string,
@@ -146,41 +132,6 @@ function activeTurn(
   return active ? {turnId: active, ...turns.get(active)} : undefined;
 }
 
-function latestTurnOutcome(
-  entries: SequencedEntry[],
-): TurnTerminalStatus | undefined {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index]?.entry;
-    if (entry?.role === "assistant") return entry.status;
-    if (entry?.role === "user") return undefined;
-  }
-  return undefined;
-}
-
-function deriveAgentMarkState({
-  connectionStatus,
-  hasPendingInput,
-  terminalStatus,
-  turn,
-}: {
-  connectionStatus: "connecting" | "connected" | "failed";
-  hasPendingInput: boolean;
-  terminalStatus?: TurnTerminalStatus;
-  turn: ReturnType<typeof activeTurn>;
-}): AgentMarkState {
-  if (connectionStatus === "connecting") return "connecting";
-  if (connectionStatus === "failed") return "offline";
-  if (turn?.phase === "finalizing") return "finalizing";
-  if (turn?.phase === "waiting" || hasPendingInput) return "waiting";
-  if (turn?.phase === "tools") return "working";
-  if (turn) return "thinking";
-  if (terminalStatus === "completed") return "done";
-  if (terminalStatus === "interrupted") return "interrupted";
-  if (terminalStatus === "stopped") return "stopped";
-  if (terminalStatus === "failed") return "failed";
-  return "idle";
-}
-
 function Toasts({toasts}: {toasts: Toast[]}) {
   return (
     <div className="toasts" aria-live="polite">
@@ -194,279 +145,11 @@ function Toasts({toasts}: {toasts: Toast[]}) {
   );
 }
 
-function RestateMark({state}: {state: AgentMarkState}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-
-    const size = 36;
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = size * pixelRatio;
-    canvas.height = size * pixelRatio;
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-
-    const palettes: Record<
-      AgentMarkState,
-      {base: string; glow: string; accent: string; speed: number}
-    > = {
-      offline: {
-        base: "#303640",
-        glow: "#626b78",
-        accent: "#8a93a1",
-        speed: 0.15,
-      },
-      connecting: {
-        base: "#2537ba",
-        glow: "#755ff0",
-        accent: "#6ee7ff",
-        speed: 1.8,
-      },
-      idle: {
-        base: "#303dcc",
-        glow: "#b268f2",
-        accent: "#67d2ff",
-        speed: 0.55,
-      },
-      thinking: {
-        base: "#432ecf",
-        glow: "#cb78ff",
-        accent: "#65c9ff",
-        speed: 1.35,
-      },
-      working: {
-        base: "#1558b0",
-        glow: "#33d4e7",
-        accent: "#7790ff",
-        speed: 2.2,
-      },
-      waiting: {
-        base: "#68431d",
-        glow: "#ff9b63",
-        accent: "#ffe29a",
-        speed: 0.28,
-      },
-      finalizing: {
-        base: "#5b31c9",
-        glow: "#df60e2",
-        accent: "#8096ff",
-        speed: 1.7,
-      },
-      done: {
-        base: "#16704b",
-        glow: "#57e397",
-        accent: "#a7ffd0",
-        speed: 0.75,
-      },
-      interrupted: {
-        base: "#6c3c18",
-        glow: "#e8893f",
-        accent: "#ffd39a",
-        speed: 0.5,
-      },
-      stopped: {
-        base: "#3d4350",
-        glow: "#7b8494",
-        accent: "#c3cad5",
-        speed: 0.32,
-      },
-      failed: {
-        base: "#6c2731",
-        glow: "#d85468",
-        accent: "#ffc1ca",
-        speed: 0.58,
-      },
-    };
-    const chevronOne = new Path2D(
-      "M6.248 7.691A1.43 1.43 0 0 0 6 8.498v8.16c0 .277.313.439.539.278l.824-.585c.228-.162.363-.424.363-.703V9.976c0-.338.381-.536.658-.341l3.245 2.286a.274.274 0 0 1-.004.453l-1.088.737a.866.866 0 0 0-.219 1.207.855.855 0 0 0 1.19.209l1.779-1.234c.381-.264.608-.699.608-1.163 0-.454-.219-.882-.588-1.147L8.039 7.184a1.297 1.297 0 0 0-1.695.366l-.096.141Z",
-    );
-    const chevronTwo = new Path2D(
-      "M11.737 7.368a.86.86 0 0 0 .2 1.199l4.432 3.191a.416.416 0 0 1 .011.669l-3.671 2.836a.857.857 0 0 0-.169 1.195.87.87 0 0 0 1.224.175l4.381-3.356c.37-.283.586-.723.586-1.188 0-.482-.232-.935-.623-1.216l-5.162-3.708a.86.86 0 0 0-1.209.203Z",
-    );
-    let animationFrame = 0;
-    let disposed = false;
-    let lastFrameAt = window.performance.now();
-
-    const draw = (time: number) => {
-      if (disposed) return;
-      lastFrameAt = window.performance.now();
-      const currentState = state;
-      const palette = palettes[currentState];
-      const seconds = time / 1_000;
-      const phase = seconds * palette.speed;
-      context.clearRect(0, 0, size, size);
-
-      const background = context.createLinearGradient(2, 2, 34, 34);
-      background.addColorStop(0, palette.base);
-      background.addColorStop(0.58, palette.glow);
-      background.addColorStop(1, palette.base);
-      context.fillStyle = background;
-      context.fillRect(0, 0, size, size);
-
-      context.save();
-      // Radial gradients already provide the blur. Avoid context.filter here:
-      // it takes a fragile accelerated-canvas path in Safari.
-      context.globalCompositeOperation = "lighter";
-      for (let index = 0; index < 3; index += 1) {
-        const angle = phase + index * ((Math.PI * 2) / 3);
-        const orbit = currentState === "waiting" ? 5 : 8;
-        const x = 18 + Math.cos(angle) * orbit;
-        const y = 18 + Math.sin(angle * 1.17) * orbit;
-        const radius = 7 + Math.sin(phase * 1.4 + index) * 2;
-        const glow = context.createRadialGradient(x, y, 0, x, y, radius);
-        glow.addColorStop(0, index === 1 ? palette.accent : palette.glow);
-        glow.addColorStop(1, "transparent");
-        context.globalAlpha = currentState === "offline" ? 0.18 : 0.62;
-        context.fillStyle = glow;
-        context.beginPath();
-        context.arc(x, y, radius, 0, Math.PI * 2);
-        context.fill();
-      }
-      context.restore();
-
-      if (
-        currentState === "connecting" ||
-        currentState === "thinking" ||
-        currentState === "finalizing"
-      ) {
-        context.save();
-        context.translate(18, 18);
-        context.rotate(phase * 1.5);
-        context.strokeStyle = palette.accent;
-        context.globalAlpha = 0.48;
-        context.lineWidth = 1;
-        context.setLineDash([2.5, 3.5]);
-        context.beginPath();
-        context.arc(0, 0, 13, 0, Math.PI * 2);
-        context.stroke();
-        context.restore();
-      }
-
-      if (currentState === "working") {
-        context.save();
-        context.strokeStyle = palette.accent;
-        context.lineWidth = 1.2;
-        for (let index = 0; index < 4; index += 1) {
-          const offset = ((seconds * 28 + index * 10) % 50) - 12;
-          context.globalAlpha = 0.2 + index * 0.11;
-          context.beginPath();
-          context.moveTo(offset - 8, 36);
-          context.lineTo(offset + 10, 0);
-          context.stroke();
-        }
-        context.restore();
-      }
-
-      if (
-        currentState === "done" ||
-        currentState === "interrupted" ||
-        currentState === "failed"
-      ) {
-        const progress = (seconds % 2.4) / 2.4;
-        context.save();
-        context.strokeStyle = palette.accent;
-        context.globalAlpha = Math.max(0, 0.62 - progress);
-        context.lineWidth = 1.2;
-        context.beginPath();
-        context.arc(18, 18, 7 + progress * 10, 0, Math.PI * 2);
-        context.stroke();
-        context.restore();
-      }
-
-      const logoShift =
-        currentState === "connecting" ||
-        currentState === "thinking" ||
-        currentState === "working"
-          ? Math.sin(phase * 4) * 0.7
-          : 0;
-      context.save();
-      context.translate(3 + logoShift, 3);
-      context.scale(1.25, 1.25);
-      const logoGradient = context.createLinearGradient(6, 7, 19, 17);
-      logoGradient.addColorStop(0, "#ffffff");
-      logoGradient.addColorStop(0.52, "#e1ddff");
-      logoGradient.addColorStop(1, "#b5e5ff");
-      context.fillStyle = logoGradient;
-      context.shadowColor = "rgba(24, 19, 82, 0.58)";
-      context.shadowBlur = 2.5;
-      context.shadowOffsetY = 1;
-      context.fill(chevronOne);
-      context.fill(chevronTwo);
-      context.restore();
-
-      context.fillStyle = palette.accent;
-      context.strokeStyle = "rgba(17, 20, 25, 0.72)";
-      context.lineWidth = 1;
-      context.beginPath();
-      context.arc(31, 31, 2.3, 0, Math.PI * 2);
-      context.fill();
-      context.stroke();
-
-      if (!document.hidden) {
-        animationFrame = window.requestAnimationFrame(draw);
-      }
-    };
-
-    const restart = () => {
-      if (disposed || document.hidden) return;
-      window.cancelAnimationFrame(animationFrame);
-      animationFrame = window.requestAnimationFrame(draw);
-    };
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        window.cancelAnimationFrame(animationFrame);
-      } else {
-        restart();
-      }
-    };
-    const watchdog = window.setInterval(() => {
-      if (
-        !disposed &&
-        !document.hidden &&
-        window.performance.now() - lastFrameAt > 1_500
-      ) {
-        restart();
-      }
-    }, 2_000);
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", restart);
-    window.addEventListener("pageshow", restart);
-    restart();
-    return () => {
-      disposed = true;
-      window.cancelAnimationFrame(animationFrame);
-      window.clearInterval(watchdog);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", restart);
-      window.removeEventListener("pageshow", restart);
-    };
-  }, [state]);
-
-  return (
-    <canvas
-      className="restate-mark-canvas"
-      ref={canvasRef}
-      style={{
-        borderRadius: 9,
-        display: "block",
-        height: "100%",
-        position: "static",
-        width: "100%",
-      }}
-    />
-  );
-}
-
 function ConnectionHeader({
-  activity,
   name,
   connected,
   error,
 }: {
-  activity: AgentMarkState;
   name: string;
   connected: boolean;
   error?: string;
@@ -475,13 +158,8 @@ function ConnectionHeader({
   return (
     <header className="topbar">
       <div className="brand">
-        <div
-          className="brand-mark"
-          data-state={activity}
-          key={activity}
-          title={`Agent status: ${activity}`}
-        >
-          <RestateMark state={activity} />
+        <div className="brand-mark" aria-hidden="true">
+          <GitBranch aria-hidden="true" />
         </div>
         <div>
           <strong>{name}</strong>
@@ -1051,10 +729,6 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     () => activeTurn(agent.entries, provisionalTurn, pendingTurnId),
     [agent.entries, pendingTurnId, provisionalTurn],
   );
-  const terminalStatus = useMemo(
-    () => latestTurnOutcome(agent.entries),
-    [agent.entries],
-  );
   const notify = useCallback((message: string, error = false) => {
     const id = ++toastId.current;
     setToasts((current) => [...current, {id, message, error}]);
@@ -1104,17 +778,9 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     }
   }
 
-  const markState = deriveAgentMarkState({
-    connectionStatus: agent.connectionStatus,
-    hasPendingInput: agent.approvals.length > 0,
-    terminalStatus,
-    turn,
-  });
-
   return (
     <div className="app-shell">
       <ConnectionHeader
-        activity={markState}
         connected={agent.connected}
         name={agentName}
         error={agent.connectionError}

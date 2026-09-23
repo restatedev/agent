@@ -13,6 +13,7 @@ import type {
   AgentMetadata,
   AgentNotificationTopic,
   AgentProfile,
+  AgentTools,
   ApprovalRequest,
   AskResult,
   ChildAgent,
@@ -78,28 +79,18 @@ export const Agent = restate.implement(AgentDefinition, {
     *createSubAgent({turnId, toolCallId, ...config}) {
       yield* requireNotDeleted();
       const metadata = yield* readMetadata();
-      const current = yield* activeTurn.current();
-      if (current?.id !== turnId || current.interruptReason !== undefined)
-        throw new TerminalError(
-          "Sub-agent creation requires the active, non-interrupting Turn",
-          {errorCode: 409},
-        );
-      if (
-        metadata.parentAgentId ||
-        !selected(current.tools.builtin, "createSubAgent")
-      )
+      const tools = yield* requireActiveTurnTools(turnId, "Sub-agent creation");
+      if (metadata.parentAgentId || !selected(tools.builtin, "createSubAgent"))
         throw new TerminalError("This agent cannot create sub-agents", {
           errorCode: 403,
         });
       const inherited = subAgentProfile(
         yield* profile.read(),
-        current.tools,
+        tools,
         config,
         agentTools.names,
       );
-      const agentId = createHash("sha256")
-        .update(JSON.stringify(["sub-agent", agentKey(), turnId, toolCallId]))
-        .digest("hex");
+      const agentId = childAgentId(agentKey(), turnId, toolCallId);
       if (yield* restate.state().get<boolean>(`deleted-child:${agentId}`))
         throw new TerminalError("Child has been deleted", {errorCode: 410});
       const children = yield* readChildren();
@@ -118,20 +109,13 @@ export const Agent = restate.implement(AgentDefinition, {
     },
     *startSubAgentTask({turnId, toolCallId, agentId, message, source}) {
       const metadata = yield* readMetadata();
-      const current = yield* activeTurn.current();
-      if (current?.id !== turnId || current.interruptReason !== undefined)
-        throw new TerminalError(
-          "Delegation requires the active, non-interrupting Turn",
-          {errorCode: 409},
-        );
-      if (metadata.parentAgentId || !selected(current.tools.builtin, source))
+      const tools = yield* requireActiveTurnTools(turnId, "Delegation");
+      if (metadata.parentAgentId || !selected(tools.builtin, source))
         throw new TerminalError("This agent cannot delegate this task", {
           errorCode: 403,
         });
       if (source === "createSubAgent") {
-        const expected = createHash("sha256")
-          .update(JSON.stringify(["sub-agent", agentKey(), turnId, toolCallId]))
-          .digest("hex");
+        const expected = childAgentId(agentKey(), turnId, toolCallId);
         if (agentId !== expected)
           throw new TerminalError(
             "Creation can only start its newly created child",
@@ -214,13 +198,8 @@ export const Agent = restate.implement(AgentDefinition, {
     },
     *deleteSubAgent({turnId, agentId}) {
       yield* requireNotDeleted();
-      const current = yield* activeTurn.current();
-      if (current?.id !== turnId || current.interruptReason !== undefined)
-        throw new TerminalError(
-          "Sub-agent deletion requires the active, non-interrupting Turn",
-          {errorCode: 409},
-        );
-      if (!selected(current.tools.builtin, "deleteSubAgent"))
+      const tools = yield* requireActiveTurnTools(turnId, "Sub-agent deletion");
+      if (!selected(tools.builtin, "deleteSubAgent"))
         throw new TerminalError("This agent cannot delete sub-agents", {
           errorCode: 403,
         });
@@ -239,13 +218,8 @@ export const Agent = restate.implement(AgentDefinition, {
     },
     *listSubAgents({turnId}) {
       yield* requireNotDeleted();
-      const current = yield* activeTurn.current();
-      if (current?.id !== turnId || current.interruptReason !== undefined)
-        throw new TerminalError(
-          "Listing sub-agents requires the active, non-interrupting Turn",
-          {errorCode: 409},
-        );
-      if (!selected(current.tools.builtin, "listSubAgents"))
+      const tools = yield* requireActiveTurnTools(turnId, "Listing sub-agents");
+      if (!selected(tools.builtin, "listSubAgents"))
         throw new TerminalError("This agent cannot list sub-agents", {
           errorCode: 403,
         });
@@ -286,6 +260,7 @@ export const Agent = restate.implement(AgentDefinition, {
     },
     *deleteMemory({key}) {
       yield* requireNotDeleted();
+      yield* requireTopLevelConversation();
       const present = (yield* memory.read()).some((entry) => entry.key === key);
       if (present) {
         yield* memory.apply([{operation: "delete", key}]);
@@ -295,6 +270,7 @@ export const Agent = restate.implement(AgentDefinition, {
     },
     *setTools(tools) {
       yield* requireNotDeleted();
+      yield* requireTopLevelConversation();
       profile.setTools(tools);
       yield* publishNotification("profile");
     },
@@ -481,6 +457,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *setInstructions({instructions}): restate.Operation<void> {
       yield* requireNotDeleted();
+      yield* requireTopLevelConversation();
       profile.setInstructions(instructions);
       yield* publishNotification("profile");
     },
@@ -493,6 +470,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *setGuardrails({guardrails}): restate.Operation<void> {
       yield* requireNotDeleted();
+      yield* requireTopLevelConversation();
       profile.setGuardrails(guardrails);
       yield* publishNotification("profile");
     },
@@ -500,6 +478,7 @@ export const Agent = restate.implement(AgentDefinition, {
     /** Enables or disables built-in web search for subsequent turns. */
     *setWebSearchEnabled({enabled}): restate.Operation<void> {
       yield* requireNotDeleted();
+      yield* requireTopLevelConversation();
       profile.setWebSearchEnabled(enabled);
       yield* publishNotification("profile");
     },
@@ -670,6 +649,33 @@ function* requireNotDeleted(): restate.Operation<void> {
     throw new TerminalError("Agent has been deleted", {errorCode: 410});
 }
 
+// Tool callbacks can arrive after a turn has ended or begun interruption.
+// Authorize against the controller's live snapshot, never the caller's copy.
+function* requireActiveTurnTools(
+  turnId: string,
+  action: string,
+): restate.Operation<AgentTools> {
+  const current = yield* activeTurn.current();
+  if (current?.id !== turnId || current.interruptReason !== undefined)
+    throw new TerminalError(
+      `${action} requires the active, non-interrupting Turn`,
+      {errorCode: 409},
+    );
+  return current.tools;
+}
+
+// A retried creation call names the same child; delegation can only start
+// that child for the originating tool call.
+function childAgentId(
+  parentAgentId: string,
+  turnId: string,
+  toolCallId: string,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify(["sub-agent", parentAgentId, turnId, toolCallId]))
+    .digest("hex");
+}
+
 type SubAgentTask = {
   turnId: string;
   toolCallId: string;
@@ -705,19 +711,21 @@ function* stopSubAgentTasks(
     tasks.filter((task) => turnId !== undefined && task.turnId !== turnId),
   );
 }
+// Child instructions, guardrails, and tool grants are fixed at creation. Its
+// own turn may still update memory; direct callers cannot widen its access.
 function* requireTopLevelConversation(): restate.Operation<void> {
   const metadata = yield* restate
     .state()
     .get<{parentAgentId?: string}>("metadata");
   if (metadata?.parentAgentId)
     throw new TerminalError(
-      "Only the parent agent can send messages to a sub-agent",
+      "Only a top-level agent accepts direct messages or profile changes",
       {errorCode: 403},
     );
 }
 
-// Cross-component coordination belongs here: snapshot the Agent profile and
-// let AgentSession append the entries that open the turn.
+// Every entry path (ask, delivery, queued successor, delegation) snapshots the
+// same profile before dispatch. AgentSession owns the history those entries open.
 function* startTurn(
   agentId: string,
   entries: ConversationEntry[],
@@ -725,6 +733,8 @@ function* startTurn(
   const agentProfile = yield* profile.read();
   const metadata = yield* readMetadata();
   const servers = yield* configuredMcpServers();
+  // Direct ask implicitly creates the agent; persist its default metadata so
+  // later initialization cannot change its parent.
   if (!(yield* restate.state().get("metadata")))
     restate.state().set("metadata", metadata);
   const tools = resolveMcpGrants(agentProfile.tools, servers);

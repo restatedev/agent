@@ -178,15 +178,6 @@ export function createAgentClient({
     history,
     watchNotifications,
 
-    /** Sequence of the latest terminal response; zero before the first one. */
-    async lastTurnSequence(options?: {signal?: AbortSignal}): Promise<number> {
-      return invoke(
-        session.lastTurnSequence(
-          rpc.opts<void, number>({...options, input: serde.empty}),
-        ),
-      );
-    },
-
     /** Returns the Agent's current notification watermarks. */
     async notifications(): Promise<AgentNotificationSnapshot> {
       return invoke(

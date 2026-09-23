@@ -37,16 +37,16 @@ curl localhost:8080/Agent/demo/interrupt \
   --json '{"reason":"Change of plan","message":"Only check Berlin"}'
 ```
 
-A child conversation rejects direct ask, steering, external delivery, and
-replacement messages. Parent delegation starts its turns. The local UI permits
-inspection, interruption without replacement, and approval resolution.
+A child conversation rejects direct ask, steering, external delivery,
+replacement messages, and direct profile edits. Parent delegation starts its
+turns. The local UI permits inspection, interruption without replacement, and
+approval resolution.
 
 ## History and notifications
 
 `AgentSession.history({fromSequence, limit})` returns ordered sequenced entries
 and `nextSequence`. Begin at 1 and use the returned cursor to paginate. The
 public log is append-only; compaction affects model context, not stored entries.
-`lastTurnSequence` reads the most recent turn boundary without a body.
 
 `AgentNotifications.snapshot()` returns `{revision, versions}`; versions has
 `history`, `profile`, `approvals`, and `schedules` counters. `watch` accepts

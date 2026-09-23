@@ -47,7 +47,7 @@ test("startup captures the watermark before fetching all data in parallel", asyn
   assert.deepEqual(result.approvals, []);
 });
 
-test("startup paginates on the BFF and stops at a short page", async () => {
+test("startup paginates on the UI proxy and stops at a short page", async () => {
   const {client, calls} = fixture({history: async (fromSequence) => {
     const count = fromSequence === 1 ? 100 : 2;
     return {entries: Array.from({length: count}, (_, i) => entry(fromSequence + i)), nextSequence: fromSequence + count};
