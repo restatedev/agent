@@ -16,22 +16,22 @@ export function toggleTool(
   return {mode: "selected", names: [...names]};
 }
 
-export function connectionEnabled(tools: AgentTools, connectionId: string) {
-  const grant = tools.mcp.find((g) => g.connectionId === connectionId);
+export function mcpServerEnabled(tools: AgentTools, serverId: string) {
+  const grant = tools.mcp.find((item) => item.connectionId === serverId);
   return grant
     ? grant.tools.mode === "all" || grant.tools.names.length > 0
     : tools.mcpDefault !== "disabled";
 }
 
-/** Off must be explicit: omission means default-on for authorized connections. */
-export function toggleConnection(
+/** An explicit selection overrides the default for one configured server. */
+export function toggleMcpServer(
   tools: AgentTools,
-  connectionId: string,
+  serverId: string,
   enabled: boolean,
 ): AgentTools {
-  const mcp = tools.mcp.filter((g) => g.connectionId !== connectionId);
+  const mcp = tools.mcp.filter((item) => item.connectionId !== serverId);
   mcp.push({
-    connectionId,
+    connectionId: serverId,
     tools: enabled ? {mode: "all"} : {mode: "selected", names: []},
   });
   return {...tools, mcp};

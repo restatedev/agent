@@ -10,8 +10,8 @@ import {useEffect, useRef, useState} from "react";
 import type {AgentClient} from "./agent-client";
 
 import {
-  connectionEnabled,
-  toggleConnection,
+  mcpServerEnabled,
+  toggleMcpServer,
   toggleTool,
   toolEnabled,
 } from "./tool-toggles";
@@ -154,10 +154,10 @@ export function AgentToolsPanel({
           <ToolSwitch
             key={server.id}
             label={server.id}
-            checked={connectionEnabled(permissions, server.id)}
+            checked={mcpServerEnabled(permissions, server.id)}
             disabled={saving}
             onChange={(enabled) =>
-              void save(toggleConnection(permissions, server.id, enabled))
+              void save(toggleMcpServer(permissions, server.id, enabled))
             }
           />
         ))}

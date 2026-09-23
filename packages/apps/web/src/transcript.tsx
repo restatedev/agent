@@ -20,7 +20,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import {type ReactNode, useEffect, useMemo, useState} from "react";
+import {useEffect, useMemo, useState} from "react";
 import type {SequencedEntry} from "./agent-client";
 import {Bubble, BubbleContent} from "./components/ui/bubble";
 import {Marker, MarkerContent, MarkerIcon} from "./components/ui/marker";
@@ -78,6 +78,8 @@ function shortTurn(turnId: string) {
 }
 
 function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
+  // Read terminal status first so every segment of a finished turn renders
+  // consistently, even when a user message splits its details into two rows.
   const terminalByTurn = new Map<string, AssistantEntry["status"]>();
   for (const {entry} of entries) {
     if (entry.role === "assistant") {
@@ -504,11 +506,9 @@ function isAnchor(row: TranscriptRow) {
 export function Transcript({
   entries,
   busy,
-  pendingAction,
 }: {
   entries: SequencedEntry[];
   busy: boolean;
-  pendingAction?: ReactNode;
 }) {
   const rows = useMemo(() => transcriptRows(entries), [entries]);
   return (
@@ -520,7 +520,7 @@ export function Transcript({
       <MessageScroller>
         <MessageScrollerViewport>
           <MessageScrollerContent aria-busy={busy}>
-            {rows.length === 0 && !pendingAction && (
+            {rows.length === 0 && (
               <div className="empty-conversation">
                 <div className="empty-orbit">
                   <Sparkles />
@@ -559,15 +559,6 @@ export function Transcript({
                 )}
               </MessageScrollerItem>
             ))}
-            {pendingAction && (
-              <MessageScrollerItem
-                className="pending-action-item"
-                messageId="pending-action"
-                scrollAnchor
-              >
-                {pendingAction}
-              </MessageScrollerItem>
-            )}
           </MessageScrollerContent>
         </MessageScrollerViewport>
         <MessageScrollerButton />

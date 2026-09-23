@@ -1,5 +1,6 @@
 "use client";
 
+import type {AgentProfile, ApprovalRequest} from "@restate-agents/types";
 import {
   Activity,
   Ban,
@@ -31,12 +32,7 @@ import type {AgentClient, SequencedEntry} from "./agent-client";
 
 import {AgentToolsPanel} from "./agent-tools-panel";
 import {Transcript} from "./transcript";
-import {
-  type AgentConnection,
-  type AgentProfile,
-  type ApprovalRequest,
-  useAgent,
-} from "./use-agent";
+import {useAgent} from "./use-agent";
 
 type Mode = "ask" | "steer" | "interrupt";
 type Tab = "approvals" | "profile";
@@ -713,16 +709,13 @@ function Inspector({
 }
 
 export function App({initialAgentId}: {initialAgentId: string}) {
-  const [connection] = useState<AgentConnection>({
-    agentId: initialAgentId,
-  });
   const [mode, setMode] = useState<Mode>("ask");
   const [tab, setTab] = useState<Tab>("approvals");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [provisionalTurn, setProvisionalTurn] = useState<string>();
   const toastId = useRef(0);
-  const agent = useAgent(connection);
-  const agentName = agent.metadata?.name ?? connection.agentId;
+  const agent = useAgent(initialAgentId);
+  const agentName = agent.metadata?.name ?? initialAgentId;
   const readOnly = Boolean(agent.metadata?.parentAgentId);
   const pendingTurnId = agent.approvals[0]?.turnId;
   const turn = useMemo(
@@ -742,8 +735,8 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     if (!turn) setProvisionalTurn(undefined);
   }, [turn]);
   useEffect(() => {
-    document.title = `Restate Agent · ${connection.agentId}`;
-  }, [connection.agentId]);
+    document.title = `Restate Agent · ${initialAgentId}`;
+  }, [initialAgentId]);
 
   async function sendMessage(message: string, replacement?: string) {
     try {
@@ -791,7 +784,7 @@ export function App({initialAgentId}: {initialAgentId: string}) {
           <input
             id="agent-id"
             name="agent"
-            defaultValue={connection.agentId}
+            defaultValue={initialAgentId}
             maxLength={256}
             required
           />
@@ -877,18 +870,16 @@ export function App({initialAgentId}: {initialAgentId: string}) {
             />
           )}
         </section>
-        {
-          <Inspector
-            readOnly={readOnly}
-            approvals={agent.approvals}
-            client={agent.client}
-            notify={notify}
-            profile={agent.profile}
-            refreshProfile={agent.refreshProfile}
-            setTab={setTab}
-            tab={tab}
-          />
-        }
+        <Inspector
+          readOnly={readOnly}
+          approvals={agent.approvals}
+          client={agent.client}
+          notify={notify}
+          profile={agent.profile}
+          refreshProfile={agent.refreshProfile}
+          setTab={setTab}
+          tab={tab}
+        />
       </main>
       <details className="demo-state">
         <summary>Memories and schedules</summary>

@@ -1,21 +1,12 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import {
-  type AgentClient,
-  type AgentSnapshot,
-  createAgentClient,
-} from "./agent-client";
+import {type AgentSnapshot, createAgentClient} from "./agent-client";
 import {mergeAgentSnapshot} from "./agent-snapshot";
 
-export type AgentProfile = Awaited<ReturnType<AgentClient["profile"]>>;
-export type ApprovalRequest = Awaited<
-  ReturnType<AgentClient["approvals"]>
->[number];
-export type AgentConnection = {agentId: string};
-
 /** One mounted conversation owns one cursor and one cancellable long poll. */
-export function useAgent({agentId}: AgentConnection) {
+export function useAgent(agentId: string) {
   const client = useMemo(() => createAgentClient(agentId), [agentId]);
   const [snapshot, setSnapshot] = useState<AgentSnapshot>();
+  // The poll reads the latest merged result without restarting on each render.
   const latest = useRef<AgentSnapshot | undefined>(undefined);
   const [status, setStatus] = useState<"connecting" | "connected" | "failed">(
     "connecting",

@@ -27,14 +27,12 @@ export type AgentSnapshot = {
 export type AgentSnapshotUpdate = Pick<AgentSnapshot, "notification"> &
   Partial<Omit<AgentSnapshot, "notification">>;
 type RequestOptions = {
-  headers?: Record<string, string>;
-  onResponse?: (response: Response) => void;
   body?: unknown;
   idempotencyKey?: string;
   signal?: AbortSignal;
 };
 
-export class AgentClientError extends Error {
+class AgentClientError extends Error {
   constructor(
     readonly status: number,
     message: string,
@@ -44,11 +42,10 @@ export class AgentClientError extends Error {
   }
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}) {
+async function request<T>(path: string, options: RequestOptions = {}) {
   const response = await fetch(path, {
     method: options.body === undefined ? "GET" : "POST",
     headers: {
-      ...options.headers,
       ...(options.body === undefined
         ? {}
         : {"content-type": "application/json"}),
@@ -70,28 +67,26 @@ export async function request<T>(path: string, options: RequestOptions = {}) {
         : undefined) ?? `${response.status} ${response.statusText}`,
     );
   }
-  options.onResponse?.(response);
   return result as T;
 }
 
 export function createAgentClient(agentId: string) {
-  const send = request;
   const base = `/api/agent/${encodeURIComponent(agentId)}`;
   const read = <T>(operation: string, parameters?: URLSearchParams) =>
-    send<T>(`${base}/${operation}${parameters ? `?${parameters}` : ""}`);
+    request<T>(`${base}/${operation}${parameters ? `?${parameters}` : ""}`);
   const write = <T>(operation: string, body: unknown) =>
-    send<T>(`${base}/${operation}`, {body});
+    request<T>(`${base}/${operation}`, {body});
 
   return {
     async snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot> {
-      return send(`${base}/snapshot`, options);
+      return request(`${base}/snapshot`, options);
     },
     async sync(
       since: AgentNotificationSnapshot,
       fromSequence: number,
       options?: {idempotencyKey?: string; signal?: AbortSignal},
     ): Promise<AgentSnapshotUpdate> {
-      return send(
+      return request(
         `${base}/sync?${new URLSearchParams({
           since: JSON.stringify(since),
           fromSequence: String(fromSequence),
@@ -107,31 +102,6 @@ export function createAgentClient(agentId: string) {
     },
     async interrupt(reason: string, message?: string): Promise<boolean> {
       return write("interrupt", {reason, ...(message ? {message} : {})});
-    },
-    async history(fromSequence = 1, limit = 100): Promise<HistoryPage> {
-      return read(
-        "history",
-        new URLSearchParams({
-          fromSequence: String(fromSequence),
-          limit: String(limit),
-        }),
-      );
-    },
-    async notifications(): Promise<AgentNotificationSnapshot> {
-      return read("notifications");
-    },
-    async watchNotifications(
-      afterRevision: number,
-      timeoutSeconds: number,
-      options?: {idempotencyKey?: string; signal?: AbortSignal},
-    ): Promise<AgentNotificationSnapshot> {
-      return send(
-        `${base}/watch?${new URLSearchParams({
-          afterRevision: String(afterRevision),
-          timeoutSeconds: String(timeoutSeconds),
-        })}`,
-        options,
-      );
     },
     async profile(): Promise<AgentProfile> {
       return read("profile");
@@ -160,9 +130,6 @@ export function createAgentClient(agentId: string) {
     },
     async cancelSchedule(scheduleId: string): Promise<unknown> {
       return write("cancel-schedule", {scheduleId});
-    },
-    async approvals(): Promise<ApprovalRequest[]> {
-      return read("approvals");
     },
     async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
       return write("resolve-approval", resolution);

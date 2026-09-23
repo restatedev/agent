@@ -78,32 +78,43 @@ export async function readAgentSnapshotUpdate(
   const result: AgentSnapshotUpdate = {notification};
   const changed = (topic: keyof typeof since.versions) =>
     notification.versions[topic] !== since.versions[topic];
-  await Promise.all([
-    changed("profile") &&
-      client.profile().then((value) => {
-        result.profile = value;
+  const reads: Promise<void>[] = [];
+  // Profile changes can also change the child directory and display name.
+  if (changed("profile")) {
+    reads.push(
+      Promise.all([
+        client.profile(),
+        client.children(),
+        client.metadata(),
+      ]).then(([profile, children, metadata]) => {
+        result.profile = profile;
+        result.children = children;
+        result.metadata = metadata;
       }),
-    changed("approvals") &&
+    );
+  }
+  if (changed("approvals")) {
+    reads.push(
       client.approvals().then((value) => {
         result.approvals = value;
       }),
-    changed("schedules") &&
+    );
+  }
+  if (changed("schedules")) {
+    reads.push(
       client.schedules().then((value) => {
         result.schedules = value;
       }),
-    changed("profile") &&
-      client.children().then((value) => {
-        result.children = value;
-      }),
-    changed("profile") &&
-      client.metadata().then((value) => {
-        result.metadata = value;
-      }),
-    changed("history") &&
+    );
+  }
+  if (changed("history")) {
+    reads.push(
       readHistory(client, signal, fromSequence).then((value) => {
         result.history = value;
       }),
-  ]);
+    );
+  }
+  await Promise.all(reads);
   signal.throwIfAborted();
   return result;
 }

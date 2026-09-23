@@ -33,22 +33,25 @@ export function subAgentProfile(
   builtins: readonly string[],
 ): AgentProfile {
   const tools = structuredClone(config.tools ?? grants);
-  const denied = !subset(tools.builtin, grants.builtin)
-    ? "builtin"
-    : !subset(tools.dynamic, grants.dynamic)
-      ? "dynamic"
-      : tools.mcp.find((grant) => {
-          const allowed = grants.mcp.find(
-            (g) => g.connectionId === grant.connectionId,
-          );
-          return !allowed || !subset(grant.tools, allowed.tools);
-        });
+  let denied: string | undefined;
+  if (!subset(tools.builtin, grants.builtin)) {
+    denied = "builtin selection";
+  } else if (!subset(tools.dynamic, grants.dynamic)) {
+    denied = "dynamic selection";
+  } else {
+    const invalidMcp = tools.mcp.find((grant) => {
+      const allowed = grants.mcp.find(
+        (item) => item.connectionId === grant.connectionId,
+      );
+      return !allowed || !subset(grant.tools, allowed.tools);
+    });
+    if (invalidMcp)
+      denied = `MCP connection ${JSON.stringify(invalidMcp.connectionId)} or its tool selection`;
+  }
   if (denied)
     throw new TerminalError(
       "Sub-agent tools cannot exceed the parent's current access: " +
-        (typeof denied === "string"
-          ? `${denied} selection is not permitted.`
-          : `MCP connection ${JSON.stringify(denied.connectionId)} or its tool selection is not permitted.`) +
+        `${denied} is not permitted.` +
         " Built-in tools such as webSearch belong in builtin; dynamic names are service/handler IDs. Correct the selection, or use tools: null to inherit current access if no narrower restriction is needed.",
       {errorCode: 403},
     );

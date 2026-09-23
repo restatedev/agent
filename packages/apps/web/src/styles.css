@@ -1367,8 +1367,7 @@ svg {
   gap: 10px;
 }
 
-.approval-card,
-.compact-card {
+.approval-card {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-raised);
@@ -1377,13 +1376,6 @@ svg {
 .approval-card {
   padding: 13px;
 }
-
-.pending-action-item {
-  width: min(100%, 760px);
-  align-self: center;
-}
-
-
 
 .card-kicker {
   display: flex;
@@ -1581,60 +1573,11 @@ svg {
   height: 13px;
 }
 
-.memory-row {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface-raised);
-  padding: 8px 9px;
-}
-
-.memory-row code {
-  color: var(--primary-bright);
-  font-family: var(--mono);
-  font-size: 9px;
-}
-
-.memory-row span {
-  color: var(--text-muted);
-  font-size: 10px;
-}
-
 .empty-copy {
   margin: 0;
   color: var(--text-faint);
   font-size: 10px;
   font-style: italic;
-}
-
-.compact-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 9px;
-}
-
-.compact-card > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.compact-card strong {
-  overflow: hidden;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.compact-card span {
-  margin-top: 2px;
-  color: var(--text-faint);
-  font-family: var(--mono);
-  font-size: 8px;
 }
 
 .toasts {
