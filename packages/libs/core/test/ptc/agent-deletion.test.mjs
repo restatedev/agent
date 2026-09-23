@@ -1,59 +1,21 @@
 import assert from "node:assert/strict";
 import {mock, test} from "node:test";
-import {User} from "../../src/user/service.ts";
 import {Agent} from "../../src/agent/service.ts";
 import {Sandbox} from "../../src/sandbox/service.ts";
 import {sandboxProvider} from "../../src/sandbox/provider.ts";
 import {context} from "./state-fixture.mjs";
 
-test("deleting an owned agent revokes membership, retains connections and queues cleanup", async () => {
-  const f = context("alice", {agents: [{agentId: "a", name: "A"}, {agentId: "b", name: "B"}], connections: [{server: {id: "notion"}}]});
-  assert.equal(await f.invoke(User.object.deleteAgent, {agentId: "a"}), true);
-  assert.deepEqual(f.state.get("agents"), [{agentId: "b", name: "B"}]);
-  assert.equal(f.state.get("connections").length, 1);
-  assert.equal(f.state.get("deleted-agent:a"), true);
-  assert.deepEqual(f.sends.map(({service, key, method, parameter}) => ({service, key, method, parameter})), [{service: "Agent", key: "a", method: "retire", parameter: {ownerUserId: "alice"}}, {service: "UserNotifications", key: "alice", method: "publish", parameter: {kind: "profile"}}]);
-  assert.equal(await f.invoke(User.object.ownsAgent, {agentId: "a"}), false);
-  assert.equal(await f.invoke(User.object.deleteAgent, {agentId: "a"}), false);
-  assert.equal(f.sends.length, 2);
-});
-
-test("deletion cannot target another user's agent", async () => {
-  const f = context("alice", {agents: [{agentId: "a", name: "A"}]});
-  assert.equal(await f.invoke(User.object.deleteAgent, {agentId: "bob-agent"}), false);
-  assert.equal(f.sends.length, 0);
-  assert.equal(f.state.get("agents").length, 1);
-});
-
-test("late create retries cannot resurrect a deleted agent", async () => {
-  const f = context("alice", {"deleted-agent:a": true});
-  await assert.rejects(f.invoke(User.object.createAgent, {agentId: "a", name: "A"}), /deleted/);
-  assert.equal(f.sends.length, 0);
-});
-
-test("deletion removes only that agent's authorization waiters", async () => {
-  const f = context("alice", {
-    agents: [{agentId: "a", name: "A"}],
-    authorizations: [
-      {manual: false, waiters: [{agentId: "a"}]},
-      {manual: false, waiters: [{agentId: "a"}, {agentId: "b"}]},
-      {manual: true, waiters: [{agentId: "a"}]},
-    ],
-  });
-  await f.invoke(User.object.deleteAgent, {agentId: "a"});
-  assert.deepEqual(f.state.get("authorizations"), [
-    {manual: false, waiters: [{agentId: "b"}]}, {manual: true, waiters: []},
-  ]);
-});
-
 test("retirement interrupts the turn, drops queued work, and asynchronously retires resources", async () => {
   const f = context("a", {
-    ownership: {ownerUserId: "alice", name: "A"},
+    metadata: {name: "A"},
     turn: {id: "turn-1", steeringBatches: [], tools: {}},
     pending: [{role: "user", text: "queued"}],
     approvals: [{turnId: "turn-1", approvalId: "approval"}],
   });
-  await f.invoke(Agent.object.retire, {ownerUserId: "alice"});
+  await f.invoke(Agent.object.retire, {});
+  const sendsAfterRetire = f.sends.length;
+  await f.invoke(Agent.object.retire, {});
+  assert.equal(f.sends.length, sendsAfterRetire);
   assert.equal(f.state.get("deleted"), true);
   assert.equal(f.state.has("pending"), false);
   assert.equal(f.state.has("approvals"), false);
@@ -61,14 +23,14 @@ test("retirement interrupts the turn, drops queued work, and asynchronously reti
   assert.equal(f.signals[0].id, "turn-1");
   assert.ok(f.sends.some(s => s.service === "Sandbox" && s.method === "retire"));
   await assert.rejects(f.invoke(Agent.object.ask, {message: "restart"}), /deleted/);
-  await assert.rejects(f.invoke(Agent.object.initialize, {ownerUserId: "alice", name: "A"}), /deleted/);
+  await assert.rejects(f.invoke(Agent.object.initialize, {name: "A"}), /deleted/);
   await f.invoke(Agent.object.deliver, {source: "schedule", message: "late", whenBusy: "queue"});
   assert.equal(f.state.has("pending"), false);
 });
 
-test("retirement checks immutable ownership", async () => {
-  const f = context("a", {ownership: {ownerUserId: "alice"}});
-  await assert.rejects(f.invoke(Agent.object.retire, {ownerUserId: "bob"}), /belong/);
+test("only the parent can retire a child", async () => {
+  const f = context("child", {metadata: {name: "Child", parentAgentId: "parent"}});
+  await assert.rejects(f.invoke(Agent.object.retire, {}), /Only the parent/);
   assert.equal(f.state.has("deleted"), false);
 });
 

@@ -121,8 +121,8 @@ races the watch against its durable case deadline.
    successor session appends the queued replacement and adjacent dispatch
    boundary, and that a new turn answers it.
 6. `memory` asks the agent to remember a preference and checks the metadata-only
-   memory event, its ordering, and the durable User profile entry.
-7. `scheduling` drives User directly to create, list, and cancel one
+   memory event, its ordering, and the durable Agent profile entry.
+7. `scheduling` drives AgentScheduler directly to create, list, and cancel one
    delayed message without model inference, then lets a one-shot delivery wake
    an idle Agent through `Agent.deliver`. It checks the delivery route,
    adjacent user entry, terminal response, and one-shot state cleanup with one

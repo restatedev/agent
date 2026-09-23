@@ -20,113 +20,44 @@ pnpm install
 
 ## Start the stack
 
-For local development without Google sign-in, set `AUTH_DEV_BYPASS=true` on
-the web/BFF process (for example, `AUTH_DEV_BYPASS=true pnpm --filter
-@restate-agents/web dev`). It defaults to off and also works with production
-builds started via `AUTH_DEV_BYPASS=true pnpm --filter @restate-agents/web start`
-(`next start`), regardless of `NODE_ENV`. No Google client credentials are needed in
-this mode. The app opens as **Development User**, user ID `dev-user`, email
-`developer@example.test`, with a separate development issuer—not an existing
-Google account. Sign out is hidden while the bypass is enabled.
+Follow [the root quickstart](../README.md#run-it) to start a fresh private
+Restate server, the core endpoint, and the optional localhost UI. There is no
+Google configuration, login bypass, account registration or application secret
+key. Existing standalone-app state is not migrated.
 
-Anyone who can reach that BFF shares this account and its agents/connectors:
-use only on a trusted local development instance, never a public tunnel.
-Agent ownership, same-origin checks, and MCP connector authorization still
-apply. Disable the flag and restart the BFF to restore normal Google login;
-development data remains separate. User registration is cached per BFF process,
-so restart the BFF after wiping Restate state.
+The core listens on 9080; Restate ingress is normally 8080 and its Admin API/UI
+9070. `pnpm dev:service` and `pnpm dev:ui` build their required workspace
+packages before starting. `pnpm dev` starts both processes. UI scripts bind to
+`127.0.0.1`; copy `packages/apps/web/env.example` to `.env.local` in that package
+if you need different ingress connectivity.
 
-Scope-based model flow control is used by the example. Enable its Restate
-protocol features when starting a fresh local server:
+Configure optional MCP servers on the core process using
+[MCP configuration](mcp-configuration.md). PTC is enabled by default; disable it
+with `AGENT_PTC_ENABLED=false`. Web search is enabled by default and uses
+Tavily's keyless endpoint; Context → Web search saves an agent-local preference.
 
-```sh
-RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true \
-RESTATE_EXPERIMENTAL_ENABLE_VQUEUES=true \
-restate-server
-```
+`AGENT_MODEL_MAX_OUTPUT_TOKENS` controls the model output budget: default
+`32000`, valid integers `1024` through `64000`. Truncation gets one recovery
+attempt at double its recorded budget, capped at `64000`; see
+[model recovery](turn-runtime.md#model-output-budgets-and-recovery).
 
-Start the endpoint in another shell:
+For optional Modal sandboxes, export `SANDBOX_PROVIDER=modal`, `MODAL_TOKEN_ID`
+and `MODAL_TOKEN_SECRET` into the core process. See [sandboxes](sandboxes.md).
+Do not send credentials as handler arguments.
 
-```sh
-export OPENAI_API_KEY=...
-pnpm dev:service
-```
+## Packaging
 
-Programmatic tool calling (PTC) is enabled by default. To disable it, start the
-core service with `AGENT_PTC_ENABLED=false pnpm dev:service`. See
-[tools.md](tools.md#programmatic-tool-calling-ptc) for the tool and replay contract.
-
-`AGENT_MODEL_MAX_OUTPUT_TOKENS` controls the agent generation budget on the
-core service: default `32000`, valid integers `1024` through `64000`. A truncated
-generation gets at most one recovery attempt at double its recorded budget,
-capped at `64000`. At the ceiling it fails without another attempt. This applies
-to normal agent calls and final summaries; guardrail and compaction budgets are
-unchanged. See [model recovery](turn-runtime.md#model-output-budgets-and-recovery).
-
-Web search is also enabled by default and requires no API key or environment
-variable. Use **Context → Web search** in the UI to save a per-Agent preference
-for future turns. It uses Tavily's free, rate-limited keyless API; see
-[web search](tools.md#web-search) for privacy, limits, and a PTC example.
-
-The endpoint listens on port 9080. Register it with Restate:
-
-```sh
-restate deployments register http://localhost:9080
-```
-
-Restate ingress is normally `http://localhost:8080`, and the local Admin API/UI
-is `http://localhost:9070`. `pnpm start:service` builds and starts the core
-runtime in production mode.
-
-To use Modal:
-
-```sh
-export SANDBOX_PROVIDER=modal
-export MODAL_TOKEN_ID=...
-export MODAL_TOKEN_SECRET=...
-pnpm dev:service
-```
-
-Shell variables must be exported so the Node process receives them. Never
-commit credentials or local launch scripts containing credentials.
-
-MCP credentials use the same `APP_SECRET_KEY` on the core service and BFF.
-An unset key defaults to `restate` outside production; production requires a
-strong random secret. Keep it stable across restarts. This credential format
-requires fresh development data and MCP reauthorization; old plaintext journals
-are not rewritten. See [credential encryption](credential-encryption.md).
-
-See [sandboxes.md](sandboxes.md) for optional Modal settings and lifecycle
-behavior.
-
-Configure [Google sign-in and user ownership](user-identity.md) before running
-`pnpm dev:ui`. There is no anonymous UI fallback. Set `APP_PUBLIC_URL` to the
-exact browser origin, including when using a tunnel.
-
-## Production BFF image
-
-The separate `docker-web` GitHub Actions workflow builds
-`docker/Dockerfile.web` on pushes to `main` and on manual dispatch. It publishes
-`ghcr.io/restatedev/agent-web:latest` on the default branch and a
-`sha-<short-commit>` tag for each build, for Linux amd64 and arm64. The existing
-`docker` workflow independently publishes the core image.
-
-The BFF Dockerfile runs the dependency builds and `next build`, and runs the
-standalone output as a non-root user with `NODE_ENV=production` on port 3000.
-Neither workflow deploys anything. Supply `APP_PUBLIC_URL`, Google OAuth
-credentials, `APP_SECRET_KEY`, and Restate connectivity settings at deployment
-time; no application credentials are needed to build the image.
+`docker/Dockerfile` and `docker/Dockerfile.web` are runnable packaging examples.
+The latter builds Next.js standalone output and serves the local UI on port
+3000. Publish container ports only on loopback for local use, for example
+`-p 127.0.0.1:3000:3000`. The web image publishing workflow has been removed.
+The remaining core image workflow is separate from deployment.
 
 ## Smoke test
 
-On **trusted private ingress**, register a development identity and create its
-agent first (or create an agent through the signed-in UI and use its ID):
+Send directly to any agent ID on private ingress:
 
 ```sh
-curl localhost:8080/User/dev-user/register \
-  --json '{"userId":"dev-user","issuer":"https://accounts.google.com","subject":"development","email":"dev@example.test","displayName":"Developer"}'
-curl localhost:8080/User/dev-user/createAgent \
-  --json '{"agentId":"demo","name":"Demo"}'
 curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
 ```
@@ -161,16 +92,18 @@ curl localhost:8080/Agent/demo/steer \
 
 ## Validation commands
 
-Run all three before committing an implementation change:
+Run the relevant deterministic checks before committing an implementation change:
 
 ```sh
 pnpm lint
 pnpm build
+pnpm --filter @restate-agents/core test:ptc
+pnpm --filter @restate-agents/web test
 pnpm bundle
 ```
 
 - `lint` runs Biome across workspace source and configuration files.
-- `build` type-checks the workspace.
+- `build` compiles the workspace and creates a production Next.js build.
 - `bundle` creates the deployable ESM bundle and catches packaging/import
   problems that type-checking alone may miss.
 
@@ -234,7 +167,7 @@ runtime trace.
 ### Useful correlations
 
 - `agentId` is the shared Agent, AgentSession, AgentNotifications,
-  User, and Sandbox Virtual Object key.
+  AgentScheduler, and Sandbox Virtual Object key.
 - `turnId` is the `AgentSession/doTurn` invocation ID.
 - `toolCallId` is the stable pending-operation ID.
 - `approvalId` is the tool call or guardrail approval signal identity.
@@ -283,34 +216,13 @@ journaled snapshot.
 
 ### MCP tool does not appear
 
-Check:
+Check the core process's `MCP_SERVERS_JSON`, selected protocol, connectivity
+and Agent tool grants. A changed connector requires a new turn. A `tokenEnv`
+reference must resolve in the core environment. Missing/invalid credentials
+produce sanitized discovery warnings or tool failures, without an OAuth wait.
 
-1. the User has the connection and the Agent profile grants its required tools;
-2. the entry's `protocol` matches the endpoint: `stateless` for MCP revision
-   `2026-07-28`, or `stateful` for the 2025-era initialize handshake;
-3. `auth.type` correctly says `none`, `oauth`, or `bearer`;
-4. an authenticated server has no pending authorization action in the
-   Approvals tab;
-5. the endpoint is reachable without an HTTP redirect;
-6. logs contain no MCP discovery warning; and
-7. you started a new turn after the catalog cache expired.
-
-The runtime does not fall back between protocol modes. A successful stateless
-catalog is cached only for the server-advertised TTL, capped at five minutes,
-in a process cache capped at 256 entries; stateful catalogs are not reused
-across turns, and existing turns retain their journaled snapshot.
-
-An OAuth or bearer challenge creates a user-visible authorization action backed
-by private Agent state. It appears in both the conversation and Approvals tab.
-The Turn remains durably waiting until the Web UI
-completes the flow, the server configuration changes, or the Turn is
-interrupted. An endpoint that still advertises an MCP `2025-06-18` session must
-be configured as `stateful`.
-
-Discovery records availability for every configured server. The model receives
-that per-turn runtime status separately from the public tool catalog, so it can
-say that a server is configured but unavailable instead of incorrectly saying
-that the server was never configured.
+Read [MCP configuration](mcp-configuration.md) and inspect the Restate discovery
+run. Never add logging that prints tokens or full provider request headers.
 
 ### An Agent remains busy
 
@@ -407,9 +319,9 @@ behavior can be tested without manufacturing many full agent runs.
 | Change transcript storage | `src/session/history.ts` |
 | Change invalidation subscriptions | `src/notifications/service.ts` |
 | Change instructions/guardrails | `src/agent/profile.ts` |
-| Change shared user memories | `src/user/memory.ts` |
+| Change agent-local memories | `src/agent/memory.ts` |
 | Change approvals | `src/agent/approval.ts` |
-| Change schedules and timer delivery | `src/user/schedules.ts` |
+| Change schedules and timer delivery | `src/scheduler/service.ts` |
 | Change the turn state machine | `src/session/service.ts` |
 | Change one inference/tool step | `src/session/step.ts` |
 | Add a built-in tool | `src/session/tools.ts` |

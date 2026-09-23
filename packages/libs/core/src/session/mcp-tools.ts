@@ -1,7 +1,7 @@
-// MCP tool discovery and invocation. Agent profile entries explicitly select
+// MCP tool discovery and invocation. Operator-configured servers explicitly select
 // stateless 2026-07-28 discovery or the stateful 2025-era initialize protocol.
-// OAuth credentials arrive through the private Turn snapshot or a durable
-// Agent signal. Each Turn journals the selected catalog and protocol verdict,
+// Operator-configured credential references are resolved only inside HTTP
+// effects. Each Turn journals the selected catalog and protocol verdict,
 // then calls the exact snapshotted remote tool definition.
 
 import {createHash} from "node:crypto";
@@ -15,18 +15,10 @@ import {
   type Tool,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
-import {openMcpToken} from "@restate-agents/secrets";
-import type {
-  EncryptedSecret,
-  McpAuthorizationResolution,
-  McpServer,
-  McpTurnCredential,
-} from "@restate-agents/types";
-import {UserDefinition} from "@restate-agents/types/services";
+import type {McpServer} from "@restate-agents/types";
 import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import {Agent} from "../agent/index.js";
-import {mcpAuthorizationSignalName} from "../internal-types.js";
+import {McpConfigurationError, resolveMcpToken} from "./mcp-config.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
 const MCP_CLIENT = {name: "restate-agent-reference", version: "0.0.1"};
@@ -37,28 +29,10 @@ const MAX_INPUT_SCHEMA_CHARS = 64_000;
 const MAX_RESULT_CHARS = 128_000;
 const MAX_CACHE_TTL_MS = 5 * 60 * 1_000;
 const MAX_CACHED_CATALOGS = 256;
-const MAX_AUTHORIZATION_ROUNDS = 4;
 const REFRESH_RETRY_INTERVAL_MS = 30 * 1_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60 * 1_000;
 
-type McpAuthorizationReason =
-  | "missing_credentials"
-  | "unauthorized"
-  | "insufficient_scope";
-type McpCredentialAuthType = Exclude<McpServer["auth"]["type"], "none">;
-
-type McpServerSnapshot = {
-  id: string;
-  endpoint: string;
-  protocol: McpServer["protocol"];
-  auth: McpServer["auth"]["type"];
-  turnId: string;
-  agentId: string;
-  ownerUserId?: string;
-  revision: number;
-  credential?: McpTurnCredential;
-  timeoutMs: number;
-};
+type McpServerSnapshot = McpServer & {turnId: string; timeoutMs: number};
 
 type McpConnection = {
   client: Client;
@@ -86,22 +60,6 @@ type McpCachedDiscoveryResult = {
   catalog?: McpCatalogDefinition;
   warnings: string[];
 };
-
-export type McpAuthChallenge = {
-  reason: McpAuthorizationReason;
-  requestedScope?: string;
-  rejectedToken?: EncryptedSecret;
-  connectionRevision?: number;
-};
-
-export type McpAuthorizationGrant = {
-  credential: McpTurnCredential;
-  challenge: McpAuthChallenge;
-};
-
-type McpAttempt<T> =
-  | {status: "succeeded"; value: T}
-  | ({status: "authorization_required"} & McpAuthChallenge);
 
 type CachedCatalog = {
   catalog: McpCatalogDefinition;
@@ -151,8 +109,7 @@ const statefulConnections = new Map<string, StatefulConnection>();
  */
 export function* discoverMcpTools(
   servers: McpServer[],
-  credentials: McpTurnCredential[],
-  context: {agentId: string; turnId: string; ownerUserId?: string},
+  context: {agentId: string; turnId: string},
   reservedNames: string[],
 ): restate.Operation<McpToolDiscovery> {
   if (servers.length === 0) {
@@ -160,13 +117,7 @@ export function* discoverMcpTools(
   }
 
   const tasks = servers.map((server) =>
-    restate.spawn(
-      discoverMcpServer(
-        server,
-        credentials.find(({serverId}) => serverId === server.id),
-        context,
-      ),
-    ),
+    restate.spawn(discoverMcpServer(server, context)),
   );
   const results = yield* restate.all(tasks);
   for (const warning of results.flatMap(({warnings}) => warnings)) {
@@ -234,55 +185,12 @@ export function* discoverMcpTools(
 /** Invokes one snapshotted tool through its configured MCP protocol mode. */
 export function* executeMcpTool(
   input: Record<string, unknown>,
-  context: {
-    turnId: string;
-    toolCallId: string;
-    authorize(
-      serverId: string,
-      authType: McpCredentialAuthType,
-      causeId: string,
-      challenge: McpAuthChallenge,
-    ): restate.Operation<McpAuthorizationGrant>;
-  },
+  context: {turnId: string; toolCallId: string},
   tool: McpAgentTool,
 ): restate.Operation<McpToolExecution> {
   try {
-    let attempt = yield* callMcpTool(input, context, tool, "initial");
-    let authorizationRound = 0;
-    while (attempt.status === "authorization_required") {
-      if (tool.target.server.auth === "none") {
-        return {
-          status: "failed",
-          error: `${tool.name} requires authorization but its configured auth type is none`,
-        };
-      }
-      if (authorizationRound >= MAX_AUTHORIZATION_ROUNDS) {
-        return {
-          status: "failed",
-          error: `${tool.name} exceeded ${MAX_AUTHORIZATION_ROUNDS} authorization rounds`,
-        };
-      }
-      const nextRound = authorizationRound + 1;
-      const grant = yield* context.authorize(
-        tool.target.server.id,
-        tool.target.server.auth,
-        `${context.toolCallId}-${tool.target.server.auth}-${nextRound}`,
-        {
-          ...attempt,
-          rejectedToken: tool.target.server.credential?.encryptedToken,
-          connectionRevision: tool.target.server.revision,
-        },
-      );
-      tool.target.server.credential = grant.credential;
-      authorizationRound = nextRound;
-      attempt = yield* callMcpTool(
-        input,
-        context,
-        tool,
-        `authorized-${authorizationRound}`,
-      );
-    }
-
+    const attempt = yield* callMcpTool(input, context, tool);
+    if (attempt.status === "failed") return attempt;
     const result = attempt.value;
     const rendered = renderToolResult(result);
     return result.isError
@@ -303,13 +211,15 @@ function* callMcpTool(
   input: Record<string, unknown>,
   context: {turnId: string; toolCallId: string},
   tool: McpAgentTool,
-  phase: string,
-): restate.Operation<McpAttempt<CallToolResult>> {
-  yield* requireConnection(tool.target.server);
+): restate.Operation<
+  | {status: "succeeded"; value: CallToolResult}
+  | {status: "failed"; error: string}
+> {
   return yield* restate.run(
     async ({signal}) => {
+      let token: string | undefined;
       try {
-        const token = resolveToken(tool.target.server);
+        token = resolveMcpToken(tool.target.server);
         const connection = await connectMcp(
           tool.target.server,
           token,
@@ -336,21 +246,17 @@ function* callMcpTool(
           }
         }
       } catch (error) {
-        if (tool.target.server.protocol === "stateful") {
-          await discardStatefulConnection(
-            tool.target.server,
-            resolveToken(tool.target.server),
-          );
-        }
-        const challenge = authChallenge(error);
-        if (challenge) {
-          return {status: "authorization_required" as const, ...challenge};
-        }
-        throw error;
+        if (tool.target.server.protocol === "stateful")
+          await discardStatefulConnection(tool.target.server, token);
+        signal.throwIfAborted();
+        if (isCancellation(error)) throw error;
+        // Provider errors can contain Authorization headers. Sanitize before
+        // the failed HTTP effect is recorded in the journal.
+        return {status: "failed" as const, error: errorMessage(error)};
       }
     },
     {
-      name: `mcp-tool-${tool.name}-${phase}`,
+      name: `mcp-tool-${tool.name}`,
       // MCP does not standardize idempotency. Avoid eager network retries;
       // crash recovery can still repeat an uncommitted remote side effect.
       retry: {maxAttempts: 1},
@@ -360,112 +266,29 @@ function* callMcpTool(
 
 function* discoverMcpServer(
   config: McpServer,
-  credential: McpTurnCredential | undefined,
-  context: {agentId: string; turnId: string; ownerUserId?: string},
+  context: {agentId: string; turnId: string},
 ): restate.Operation<McpDiscoveryResult> {
-  try {
-    const server = serverSnapshot(config, credential, context);
-    let authorizationRound = 0;
-    if (server.auth !== "none" && !server.credential) {
-      const nextRound = authorizationRound + 1;
-      server.credential = yield* requestMcpAuthorization(
-        server.id,
-        context,
-        server.auth,
-        `discovery-${server.id}-${server.auth}-${nextRound}`,
-        {reason: "missing_credentials", connectionRevision: server.revision},
-      );
-      authorizationRound = nextRound;
-    }
-
-    let attempt = yield* discoverMcpServerAttempt(config, server, "initial");
-    while (attempt.status === "authorization_required") {
-      if (server.auth === "none") {
-        return {
-          warnings: [
-            `${config.id}: server requires authorization but its configured auth type is none`,
-          ],
-        };
-      }
-      if (authorizationRound >= MAX_AUTHORIZATION_ROUNDS) {
-        return {
-          warnings: [
-            `${config.id}: unavailable because authorization was rejected after ${MAX_AUTHORIZATION_ROUNDS} attempts`,
-          ],
-        };
-      }
-      const challenge = attempt;
-      const nextRound = authorizationRound + 1;
-      server.credential = yield* requestMcpAuthorization(
-        server.id,
-        context,
-        server.auth,
-        `discovery-${server.id}-${server.auth}-${nextRound}`,
-        {
-          ...challenge,
-          rejectedToken: server.credential?.encryptedToken,
-          connectionRevision: server.revision,
-        },
-      );
-      authorizationRound = nextRound;
-      attempt = yield* discoverMcpServerAttempt(
-        config,
-        server,
-        `authorized-${authorizationRound}`,
-      );
-    }
-    return attempt.value;
-  } catch (error) {
-    if (isCancellation(error)) {
-      throw error;
-    }
-    return {
-      warnings: [`${config.id}: discovery failed: ${errorMessage(error)}`],
-    };
-  }
-}
-
-function* discoverMcpServerAttempt(
-  config: McpServer,
-  server: McpServerSnapshot,
-  phase: string,
-): restate.Operation<McpAttempt<McpDiscoveryResult>> {
-  yield* requireConnection(server);
-  const attempt = yield* restate.run(
+  const server: McpServerSnapshot = {
+    ...config,
+    turnId: context.turnId,
+    timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+  };
+  return yield* restate.run(
     async ({signal}) => {
       try {
-        const value = await discoverCached(config, server, signal);
-        return {status: "succeeded" as const, value};
+        const result = await discoverCached(config, server, signal);
+        return {
+          warnings: result.warnings,
+          ...(result.catalog ? {catalog: {...result.catalog, server}} : {}),
+        };
       } catch (error) {
-        const challenge = authChallenge(error);
-        if (challenge) {
-          return {status: "authorization_required" as const, ...challenge};
-        }
-        throw error;
+        signal.throwIfAborted();
+        if (isCancellation(error)) throw error;
+        return {warnings: [`${config.id}: ${errorMessage(error)}`]};
       }
     },
-    {
-      name: `discover-mcp-${config.id}-${phase}`,
-      retry: {
-        maxAttempts: 3,
-        initialInterval: 200,
-        maxInterval: 2_000,
-        exponentiationFactor: 2,
-      },
-    },
+    {name: `discover-mcp-${config.id}`, retry: {maxAttempts: 1}},
   );
-  if (attempt.status === "authorization_required") {
-    return attempt;
-  }
-  return {
-    status: "succeeded",
-    value: {
-      warnings: attempt.value.warnings,
-      ...(attempt.value.catalog
-        ? {catalog: {...attempt.value.catalog, server}}
-        : {}),
-    },
-  };
 }
 
 async function discoverCached(
@@ -474,7 +297,7 @@ async function discoverCached(
   signal: AbortSignal,
 ): Promise<McpCachedDiscoveryResult> {
   const now = Date.now();
-  const token = resolveToken(server);
+  const token = resolveMcpToken(server);
   if (config.protocol === "stateful") {
     const refresh = fetchCatalog(config, server, token).then(
       ({catalog, warnings}) => ({catalog, warnings}),
@@ -672,7 +495,7 @@ function createTransport(
   server: McpServerSnapshot,
   token: string | undefined,
 ): StreamableHTTPClientTransport {
-  return new StreamableHTTPClientTransport(new URL(server.endpoint), {
+  return new StreamableHTTPClientTransport(new URL(server.url), {
     ...(token ? {authProvider: {token: async () => token}} : {}),
     fetch: noRedirectFetch,
     onInsufficientScope: "throw",
@@ -686,25 +509,6 @@ function noRedirectFetch(
   return fetch(input, {...init, redirect: "error"});
 }
 
-function serverSnapshot(
-  config: McpServer & {revision?: number},
-  credential: McpTurnCredential | undefined,
-  context: {agentId: string; turnId: string; ownerUserId?: string},
-): McpServerSnapshot {
-  return {
-    id: config.id,
-    endpoint: config.url,
-    protocol: config.protocol,
-    auth: config.auth.type,
-    turnId: context.turnId,
-    agentId: context.agentId,
-    ownerUserId: context.ownerUserId,
-    revision: config.revision ?? 0,
-    ...(credential ? {credential} : {}),
-    timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-  };
-}
-
 function statefulConnectionKey(
   server: McpServerSnapshot,
   token: string | undefined,
@@ -712,7 +516,7 @@ function statefulConnectionKey(
   return JSON.stringify([
     server.turnId,
     server.id,
-    server.endpoint,
+    server.url,
     token ? tokenFingerprint(token) : "anonymous",
   ]);
 }
@@ -757,43 +561,12 @@ export function releaseMcpSessionsAfterCancellation(turnId: string): void {
   void closeStatefulConnections(turnId);
 }
 
-function resolveToken(server: McpServerSnapshot): string | undefined {
-  if (!server.credential) return undefined;
-  if (!server.ownerUserId)
-    throw new Error("MCP credentials require an owning user");
-  if (server.credential.serverId !== server.id)
-    throw new Error("MCP credential server binding does not match");
-  // Called only inside the external HTTP run. The journaled snapshot retains
-  // ciphertext; plaintext is never returned from this boundary.
-  const accessToken = openMcpToken(server.ownerUserId, server.credential);
-
-  let normalized = unwrapQuotedToken(accessToken.trim());
-  normalized = normalized.replace(/^Authorization\s*:\s*/i, "").trim();
-  normalized = unwrapQuotedToken(normalized);
-  while (/^Bearer(?:\s+|$)/i.test(normalized)) {
-    normalized = normalized.replace(/^Bearer(?:\s+|$)/i, "").trim();
-  }
-  normalized = unwrapQuotedToken(normalized);
-  return normalized || undefined;
-}
-
-function unwrapQuotedToken(value: string): string {
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
-    return value.slice(1, -1).trim();
-  }
-  return value;
-}
-
 function catalogCacheKey(config: McpServer, token: string | undefined): string {
   return JSON.stringify([
     config.id,
     config.url,
     config.protocol,
-    config.auth.type,
+    config.tokenEnv,
     token ? tokenFingerprint(token) : "anonymous",
   ]);
 }
@@ -810,63 +583,6 @@ function protocolPrior(
     throw new Error("server did not return a stateless discovery result");
   }
   return {kind: "modern", discover: discovery};
-}
-
-export function* requestMcpAuthorization(
-  serverId: string,
-  context: {agentId: string; turnId: string; ownerUserId?: string},
-  authType: McpCredentialAuthType,
-  causeId: string,
-  challenge: McpAuthChallenge,
-): restate.Operation<McpTurnCredential> {
-  const request = yield* restate
-    .client(Agent, context.agentId)
-    .requestMcpAuthorization({
-      authRequestId: `${context.turnId}:${causeId}:${serverId}`,
-      connectionRevision: challenge.connectionRevision,
-      rejectedToken: challenge.rejectedToken,
-      serverId,
-      turnId: context.turnId,
-      authType,
-      reason: challenge.reason,
-      ...(challenge.requestedScope
-        ? {requestedScope: challenge.requestedScope}
-        : {}),
-    });
-  if (!request) {
-    throw new Error(
-      `${serverId}: authorization request was rejected because the Turn or server is no longer eligible`,
-    );
-  }
-
-  try {
-    const resolution = yield* restate.signal<McpAuthorizationResolution>(
-      mcpAuthorizationSignalName(request.authRequestId),
-    );
-    if (resolution.status === "cancelled") {
-      throw new Error(`${serverId}: ${resolution.reason}`);
-    }
-    return resolution.credential;
-  } catch (error) {
-    yield* restate.sendClient(Agent, context.agentId).cancelMcpAuthorization({
-      authRequestId: request.authRequestId,
-      turnId: context.turnId,
-    });
-    throw error;
-  }
-}
-
-function authChallenge(error: unknown): McpAuthChallenge | undefined {
-  if (UnauthorizedError.isInstance(error)) {
-    return {reason: "unauthorized"};
-  }
-  if (InsufficientScopeError.isInstance(error)) {
-    return {
-      reason: "insufficient_scope",
-      ...(error.requiredScope ? {requestedScope: error.requiredScope} : {}),
-    };
-  }
-  return undefined;
 }
 
 function tokenFingerprint(token: string): string {
@@ -1023,52 +739,11 @@ function isCancellation(error: unknown): boolean {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function* requireConnection(
-  server: McpServerSnapshot,
-): restate.Operation<void> {
-  if (!server.ownerUserId)
-    throw new Error("MCP execution requires an owning user");
-  const allowed = yield* restate
-    .client(UserDefinition, server.ownerUserId)
-    .validateConnection({
-      agentId: server.agentId,
-      connectionId: server.id,
-      revision: server.revision,
-    });
-  if (!allowed)
-    throw new Error(
-      "User connection was removed, disconnected, or changed; start a new turn",
-    );
-}
-/** Account-level discovery does not create an Agent turn or authorization waiter. */
-export function* discoverConnectionTools(
-  config: McpServer & {revision: number},
-  credential: McpTurnCredential | undefined,
-  userId: string,
-): restate.Operation<Array<{name: string; description: string}>> {
-  const snapshot = serverSnapshot(config, credential, {
-    agentId: userId,
-    ownerUserId: userId,
-    turnId: restate.handlerRequest().id,
-  });
-  return yield* restate.run(
-    async ({signal}) => {
-      try {
-        const result = await discoverCached(config, snapshot, signal);
-        return (
-          result.catalog?.tools.map((t) => ({
-            name: t.name,
-            description: t.description ?? "",
-          })) ?? []
-        );
-      } finally {
-        if (snapshot.protocol === "stateful")
-          await discardStatefulConnection(snapshot, resolveToken(snapshot));
-      }
-    },
-    {name: "discover-user-connection", retry: {maxAttempts: 1}},
-  );
+  if (error instanceof McpConfigurationError) return error.message;
+  if (
+    UnauthorizedError.isInstance(error) ||
+    InsufficientScopeError.isInstance(error)
+  )
+    return "MCP authorization failed; check the configured credential";
+  return "MCP request failed; check the configured endpoint and credential";
 }

@@ -8,7 +8,6 @@ import {
   CircleCheck,
   GitBranch,
   Globe,
-  KeyRound,
   MessageSquareText,
   Plus,
   RefreshCw,
@@ -21,7 +20,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  type FormEvent,
   type KeyboardEvent,
   useCallback,
   useEffect,
@@ -30,14 +28,13 @@ import {
   useState,
 } from "react";
 import type {AgentClient, SequencedEntry} from "./agent-client";
-import {lastTurnSequence} from "./agent-inbox";
+
 import {AgentToolsPanel} from "./agent-tools-panel";
 import {Transcript} from "./transcript";
 import {
   type AgentConnection,
   type AgentProfile,
   type ApprovalRequest,
-  type McpAuthorizationRequest,
   useAgent,
 } from "./use-agent";
 
@@ -643,175 +640,30 @@ function Composer({
   );
 }
 
-function McpAuthorizationCard({
-  authorization,
-  client,
-  notify,
-}: {
-  authorization: McpAuthorizationRequest;
-  client: AgentClient;
-  notify: (message: string, error?: boolean) => void;
-}) {
-  const [bearerToken, setBearerToken] = useState("");
-  const [resolving, setResolving] = useState(false);
-  const heading =
-    authorization.reason === "missing_credentials"
-      ? `Connect ${authorization.serverId}`
-      : authorization.reason === "insufficient_scope"
-        ? `Expand access to ${authorization.serverId}`
-        : `Reconnect ${authorization.serverId}`;
-  const reason =
-    authorization.reason === "missing_credentials"
-      ? "A credential is required before this server can expose its tools."
-      : authorization.reason === "insufficient_scope"
-        ? "The current credential does not grant the access this tool needs."
-        : "The server rejected the previous credential. Check it and try again.";
-
-  return (
-    <article className="approval-card mcp-authorization-card">
-      <div className="card-kicker">
-        <KeyRound /> MCP authorization
-      </div>
-      <h3>{heading}</h3>
-      <p className="card-meta">
-        turn {shortTurn(authorization.turnId)} · {authorization.authType} ·{" "}
-        {authorization.reason}
-        {authorization.requestedScope
-          ? ` · scope ${authorization.requestedScope}`
-          : ""}
-      </p>
-      <p>{reason}</p>
-      {authorization.authType === "bearer" ? (
-        <form
-          className="mcp-bearer-form"
-          onSubmit={async (event: FormEvent) => {
-            event.preventDefault();
-            const accessToken = bearerToken
-              .trim()
-              .replace(/^Authorization\s*:\s*/i, "")
-              .replace(/^(?:Bearer\s+)+/i, "")
-              .trim();
-            if (!accessToken) return;
-            setResolving(true);
-            try {
-              const completed = await client.completeMcpBearerAuthorization(
-                authorization.authRequestId,
-                accessToken,
-              );
-              if (!completed) {
-                notify(
-                  "The waiting turn no longer accepts this credential",
-                  true,
-                );
-                return;
-              }
-              setBearerToken("");
-              notify(`Credential submitted for ${authorization.serverId}`);
-            } catch (error) {
-              notify(errorMessage(error), true);
-            } finally {
-              setResolving(false);
-            }
-          }}
-        >
-          <input
-            aria-label={`${authorization.serverId} bearer token`}
-            autoComplete="off"
-            onChange={(event) => setBearerToken(event.target.value)}
-            placeholder={
-              authorization.serverId === "github"
-                ? "GitHub personal access token"
-                : "Bearer access token"
-            }
-            spellCheck={false}
-            type="password"
-            value={bearerToken}
-          />
-          {authorization.serverId === "github" ? (
-            <p className="field-hint">
-              Paste the token itself. A leading “Bearer” is accepted and removed
-              automatically.
-            </p>
-          ) : null}
-          <div className="card-actions">
-            <button
-              className="button approve"
-              disabled={resolving || !bearerToken.trim()}
-              type="submit"
-            >
-              {resolving ? <RefreshCw className="spin" /> : <KeyRound />}
-              Save token
-            </button>
-          </div>
-        </form>
-      ) : (
-        <div className="card-actions">
-          <button
-            className="button approve"
-            disabled={resolving}
-            onClick={async () => {
-              setResolving(true);
-              try {
-                const result = await client.startMcpAuthorization(
-                  authorization.authRequestId,
-                );
-                if (result.status === "redirect") {
-                  window.location.assign(result.authorizationUrl);
-                  return;
-                }
-                notify(`Authorization completed for ${authorization.serverId}`);
-              } catch (error) {
-                notify(errorMessage(error), true);
-              } finally {
-                setResolving(false);
-              }
-            }}
-            type="button"
-          >
-            {resolving ? <RefreshCw className="spin" /> : <KeyRound />}
-            Authorize
-          </button>
-        </div>
-      )}
-    </article>
-  );
-}
-
 function ApprovalsPanel({
   approvals,
-  mcpAuthorizations,
   client,
   notify,
 }: {
   approvals: ApprovalRequest[];
-  mcpAuthorizations: McpAuthorizationRequest[];
   client: AgentClient;
   notify: (message: string, error?: boolean) => void;
 }) {
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [resolving, setResolving] = useState<string>();
-  if (approvals.length === 0 && mcpAuthorizations.length === 0) {
+  if (approvals.length === 0) {
     return (
       <div className="panel-empty">
         <ShieldCheck />
         <strong>No pending approvals</strong>
         <span>
-          Human decisions and account connections requested by tools appear
-          here.
+          Human decisions requested by tools and guardrails appear here.
         </span>
       </div>
     );
   }
   return (
     <div className="card-list">
-      {mcpAuthorizations.map((authorization) => (
-        <McpAuthorizationCard
-          authorization={authorization}
-          client={client}
-          key={`mcp-${authorization.authRequestId}`}
-          notify={notify}
-        />
-      ))}
       {approvals.map((approval) => (
         <article className="approval-card" key={approval.approvalId}>
           <div className="card-kicker">
@@ -1023,7 +875,7 @@ function ProfilePanel({
             <Settings2 />
             <span>
               <strong>Instructions</strong>
-              <small>User-owned prompt context</small>
+              <small>Agent instructions</small>
             </span>
           </div>
         </div>
@@ -1120,19 +972,19 @@ function ProfilePanel({
 }
 
 function Inspector({
+  readOnly,
   tab,
   setTab,
   approvals,
-  mcpAuthorizations,
   profile,
   client,
   notify,
   refreshProfile,
 }: {
+  readOnly: boolean;
   tab: Tab;
   setTab: (tab: Tab) => void;
   approvals: ApprovalRequest[];
-  mcpAuthorizations: McpAuthorizationRequest[];
   profile?: AgentProfile;
   client: AgentClient;
   notify: (message: string, error?: boolean) => void;
@@ -1140,8 +992,8 @@ function Inspector({
 }) {
   const tabs: Array<{id: Tab; label: string; icon: typeof Activity}> = [
     {id: "approvals", label: "Approvals", icon: ShieldCheck},
-    {id: "profile", label: "Context", icon: Settings2},
   ];
+  if (!readOnly) tabs.push({id: "profile", label: "Context", icon: Settings2});
   return (
     <aside className="inspector">
       <div className="inspector-tabs" role="tablist">
@@ -1155,10 +1007,9 @@ function Inspector({
             type="button"
           >
             <Icon /> {label}
-            {id === "approvals" &&
-              approvals.length + mcpAuthorizations.length > 0 && (
-                <span>{approvals.length + mcpAuthorizations.length}</span>
-              )}
+            {id === "approvals" && approvals.length > 0 && (
+              <span>{approvals.length}</span>
+            )}
           </button>
         ))}
       </div>
@@ -1167,11 +1018,10 @@ function Inspector({
           <ApprovalsPanel
             approvals={approvals}
             client={client}
-            mcpAuthorizations={mcpAuthorizations}
             notify={notify}
           />
         )}
-        {tab === "profile" && (
+        {tab === "profile" && !readOnly && (
           <ProfilePanel
             client={client}
             notify={notify}
@@ -1184,19 +1034,7 @@ function Inspector({
   );
 }
 
-export function App({
-  initialAgentId,
-  agentName,
-  onTurnSeen,
-  active,
-  readOnly = false,
-}: {
-  initialAgentId: string;
-  agentName: string;
-  active: boolean;
-  readOnly?: boolean;
-  onTurnSeen: (agentId: string, sequence: number) => void;
-}) {
+export function App({initialAgentId}: {initialAgentId: string}) {
   const [connection] = useState<AgentConnection>({
     agentId: initialAgentId,
   });
@@ -1206,27 +1044,9 @@ export function App({
   const [provisionalTurn, setProvisionalTurn] = useState<string>();
   const toastId = useRef(0);
   const agent = useAgent(connection);
-  const lastResponse = lastTurnSequence(agent.entries);
-  useEffect(() => {
-    const markVisibleResponse = () => {
-      if (
-        active &&
-        document.visibilityState === "visible" &&
-        document.hasFocus()
-      ) {
-        onTurnSeen(connection.agentId, lastResponse);
-      }
-    };
-    markVisibleResponse();
-    window.addEventListener("focus", markVisibleResponse);
-    document.addEventListener("visibilitychange", markVisibleResponse);
-    return () => {
-      window.removeEventListener("focus", markVisibleResponse);
-      document.removeEventListener("visibilitychange", markVisibleResponse);
-    };
-  }, [active, connection.agentId, lastResponse, onTurnSeen]);
-  const pendingTurnId =
-    agent.mcpAuthorizations[0]?.turnId ?? agent.approvals[0]?.turnId;
+  const agentName = agent.metadata?.name ?? connection.agentId;
+  const readOnly = Boolean(agent.metadata?.parentAgentId);
+  const pendingTurnId = agent.approvals[0]?.turnId;
   const turn = useMemo(
     () => activeTurn(agent.entries, provisionalTurn, pendingTurnId),
     [agent.entries, pendingTurnId, provisionalTurn],
@@ -1248,22 +1068,8 @@ export function App({
     if (!turn) setProvisionalTurn(undefined);
   }, [turn]);
   useEffect(() => {
-    if (active) document.title = `Restate Agent · ${connection.agentId}`;
-  }, [active, connection.agentId]);
-  useEffect(() => {
-    if (!active) return;
-    const url = new URL(window.location.href);
-    const oauthResult = url.searchParams.get("mcpAuth");
-    if (!oauthResult) return;
-    notify(
-      oauthResult === "completed"
-        ? "MCP authorization completed"
-        : "MCP authorization failed",
-      oauthResult !== "completed",
-    );
-    url.searchParams.delete("mcpAuth");
-    window.history.replaceState(null, "", url);
-  }, [active, notify]);
+    document.title = `Restate Agent · ${connection.agentId}`;
+  }, [connection.agentId]);
 
   async function sendMessage(message: string, replacement?: string) {
     try {
@@ -1300,8 +1106,7 @@ export function App({
 
   const markState = deriveAgentMarkState({
     connectionStatus: agent.connectionStatus,
-    hasPendingInput:
-      agent.approvals.length > 0 || agent.mcpAuthorizations.length > 0,
+    hasPendingInput: agent.approvals.length > 0,
     terminalStatus,
     turn,
   });
@@ -1314,6 +1119,36 @@ export function App({
         name={agentName}
         error={agent.connectionError}
       />
+      <nav className="demo-navigation" aria-label="Agent navigation">
+        <form action="/" method="get">
+          <label htmlFor="agent-id">Agent ID</label>
+          <input
+            id="agent-id"
+            name="agent"
+            defaultValue={connection.agentId}
+            maxLength={256}
+            required
+          />
+          <button type="submit" className="button secondary">
+            Open agent
+          </button>
+        </form>
+        {agent.metadata?.parentAgentId && (
+          <a
+            href={`/?agent=${encodeURIComponent(agent.metadata.parentAgentId)}`}
+          >
+            Parent conversation
+          </a>
+        )}
+        {agent.children.map((child) => (
+          <a
+            key={child.agentId}
+            href={`/?agent=${encodeURIComponent(child.agentId)}`}
+          >
+            {child.name}
+          </a>
+        ))}
+      </nav>
       <main className="workspace" data-readonly={readOnly}>
         <section className="conversation-pane">
           <div className="conversation-heading">
@@ -1330,37 +1165,6 @@ export function App({
             <Transcript
               entries={agent.entries}
               busy={Boolean(turn && !turn.terminal)}
-              pendingAction={
-                !readOnly && agent.mcpAuthorizations.length > 0 ? (
-                  <section
-                    aria-label="MCP authorization required"
-                    className="conversation-authorization"
-                    role="alert"
-                  >
-                    <div className="conversation-authorization-heading">
-                      <span className="conversation-authorization-icon">
-                        <KeyRound />
-                      </span>
-                      <div>
-                        <strong>Connection required</strong>
-                        <span>
-                          This turn is waiting for you to connect an account.
-                        </span>
-                      </div>
-                    </div>
-                    <div className="card-list">
-                      {agent.mcpAuthorizations.map((authorization) => (
-                        <McpAuthorizationCard
-                          authorization={authorization}
-                          client={agent.client}
-                          key={`conversation-mcp-${authorization.authRequestId}`}
-                          notify={notify}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                ) : undefined
-              }
             />
           </div>
           <StatusStrip turn={turn} />
@@ -1391,11 +1195,10 @@ export function App({
               >
                 <Ban /> Interrupt
               </button>
-              {(agent.approvals.length > 0 ||
-                agent.mcpAuthorizations.length > 0) && (
+              {agent.approvals.length > 0 && (
                 <p className="empty-copy">
-                  This child is waiting for approval or an account connection.
-                  You can interrupt its task.
+                  This child is waiting for approval. Use the Approvals panel to
+                  respond, or interrupt its task.
                 </p>
               )}
             </div>
@@ -1408,19 +1211,68 @@ export function App({
             />
           )}
         </section>
-        {!readOnly && (
+        {
           <Inspector
+            readOnly={readOnly}
             approvals={agent.approvals}
             client={agent.client}
-            mcpAuthorizations={agent.mcpAuthorizations}
             notify={notify}
             profile={agent.profile}
             refreshProfile={agent.refreshProfile}
             setTab={setTab}
             tab={tab}
           />
-        )}
+        }
       </main>
+      <details className="demo-state">
+        <summary>Memories and schedules</summary>
+        <h3>Agent memories</h3>
+        {!agent.profile?.memories.length && (
+          <p>
+            No saved memories. Ask this agent to remember something for a later
+            turn.
+          </p>
+        )}
+        {agent.profile?.memories.map((entry) => (
+          <p key={entry.key}>
+            <strong>{entry.key}</strong>: {entry.content}
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={() => {
+                  void agent.client
+                    .deleteMemory(entry.key)
+                    .catch((error) => notify(errorMessage(error), true));
+                }}
+              >
+                Delete
+              </button>
+            )}
+          </p>
+        ))}
+        <h3>Scheduled messages</h3>
+        {!agent.schedules.length && (
+          <p>No scheduled messages. Ask this agent to schedule a reminder.</p>
+        )}
+        {agent.schedules.map((schedule) => (
+          <p key={schedule.scheduleId}>
+            <strong>{schedule.scheduleId}</strong>: {schedule.message} ·{" "}
+            {new Date(schedule.nextRunAt).toLocaleString()}
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={() => {
+                  void agent.client
+                    .cancelSchedule(schedule.scheduleId)
+                    .catch((error) => notify(errorMessage(error), true));
+                }}
+              >
+                Cancel
+              </button>
+            )}
+          </p>
+        ))}
+      </details>
       <Toasts toasts={toasts} />
     </div>
   );

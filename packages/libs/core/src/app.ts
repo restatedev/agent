@@ -7,22 +7,18 @@ import {serve} from "@restatedev/restate-sdk";
 import {
   Agent,
   AgentNotifications,
+  AgentScheduler,
   AgentSession,
   Evals,
   ModelGateway,
   Sandbox,
-  User,
-  UserNotifications,
-  UserSession,
 } from "./index.js";
 
 serve({
   services: [
     Agent,
-    User,
-    UserSession,
+    AgentScheduler,
     AgentNotifications,
-    UserNotifications,
     AgentSession,
     ModelGateway,
     Sandbox,

@@ -6,17 +6,15 @@ import {iface} from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 import {
   AgentDeliverySchema,
+  AgentInitializationSchema,
+  AgentMetadataSchema,
   AgentNotificationSnapshotSchema,
   AgentNotificationSubscriptionSchema,
   AgentNotificationTopicSchema,
   AgentNotificationUnsubscribeSchema,
   AgentNotificationWatchRequestSchema,
-  AgentOwnershipSchema,
   AgentProfileSchema,
   AgentToolsSchema,
-  AgentInitializationSchema,
-  SubAgentConfigSchema,
-  UserCreateSubAgentSchema,
   AgentTurnOutcomeSchema,
   AgentTurnRequestSchema,
   ApprovalCancellationSchema,
@@ -24,64 +22,39 @@ import {
   ApprovalResolutionSchema,
   AskRequestSchema,
   AskResultSchema,
+  ChildAgentSchema,
   ConversationCompactionPlanSchema,
   ConversationCompactionResultSchema,
   HistoryPageSchema,
   HistoryRequestSchema,
   InterruptRequestSchema,
-  McpAuthorizationCancellationSchema,
-  McpAuthorizationCompletionSchema,
-  McpAuthorizationContextRequestSchema,
-  McpAuthorizationContextSchema,
-  McpAuthorizationFlowUpdateSchema,
-  McpAuthorizationRequestInputSchema,
-  McpAuthorizationRequestSchema,
-  McpAuthorizationResolutionSchema,
-  McpBearerAuthorizationCompletionSchema,
-  McpServerIdRequestSchema,
-  McpServerMutationResultSchema,
-  McpServerRemovalResultSchema,
   McpServerSchema,
-  McpTurnCredentialSchema,
-  MemoryChangeSchema,
-  MemoryEntrySchema,
   MemoryKeyRequestSchema,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
   MessageSchema,
-  ResolvedMcpServerSchema,
+  ScheduleCancellationResultSchema,
+  ScheduledMessageSchema,
   ScheduleIdRequestSchema,
+  ScheduleMutationResultSchema,
+  ScheduleSpecSchema,
   SetGuardrailsSchema,
   SetInstructionsSchema,
   SetWebSearchEnabledSchema,
+  SubAgentConfigSchema,
   ToolDescriptorSchema,
-  UserAgentSchema,
-  UserConnectionSchema,
-  UserIdentitySchema,
-  UserNotificationSnapshotSchema,
-  UserProfileSchema,
-  UserScheduleSpecSchema,
-  UserScheduleSchema,
-  ScheduleRunSchema,
 } from "./index.js";
 import {
   AGENT_NOTIFICATIONS_SERVICE_NAME,
+  AGENT_SCHEDULER_SERVICE_NAME,
   AGENT_SERVICE_NAME,
   AGENT_SESSION_SERVICE_NAME,
 } from "./targets.js";
 
 /** Restate contract implemented by core and consumed by external clients. */
 export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
-  startScheduledTurn: iface.schemas({
-    input: z.object({ownerUserId: z.string()}),
-    output: z.object({turnId: z.string()}),
-  }),
-  createSchedule: iface.schemas({
-    input: UserScheduleSpecSchema.extend({turnId: z.string()}),
-    output: UserScheduleSchema,
-  }),
   retire: iface.schemas({
-    input: z.object({ownerUserId: z.string()}),
+    input: z.object({parentAgentId: z.string().optional()}),
     output: z.void(),
   }),
   ask: iface.schemas({input: AskRequestSchema, output: AskResultSchema}),
@@ -110,7 +83,7 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
       turnId: z.string().min(1),
       toolCallId: z.string().min(1),
     }),
-    output: UserAgentSchema,
+    output: ChildAgentSchema,
   }),
   startSubAgentTask: iface.schemas({
     input: z.object({
@@ -128,7 +101,6 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
   }),
   startDelegatedTurn: iface.schemas({
     input: z.object({
-      ownerUserId: z.string(),
       parentAgentId: z.string(),
       parentTurnId: z.string(),
       message: z.string().trim().min(1).max(16000),
@@ -149,11 +121,16 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
   }),
   listSubAgents: iface.schemas({
     input: z.object({turnId: z.string().min(1)}),
-    output: z.array(UserAgentSchema),
+    output: z.array(ChildAgentSchema),
   }),
-  ownership: iface.schemas({
+  metadata: iface.schemas({
     input: z.void(),
-    output: AgentOwnershipSchema.nullable(),
+    output: AgentMetadataSchema,
+  }),
+  children: iface.schemas({input: z.void(), output: z.array(ChildAgentSchema)}),
+  deleteMemory: iface.schemas({
+    input: MemoryKeyRequestSchema,
+    output: z.boolean(),
   }),
   setTools: iface.schemas({input: AgentToolsSchema, output: z.void()}),
   toolCatalog: iface.schemas({
@@ -161,27 +138,8 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     output: z.object({
       builtin: z.array(ToolDescriptorSchema),
       dynamic: z.array(ToolDescriptorSchema),
+      mcp: z.array(McpServerSchema),
     }),
-  }),
-  resolveMcpAuthorization: iface.schemas({
-    input: z.object({
-      authRequestId: z.string(),
-      turnId: z.string(),
-      resolution: McpAuthorizationResolutionSchema,
-    }),
-    output: z.void(),
-  }),
-  requestMcpAuthorization: iface.schemas({
-    input: McpAuthorizationRequestInputSchema,
-    output: McpAuthorizationRequestSchema.nullable(),
-  }),
-  cancelMcpAuthorization: iface.schemas({
-    input: McpAuthorizationCancellationSchema,
-    output: z.void(),
-  }),
-  mcpAuthorizations: iface.schemas({
-    input: z.void(),
-    output: z.array(McpAuthorizationRequestSchema),
   }),
   updateMemory: iface.schemas({
     input: MemoryUpdateSchema,
@@ -236,37 +194,6 @@ export const AgentNotificationsDefinition = iface.object(
   },
 );
 
-/** Private workspace invalidation feed, keyed only by the owning user ID. */
-export const UserNotificationsDefinition = iface.object("UserNotifications", {
-  publish: iface.schemas({
-    input: z.discriminatedUnion("kind", [
-      z.object({kind: z.literal("profile")}),
-      z.object({
-        kind: z.literal("agent"),
-        agentId: z.string(),
-        topic: AgentNotificationTopicSchema,
-      }),
-    ]),
-    output: z.void(),
-  }),
-  snapshot: iface.schemas({
-    input: z.void(),
-    output: UserNotificationSnapshotSchema,
-  }),
-  watch: iface.schemas({
-    input: AgentNotificationWatchRequestSchema,
-    output: UserNotificationSnapshotSchema,
-  }),
-  subscribe: iface.schemas({
-    input: AgentNotificationSubscriptionSchema,
-    output: UserNotificationSnapshotSchema.nullable(),
-  }),
-  unsubscribe: iface.schemas({
-    input: AgentNotificationUnsubscribeSchema,
-    output: z.void(),
-  }),
-});
-
 /** AgentSession contract implemented by core and consumed by clients. */
 export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
   lastTurnSequence: iface.schemas({
@@ -291,173 +218,22 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
   }),
 });
 
-/** Private per-user account, agent directory, shared memories and MCP credentials. */
-export const UserDefinition = iface.object("User", {
-  deleteMemory: iface.schemas({
-    input: MemoryKeyRequestSchema,
-    output: z.boolean(),
-  }),
-  upsertSchedule: iface.schemas({
-    input: UserScheduleSpecSchema,
-    output: UserScheduleSchema,
-  }),
-  saveAgentSchedule: iface.schemas({
-    input: z.object({
-      agentId: z.string(),
-      spec: UserScheduleSpecSchema,
-      profile: AgentProfileSchema,
+export const AgentSchedulerDefinition = iface.object(
+  AGENT_SCHEDULER_SERVICE_NAME,
+  {
+    retire: iface.schemas({input: z.void(), output: z.void()}),
+    upsert: iface.schemas({
+      input: ScheduleSpecSchema,
+      output: ScheduleMutationResultSchema,
     }),
-    output: UserScheduleSchema,
-  }),
-  cancelSchedule: iface.schemas({
-    input: ScheduleIdRequestSchema,
-    output: z.boolean(),
-  }),
-  schedules: iface.schemas({
-    input: z.void(),
-    output: z.array(UserScheduleSchema),
-  }),
-  fireSchedule: iface.schemas({
-    input: ScheduleIdRequestSchema,
-    output: z.void(),
-  }),
-  executeSchedule: iface.schemas({
-    input: z.object({agentId: z.string()}),
-    output: z.void(),
-  }),
-  finishSchedule: iface.schemas({
-    input: z.object({
-      agentId: z.string(),
-      status: ScheduleRunSchema.shape.status,
-      error: z.string().optional(),
+    cancel: iface.schemas({
+      input: ScheduleIdRequestSchema,
+      output: ScheduleCancellationResultSchema,
     }),
-    output: z.void(),
-  }),
-  updateMemory: iface.schemas({
-    input: z.object({
-      agentId: z.string().min(1),
-      changes: z.array(MemoryChangeSchema).min(1),
+    list: iface.schemas({
+      input: z.void(),
+      output: z.array(ScheduledMessageSchema),
     }),
-    output: MemoryUpdateResultSchema,
-  }),
-  register: iface.schemas({input: UserIdentitySchema, output: z.void()}),
-  profile: iface.schemas({input: z.void(), output: UserProfileSchema}),
-  createAgent: iface.schemas({
-    input: UserAgentSchema.omit({parentAgentId: true, scheduleRun: true}),
-    output: UserAgentSchema,
-  }),
-  createSubAgent: iface.schemas({
-    input: UserCreateSubAgentSchema,
-    output: UserAgentSchema,
-  }),
-  deleteSubAgent: iface.schemas({
-    input: z.object({
-      parentAgentId: z.string().min(1),
-      agentId: z.string().min(1),
-    }),
-    output: z.boolean(),
-  }),
-  deleteAgent: iface.schemas({
-    input: z.object({agentId: z.string().min(1)}),
-    output: z.boolean(),
-  }),
-  listSubAgents: iface.schemas({
-    input: z.object({parentAgentId: z.string().min(1)}),
-    output: z.array(UserAgentSchema),
-  }),
-  ownsAgent: iface.schemas({
-    input: z.object({agentId: z.string()}),
-    output: z.boolean(),
-  }),
-  upsertConnection: iface.schemas({
-    input: McpServerSchema,
-    output: McpServerMutationResultSchema,
-  }),
-  removeConnection: iface.schemas({
-    input: McpServerIdRequestSchema,
-    output: McpServerRemovalResultSchema,
-  }),
-  disconnectConnection: iface.schemas({
-    input: McpServerIdRequestSchema,
-    output: z.void(),
-  }),
-  connections: iface.schemas({
-    input: z.void(),
-    output: z.array(UserConnectionSchema),
-  }),
-  snapshot: iface.schemas({
-    input: z.object({agentId: z.string(), tools: AgentToolsSchema}),
-    output: z.object({
-      memories: z.array(MemoryEntrySchema),
-      tools: AgentToolsSchema,
-      servers: z.array(ResolvedMcpServerSchema),
-      credentials: z.array(McpTurnCredentialSchema),
-    }),
-  }),
-  validateConnection: iface.schemas({
-    input: z.object({
-      agentId: z.string(),
-      connectionId: z.string(),
-      revision: z.number(),
-    }),
-    output: z.boolean(),
-  }),
-  discoverConnection: iface.schemas({
-    input: McpServerIdRequestSchema,
-    output: z.array(ToolDescriptorSchema),
-  }),
-  saveConnectionCatalog: iface.schemas({
-    input: z.object({
-      id: z.string(),
-      revision: z.number(),
-      tools: z.array(ToolDescriptorSchema),
-    }),
-    output: z.boolean(),
-  }),
-  requestMcpAuthorization: iface.schemas({
-    input: z.object({
-      agentId: z.string(),
-      request: McpAuthorizationRequestInputSchema,
-    }),
-    output: McpAuthorizationRequestSchema.nullable(),
-  }),
-  beginAuthorization: iface.schemas({
-    input: z.object({connectionId: z.string(), authRequestId: z.string()}),
-    output: McpAuthorizationRequestSchema,
-  }),
-  cancelMcpAuthorization: iface.schemas({
-    input: z.object({
-      agentId: z.string(),
-      turnId: z.string(),
-      authRequestId: z.string(),
-    }),
-    output: z.void(),
-  }),
-  mcpAuthorizationContext: iface.schemas({
-    input: McpAuthorizationContextRequestSchema,
-    output: McpAuthorizationContextSchema,
-  }),
-  saveMcpAuthorizationFlow: iface.schemas({
-    input: McpAuthorizationFlowUpdateSchema,
-    output: z.boolean(),
-  }),
-  completeMcpAuthorization: iface.schemas({
-    input: McpAuthorizationCompletionSchema,
-    output: z.boolean(),
-  }),
-  completeMcpBearerAuthorization: iface.schemas({
-    input: McpBearerAuthorizationCompletionSchema,
-    output: z.boolean(),
-  }),
-});
-export const UserSessionDefinition = iface.object("UserSession", {
-  create: iface.schemas({
-    input: z.object({userId: z.string(), expiresAt: z.number()}),
-    output: z.void(),
-  }),
-  read: iface.schemas({
-    input: z.void(),
-    output: z.object({userId: z.string(), expiresAt: z.number()}).nullable(),
-  }),
-  revoke: iface.schemas({input: z.void(), output: z.void()}),
-});
+    fire: iface.schemas({input: ScheduleIdRequestSchema, output: z.void()}),
+  },
+);

@@ -45,7 +45,7 @@ async function run({finalize=false, guardrails=[], replay}={}) {
     const events=[];
     let stops=0;
     const state={
-      context:{agentId:"test",turnId:"turn",ownerUserId:"user"},
+      context:{agentId:"test",turnId:"turn"},
       messages:[{role:"user",content:"Research request"}],
       guardrails,approvedActions:[],rejectedGuardrails:new Set(),blockedGuardrails:new Set(),
       transcript:{*append(...entries){events.push(...entries);}},

@@ -2,7 +2,7 @@
 //
 // Authoritative data remains with its owning Virtual Object: AgentSession owns
 // history, while Agent owns profile, approvals, and MCP authorization state.
-// User-owned schedules notify through UserNotifications. This object records watermarks
+// AgentScheduler owns schedules. This object records watermarks
 // and parks watchers.
 // Producers can therefore notify readers without coupling their state to the
 // conversation controller.
@@ -11,11 +11,7 @@ import type {
   AgentNotificationSnapshot,
   AgentNotificationSubscription,
 } from "@restate-agents/types";
-import {
-  AgentDefinition,
-  AgentNotificationsDefinition,
-  UserNotificationsDefinition,
-} from "@restate-agents/types/services";
+import {AgentNotificationsDefinition} from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {raceBranches} from "../race.js";
@@ -30,7 +26,7 @@ const EMPTY_SNAPSHOT: AgentNotificationSnapshot = {
     history: 0,
     profile: 0,
     approvals: 0,
-    mcpAuth: 0,
+    schedules: 0,
   },
 };
 
@@ -48,21 +44,6 @@ export const AgentNotifications = restate.implement(
           versions: {...current.versions, [topic]: revision},
         };
         restate.state().set(SNAPSHOT, snapshot);
-
-        // Route by immutable ownership, never a caller-provided user ID. Cache
-        // only successful ownership lookups (also covers already-existing agents).
-        let owner = yield* restate.state().get<string>("owner");
-        if (!owner) {
-          owner =
-            (yield* restate
-              .client(AgentDefinition, notificationKey())
-              .ownership())?.ownerUserId ?? null;
-          if (owner) restate.state().set("owner", owner);
-        }
-        if (owner)
-          yield* restate
-            .sendClient(UserNotificationsDefinition, owner)
-            .publish({kind: "agent", agentId: notificationKey(), topic});
 
         const subscriptions = yield* readSubscriptions();
         const ready = subscriptions.filter(

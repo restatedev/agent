@@ -2,28 +2,22 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import * as durable from "@restatedev/restate-sdk-gen";
 import {Agent} from "../../src/agent/service.ts";
-import {User} from "../../src/user/service.ts";
 import * as tools from "../../src/session/tools.ts";
 import {context} from "./state-fixture.mjs";
 import {runHandler} from "./harness.mjs";
 
 const grants = {builtin: {mode: "all"}, dynamic: {mode: "selected", names: []}, mcp: []};
-const owner = {ownerUserId: "alice", name: "Parent"};
+const owner = {name: "Parent"};
 const active = {id: "parent-turn", tools: grants, steeringBatches: []};
 const request = {turnId: "parent-turn", toolCallId: "call-1", agentId: "child", message: "Research", source: "messageSubAgent"};
 const task = {...request, childTurnId: "child-turn"};
 const child = {agentId: "child", name: "Research", parentAgentId: "parent"};
 
-test("parent starts only an owned direct child and registers the exact turn for cleanup", async () => {
-  const f = context("parent", {ownership: owner, turn: active}, call => {
-    if (call.method === "listSubAgents") {
-      assert.equal(call.key, "alice");
-      assert.deepEqual(call.parameter, {parentAgentId: "parent"});
-      return [child];
-    }
+test("parent starts only a direct child and registers the exact turn for cleanup", async () => {
+  const f = context("parent", {metadata: owner, turn: active, children: [child]}, call => {
     assert.equal(call.method, "startDelegatedTurn");
     assert.equal(call.key, "child");
-    assert.deepEqual(call.parameter, {ownerUserId: "alice", parentAgentId: "parent", parentTurnId: "parent-turn", message: "Research"});
+    assert.deepEqual(call.parameter, {parentAgentId: "parent", parentTurnId: "parent-turn", message: "Research"});
     return {turnId: "child-turn"};
   });
   assert.deepEqual(await f.invoke(Agent.object.startSubAgentTask, request), {turnId: "child-turn"});
@@ -37,10 +31,10 @@ test("parent starts only an owned direct child and registers the exact turn for 
   await assert.rejects(f.invoke(Agent.object.startSubAgentTask, request), /non-interrupting/);
 });
 
-test("child rejects foreign parents/users, direct user messages, and overlapping tasks", async () => {
-  const f = context("child", {ownership: {...owner, parentAgentId: "parent"}, turn: {id: "child-turn", tools: grants, steeringBatches: []}});
-  const input = {ownerUserId: "alice", parentAgentId: "parent", parentTurnId: "turn", message: "Follow up"};
-  for (const wrong of [{ownerUserId: "bob"}, {parentAgentId: "other"}])
+test("child rejects foreign parents, direct user messages, and overlapping tasks", async () => {
+  const f = context("child", {metadata: {...owner, parentAgentId: "parent"}, turn: {id: "child-turn", tools: grants, steeringBatches: []}});
+  const input = {parentAgentId: "parent", parentTurnId: "turn", message: "Follow up"};
+  for (const wrong of [{parentAgentId: "other"}])
     await assert.rejects(f.invoke(Agent.object.startDelegatedTurn, {...input, ...wrong}), /owning parent/);
   await assert.rejects(f.invoke(Agent.object.startDelegatedTurn, input), /busy/);
   await assert.rejects(f.invoke(Agent.object.ask, {message: "Bypass parent"}), /Only the parent/);
@@ -50,18 +44,16 @@ test("child rejects foreign parents/users, direct user messages, and overlapping
   assert.equal(await f.invoke(Agent.object.interrupt, {reason: "User injected instruction"}), true);
   assert.equal(f.state.get("turn").interruptReason, "Interrupted by the user");
   assert.equal(f.calls.length, 0);
-  const u = context("alice", {agents: [child]});
-  await assert.rejects(u.invoke(User.object.deleteAgent, {agentId: "child"}), /Only the parent/);
 });
 
 test("interrupt, turn end, retirement, and abandoned waits send idempotent exact-turn cleanup", async () => {
   for (const [handler, input] of [
     [Agent.object.interrupt, {reason: "Stop"}],
     [Agent.object.onTurnEnd, {turnId: "parent-turn", status: "completed", response: "Done", consumedSteering: 0}],
-    [Agent.object.retire, {ownerUserId: "alice"}],
+    [Agent.object.retire, {}],
     [Agent.object.finishSubAgentTask, {turnId: "parent-turn", toolCallId: "call-1"}],
   ]) {
-    const f = context("parent", {ownership: owner, turn: active, "sub-agent-tasks": [task]});
+    const f = context("parent", {metadata: owner, turn: active, "sub-agent-tasks": [task]});
     await f.invoke(handler, input);
     const cleanup = f.sends.filter(call => call.method === "interruptDelegatedTurn");
     assert.equal(cleanup.length, 1);
@@ -72,7 +64,7 @@ test("interrupt, turn end, retirement, and abandoned waits send idempotent exact
     await f.invoke(Agent.object.finishSubAgentTask, {turnId: "parent-turn", toolCallId: "call-1"});
     assert.equal(f.sends.filter(call => call.method === "interruptDelegatedTurn").length, 1);
   }
-  const c = context("child", {ownership: {...owner, parentAgentId: "parent"}, turn: {id: "new-turn", tools: grants, steeringBatches: []}});
+  const c = context("child", {metadata: {...owner, parentAgentId: "parent"}, turn: {id: "new-turn", tools: grants, steeringBatches: []}});
   await c.invoke(Agent.object.interruptDelegatedTurn, {parentAgentId: "parent", turnId: "child-turn", reason: "Late cleanup"});
   assert.equal(c.signals.length, 0);
   assert.equal(c.state.get("turn").interruptReason, undefined);

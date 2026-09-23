@@ -38,13 +38,6 @@ const McpServerIdSchema = z
     "A stable identifier for one MCP server. Reusing it replaces the existing server.",
   );
 
-export const McpServerAuthSchema = z.discriminatedUnion("type", [
-  z.object({type: z.literal("none")}),
-  z.object({type: z.literal("oauth")}),
-  z.object({type: z.literal("bearer")}),
-]);
-export type McpServerAuth = z.infer<typeof McpServerAuthSchema>;
-
 export const McpProtocolSchema = z.enum(["stateless", "stateful"]);
 export type McpProtocol = z.infer<typeof McpProtocolSchema>;
 
@@ -53,7 +46,11 @@ export const McpServerSchema = z.object({
   type: z.literal("http"),
   url: z.string().trim().min(1),
   protocol: McpProtocolSchema,
-  auth: McpServerAuthSchema,
+  // Name only. The core resolves the secret inside the HTTP effect.
+  tokenEnv: z
+    .string()
+    .regex(/^[A-Z_][A-Z0-9_]*$/)
+    .optional(),
 });
 export type McpServer = z.infer<typeof McpServerSchema>;
 
@@ -66,13 +63,12 @@ export const ToolSelectionSchema = z.discriminatedUnion("mode", [
 ]);
 export type ToolSelection = z.infer<typeof ToolSelectionSchema>;
 export const AgentToolsSchema = z.object({
-  // Omission preserves ordinary agents' automatic authorized-connector access.
+  // Ordinary agents default to the operator-configured connectors.
   // Sub-agents pin their creation-time connector grants instead.
-  mcpDefault: z.enum(["authorized", "disabled"]).optional(),
+  mcpDefault: z.enum(["configured", "disabled"]).optional(),
   builtin: ToolSelectionSchema,
   dynamic: ToolSelectionSchema,
-  // Profile entries are overrides. At turn start User resolves omitted,
-  // authorized connections to all; selected/[] is a persistent opt-out.
+  // Profile entries override the configured servers; selected/[] disables one.
   mcp: z
     .array(
       z.object({connectionId: McpServerIdSchema, tools: ToolSelectionSchema}),
@@ -85,74 +81,25 @@ export const AgentToolsSchema = z.object({
     ),
 });
 export type AgentTools = z.infer<typeof AgentToolsSchema>;
-/** User-owned schedule; each occurrence starts an independent conversation. */
-export const UserScheduleSpecSchema = z.object({
-  scheduleId: z.string().trim().min(1).max(64),
-  name: z.string().trim().min(1).max(100),
-  message: z.string().trim().min(1).max(32000),
-  delaySeconds: z.number().int().min(1).max(31_536_000),
-  repeatEverySeconds: z.number().int().min(1).max(31_536_000).nullable(),
-  tools: AgentToolsSchema.nullable().describe(
-    "Null inherits current access; otherwise restrict tools. Never broaden access.",
-  ),
-});
-export type UserScheduleSpec = z.infer<typeof UserScheduleSpecSchema>;
-export const UserScheduleSchema = UserScheduleSpecSchema.omit({
-  delaySeconds: true,
-}).extend({
-  nextRunAt: z.number().nullable(),
-  skippedRuns: z.number().int().nonnegative(),
-  lastError: z.string().optional(),
-});
-export type UserSchedule = z.infer<typeof UserScheduleSchema>;
-export const ScheduleRunSchema = z.object({
-  scheduleId: z.string(),
-  scheduleName: z.string(),
-  startedAt: z.number(),
-  status: z.enum(["running", "completed", "failed", "interrupted", "stopped"]),
-  finishedAt: z.number().optional(),
-  error: z.string().optional(),
-});
 export const DEFAULT_AGENT_TOOLS: AgentTools = {
   builtin: {mode: "all"},
   dynamic: {mode: "selected", names: []},
   mcp: [],
 };
-export const UserIdentitySchema = z.object({
-  userId: z.string().min(1),
-  issuer: z.enum(["https://accounts.google.com", "urn:restate:development"]),
-  subject: z.string().min(1),
-  displayName: z.string(),
-  email: z.string(),
-});
-export type UserIdentity = z.infer<typeof UserIdentitySchema>;
-export const AgentOwnershipSchema = z.object({
-  ownerUserId: z.string().min(1),
-  name: z.string().trim().min(1).max(100),
+export const AgentMetadataSchema = z.object({
+  name: z.string().trim().min(1).max(256),
   parentAgentId: z.string().min(1).optional(),
 });
-export const UserAgentSchema = z.object({
+export type AgentMetadata = z.infer<typeof AgentMetadataSchema>;
+export const ChildAgentSchema = AgentMetadataSchema.extend({
   agentId: z.string().min(1),
-  name: z.string().trim().min(1).max(100),
-  parentAgentId: z.string().min(1).optional(),
-  scheduleRun: ScheduleRunSchema.optional(),
 });
-export type UserAgent = z.infer<typeof UserAgentSchema>;
+export type ChildAgent = z.infer<typeof ChildAgentSchema>;
 export const ToolDescriptorSchema = z.object({
   name: z.string(),
   description: z.string(),
 });
 export type ToolDescriptor = z.infer<typeof ToolDescriptorSchema>;
-export const ResolvedMcpServerSchema = McpServerSchema.extend({
-  revision: z.number().int().positive(),
-});
-export type ResolvedMcpServer = z.infer<typeof ResolvedMcpServerSchema>;
-export const UserConnectionSchema = z.object({
-  server: ResolvedMcpServerSchema,
-  connected: z.boolean(),
-  tools: z.array(ToolDescriptorSchema),
-});
-export type UserConnection = z.infer<typeof UserConnectionSchema>;
 export const MemoryEntrySchema = z.object({
   key: z.string().trim().min(1),
   content: z.string().trim().min(1),
@@ -161,195 +108,6 @@ export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
 export const MemoryKeyRequestSchema = MemoryEntrySchema.pick({
   key: true,
 }).strict();
-export const UserProfileSchema = z.object({
-  identity: UserIdentitySchema,
-  agents: z.array(UserAgentSchema),
-  connections: z.array(UserConnectionSchema),
-  memories: z.array(MemoryEntrySchema),
-  schedules: z.array(UserScheduleSchema).default([]),
-});
-export type UserProfile = z.infer<typeof UserProfileSchema>;
-
-export const McpServerIdRequestSchema = McpServerSchema.pick({id: true});
-
-// Plaintext OAuth shapes are used only in BFF memory. The durable wire shapes
-// below carry authenticated ciphertext, never the plaintext SDK values.
-export const EncryptedSecretSchema = z
-  .string()
-  .regex(/^v1:[A-Za-z0-9+/]{38,}={0,2}$/)
-  .brand<"EncryptedSecret">();
-export type EncryptedSecret = z.infer<typeof EncryptedSecretSchema>;
-
-export const McpOAuthTokensSchema = z
-  .object({
-    access_token: z.string().min(1),
-    token_type: z.string().min(1),
-    expires_in: z.number().optional(),
-    refresh_token: z.string().optional(),
-    scope: z.string().optional(),
-    id_token: z.string().optional(),
-    issuer: z.string().optional(),
-  })
-  .loose();
-export type McpOAuthTokens = z.infer<typeof McpOAuthTokensSchema>;
-
-export const McpOAuthClientInformationSchema = z
-  .object({
-    client_id: z.string().min(1),
-    client_secret: z.string().optional(),
-    client_id_issued_at: z.number().optional(),
-    client_secret_expires_at: z.number().optional(),
-    issuer: z.string().optional(),
-  })
-  .loose();
-export type McpOAuthClientInformation = z.infer<
-  typeof McpOAuthClientInformationSchema
->;
-
-export const McpOAuthDiscoveryStateSchema = z
-  .object({
-    authorizationServerUrl: z.string().min(1),
-    authorizationServerMetadata: z.record(z.string(), z.unknown()).optional(),
-    resourceMetadata: z.record(z.string(), z.unknown()).optional(),
-    resourceMetadataUrl: z.string().optional(),
-  })
-  .loose();
-export type McpOAuthDiscoveryState = z.infer<
-  typeof McpOAuthDiscoveryStateSchema
->;
-
-export const McpOAuthStateSchema = z.object({
-  serverId: McpServerIdSchema,
-  redirectUrl: z.string().optional(),
-  tokens: McpOAuthTokensSchema,
-  clientInformation: McpOAuthClientInformationSchema.optional(),
-  discoveryState: McpOAuthDiscoveryStateSchema.optional(),
-});
-export type McpOAuthState = z.infer<typeof McpOAuthStateSchema>;
-
-// The deliberately minimal credential projected into a Turn. Refresh tokens
-// and OAuth protocol state remain private to the Agent/BFF boundary.
-export const McpTurnCredentialSchema = z.object({
-  serverId: McpServerIdSchema,
-  encryptedToken: EncryptedSecretSchema,
-});
-export type McpTurnCredential = z.infer<typeof McpTurnCredentialSchema>;
-
-export const McpStoredOAuthStateSchema = McpTurnCredentialSchema.extend({
-  encryptedState: EncryptedSecretSchema,
-});
-export type McpStoredOAuthState = z.infer<typeof McpStoredOAuthStateSchema>;
-
-// A user-supplied bearer token is durable private Agent state. It shares the
-// minimal Turn projection shape but is stored separately from OAuth state.
-export const McpBearerCredentialSchema = McpTurnCredentialSchema;
-export type McpBearerCredential = z.infer<typeof McpBearerCredentialSchema>;
-
-export const McpAuthorizationReasonSchema = z.enum([
-  "missing_credentials",
-  "unauthorized",
-  "insufficient_scope",
-]);
-
-export const McpAuthorizationRequestSchema = z.object({
-  authRequestId: z.string().min(1),
-  serverId: McpServerIdSchema,
-  turnId: z.string().min(1),
-  authType: z.enum(["oauth", "bearer"]),
-  reason: McpAuthorizationReasonSchema,
-  requestedScope: z.string().optional(),
-  connectionRevision: z.number().int().positive().optional(),
-  rejectedToken: EncryptedSecretSchema.optional(),
-  flowId: z.string().optional(),
-});
-export type McpAuthorizationRequest = z.infer<
-  typeof McpAuthorizationRequestSchema
->;
-
-export const McpAuthorizationRequestInputSchema = McpAuthorizationRequestSchema;
-
-export const McpAuthorizationCancellationSchema =
-  McpAuthorizationRequestSchema.pick({
-    authRequestId: true,
-    turnId: true,
-  });
-
-export const McpOAuthFlowSchema = z.object({
-  redirectUrl: z.string().min(1),
-  state: z.string().min(1),
-  codeVerifier: z.string().min(1),
-  tokens: McpOAuthTokensSchema.optional(),
-  clientInformation: McpOAuthClientInformationSchema.optional(),
-  discoveryState: McpOAuthDiscoveryStateSchema.optional(),
-});
-export type McpOAuthFlow = z.infer<typeof McpOAuthFlowSchema>;
-
-export const McpAuthorizationFlowUpdateSchema = z.object({
-  expectedFlow: EncryptedSecretSchema.nullable(),
-  authRequestId: z.string().min(1),
-  flow: EncryptedSecretSchema,
-});
-
-export const McpAuthorizationContextRequestSchema = z.object({
-  authRequestId: z.string().min(1),
-});
-
-export const McpAuthorizationContextSchema = z
-  .object({
-    request: McpAuthorizationRequestSchema,
-    server: McpServerSchema,
-    oauthState: McpStoredOAuthStateSchema.optional(),
-    flow: EncryptedSecretSchema.optional(),
-  })
-  .nullable();
-export type McpAuthorizationContext = z.infer<
-  typeof McpAuthorizationContextSchema
->;
-
-export const McpAuthorizationCompletionSchema = z.object({
-  expectedFlow: EncryptedSecretSchema.nullable(),
-  authRequestId: z.string().min(1),
-  oauthState: McpStoredOAuthStateSchema,
-});
-
-export const McpBearerAuthorizationCompletionSchema = z.object({
-  authRequestId: z.string().min(1),
-  credential: McpTurnCredentialSchema,
-});
-
-export const McpAuthorizationResolutionSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("authorized"),
-    credential: McpTurnCredentialSchema,
-  }),
-  z.object({status: z.literal("cancelled"), reason: z.string().min(1)}),
-]);
-export type McpAuthorizationResolution = z.infer<
-  typeof McpAuthorizationResolutionSchema
->;
-
-export const McpServerMutationResultSchema = z.discriminatedUnion("accepted", [
-  z.object({
-    accepted: z.literal(true),
-    replaced: z.boolean(),
-    server: McpServerSchema,
-  }),
-  z.object({
-    accepted: z.literal(false),
-    error: z.string(),
-  }),
-]);
-export type McpServerMutationResult = z.infer<
-  typeof McpServerMutationResultSchema
->;
-
-export const McpServerRemovalResultSchema = z.object({
-  removed: z.boolean(),
-});
-export type McpServerRemovalResult = z.infer<
-  typeof McpServerRemovalResultSchema
->;
-
 const AskStatsSchema = z.object({
   pendingMessages: z.number().int().nonnegative(),
 });
@@ -380,9 +138,88 @@ const DeliveryWhenBusySchema = z
     "How a delivered message enters the conversation when a Turn is active.",
   );
 
-export const ScheduleIdRequestSchema = UserScheduleSpecSchema.pick({
+const ScheduleIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .describe(
+    "A stable human-readable identifier. Reusing it replaces the existing schedule.",
+  );
+
+export const ScheduleSpecSchema = z.object({
+  scheduleId: ScheduleIdSchema,
+  message: z
+    .string()
+    .trim()
+    .min(1)
+    .describe("The user request to deliver when the schedule becomes due."),
+  delaySeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(31_536_000)
+    .describe("Seconds from now until the first delivery."),
+  repeatEverySeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(31_536_000)
+    .nullable()
+    .describe(
+      "Fixed delay between later deliveries, or null for a one-shot schedule.",
+    ),
+  whenBusy: DeliveryWhenBusySchema,
+});
+
+export type ScheduleSpec = z.infer<typeof ScheduleSpecSchema>;
+
+export const ScheduleIdRequestSchema = ScheduleSpecSchema.pick({
   scheduleId: true,
 });
+
+export const ScheduledMessageSchema = ScheduleSpecSchema.omit({
+  delaySeconds: true,
+}).extend({
+  nextRunAt: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe("Unix epoch milliseconds for the next delivery."),
+});
+export type ScheduledMessage = z.infer<typeof ScheduledMessageSchema>;
+
+export const ScheduleMutationResultSchema = z.discriminatedUnion("accepted", [
+  z.object({
+    accepted: z.literal(true),
+    replaced: z.boolean(),
+    schedule: ScheduledMessageSchema,
+  }),
+  z.object({
+    accepted: z.literal(false),
+    error: z.string(),
+  }),
+]);
+export type ScheduleMutationResult = z.infer<
+  typeof ScheduleMutationResultSchema
+>;
+
+export const ScheduleCancellationResultSchema = z.discriminatedUnion(
+  "accepted",
+  [
+    z.object({
+      accepted: z.literal(true),
+      cancelled: z.boolean(),
+    }),
+    z.object({
+      accepted: z.literal(false),
+      error: z.string(),
+    }),
+  ],
+);
+export type ScheduleCancellationResult = z.infer<
+  typeof ScheduleCancellationResultSchema
+>;
 
 export const AgentDeliverySchema = z.object({
   source: z
@@ -443,7 +280,7 @@ const ToolEventSchema = z.object({
   ),
 });
 
-// Keyed updates to shared User memories: model-managed context data, not
+// Keyed updates to this agent's memories: model-managed context data, not
 // authoritative instructions or policy. Agent configuration remains separate.
 export const MemoryChangeSchema = z.discriminatedUnion("operation", [
   z.object({
@@ -510,6 +347,7 @@ export const SetGuardrailsSchema = z.object({
 });
 
 export const AgentProfileSchema = z.object({
+  memories: z.array(MemoryEntrySchema).max(32).default([]),
   instructions: z.string().optional(),
   guardrails: z.array(GuardrailSchema),
   tools: AgentToolsSchema.default(DEFAULT_AGENT_TOOLS),
@@ -517,9 +355,8 @@ export const AgentProfileSchema = z.object({
 });
 export type AgentProfile = z.infer<typeof AgentProfileSchema>;
 
-export const AgentInitializationSchema = AgentOwnershipSchema.extend({
+export const AgentInitializationSchema = AgentMetadataSchema.extend({
   profile: AgentProfileSchema.optional(),
-  scheduledMessage: MessageSchema.optional(),
 });
 export const SubAgentConfigSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -559,11 +396,6 @@ export const SubAgentConfigSchema = z.object({
     ),
 });
 export type SubAgentConfig = z.infer<typeof SubAgentConfigSchema>;
-export const UserCreateSubAgentSchema = z.object({
-  agent: UserAgentSchema.extend({parentAgentId: z.string().min(1)}),
-  profile: AgentProfileSchema,
-});
-
 export const SetWebSearchEnabledSchema = z.object({enabled: z.boolean()});
 
 // The decision delivered to a waiting tool or policy gate over a signal and
@@ -686,7 +518,7 @@ const AgentNotificationVersionsSchema = z.object({
   history: z.number().int().nonnegative(),
   profile: z.number().int().nonnegative(),
   approvals: z.number().int().nonnegative(),
-  mcpAuth: z.number().int().nonnegative(),
+  schedules: z.number().int().nonnegative(),
 });
 
 export const AgentNotificationSnapshotSchema = z.object({
@@ -696,34 +528,6 @@ export const AgentNotificationSnapshotSchema = z.object({
 export type AgentNotificationSnapshot = z.infer<
   typeof AgentNotificationSnapshotSchema
 >;
-
-export const UserNotificationSnapshotSchema = z.object({
-  revision: z.number().int().nonnegative(),
-  profileRevision: z.number().int().nonnegative(),
-  agents: z.record(z.string(), AgentNotificationSnapshotSchema),
-});
-export type UserNotificationSnapshot = z.infer<
-  typeof UserNotificationSnapshotSchema
->;
-
-// No caller-selected user identity. These are cache positions, not authority.
-export const WorkspaceSyncRequestSchema = z
-  .object({
-    authorization: z.string().max(48_000).optional(),
-    revision: z.number().int().nonnegative().nullable(),
-    profileRevision: z.number().int().nonnegative().nullable(),
-    agents: z.array(
-      z
-        .object({
-          agentId: z.string().min(1).max(256),
-          notification: AgentNotificationSnapshotSchema.optional(),
-          nextSequence: z.number().int().min(1),
-        })
-        .strict(),
-    ),
-  })
-  .strict();
-export type WorkspaceSyncRequest = z.infer<typeof WorkspaceSyncRequestSchema>;
 
 export const AgentNotificationWatchRequestSchema = z.object({
   afterRevision: z.number().int().nonnegative(),
@@ -742,7 +546,7 @@ export const AgentNotificationTopicSchema = z.enum([
   "history",
   "profile",
   "approvals",
-  "mcpAuth",
+  "schedules",
 ]);
 export type AgentNotificationTopic = z.infer<
   typeof AgentNotificationTopicSchema
@@ -796,10 +600,7 @@ export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;
 export const AgentTurnRequestSchema = AgentProfileSchema.extend({
   // Optional for already-journaled turns; new dispatches always include the name.
   agentName: z.string().optional(),
-  memories: z.array(MemoryEntrySchema),
-  ownerUserId: z.string().min(1),
-  mcpServers: z.array(ResolvedMcpServerSchema),
-  mcpCredentials: z.array(McpTurnCredentialSchema),
+  mcpServers: z.array(McpServerSchema),
   entries: z.array(ConversationEntrySchema),
 });
 export type AgentTurnRequest = z.infer<typeof AgentTurnRequestSchema>;

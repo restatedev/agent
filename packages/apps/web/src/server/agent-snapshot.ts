@@ -7,33 +7,39 @@ type SnapshotClient = Pick<
   | "watchNotifications"
   | "profile"
   | "approvals"
-  | "mcpAuthorizations"
+  | "schedules"
+  | "metadata"
+  | "children"
   | "history"
 >;
 
-/** Caller must authorize the agent before supplying its client. */
+/** Loads the local demo view from the per-agent protocol. */
 export async function loadAgentSnapshot(
   client: SnapshotClient,
   signal: AbortSignal,
-  watermark?: AgentSnapshot["notification"],
 ): Promise<AgentSnapshot> {
   signal.throwIfAborted();
   // Capture the watermark BEFORE reading data: changes during loading must
   // still wake the browser's first watch. This is not an atomic VO snapshot.
-  const notification = watermark ?? (await client.notifications());
+  const notification = await client.notifications();
   signal.throwIfAborted();
-  const [profile, approvals, mcpAuthorizations, history] = await Promise.all([
-    client.profile(),
-    client.approvals(),
-    client.mcpAuthorizations(),
-    readHistory(client, signal, 1),
-  ]);
+  const [profile, approvals, schedules, metadata, children, history] =
+    await Promise.all([
+      client.profile(),
+      client.approvals(),
+      client.schedules(),
+      client.metadata(),
+      client.children(),
+      readHistory(client, signal, 1),
+    ]);
   signal.throwIfAborted();
   return {
     notification,
     profile,
     approvals,
-    mcpAuthorizations,
+    schedules,
+    metadata,
+    children,
     history,
   };
 }
@@ -81,9 +87,17 @@ export async function readAgentSnapshotUpdate(
       client.approvals().then((value) => {
         result.approvals = value;
       }),
-    changed("mcpAuth") &&
-      client.mcpAuthorizations().then((value) => {
-        result.mcpAuthorizations = value;
+    changed("schedules") &&
+      client.schedules().then((value) => {
+        result.schedules = value;
+      }),
+    changed("profile") &&
+      client.children().then((value) => {
+        result.children = value;
+      }),
+    changed("profile") &&
+      client.metadata().then((value) => {
+        result.metadata = value;
       }),
     changed("history") &&
       readHistory(client, signal, fromSequence).then((value) => {

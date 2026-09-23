@@ -1,13 +1,16 @@
 import type {
+  AgentMetadata,
   AgentNotificationSnapshot,
   AgentProfile,
   AgentTools,
   ApprovalRequest,
   ApprovalResolution,
   AskResult,
+  ChildAgent,
   Guardrail,
   HistoryPage,
-  McpAuthorizationRequest,
+  McpServer,
+  ScheduledMessage,
   ToolDescriptor,
 } from "@restate-agents/types";
 
@@ -16,7 +19,9 @@ export type AgentSnapshot = {
   notification: AgentNotificationSnapshot;
   profile: AgentProfile;
   approvals: ApprovalRequest[];
-  mcpAuthorizations: McpAuthorizationRequest[];
+  schedules: ScheduledMessage[];
+  metadata: AgentMetadata;
+  children: ChildAgent[];
   history: HistoryPage;
 };
 export type AgentSnapshotUpdate = Pick<AgentSnapshot, "notification"> &
@@ -69,31 +74,8 @@ export async function request<T>(path: string, options: RequestOptions = {}) {
   return result as T;
 }
 
-export function createAgentClient(
-  agentId: string,
-  workspace?: {userId: string; authorization: () => string | undefined},
-) {
-  // Private to this client/workspace instance, never persisted or shared across accounts.
-  let accessToken: string | undefined;
-  const send = <T>(path: string, options: RequestOptions = {}) => {
-    const proof = workspace?.authorization();
-    return request<T>(path, {
-      ...options,
-      headers: {
-        ...(accessToken ? {"x-agent-access": accessToken} : {}),
-        // Large directories use the small per-agent proof to stay within proxy header limits.
-        ...(proof && proof.length <= 6000 ? {"x-workspace-access": proof} : {}),
-      },
-      onResponse(response) {
-        if (
-          workspace &&
-          response.headers.get("x-agent-user") !== workspace.userId
-        )
-          throw new AgentClientError(401, "Session changed");
-        accessToken = response.headers.get("x-agent-access") ?? accessToken;
-      },
-    });
-  };
+export function createAgentClient(agentId: string) {
+  const send = request;
   const base = `/api/agent/${encodeURIComponent(agentId)}`;
   const read = <T>(operation: string, parameters?: URLSearchParams) =>
     send<T>(`${base}/${operation}${parameters ? `?${parameters}` : ""}`);
@@ -169,27 +151,15 @@ export function createAgentClient(
     async toolCatalog(): Promise<{
       builtin: ToolDescriptor[];
       dynamic: ToolDescriptor[];
+      mcp: McpServer[];
     }> {
       return read("tool-catalog");
     },
-    async mcpAuthorizations(): Promise<McpAuthorizationRequest[]> {
-      return read("mcp-authorizations");
+    async deleteMemory(key: string): Promise<boolean> {
+      return write("delete-memory", {key});
     },
-    async startMcpAuthorization(
-      authRequestId: string,
-    ): Promise<
-      {status: "redirect"; authorizationUrl: string} | {status: "completed"}
-    > {
-      return write("start-mcp-authorization", {authRequestId});
-    },
-    async completeMcpBearerAuthorization(
-      authRequestId: string,
-      accessToken: string,
-    ): Promise<boolean> {
-      return write("complete-mcp-bearer-authorization", {
-        authRequestId,
-        accessToken,
-      });
+    async cancelSchedule(scheduleId: string): Promise<unknown> {
+      return write("cancel-schedule", {scheduleId});
     },
     async approvals(): Promise<ApprovalRequest[]> {
       return read("approvals");

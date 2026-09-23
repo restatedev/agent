@@ -31,7 +31,7 @@ Use executable contracts before prose:
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
    internal handlers, and `src/gateway/model.ts`;
 2. handler code in `src/agent/service.ts`, `src/session/service.ts`,
-   `src/notifications/service.ts`, `src/user/schedules.ts`,
+   `src/notifications/service.ts`, `src/scheduler/service.ts`,
    `src/gateway/service.ts`, and `src/sandbox/service.ts`;
 3. focused ownership modules;
 4. docs.
@@ -43,19 +43,18 @@ an unimplemented behavior is a bug.
 
 Preserve these unless the requested change explicitly replaces them:
 
-1. `Agent` is the only durable conversation controller for an `agentId`. Its
-   exclusive handlers serialize the active invocation, pending input,
-   profile, approvals, immutable user ownership and authorization actions, and
-   externally delivered messages. It does not own conversation history,
-   notifications, or schedules. User owns identity, connections and encrypted
-   credentials; UserSession owns browser sessions. The BFF authenticates Google
-   and enforces ownership; all internal ingress remains trusted.
+1. `Agent` is the responsive controller for one `agentId`. It owns active work,
+   pending input, profile/memories, approvals, metadata and child bookkeeping.
+   AgentSession owns history, AgentNotifications owns invalidation, and
+   AgentScheduler owns timers. No account or browser-session service exists.
+   Ingress and the optional local UI are trusted operator surfaces.
+
 2. `AgentSession`, keyed by the same `agentId`, owns the canonical transcript
    and summary checkpoint. The transcript is append-only; never rewrite an
    existing user entry to explain later routing.
 3. At most one `AgentSession.doTurn` invocation is active for an Agent. Its
    Restate invocation ID is the stable `turnId` and signal target.
-4. A turn receives a stable Agent profile and shared User memory snapshot. Instructions, memories,
+4. A turn receives a stable Agent profile including its local memory snapshot. Instructions, memories,
    guardrails, and tool grants changed during that turn affect the next turn.
    The session loads its conversation context once at the beginning of
    `doTurn`.
@@ -89,20 +88,24 @@ Preserve these unless the requested change explicitly replaces them:
     explicitly selected stateless `2026-07-28` or stateful 2025-era protocol.
     The exact server, protocol verdict, remote name, and tool definition used
     for inference are retained in the turn snapshot used for invocation.
-    OAuth and bearer credentials are private User state; authorization
-    completion stores them before signaling the waiting Turn. The BFF encrypts
-    credentials before Restate ingress; state, RPCs, run results, and signals
-    must never contain their plaintext. See [credential encryption](credential-encryption.md).
+    MCP credentials resolve from operator environment references inside HTTP
+    effects only. Tokens must not cross durable inputs, state, signals, or
+    returned credential values. Sanitize provider exceptions before recording
+    results. See [MCP configuration](mcp-configuration.md).
+
 18. Keep the layers distinct in prose and code comments: `Agent` is the
     deterministic controller, `AgentSession` owns session history and turn
     execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
     iteration, and the model plus harness/runtime is the operational agent.
-19. `AgentNotifications` carries invalidation only. `AgentSession`, `Agent`,
-    and `User` remain authoritative for history, profile/approvals,
+19. `AgentNotifications` carries invalidation only. AgentSession, Agent, and
+    AgentScheduler remain authoritative for history, profile/approvals/children,
     and schedules respectively.
-20. `User` owns schedules and delayed calls. Each occurrence creates a fresh
-    agent; overlaps are skipped. The shared run waiter does not hold User's
-    exclusive lock. See [Schedules](schedules.md).
+20. AgentScheduler owns delayed calls and delivers to the same agent with an
+    explicit queue/steer/interrupt policy. It never waits for the whole turn.
+    Agent retirement sends scheduler cleanup one way to avoid callback deadlock.
+21. Child agents inherit a creation-time copy of context and narrower access.
+    Parent controllers coordinate exact child turns, but their sessions own
+    child-result waits. Children cannot nest or create schedules.
 
 The detailed turn-runtime list lives in
 [turn-runtime.md#refactoring-constraints](turn-runtime.md#refactoring-constraints).
@@ -137,19 +140,18 @@ The detailed turn-runtime list lives in
   documentation enters the model prompt and the handler can be invoked with
   the agent service's authority.
 - MCP endpoint configuration is also a trusted capability boundary. Tool
-  descriptions and schemas enter the model prompt, credentials live in
-  private User state rather than the profile, and HTTP calls may be repeated
+  descriptions and schemas enter the model prompt, credentials resolve inside HTTP effects from operator environment references, and HTTP calls may be repeated
   unless the remote server honors the stable idempotency key.
 - AgentSession history is the public conversation event log, not the complete
   agent trajectory or Restate execution trace. The `transcript` wire name is
   retained in evaluation results.
 - History is not the invalidation mechanism for every current-state area.
   Drain `AgentSession.history`, then use AgentNotifications versions to decide
-  whether to re-read history, profile, approvals, MCP authorization actions,
+  whether to re-read history, profile, approvals,
   or schedules.
 - `activity` and `progress` are status communication, not chain-of-thought or
   model reasoning.
-- The per-User `memories` collection is persistent semantic memory shared across agents.
+- The per-Agent `memories` collection is persistent semantic memory for one conversation.
   Active-turn messages are working context, and conversation history is a separate
   canonical log.
 
@@ -162,9 +164,9 @@ The detailed turn-runtime list lives in
 | History chunks, cursor, writer, summary checkpoint | `session/history.ts` |
 | Notification revisions, subscriptions, and awakeables | `notifications/service.ts` |
 | Instructions, guardrails | `agent/profile.ts` |
-| Shared user memories | `user/memory.ts` |
+| Agent-local memories | `agent/memory.ts` |
 | Pending approval state and decision signal | `agent/approval.ts` |
-| Durable scheduled-message state, timers, and delivery | `user/schedules.ts` |
+| Durable scheduled-message state, timers, and delivery | `scheduler/service.ts` |
 | Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |
@@ -204,13 +206,12 @@ in [tools.md](tools.md).
 
 ### MCP tool
 
-Add the endpoint to User connections, then grant its tools in the Agent profile.
-Select `stateless` for handshake-free `2026-07-28` servers and `stateful` for
-servers that use the 2025-era `initialize` handshake.
-Do not accept MCP URLs or credential values from conversation input. Keep full
-OAuth and bearer state private to the User/BFF boundary, pass only an encrypted
-access token into a Turn, retain the exact tool definition in the per-turn snapshot,
-and read [tools.md](tools.md) for transport, auth, retry, and result constraints.
+Configure the endpoint in the core process's `MCP_SERVERS_JSON` and optionally
+narrow its Agent grants. Select `stateless` for handshake-free `2026-07-28`
+servers and `stateful` for supported 2025-era handshake servers. Do not accept
+URLs or credential values from conversation input. Pass only a `tokenEnv`
+reference through durable configuration and resolve the token inside the HTTP
+effect. Read [MCP configuration](mcp-configuration.md) and [tools](tools.md).
 
 ### New Agent handler
 
@@ -240,6 +241,8 @@ Run checks proportional to the change, normally:
 ```sh
 pnpm lint
 pnpm build
+pnpm --filter @restate-agents/core test:ptc
+pnpm --filter @restate-agents/web test
 pnpm bundle
 git diff --check
 ```

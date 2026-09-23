@@ -38,10 +38,6 @@ export function approvalSignalName(approvalId: string): string {
   return `approval-${approvalId}`;
 }
 
-export function mcpAuthorizationSignalName(authRequestId: string): string {
-  return `mcp-authorization-${authRequestId}`;
-}
-
 type DerivedConversationEvent = Extract<
   ConversationEntry,
   {

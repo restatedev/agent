@@ -10,24 +10,18 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 
 ## Ownership
 
-- `Agent` owns the active invocation ID, queued input, profile, approvals,
-  immutable owner and per-turn authorization actions, and
-  external-message routing.
-- `User` owns identity, shared MCP connections and encrypted credentials/flows;
-  `UserSession` owns browser-session expiry and revocation.
-- `AgentNotifications` owns invalidation revisions and subscriptions;
-  `User` owns schedules and durable delayed calls.
+- `Agent` owns active work, queued input, profile/memories, approvals, metadata,
+  child bookkeeping and external-message routing.
+- `AgentNotifications` owns invalidation revisions/subscriptions;
+  `AgentScheduler` owns per-agent schedules and durable delayed calls.
 - `AgentSession`, keyed by the same `agentId`, owns the append-only transcript
-  and compaction checkpoint. Its exclusive `doTurn` handler owns transient
-  cross-step execution state.
-- At startup, `doTurn` opens history once, appends its activated entries, and
-  builds model context from the session summary and uncompacted entries.
-- The Agent-supplied profile and minimal MCP credential snapshots
-  (`serverId` and `encryptedToken`) are stable at run start. Profile changes affect
-  the next turn; an OAuth completion can additionally deliver a replacement
-  minimal credential directly to the waiting run. Refresh tokens and OAuth
-  protocol state never enter the Turn. Decryption happens only inside the MCP
-  HTTP run; its journaled result must never include plaintext credentials.
+  and compaction checkpoint. Its exclusive `doTurn` owns cross-step execution.
+- `doTurn` opens history once, appends activated entries and builds model context
+  from the summary and uncompacted history.
+- Profile and MCP reference snapshots are stable at turn start. Profile edits
+  affect the next turn. Environment credentials resolve only inside HTTP
+  effects and must never be returned or passed through durable arguments.
+
 - `session/step.ts` owns one bounded transition: model call, guardrail gate,
   optional approval wait, and allowed foreground tool batch. It owns no task
   after returning.
@@ -43,7 +37,7 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
   One turn borrows lazily and releases on every handled exit.
 
 Built-in tool mechanics execute inside `doTurn`; they are not services merely
-for durability. Tools call Agent only for Agent-owned state for
+for durability. Tools call Agent for Agent-owned state, AgentScheduler for
 durable schedules, Sandbox for serialized resource lifecycle, and independently
 deployed dynamic handlers as ordinary durable RPCs.
 
@@ -70,7 +64,7 @@ deployed dynamic handlers as ordinary durable RPCs.
   bounded to 128 child calls plus source, output, memory, and computation limits.
 - Each step receives a copy of the complete live model context accumulated by
   the run.
-- The entire shared user memory snapshot fetched by Agent is injected once as data before conversation context;
+- The entire local memory snapshot read by Agent is injected once as data before conversation context;
   user instructions are supplied to every agent-model call.
 - A normal iteration returns text, tool outcomes, a recoverable model error, or
   a guardrail block.
@@ -114,19 +108,14 @@ deployed dynamic handlers as ordinary durable RPCs.
 The evaluator is probabilistic model behavior; enforcement of the returned
 decision is deterministic runtime control flow.
 
-## MCP authorization
+## MCP configuration
 
-Agent snapshots its owner's resolved connections and minimal encrypted
-credentials, filtered by its tool grants. Missing/expired credentials produce
-an Agent UI action and a User-owned shared flow. The turn waits on its named
-signal. BFF handles OAuth or PAT submission; User persists ciphertext and
-notifies all attached Agents. Agent signals only a matching active,
-non-interrupting turn.
-
-Profile grants are fixed for a turn, including its authorization eligibility.
-A global connection change/disconnect invalidates its revision before another
-MCP call. Interrupting one turn removes only its waiter; other agents continue.
-Full OAuth state never enters the turn. See [identity](user-identity.md).
+Agent snapshots the operator's configured server references filtered by tool
+grants. Discovery and invocation resolve any environment-backed token inside
+the HTTP effect. Metadata changes/removal invalidate later HTTP attempts under
+an old snapshot. Missing credentials fail without anonymous fallback or login
+waits. Provider errors are sanitized before journaling. See
+[MCP configuration](mcp-configuration.md) for rotation, replay and result limits.
 
 ## Steering
 
@@ -162,12 +151,11 @@ write history.
 - Parallel sandbox calls share one in-flight borrow; dependent operations must
   either be proposed in separate loop iterations or awaited in order inside a
   PTC program.
-- `manageMemory` atomically updates the User's collection (at most 32 entries).
-  Agent accepts only the active, non-interrupting `turnId`, forwards to its
-  immutable owner, and User checks the agent's membership before writing.
-- Schedule creation validates access through Agent, then persists on User. Once saved, that
-  durable side effect survives the turn that created it and is not a pending
-  turn operation.
+- `manageMemory` atomically updates this Agent's collection (at most 32 entries).
+  Agent accepts only its active, non-interrupting `turnId`.
+- Schedule tools persist on the same-key AgentScheduler. Once saved, that
+  durable side effect survives the turn and is not a pending turn operation.
+
 - Assistant tool-call and matching tool-result messages are committed together
   to working model context.
 - Foreground outcomes are `succeeded`, `failed`, `pending`, or
@@ -271,12 +259,11 @@ delivery appends its source and selected route with the delivered input. These
 derived events are omitted from future model context and compaction where
 appropriate.
 
-Profile setters do not append transcript events; Agent publishes profile
-versions to AgentNotifications. Every transcript append one-way publishes the
-`history` topic, and User publishes schedule changes. Consumers use
-history for ordered conversation data, Agent for `profile` and `approvals`,
-User for schedules, and AgentNotifications for conversation invalidations.
-Schedule/run changes use the UserNotifications profile watermark instead.
+Profile setters publish `profile` versions without transcript events. Every
+history append one-way publishes `history`; AgentScheduler publishes schedule
+changes. Consumers read authoritative history from AgentSession, context and
+approvals from Agent, and schedules from AgentScheduler, then use the per-agent
+notification versions to invalidate those snapshots.
 
 Every `completed`, `interrupted`, `stopped`, or `failed` outcome includes
 `consumedSteering`.

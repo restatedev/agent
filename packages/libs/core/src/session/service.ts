@@ -10,7 +10,6 @@ import type {
   Guardrail,
   HistoryPage,
   McpServer,
-  McpTurnCredential,
 } from "@restate-agents/types";
 import {AgentSessionDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
@@ -69,7 +68,6 @@ type AgentSessionState = {
   discoveredTools: DiscoveredAgentTool[];
   mcpTools: McpAgentTool[];
   mcpServers: McpServer[];
-  mcpCredentials: McpTurnCredential[];
 };
 
 const MAX_STEPS = 50;
@@ -141,7 +139,6 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
             turnId,
             req.webSearchEnabled,
             req.tools,
-            req.ownerUserId,
           ),
           transcript,
           instructions: req.instructions,
@@ -160,7 +157,6 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           discoveredTools: [],
           mcpTools: [],
           mcpServers: req.mcpServers,
-          mcpCredentials: req.mcpCredentials,
         };
         outcome = yield* executeTurn(state);
       } catch (error) {
@@ -262,11 +258,9 @@ function* executeTurn(
   state.discoveredTools = yield* discoverAgentTools(agentTools.names);
   const mcpDiscovery = yield* discoverMcpTools(
     state.mcpServers,
-    state.mcpCredentials,
     {
       agentId: state.context.agentId,
       turnId: state.context.turnId,
-      ownerUserId: state.context.ownerUserId,
     },
     [...agentTools.names, ...state.discoveredTools.map(({name}) => name)],
   );

@@ -12,15 +12,12 @@ import {
   loadAgentSnapshot,
   syncAgentSnapshot,
 } from "../../../../../src/server/agent-snapshot";
-import {allowsUserAgentMutation} from "../../../../../src/server/agent-mutation-policy";
-import {completeMcpBearerAuthorization} from "../../../../../src/server/mcp-bearer";
-import {startMcpOAuth} from "../../../../../src/server/mcp-oauth";
-import {BffError, errorResponse} from "../../../../../src/server/restate";
-
 import {
-  authorizedAgent,
+  agentClient,
+  BffError,
+  errorResponse,
   requireSameOrigin,
-} from "../../../../../src/server/user-auth";
+} from "../../../../../src/server/restate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,17 +26,11 @@ type RouteContext = {
   params: Promise<{agentId: string; operation: string}>;
 };
 
-function authorizedJson(accessToken: string, userId: string) {
-  return (value: unknown, init?: ResponseInit) =>
-    Response.json(value, {
-      ...init,
-      headers: {
-        "Cache-Control": "private, no-store",
-        Vary: "Cookie",
-        "x-agent-access": accessToken,
-        "x-agent-user": userId,
-      },
-    });
+function json(value: unknown, init?: ResponseInit) {
+  return Response.json(value, {
+    ...init,
+    headers: {"Cache-Control": "no-store"},
+  });
 }
 
 function integerParameter(
@@ -67,8 +58,7 @@ async function input<T>(request: Request): Promise<T> {
 export async function GET(request: Request, context: RouteContext) {
   try {
     const {agentId, operation} = await context.params;
-    const {client, user, accessToken} = await authorizedAgent(agentId, request);
-    const json = authorizedJson(accessToken, user.userId);
+    const client = agentClient(agentId);
     const {searchParams} = new URL(request.url);
 
     switch (operation) {
@@ -123,8 +113,10 @@ export async function GET(request: Request, context: RouteContext) {
         return json(await client.profile());
       case "approvals":
         return json(await client.approvals());
-      case "mcp-authorizations":
-        return json(await client.mcpAuthorizations());
+      case "schedules":
+        return json(await client.schedules());
+      case "children":
+        return json(await client.children());
       default:
         throw new BffError(404, `Unknown agent read operation: ${operation}`);
     }
@@ -137,19 +129,14 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     requireSameOrigin(request);
     const {agentId, operation} = await context.params;
-    const {client, user, accessToken} = await authorizedAgent(agentId, request);
-    const json = authorizedJson(accessToken, user.userId);
-    // Read-only child policy is enforced server-side, independently of the UI
-    // and cached ownership proofs. This also rejects recently deleted agents.
-    const agent = (await user.client.profile()).agents.find(
-      (agent) => agent.agentId === agentId,
-    );
-    if (!agent) throw new BffError(404, "Agent not found");
-    if (!allowsUserAgentMutation(agent, operation))
-      throw new BffError(
-        403,
-        "Sub-agent conversations are read-only; only interrupt is allowed",
-      );
+    const client = agentClient(agentId);
+    const agent = await client.metadata();
+    if (
+      agent.parentAgentId &&
+      operation !== "interrupt" &&
+      operation !== "resolve-approval"
+    )
+      throw new BffError(403, "Only the parent can modify a child agent");
 
     switch (operation) {
       case "ask": {
@@ -199,16 +186,13 @@ export async function POST(request: Request, context: RouteContext) {
         await client.setTools(parsed.data);
         return json(null);
       }
-      case "start-mcp-authorization": {
-        const body = await input<{authRequestId: string}>(request);
-        return json(await startMcpOAuth(request, agentId, body.authRequestId));
+      case "delete-memory": {
+        const body = await input<{key: string}>(request);
+        return json(await client.deleteMemory(body.key));
       }
-      case "complete-mcp-bearer-authorization": {
-        const body = await input<{
-          authRequestId: string;
-          accessToken: string;
-        }>(request);
-        return json(await completeMcpBearerAuthorization(agentId, body));
+      case "cancel-schedule": {
+        const body = await input<{scheduleId: string}>(request);
+        return json(await client.cancelSchedule(body.scheduleId));
       }
       case "resolve-approval":
         return json(

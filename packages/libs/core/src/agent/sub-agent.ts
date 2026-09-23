@@ -20,7 +20,6 @@ export function subAgentProfile(
   grants: AgentTools,
   config: SubAgentConfig,
   builtins: readonly string[],
-  allowSubAgents = false,
 ): AgentProfile {
   const tools = structuredClone(config.tools ?? grants);
   const denied = !subset(tools.builtin, grants.builtin)
@@ -42,13 +41,22 @@ export function subAgentProfile(
         " Built-in tools such as webSearch belong in builtin; dynamic names are service/handler IDs. Correct the selection, or use tools: null to inherit current access if no narrower restriction is needed.",
       {errorCode: 403},
     );
-  // One level of delegation for now. PTC still sees only these allowed tools.
+  // Children run only on parent delegation: no nesting or scheduled turns.
+  // PTC still sees only these allowed tools.
   tools.builtin = {
     mode: "selected",
     names: (tools.builtin.mode === "all"
       ? [...builtins]
       : tools.builtin.names
-    ).filter((name) => allowSubAgents || name !== "createSubAgent"),
+    ).filter(
+      (name) =>
+        ![
+          "createSubAgent",
+          "createSchedule",
+          "cancelSchedule",
+          "listSchedules",
+        ].includes(name),
+    ),
   };
   tools.mcpDefault = "disabled";
   const guardrails = structuredClone(parent.guardrails);
@@ -77,6 +85,7 @@ export function subAgentProfile(
   return {
     ...(instructions ? {instructions} : {}),
     guardrails,
+    memories: structuredClone(parent.memories),
     tools,
     webSearchEnabled: config.webSearchEnabled ?? parent.webSearchEnabled,
   };

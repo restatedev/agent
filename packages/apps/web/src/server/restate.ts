@@ -3,8 +3,6 @@ import "server-only";
 import {
   AgentClientError,
   createAgentClient,
-  createUserClient,
-  createUserSessionClient,
   IngressClientError,
 } from "@restate-agents/client";
 
@@ -51,21 +49,6 @@ export function agentClient(agentId: string) {
   });
 }
 
-export function userClient(userId: string) {
-  return createUserClient({
-    ingressUrl: ingressUrl(),
-    userId,
-    headers: ingressHeaders(),
-  });
-}
-export function userSessionClient(sessionId: string) {
-  return createUserSessionClient({
-    ingressUrl: ingressUrl(),
-    sessionId,
-    headers: ingressHeaders(),
-  });
-}
-
 export function errorResponse(error: unknown) {
   if (error instanceof Error && error.name === "AbortError") {
     return new Response(null, {status: 499});
@@ -88,4 +71,15 @@ export function errorResponse(error: unknown) {
   // Unknown provider/SDK errors may carry request headers or token material.
   console.error("Unexpected BFF request failure");
   return Response.json({message: "Unexpected BFF error"}, {status: 500});
+}
+
+/** The UI is a local operator tool. Reject cross-origin browser writes. */
+export function requireSameOrigin(request: Request) {
+  const expected = new URL(process.env.APP_PUBLIC_URL ?? request.url);
+  // Next.js can reconstruct request.url with localhost even when the browser
+  // uses 127.0.0.1. Host retains the address the browser actually requested.
+  if (!process.env.APP_PUBLIC_URL)
+    expected.host = request.headers.get("host") ?? expected.host;
+  if (request.headers.get("origin") !== expected.origin)
+    throw new BffError(403, "Cross-origin action rejected");
 }

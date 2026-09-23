@@ -1,59 +1,96 @@
-import {useCallback, useMemo} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {
   type AgentClient,
+  type AgentSnapshot,
   createAgentClient,
-  type SequencedEntry,
 } from "./agent-client";
-import {useWorkspaceCache} from "./use-workspace";
+import {mergeAgentSnapshot} from "./agent-snapshot";
 
 export type AgentProfile = Awaited<ReturnType<AgentClient["profile"]>>;
 export type ApprovalRequest = Awaited<
   ReturnType<AgentClient["approvals"]>
 >[number];
-export type McpAuthorizationRequest = Awaited<
-  ReturnType<AgentClient["mcpAuthorizations"]>
->[number];
 export type AgentConnection = {agentId: string};
-const emptyEntries: SequencedEntry[] = [];
-const emptyApprovals: ApprovalRequest[] = [];
-const emptyAuth: McpAuthorizationRequest[] = [];
 
-/** Views subscribe to a retained workspace cache; they never start a poll. */
-export function useAgent(connection: AgentConnection) {
-  const {cache, state} = useWorkspaceCache();
-  const id = connection.agentId;
-  const client = useMemo(() => createAgentClient(id, cache), [id, cache]);
-  const cached = Object.hasOwn(state.agents, id) ? state.agents[id] : undefined;
+/** One mounted conversation owns one cursor and one cancellable long poll. */
+export function useAgent({agentId}: AgentConnection) {
+  const client = useMemo(() => createAgentClient(agentId), [agentId]);
+  const [snapshot, setSnapshot] = useState<AgentSnapshot>();
+  const latest = useRef<AgentSnapshot | undefined>(undefined);
+  const [status, setStatus] = useState<"connecting" | "connected" | "failed">(
+    "connecting",
+  );
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let retry: (() => void) | undefined;
+    setSnapshot(undefined);
+    latest.current = undefined;
+    setStatus("connecting");
+    async function follow() {
+      let windowKey = crypto.randomUUID();
+      while (!abort.signal.aborted) {
+        try {
+          let current = latest.current;
+          if (!current) current = await client.snapshot({signal: abort.signal});
+          else {
+            const update = await client.sync(
+              current.notification,
+              current.history.nextSequence,
+              {signal: abort.signal, idempotencyKey: windowKey},
+            );
+            current = mergeAgentSnapshot(latest.current ?? current, update);
+          }
+          if (abort.signal.aborted) return;
+          windowKey = crypto.randomUUID();
+          latest.current = current;
+          setSnapshot(current);
+          setStatus("connected");
+          setError(undefined);
+        } catch (failure) {
+          if (abort.signal.aborted) return;
+          setStatus("failed");
+          setError(
+            failure instanceof Error ? failure.message : String(failure),
+          );
+          // Keep the window key so reconnecting attaches to the same wait.
+          await new Promise<void>((resolve) => {
+            retry = resolve;
+            timer = setTimeout(resolve, 2_000);
+          });
+        }
+      }
+    }
+    void follow();
+    return () => {
+      abort.abort();
+      clearTimeout(timer);
+      retry?.();
+    };
+  }, [client]);
+
   const refreshProfile = useCallback(async () => {
     const profile = await client.profile();
-    cache.patchAgent(id, {profile});
+    if (latest.current) {
+      latest.current = {...latest.current, profile};
+      setSnapshot(latest.current);
+    }
     return profile;
-  }, [cache, client, id]);
-  const refreshApprovals = useCallback(async () => {
-    const approvals = await client.approvals();
-    cache.patchAgent(id, {approvals});
-    return approvals;
-  }, [cache, client, id]);
-  const refreshMcpAuthorizations = useCallback(async () => {
-    const mcpAuthorizations = await client.mcpAuthorizations();
-    cache.patchAgent(id, {mcpAuthorizations});
-    return mcpAuthorizations;
-  }, [cache, client, id]);
-  const status =
-    state.status === "connected" && !cached?.history
-      ? "connecting"
-      : state.status;
+  }, [client]);
+
   return {
     client,
-    entries: cached?.history?.entries ?? emptyEntries,
-    profile: cached?.profile,
-    approvals: cached?.approvals ?? emptyApprovals,
-    mcpAuthorizations: cached?.mcpAuthorizations ?? emptyAuth,
+    entries: snapshot?.history.entries ?? [],
+    profile: snapshot?.profile,
+    metadata: snapshot?.metadata,
+    children: snapshot?.children ?? [],
+    schedules: snapshot?.schedules ?? [],
+    approvals: snapshot?.approvals ?? [],
     connected: status === "connected",
     connectionStatus: status,
-    connectionError: state.error,
+    connectionError: error,
     refreshProfile,
-    refreshApprovals,
-    refreshMcpAuthorizations,
   };
 }

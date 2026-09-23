@@ -5,32 +5,14 @@ import type {
 import type {
   AgentDefinition,
   AgentNotificationsDefinition,
+  AgentSchedulerDefinition,
   AgentSessionDefinition,
-  UserDefinition,
-  UserNotificationsDefinition,
-  UserSessionDefinition,
 } from "./services.js";
 
 /** Stable Restate service names needed by lightweight external clients. */
 export const AGENT_SERVICE_NAME = "Agent";
 export const AGENT_SESSION_SERVICE_NAME = "AgentSession";
 export const AGENT_NOTIFICATIONS_SERVICE_NAME = "AgentNotifications";
-export const UserIngressDefinition: VirtualObjectDefinition<
-  "User",
-  IngressHandlers<typeof UserDefinition>
-> = {name: "User"};
-export const UserSessionIngressDefinition: VirtualObjectDefinition<
-  "UserSession",
-  IngressHandlers<typeof UserSessionDefinition>
-> = {name: "UserSession"};
-export type UserNotificationsIngressHandlers = IngressHandlers<
-  typeof UserNotificationsDefinition
->;
-export const UserNotificationsIngressDefinition: VirtualObjectDefinition<
-  "UserNotifications",
-  UserNotificationsIngressHandlers
-> = {name: "UserNotifications"};
-
 export const DEFAULT_ASK =
   "What is the weather in the top 10 European capitals? Also sleep for 4 minutes.";
 
@@ -47,10 +29,6 @@ type IngressHandlers<D> = D extends {
   : never;
 
 export type AgentIngressHandlers = IngressHandlers<typeof AgentDefinition>;
-export type UserIngressHandlers = IngressHandlers<typeof UserDefinition>;
-export type UserSessionIngressHandlers = IngressHandlers<
-  typeof UserSessionDefinition
->;
 export type AgentSessionIngressHandlers = IngressHandlers<
   typeof AgentSessionDefinition
 >;
@@ -71,3 +49,12 @@ export const AgentNotificationsIngressDefinition: VirtualObjectDefinition<
   typeof AGENT_NOTIFICATIONS_SERVICE_NAME,
   AgentNotificationsIngressHandlers
 > = {name: AGENT_NOTIFICATIONS_SERVICE_NAME};
+
+export const AGENT_SCHEDULER_SERVICE_NAME = "AgentScheduler";
+export type AgentSchedulerIngressHandlers = IngressHandlers<
+  typeof AgentSchedulerDefinition
+>;
+export const AgentSchedulerIngressDefinition: VirtualObjectDefinition<
+  typeof AGENT_SCHEDULER_SERVICE_NAME,
+  AgentSchedulerIngressHandlers
+> = {name: AGENT_SCHEDULER_SERVICE_NAME};

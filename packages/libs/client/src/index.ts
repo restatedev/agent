@@ -27,17 +27,17 @@ import type {
   AskResult,
   Guardrail,
   HistoryPage,
-  McpAuthorizationRequest,
 } from "@restate-agents/types";
 
 export {HttpCallError as IngressClientError} from "@restatedev/restate-sdk-clients";
-export {createUserClient, createUserSessionClient} from "./user.js";
 
 import {
   AgentIngressDefinition,
   type AgentIngressHandlers,
   AgentNotificationsIngressDefinition,
   type AgentNotificationsIngressHandlers,
+  AgentSchedulerIngressDefinition,
+  type AgentSchedulerIngressHandlers,
   AgentSessionIngressDefinition,
   type AgentSessionIngressHandlers,
   DEFAULT_ASK,
@@ -103,6 +103,10 @@ export function createAgentClient({
   );
   const notifications = ingress.objectClient<AgentNotificationsIngressHandlers>(
     AgentNotificationsIngressDefinition,
+    agentId,
+  );
+  const scheduler = ingress.objectClient<AgentSchedulerIngressHandlers>(
+    AgentSchedulerIngressDefinition,
     agentId,
   );
   async function invoke<T>(operation: PromiseLike<T>): Promise<T> {
@@ -260,22 +264,29 @@ export function createAgentClient({
     async setTools(tools: AgentTools): Promise<void> {
       return invoke(agent.setTools(tools));
     },
-    async ownership() {
-      return invoke(agent.ownership(rpc.opts({input: serde.empty})));
+    async metadata() {
+      return invoke(agent.metadata(rpc.opts({input: serde.empty})));
+    },
+    async children() {
+      return invoke(agent.children(rpc.opts({input: serde.empty})));
+    },
+    async retire() {
+      return invoke(agent.retire({}));
+    },
+    async deleteMemory(key: string) {
+      return invoke(agent.deleteMemory({key}));
+    },
+    async schedules() {
+      return invoke(scheduler.list(rpc.opts({input: serde.empty})));
+    },
+    async schedule(spec: import("@restate-agents/types").ScheduleSpec) {
+      return invoke(scheduler.upsert(spec));
+    },
+    async cancelSchedule(scheduleId: string) {
+      return invoke(scheduler.cancel({scheduleId}));
     },
     async toolCatalog() {
       return invoke(agent.toolCatalog(rpc.opts({input: serde.empty})));
-    },
-
-    // ---- MCP authorization ----
-
-    /** Returns pending MCP OAuth actions without exposing stored credentials. */
-    async mcpAuthorizations(): Promise<McpAuthorizationRequest[]> {
-      return invoke(
-        agent.mcpAuthorizations(
-          rpc.opts<void, McpAuthorizationRequest[]>({input: serde.empty}),
-        ),
-      );
     },
 
     // ---- human approvals ----

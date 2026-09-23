@@ -1,7 +1,6 @@
 // Agent is the durable conversation controller. It is a Virtual Object keyed
 // by agent id, so its exclusive handlers serialize every decision about the
-// active turn, queued messages, persistent profile, approvals, and private MCP
-// authorization state.
+// active turn, queued messages, persistent profile, approvals, and child agents.
 //
 // It never runs turn execution itself. `ask` starts or queues work,
 // `interrupt` and `steer` resolve signals on the active AgentSession
@@ -11,16 +10,18 @@
 import {createHash} from "node:crypto";
 import type {
   AgentDelivery,
+  AgentMetadata,
   AgentNotificationTopic,
   AgentProfile,
   ApprovalRequest,
   AskResult,
+  ChildAgent,
   ConversationEntry,
 } from "@restate-agents/types";
 import {
   AgentDefinition,
   AgentNotificationsDefinition,
-  UserDefinition,
+  AgentSchedulerDefinition,
 } from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
@@ -37,94 +38,46 @@ import {
 } from "../retention.js";
 import {Sandbox} from "../sandbox/index.js";
 import {discoverAgentTools} from "../session/dynamic-tools.js";
+import {configuredMcpServers, resolveMcpGrants} from "../session/mcp-config.js";
 import {dynamicToolId, selected} from "../session/tool-permissions.js";
 import * as agentTools from "../session/tools.js";
 import * as activeTurn from "./active-turn.js";
 import * as approvals from "./approval.js";
-import * as mcpAuthorization from "./mcp-authorization.js";
+import * as memory from "./memory.js";
 import * as profile from "./profile.js";
 import {subAgentProfile} from "./sub-agent.js";
 
 /** Durable per-Agent controller for turns, routing, profile, and user actions. */
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
-    *createSchedule({turnId, ...spec}) {
-      const owner = yield* requireOwner();
-      const current = yield* activeTurn.current();
-      if (current?.id !== turnId || current.interruptReason !== undefined)
-        throw new TerminalError("Schedule creation requires the active Turn", {
-          errorCode: 409,
-        });
-      if (!selected(current.tools.builtin, "createSchedule"))
-        throw new TerminalError("Schedule creation is not permitted", {
-          errorCode: 403,
-        });
-      const inherited = subAgentProfile(
-        yield* profile.read(),
-        current.tools,
-        {
-          name: spec.name,
-          instructions: null,
-          guardrails: null,
-          tools: spec.tools,
-          webSearchEnabled: null,
-          initialMessage: null,
-        },
-        agentTools.names,
-        true,
-      );
-      return yield* restate
-        .client(UserDefinition, owner.ownerUserId)
-        .saveAgentSchedule({agentId: agentKey(), spec, profile: inherited});
-    },
-    *initialize({profile: initialProfile, scheduledMessage, ...owner}) {
+    *initialize({profile: initialProfile, ...metadata}) {
       yield* requireNotDeleted();
-      const existing = yield* restate.state().get<typeof owner>("ownership");
-      if (
-        existing &&
-        (existing.ownerUserId !== owner.ownerUserId ||
-          existing.parentAgentId !== owner.parentAgentId)
-      )
-        throw new TerminalError("Agent ownership is immutable", {
+      const existing = yield* restate.state().get<typeof metadata>("metadata");
+      if (existing && existing.parentAgentId !== metadata.parentAgentId)
+        throw new TerminalError("Agent parent is immutable", {
           errorCode: 409,
         });
       if (!existing) {
-        restate.state().set("ownership", owner);
-        if (scheduledMessage)
-          restate.state().set("scheduled-message", scheduledMessage);
+        restate.state().set("metadata", metadata);
         if (initialProfile) {
           profile.setInstructions(initialProfile.instructions ?? null);
+          yield* memory.apply(
+            initialProfile.memories.map((entry) => ({
+              operation: "set" as const,
+              ...entry,
+            })),
+          );
           profile.setGuardrails(initialProfile.guardrails);
           profile.setTools(initialProfile.tools);
           profile.setWebSearchEnabled(initialProfile.webSearchEnabled);
         }
+        yield* publishNotification("profile");
       }
     },
-    *startScheduledTurn({ownerUserId}) {
-      const owner = yield* requireOwner();
-      if (owner.ownerUserId !== ownerUserId)
-        throw new TerminalError("Scheduled run owner mismatch", {
-          errorCode: 403,
-        });
-      const previous = yield* restate.state().get<string>("scheduled-turn");
-      if (previous) return {turnId: previous};
-      const message = yield* restate.state().get<string>("scheduled-message");
-      if (!message)
-        throw new TerminalError("Not a scheduled run", {errorCode: 409});
-      if (yield* activeTurn.current())
-        throw new TerminalError("Scheduled agent already busy", {
-          errorCode: 409,
-        });
-      const turnId = yield* startTurn(agentKey(), [
-        {role: "user", text: message, delivery: "turn"},
-      ]);
-      restate.state().set("scheduled-turn", turnId);
-      restate.state().clear("scheduled-message");
-      return {turnId};
-    },
+
     *createSubAgent({turnId, toolCallId, ...config}) {
       yield* requireNotDeleted();
-      const owner = yield* requireOwner();
+      const metadata = yield* readMetadata();
       const current = yield* activeTurn.current();
       if (current?.id !== turnId || current.interruptReason !== undefined)
         throw new TerminalError(
@@ -132,7 +85,7 @@ export const Agent = restate.implement(AgentDefinition, {
           {errorCode: 409},
         );
       if (
-        owner.parentAgentId ||
+        metadata.parentAgentId ||
         !selected(current.tools.builtin, "createSubAgent")
       )
         throw new TerminalError("This agent cannot create sub-agents", {
@@ -145,46 +98,39 @@ export const Agent = restate.implement(AgentDefinition, {
         agentTools.names,
       );
       const agentId = createHash("sha256")
-        .update(
-          JSON.stringify([
-            "sub-agent",
-            owner.ownerUserId,
-            agentKey(),
-            turnId,
-            toolCallId,
-          ]),
-        )
+        .update(JSON.stringify(["sub-agent", agentKey(), turnId, toolCallId]))
         .digest("hex");
-      return yield* restate
-        .client(UserDefinition, owner.ownerUserId)
-        .createSubAgent({
-          agent: {agentId, name: config.name, parentAgentId: agentKey()},
-          profile: inherited,
-        });
+      if (yield* restate.state().get<boolean>(`deleted-child:${agentId}`))
+        throw new TerminalError("Child has been deleted", {errorCode: 410});
+      const children = yield* readChildren();
+      const existing = children.find((child) => child.agentId === agentId);
+      if (existing) return existing;
+      const child = {agentId, name: config.name, parentAgentId: agentKey()};
+      // Child initialization never calls its parent while this lock is held.
+      yield* restate.client(AgentDefinition, agentId).initialize({
+        name: child.name,
+        parentAgentId: agentKey(),
+        profile: inherited,
+      });
+      restate.state().set("children", [...children, child]);
+      yield* publishNotification("profile");
+      return child;
     },
     *startSubAgentTask({turnId, toolCallId, agentId, message, source}) {
-      const owner = yield* requireOwner();
+      const metadata = yield* readMetadata();
       const current = yield* activeTurn.current();
       if (current?.id !== turnId || current.interruptReason !== undefined)
         throw new TerminalError(
           "Delegation requires the active, non-interrupting Turn",
           {errorCode: 409},
         );
-      if (owner.parentAgentId || !selected(current.tools.builtin, source))
+      if (metadata.parentAgentId || !selected(current.tools.builtin, source))
         throw new TerminalError("This agent cannot delegate this task", {
           errorCode: 403,
         });
       if (source === "createSubAgent") {
         const expected = createHash("sha256")
-          .update(
-            JSON.stringify([
-              "sub-agent",
-              owner.ownerUserId,
-              agentKey(),
-              turnId,
-              toolCallId,
-            ]),
-          )
+          .update(JSON.stringify(["sub-agent", agentKey(), turnId, toolCallId]))
           .digest("hex");
         if (agentId !== expected)
           throw new TerminalError(
@@ -192,9 +138,7 @@ export const Agent = restate.implement(AgentDefinition, {
             {errorCode: 403},
           );
       }
-      const children = yield* restate
-        .client(UserDefinition, owner.ownerUserId)
-        .listSubAgents({parentAgentId: agentKey()});
+      const children = yield* readChildren();
       if (!children.some((child) => child.agentId === agentId))
         throw new TerminalError("Agent is not a direct child of this parent", {
           errorCode: 403,
@@ -207,7 +151,6 @@ export const Agent = restate.implement(AgentDefinition, {
       const child = yield* restate
         .client(AgentDefinition, agentId)
         .startDelegatedTurn({
-          ownerUserId: owner.ownerUserId,
           parentAgentId: agentKey(),
           parentTurnId: turnId,
           message,
@@ -220,12 +163,9 @@ export const Agent = restate.implement(AgentDefinition, {
         ]);
       return child;
     },
-    *startDelegatedTurn({ownerUserId, parentAgentId, parentTurnId, message}) {
-      const owner = yield* requireOwner();
-      if (
-        owner.ownerUserId !== ownerUserId ||
-        owner.parentAgentId !== parentAgentId
-      )
+    *startDelegatedTurn({parentAgentId, parentTurnId, message}) {
+      const metadata = yield* readMetadata();
+      if (metadata.parentAgentId !== parentAgentId)
         throw new TerminalError(
           "Only the owning parent can submit a child task",
           {errorCode: 403},
@@ -260,21 +200,20 @@ export const Agent = restate.implement(AgentDefinition, {
       );
     },
     *interruptDelegatedTurn({parentAgentId, turnId, reason}) {
-      const owner = yield* restate
+      const metadata = yield* restate
         .state()
-        .get<{parentAgentId?: string}>("ownership");
-      if (owner?.parentAgentId !== parentAgentId)
+        .get<{parentAgentId?: string}>("metadata");
+      if (metadata?.parentAgentId !== parentAgentId)
         throw new TerminalError("Agent is not a direct child of this parent", {
           errorCode: 403,
         });
       const current = yield* activeTurn.current();
       if (current?.id !== turnId) return;
       yield* activeTurn.interrupt(reason);
-      yield* mcpAuthorization.cancelTurn(turnId, reason);
       yield* approvals.clearTurn(turnId);
     },
     *deleteSubAgent({turnId, agentId}) {
-      const owner = yield* requireOwner();
+      yield* requireNotDeleted();
       const current = yield* activeTurn.current();
       if (current?.id !== turnId || current.interruptReason !== undefined)
         throw new TerminalError(
@@ -285,12 +224,21 @@ export const Agent = restate.implement(AgentDefinition, {
         throw new TerminalError("This agent cannot delete sub-agents", {
           errorCode: 403,
         });
-      return yield* restate
-        .client(UserDefinition, owner.ownerUserId)
-        .deleteSubAgent({parentAgentId: agentKey(), agentId});
+      const children = yield* readChildren();
+      if (!children.some((child) => child.agentId === agentId)) return false;
+      restate.state().set(`deleted-child:${agentId}`, true);
+      restate.state().set(
+        "children",
+        children.filter((child) => child.agentId !== agentId),
+      );
+      yield* restate
+        .sendClient(AgentDefinition, agentId)
+        .retire({parentAgentId: agentKey()});
+      yield* publishNotification("profile");
+      return true;
     },
     *listSubAgents({turnId}) {
-      const owner = yield* requireOwner();
+      yield* requireNotDeleted();
       const current = yield* activeTurn.current();
       if (current?.id !== turnId || current.interruptReason !== undefined)
         throw new TerminalError(
@@ -301,53 +249,52 @@ export const Agent = restate.implement(AgentDefinition, {
         throw new TerminalError("This agent cannot list sub-agents", {
           errorCode: 403,
         });
-      return yield* restate
-        .client(UserDefinition, owner.ownerUserId)
-        .listSubAgents({parentAgentId: agentKey()});
+      return yield* readChildren();
     },
-    *retire({ownerUserId}) {
-      const owner = yield* restate
-        .state()
-        .get<{ownerUserId: string}>("ownership");
-      if (!owner || owner.ownerUserId !== ownerUserId)
-        throw new TerminalError("Agent does not belong to this user", {
+    *retire({parentAgentId}) {
+      const metadata = yield* restate.state().get<AgentMetadata>("metadata");
+      if (metadata?.parentAgentId !== parentAgentId)
+        throw new TerminalError("Only the parent can retire a child", {
           errorCode: 403,
         });
+      if (yield* restate.state().get<boolean>("deleted")) return;
       restate.state().set("deleted", true);
       restate.state().clear("pending");
       yield* stopSubAgentTasks(undefined, "Parent deleted");
       const current = yield* activeTurn.current();
       if (current) {
         yield* activeTurn.interrupt("Agent deleted");
-        yield* mcpAuthorization.cancelTurn(current.id, "Agent deleted");
         yield* approvals.clearTurn(current.id);
       }
       // Do not wait for sandbox cleanup while holding Agent's lock: the active
-      // turn may need this controller. User schedules are independent.
+      // turn may need this controller.
+      for (const child of yield* readChildren()) {
+        yield* restate
+          .sendClient(AgentDefinition, child.agentId)
+          .retire({parentAgentId: agentKey()});
+      }
+      restate.state().clear("children");
+      yield* restate.sendClient(AgentSchedulerDefinition, agentKey()).retire();
       yield* restate.sendClient(Sandbox, agentKey()).retire();
       yield* publishNotification("profile");
     },
-    *ownership() {
-      return (
-        (yield* restate
-          .sharedState()
-          .get<{ownerUserId: string; name: string; parentAgentId?: string}>(
-            "ownership",
-          )) ?? null
-      );
+    *metadata() {
+      return yield* readMetadata();
+    },
+    *children() {
+      return yield* readChildren();
+    },
+    *deleteMemory({key}) {
+      yield* requireNotDeleted();
+      const present = (yield* memory.read()).some((entry) => entry.key === key);
+      if (present) {
+        yield* memory.apply([{operation: "delete", key}]);
+        yield* publishNotification("profile");
+      }
+      return present;
     },
     *setTools(tools) {
-      const owner = yield* requireOwner();
-      const connections = yield* restate
-        .client(UserDefinition, owner.ownerUserId)
-        .connections();
-      if (
-        tools.mcp.some(
-          (grant) =>
-            !connections.some((c) => c.server.id === grant.connectionId),
-        )
-      )
-        throw new TerminalError("Unknown user connection", {errorCode: 400});
+      yield* requireNotDeleted();
       profile.setTools(tools);
       yield* publishNotification("profile");
     },
@@ -364,22 +311,14 @@ export const Agent = restate.implement(AgentDefinition, {
             },
           })
           .map(({name, description}) => ({name, description})),
+        mcp: yield* configuredMcpServers(),
         dynamic: dynamic.map((tool) => ({
           name: dynamicToolId(tool),
           description: tool.description,
         })),
       };
     },
-    *resolveMcpAuthorization(input) {
-      const current = yield* activeTurn.current();
-      if (
-        yield* mcpAuthorization.resolve(
-          input,
-          current?.interruptReason === undefined ? current?.id : undefined,
-        )
-      )
-        yield* publishNotification("mcpAuth");
-    },
+
     /**
      * Accepts a user message, starting a Turn while idle or appending it to the
      * next-Turn queue while another Turn is active.
@@ -391,11 +330,6 @@ export const Agent = restate.implement(AgentDefinition, {
     *ask({message}): restate.Operation<AskResult> {
       yield* requireNotDeleted();
       yield* requireTopLevelConversation();
-      if (yield* restate.state().get("scheduled-message"))
-        throw new TerminalError(
-          "Scheduled run is starting; try again shortly",
-          {errorCode: 409},
-        );
       const agentId = agentKey();
       const current = yield* activeTurn.current();
       if (current) {
@@ -432,8 +366,8 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *interrupt({reason, message}): restate.Operation<boolean> {
       yield* requireNotDeleted();
-      const owner = yield* requireOwner();
-      if (owner.parentAgentId) {
+      const metadata = yield* readMetadata();
+      if (metadata.parentAgentId) {
         if (message !== undefined)
           throw new TerminalError(
             "Sub-agent conversations are read-only; only interrupt is allowed",
@@ -457,14 +391,6 @@ export const Agent = restate.implement(AgentDefinition, {
       }
       if (!requested) {
         return message !== undefined;
-      }
-
-      const cancelledAuthorizations = yield* mcpAuthorization.cancelTurn(
-        current.id,
-        "Turn interrupted",
-      );
-      if (cancelledAuthorizations.length > 0) {
-        yield* publishNotification("mcpAuth");
       }
 
       return true;
@@ -578,53 +504,10 @@ export const Agent = restate.implement(AgentDefinition, {
       yield* publishNotification("profile");
     },
 
-    /** Registers a user authorization action requested by the active Turn. */
-    *requestMcpAuthorization(request) {
-      const current = yield* activeTurn.current();
-      if (
-        current?.id !== request.turnId ||
-        current.interruptReason !== undefined
-      ) {
-        return null;
-      }
-      const owner = yield* requireOwner();
-      const grant = current.tools.mcp.find(
-        (g) => g.connectionId === request.serverId,
-      );
-      if (
-        !grant ||
-        (grant.tools.mode === "selected" && grant.tools.names.length === 0)
-      )
-        return null;
-      const existing = (yield* mcpAuthorization.requests()).find(
-        (r) => r.turnId === request.turnId && r.serverId === request.serverId,
-      );
-      if (existing) return existing;
-      const registered = yield* restate
-        .client(UserDefinition, owner.ownerUserId)
-        .requestMcpAuthorization({agentId: agentKey(), request});
-      if (!registered) return null;
-      yield* mcpAuthorization.register(registered);
-      yield* publishNotification("mcpAuth");
-      return registered;
-    },
-
-    /** Removes an authorization wait abandoned by Turn cancellation. */
-    *cancelMcpAuthorization(request): restate.Operation<void> {
-      if (yield* mcpAuthorization.cancel(request)) {
-        yield* publishNotification("mcpAuth");
-      }
-    },
-
-    /** Returns user-visible pending MCP authorization actions. */
-    *mcpAuthorizations() {
-      return yield* mcpAuthorization.requests();
-    },
-
     /**
      * Applies one atomic model-requested memory batch.
      *
-     * Only the active, non-interrupting Turn may mutate its owner's memories.
+     * Only the active, non-interrupting Turn may mutate this agent's memories.
      */
     *updateMemory({
       turnId,
@@ -638,13 +521,9 @@ export const Agent = restate.implement(AgentDefinition, {
         };
       }
 
-      const owner = yield* requireOwner();
-      return yield* restate
-        .client(UserDefinition, owner.ownerUserId)
-        .updateMemory({
-          agentId: agentKey(),
-          changes,
-        });
+      const result = yield* memory.apply(changes);
+      if (result.applied) yield* publishNotification("profile");
+      return result;
     },
 
     /**
@@ -732,13 +611,6 @@ export const Agent = restate.implement(AgentDefinition, {
       if (cancelledApprovals.length > 0) {
         yield* publishNotification("approvals");
       }
-      const cancelledAuthorizations = yield* mcpAuthorization.clearTurn(
-        finished.outcome.turnId,
-      );
-      if (cancelledAuthorizations.length > 0) {
-        yield* publishNotification("mcpAuth");
-      }
-
       const queuedMessages = finished.queuedEntries.filter(
         ({role}) => role === "user",
       ).length;
@@ -762,8 +634,6 @@ export const Agent = restate.implement(AgentDefinition, {
     enableLazyState: true,
     handlers: {
       initialize: coordinationRetention,
-      startScheduledTurn: coordinationRetention,
-      createSchedule: coordinationRetention,
       createSubAgent: coordinationRetention,
       startSubAgentTask: coordinationRetention,
       startDelegatedTurn: coordinationRetention,
@@ -779,14 +649,12 @@ export const Agent = restate.implement(AgentDefinition, {
       setInstructions: noRetention,
       setGuardrails: noRetention,
       setWebSearchEnabled: noRetention,
-      ownership: {shared: true, ...noRetention},
+      metadata: {shared: true, ...noRetention},
+      children: {shared: true, ...noRetention},
+      deleteMemory: noRetention,
       toolCatalog: {shared: true, ...noRetention},
-      resolveMcpAuthorization: coordinationRetention,
       onTurnEnd: noRetention,
       updateMemory: noRetention,
-      requestMcpAuthorization: coordinationRetention,
-      cancelMcpAuthorization: coordinationRetention,
-      mcpAuthorizations: {shared: true, ...noRetention},
       deliver: noRetention,
       requestApproval: coordinationRetention,
       cancelApproval: coordinationRetention,
@@ -838,10 +706,10 @@ function* stopSubAgentTasks(
   );
 }
 function* requireTopLevelConversation(): restate.Operation<void> {
-  const owner = yield* restate
+  const metadata = yield* restate
     .state()
-    .get<{parentAgentId?: string}>("ownership");
-  if (owner?.parentAgentId)
+    .get<{parentAgentId?: string}>("metadata");
+  if (metadata?.parentAgentId)
     throw new TerminalError(
       "Only the parent agent can send messages to a sub-agent",
       {errorCode: 403},
@@ -855,18 +723,22 @@ function* startTurn(
   entries: ConversationEntry[],
 ): restate.Operation<string> {
   const agentProfile = yield* profile.read();
-  const owner = yield* requireOwner();
-  const snapshot = yield* restate
-    .client(UserDefinition, owner.ownerUserId)
-    .snapshot({agentId, tools: agentProfile.tools});
+  const metadata = yield* readMetadata();
+  const servers = yield* configuredMcpServers();
+  if (!(yield* restate.state().get("metadata")))
+    restate.state().set("metadata", metadata);
+  const tools = resolveMcpGrants(agentProfile.tools, servers);
   return yield* activeTurn.start(agentId, {
     ...agentProfile,
-    agentName: owner.name,
-    tools: snapshot.tools,
-    ownerUserId: owner.ownerUserId,
-    memories: snapshot.memories,
-    mcpServers: snapshot.servers,
-    mcpCredentials: snapshot.credentials,
+    agentName: metadata.name,
+    tools,
+    mcpServers: servers.filter((server) =>
+      tools.mcp.some(
+        (grant) =>
+          grant.connectionId === server.id &&
+          (grant.tools.mode === "all" || grant.tools.names.length > 0),
+      ),
+    ),
     entries,
   });
 }
@@ -905,21 +777,14 @@ function agentKey(): string {
   return key;
 }
 
-function* requireOwner(): restate.Operation<{
-  ownerUserId: string;
-  name: string;
-  parentAgentId?: string;
-}> {
+function* readMetadata(): restate.Operation<AgentMetadata> {
   yield* requireNotDeleted();
-  const owner = yield* restate
-    .sharedState()
-    .get<{ownerUserId: string; name: string; parentAgentId?: string}>(
-      "ownership",
-    );
-  if (!owner)
-    throw new TerminalError(
-      "Create this agent through its user account first",
-      {errorCode: 409},
-    );
-  return owner;
+  return (
+    (yield* restate.sharedState().get<AgentMetadata>("metadata")) ?? {
+      name: agentKey(),
+    }
+  );
+}
+function* readChildren(): restate.Operation<ChildAgent[]> {
+  return (yield* restate.sharedState().get<ChildAgent[]>("children")) ?? [];
 }

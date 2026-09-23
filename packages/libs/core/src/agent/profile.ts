@@ -1,10 +1,11 @@
 // Durable profile for one Agent virtual object. Instructions, guardrails, and
-// tool grants and web search are user-managed configuration. Shared memories
-// belong to User and are fetched by Agent when starting a turn.
+// tool grants, web search, and memories belong to this agent.
 
 import type {AgentProfile, AgentTools, Guardrail} from "@restate-agents/types";
 import {DEFAULT_AGENT_TOOLS} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
+
+import * as memory from "./memory.js";
 
 const INSTRUCTIONS = "profile/instructions";
 const GUARDRAILS = "profile/guardrails";
@@ -28,6 +29,7 @@ export function* read(): restate.Operation<AgentProfile> {
   return {
     ...(instructions ? {instructions} : {}),
     guardrails: guardrails ?? [],
+    memories: yield* memory.read(),
     tools: tools ?? structuredClone(DEFAULT_AGENT_TOOLS),
     webSearchEnabled: webSearchEnabled ?? true,
   };

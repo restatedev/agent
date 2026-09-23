@@ -4,7 +4,7 @@ import {loadAgentSnapshot, syncAgentSnapshot} from "../src/server/agent-snapshot
 
 const notification = (revision = 1, versions = {}) => ({
   revision,
-  versions: {history: 0, profile: 0, approvals: 0, mcpAuth: 0, schedules: 0, ...versions},
+  versions: {history: 0, profile: 0, approvals: 0, schedules: 0, ...versions},
 });
 const entry = (sequence) => ({
   sequence,
@@ -19,8 +19,9 @@ function fixture(overrides = {}) {
     watchNotifications: async () => notification(),
     profile: async () => ({guardrails: [], tools: {}, webSearchEnabled: true}),
     approvals: async () => [],
-    mcpAuthorizations: async () => [],
     schedules: async () => [],
+    metadata: async () => ({name: "demo"}),
+    children: async () => [],
     history: async (fromSequence) => ({entries: [], nextSequence: fromSequence}),
     ...overrides,
   };
@@ -37,7 +38,7 @@ test("startup captures the watermark before fetching all data in parallel", asyn
   const pending = loadAgentSnapshot(client, options().signal);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(calls.map(c => c.name), [
-    "notifications", "profile", "approvals", "mcpAuthorizations", "history",
+    "notifications", "profile", "approvals", "schedules", "metadata", "children", "history",
   ]);
   release();
   const result = await pending;
@@ -65,11 +66,11 @@ test("unchanged notification returns no cached data and performs no data reads",
 });
 
 test("sync fetches only changed topics, including empty arrays that clear UI state", async () => {
-  const next = notification(3, {approvals: 1, mcpAuth: 1});
+  const next = notification(3, {approvals: 1, schedules: 1});
   const {client, calls} = fixture({watchNotifications: async () => next});
   const result = await syncAgentSnapshot(client, notification(), 42, options());
-  assert.deepEqual(result, {notification: next, approvals: [], mcpAuthorizations: []});
-  assert.deepEqual(calls.map(c => c.name), ["watchNotifications", "approvals", "mcpAuthorizations"]);
+  assert.deepEqual(result, {notification: next, approvals: [], schedules: []});
+  assert.deepEqual(calls.map(c => c.name), ["watchNotifications", "approvals", "schedules"]);
 });
 
 test("history sync resumes at the browser cursor instead of reloading history", async () => {
@@ -93,6 +94,8 @@ test("changes during initial reads remain visible to the first watch", async () 
   const update = await syncAgentSnapshot(client, initial.notification, initial.history.nextSequence, options());
   assert.equal(update.notification.revision, 2);
   assert.ok(update.profile);
+  assert.deepEqual(update.metadata, {name: "demo"});
+  assert.deepEqual(update.children, []);
 });
 
 test("failed sync can retry the same cursor and window key without losing changes", async () => {
@@ -123,4 +126,14 @@ test("aborting during a history page prevents further paging and returning stale
 test("malformed non-advancing history fails rather than looping forever", async () => {
   const {client} = fixture({history: async () => ({entries: [entry(1)], nextSequence: 1})});
   await assert.rejects(loadAgentSnapshot(client, options().signal), /cursor did not advance/);
+});
+
+test("retried history merges do not duplicate entries or move the cursor backward", async () => {
+  const {mergeAgentSnapshot} = await import("../src/agent-snapshot.ts");
+  const current = {notification: notification(2), history: {entries: [entry(1), entry(2)], nextSequence: 3}, profile: {memories: []}, metadata: {name: "demo"}, children: [], approvals: [], schedules: []};
+  const update = {notification: notification(3), history: {entries: [entry(2), entry(3)], nextSequence: 4}};
+  const merged = mergeAgentSnapshot(current, update);
+  assert.deepEqual(merged.history.entries.map(item => item.sequence), [1, 2, 3]);
+  assert.equal(merged.history.nextSequence, 4);
+  assert.deepEqual(mergeAgentSnapshot(merged, {...update, notification: notification(1)}), merged);
 });

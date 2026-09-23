@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import {mock, test} from "node:test";
-import {sealMcpToken} from "@restate-agents/secrets";
 import * as durable from "@restatedev/restate-sdk-gen";
 import {agentStep, settleStep} from "../../src/session/step.ts";
 import * as agentTools from "../../src/session/tools.ts";
@@ -25,14 +24,13 @@ const mcp = {
   target: {
     server: {
       id: "test",
-      endpoint: "https://ptc.example/mcp",
+      url: "https://ptc.example/mcp",
+      type: "http",
+      tokenEnv: "TEST_MCP_TOKEN",
       protocol: "stateless",
-      auth: "bearer",
       turnId: "turn",
       agentId: "test",
-      ownerUserId:"test",
       timeoutMs: 1000,
-      credential: sealMcpToken("test", "test", "old-test-token"),
     },
     remoteName: "lookup",
     definition: {name: "lookup", inputSchema: {type: "object"}},
@@ -46,7 +44,8 @@ const mcp = {
     },
   },
 };
-const renewedMcpCredential = sealMcpToken("test", "test", "new-test-token");
+process.env.MCP_SERVERS_JSON = JSON.stringify([{id: "test", type: "http", url: "https://ptc.example/mcp", protocol: "stateless", tokenEnv: "TEST_MCP_TOKEN"}]);
+process.env.TEST_MCP_TOKEN = "test-env-token";
 
 // Actual gen scheduler and core; outbound RPCs are journaled test fixtures.
 // This keeps the tests offline while exercising the production tool dispatcher.
@@ -67,7 +66,7 @@ function contextWithFixtures(
             return {invocationId};
           }
           return Object.assign(
-            ctx.run(name, () => opts.service==="User" && opts.method==="validateConnection" ? true : rpc(opts)),
+            ctx.run(name, () => rpc(opts)),
             {invocationId},
           );
         };
@@ -84,18 +83,12 @@ function contextWithFixtures(
 function toolContext() {
   return {
     agentId: "test",
-    ownerUserId:"test",
     permissions:{builtin:{mode:"all"},dynamic:{mode:"all"},mcp:[{connectionId:"test",tools:{mode:"all"}}]},
     turnId: "turn",
     webSearchEnabled: true,
     sandbox: {
       *client() {
         throw new Error("sandbox not used");
-      },
-    },
-    mcpAuthorization: {
-      *authorize() {
-        throw new Error("unexpected authorization");
       },
     },
   };
@@ -129,34 +122,29 @@ test("Agent grants constrain both direct execution and the PTC guest catalog",as
   assert.equal(externalCalls,0);
 });
 
-test("a revoked user connection prevents another MCP HTTP call",async t=>{
-  const fetch=t.mock.method(globalThis,"fetch",()=>{throw Error("must not contact revoked connection");});
-  const result=await runHandler(ctx=>durable.execute(new Proxy(ctx,{get(target,key){
-    if(key==="genericCall")return opts=>{assert.equal(opts.method,"validateConnection");return Object.assign(ctx.run("revoked",()=>false),{invocationId:ctx.run("id",()=>"revoked")});};
-    const value=Reflect.get(target,key);return typeof value==="function"?value.bind(target):value;
-  }}),durable.gen(function*(){
-    return yield* agentTools.execute({toolCallId:"revoked",toolName:mcp.name,input:{}},toolContext(),[],[structuredClone(mcp)]);
-  })));
-  assert.equal(result.output.status,"failed");assert.match(result.output.error,/removed, disconnected, or changed/);
-  assert.equal(fetch.mock.callCount(),0);
+test("a removed operator connection prevents another MCP HTTP call", async t => {
+  const previous = process.env.MCP_SERVERS_JSON;
+  process.env.MCP_SERVERS_JSON = "[]";
+  t.after(() => { process.env.MCP_SERVERS_JSON = previous; });
+  const fetch = t.mock.method(globalThis, "fetch", () => {throw Error("must not contact removed connection");});
+  const result = await runHandler(ctx => durable.execute(ctx, agentTools.execute({toolCallId: "removed", toolName: mcp.name, input: {}}, toolContext(), [], [structuredClone(mcp)])));
+  assert.equal(result.output.status, "failed");
+  assert.equal(fetch.mock.callCount(), 0);
 });
 
-test("PTC dispatches static, dynamic and MCP tools with auth retry and compact output", {
+test("PTC dispatches static, dynamic and MCP tools with environment credentials and compact output", {
   timeout: 8000,
 }, async () => {
   const entries = [],
     calls = [],
     guarded = [],
     requests = [];
-  let auths = 0;
   const fetch = mock.method(globalThis, "fetch", async (url, init) => {
     assert.equal(String(url), "https://ptc.example/mcp");
     const body = JSON.parse(init.body);
     const headers = new Headers(init.headers);
     requests.push({body, key: headers.get("Idempotency-Key")});
-    if (headers.get("Authorization") === "Bearer old-test-token")
-      return new Response("unauthorized", {status: 401});
-    assert.equal(headers.get("Authorization"), "Bearer new-test-token");
+    assert.equal(headers.get("Authorization"), "Bearer test-env-token");
     assert.equal(body.method, "tools/call");
     return Response.json({
       jsonrpc: "2.0",
@@ -184,16 +172,6 @@ test("PTC dispatches static, dynamic and MCP tools with auth retry and compact o
         }),
         durable.gen(function* () {
           const context = toolContext();
-          context.mcpAuthorization = {
-            *authorize(serverId) {
-              assert.equal(serverId, renewedMcpCredential.serverId);
-              auths++;
-              return {
-                credential: renewedMcpCredential,
-                challenge: {status: "authorization_required"},
-              };
-            },
-          };
           return yield* agentTools.execute(
             {
               toolCallId: "outer",
@@ -233,16 +211,15 @@ test("PTC dispatches static, dynamic and MCP tools with auth retry and compact o
       ids: [1, 2],
       count: 7,
     });
-    assert.equal(auths, 1);
     assert.equal(calls.length, 1);
     assert.deepEqual(
       guarded.map((call) => call.toolName),
       ["getWeather", "lookupItems", "mcp__test__lookup"],
     );
     assert.equal(new Set(guarded.map((call) => call.toolCallId)).size, 3);
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 1);
     assert.equal(requests[0].key, "turn:outer:call-2");
-    assert.equal(requests[1].key, requests[0].key);
+    assert.ok(!result.journal.map(frame => frame.toString("utf8")).join("").includes("test-env-token"));
     assert.ok(!JSON.stringify(entries).includes("large intermediate result"));
     assert.ok(!result.output.result.includes("raw"));
   } finally {

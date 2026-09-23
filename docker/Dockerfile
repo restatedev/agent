@@ -16,7 +16,6 @@
 #   MODAL_TOKEN_ID/SECRET credentials for the modal sandbox provider
 #   RESTATE_ADMIN_URL     admin API for dynamic tool discovery (default
 #                         http://localhost:9070) and RESTATE_ADMIN_TOKEN
-#   APP_SECRET_KEY        strong credential-encryption key, shared with the BFF
 #   PORT                  listen port (default 9080)
 
 # syntax=docker/dockerfile:1
@@ -40,17 +39,14 @@ FROM base AS build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/libs/core/package.json packages/libs/core/
 COPY packages/libs/types/package.json packages/libs/types/
-COPY packages/libs/secrets/package.json packages/libs/secrets/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --filter @restate-agents/core... --frozen-lockfile
 
 COPY tsconfig.base.json ./
 COPY packages/libs/core/tsconfig.json packages/libs/core/
 COPY packages/libs/types/tsconfig.json packages/libs/types/
-COPY packages/libs/secrets/tsconfig.json packages/libs/secrets/
 COPY packages/libs/core/src packages/libs/core/src
 COPY packages/libs/types/src packages/libs/types/src
-COPY packages/libs/secrets/src packages/libs/secrets/src
 RUN pnpm --filter @restate-agents/core... build
 
 # Assemble a self-contained production tree (dist + prod-only node_modules,

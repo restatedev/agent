@@ -7,13 +7,13 @@
     "build": "pnpm -r build",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "bundle": "pnpm --filter @restate-agents/secrets... build && pnpm --filter @restate-agents/core bundle",
+    "bundle": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core bundle",
     "start": "pnpm build && pnpm --parallel --filter @restate-agents/core --filter @restate-agents/web start",
     "start:service": "pnpm --filter @restate-agents/core... build && pnpm --filter @restate-agents/core start",
     "start:ui": "pnpm --filter @restate-agents/web... build && pnpm --filter @restate-agents/web start",
-    "dev": "pnpm --filter @restate-agents/client... --filter @restate-agents/secrets... build && pnpm --parallel --filter @restate-agents/core --filter @restate-agents/web dev",
-    "dev:service": "pnpm --filter @restate-agents/secrets... build && pnpm --filter @restate-agents/core dev",
-    "dev:ui": "pnpm --filter @restate-agents/client... --filter @restate-agents/secrets... build && pnpm --filter @restate-agents/web dev"
+    "dev": "pnpm --filter @restate-agents/client... build && pnpm --parallel --filter @restate-agents/core --filter @restate-agents/web dev",
+    "dev:service": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core dev",
+    "dev:ui": "pnpm --filter @restate-agents/client... build && pnpm --filter @restate-agents/web dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16"

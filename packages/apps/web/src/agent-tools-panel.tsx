@@ -2,19 +2,19 @@
 import type {
   AgentProfile,
   AgentTools,
+  McpServer,
   ToolDescriptor,
   ToolSelection,
 } from "@restate-agents/types";
 import {useEffect, useRef, useState} from "react";
 import type {AgentClient} from "./agent-client";
-import {MCP_SERVER_PRESETS} from "./mcp-presets";
+
 import {
   connectionEnabled,
   toggleConnection,
   toggleTool,
   toolEnabled,
 } from "./tool-toggles";
-import {useUser} from "./user-context";
 
 function ToolSwitch({
   label,
@@ -103,11 +103,11 @@ export function AgentToolsPanel({
   refresh: () => Promise<AgentProfile>;
   notify: (message: string, error?: boolean) => void;
 }) {
-  const user = useUser();
   const [catalog, setCatalog] = useState<{
     builtin: ToolDescriptor[];
     dynamic: ToolDescriptor[];
-  }>({builtin: [], dynamic: []});
+    mcp: McpServer[];
+  }>({builtin: [], dynamic: [], mcp: []});
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   useEffect(() => {
@@ -148,62 +148,20 @@ export function AgentToolsPanel({
       <div className="section-heading">
         <strong>Tool access</strong>
       </div>
-      <p className="empty-copy">
-        {permissions.mcpDefault === "disabled"
-          ? "This sub-agent starts with its parent's tool access at creation. New connectors stay off until you enable them."
-          : "Authorized connectors are enabled automatically each turn. Switch off any this agent should not use; your opt-outs are remembered."}
-      </p>
+      <p className="empty-copy">Tool selections apply to the next turn.</p>
       <div className="agent-tool-list">
-        {user.profile.connections.map((connection) => {
-          const id = connection.server.id;
-          const label =
-            MCP_SERVER_PRESETS.find((preset) => preset.id === id)?.label ?? id;
-          const ready =
-            connection.connected || connection.server.auth.type === "none";
-          const enabled = ready && connectionEnabled(permissions, id);
-          return (
-            <div key={id}>
-              <ToolSwitch
-                label={label}
-                checked={enabled}
-                disabled={saving || (!ready && !enabled)}
-                onChange={(on) =>
-                  void save(toggleConnection(permissions, id, on))
-                }
-              />
-              {!ready && (
-                <a className="agent-tool-connect" href="/">
-                  Authorize {label} in Profile &amp; connectors
-                </a>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {!user.profile.connections.length && (
-        <p className="empty-copy">No connections yet.</p>
-      )}
-      <a className="agent-tool-connect" href="/">
-        Manage profile &amp; connectors
-      </a>
-      {permissions.mcp
-        .filter(
-          (g) =>
-            !user.profile.connections.some(
-              (c) => c.server.id === g.connectionId,
-            ),
-        )
-        .map((g) => (
+        {catalog.mcp.map((server) => (
           <ToolSwitch
-            key={g.connectionId}
-            label={`${g.connectionId} (removed)`}
-            checked={connectionEnabled(permissions, g.connectionId)}
+            key={server.id}
+            label={server.id}
+            checked={connectionEnabled(permissions, server.id)}
             disabled={saving}
-            onChange={() =>
-              void save(toggleConnection(permissions, g.connectionId, false))
+            onChange={(enabled) =>
+              void save(toggleConnection(permissions, server.id, enabled))
             }
           />
         ))}
+      </div>
       <ToolGroup
         label="Built-in tools"
         selection={permissions.builtin}

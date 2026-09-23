@@ -1,4 +1,4 @@
-// Shared semantic memory for one user, serialized by the User VO.
+// Semantic memory for one agent, serialized by its controller.
 import type {
   MemoryChange,
   MemoryEntry,
@@ -13,7 +13,7 @@ export function* read(): restate.Operation<MemoryEntry[]> {
   return (yield* restate.sharedState().get<MemoryEntry[]>(MEMORIES)) ?? [];
 }
 
-/** Atomic keyed changes avoid replacing another agent's unrelated memories. */
+/** Atomic keyed changes avoid replacing unrelated memory entries. */
 export function* apply(
   changes: MemoryChange[],
 ): restate.Operation<MemoryUpdateResult> {
@@ -31,7 +31,7 @@ export function* apply(
   if (updated.length > MAX_MEMORIES)
     return {
       applied: false,
-      error: `user memory is limited to ${MAX_MEMORIES} entries`,
+      error: `agent memory is limited to ${MAX_MEMORIES} entries`,
     };
   if (updated.length) restate.state().set(MEMORIES, updated);
   else restate.state().clear(MEMORIES);

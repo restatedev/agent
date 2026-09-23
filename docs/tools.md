@@ -74,7 +74,7 @@ Search selections are journaled in `search-tools-<toolCallId>`. On replay the
 runtime restores those selections without reranking. The index and loaded set
 are private to the turn, not stored in a new VO or shared across users. A new
 turn starts with a fresh loaded set. Only permitted tools are indexed; execution
-still enforces the same grants, guardrails and authorization flows. Tool
+still enforces the same grants, guardrails and permission checks. Tool
 descriptions remain untrusted metadata. Search uses the normal built-in policy
 path and does not execute matched tools.
 
@@ -133,14 +133,14 @@ of the model contract, not cosmetic documentation.
 | `sleep` | Durable timer | Pending |
 | `humanApproval` | Signal-backed human decision | Pending |
 | `cancelOperation` | Cancel one pending operation by ID | Foreground control |
-| `manageMemory` | Atomically set or delete shared user memories | Foreground Agent → User RPC |
+| `manageMemory` | Atomically set or delete agent-local memories | Foreground Agent RPC |
 | `createSubAgent` | Create a persistent child and await its optional first task | Durable child-turn wait |
 | `messageSubAgent` | Ask a direct child a follow-up and return its answer | Durable child-turn wait |
-| `listSubAgents` | Find existing direct children by name, ID and link | Foreground Agent → User RPC |
-| `deleteSubAgent` | Delete a direct child's entire subtree | Foreground Agent → User RPC |
-| `createSchedule` | Create or replace a user-owned schedule with fresh agents per run | Foreground Agent → User RPC |
-| `cancelSchedule` | Idempotently cancel a schedule | Foreground Agent → User RPC |
-| `listSchedules` | Read schedules for this user | Foreground Agent → User RPC |
+| `listSubAgents` | Find existing direct children by name, ID and link | Foreground Agent RPC |
+| `deleteSubAgent` | Delete a direct child's entire subtree | Foreground Agent RPC |
+| `createSchedule` | Create or replace a message timer for this conversation | Foreground AgentScheduler RPC |
+| `cancelSchedule` | Idempotently cancel a schedule | Foreground AgentScheduler RPC |
+| `listSchedules` | Read schedules for this agent | Foreground AgentScheduler RPC |
 | `listFiles` | List an agent sandbox directory | Foreground sandbox operation |
 | `readFile` | Read a UTF-8 sandbox file | Foreground sandbox operation |
 | `writeFile` | Replace a UTF-8 sandbox file | Foreground sandbox operation |
@@ -149,45 +149,29 @@ of the model contract, not cosmetic documentation.
 
 ## Sub-agents
 
-`createSubAgent` accepts `name`, plus nullable `instructions`, `guardrails`,
-`tools`, `webSearchEnabled`, and `initialMessage`. Use `null` to inherit
-configuration or omit a first task. Instructions and guardrails are additive;
-tool selections can only narrow the parent's active turn grants. Guardrail IDs
-cannot replace inherited rules. The child gets a separate sandbox and empty
-conversation, so its first task must be self-contained. Parent history and
-files are not copied. Existing tool policy enforcement applies both directly
-and through `executeProgram`.
+`createSubAgent` accepts a name, nullable configuration overrides and optional
+initial message. It copies parent instructions, memories, guardrails and
+current tool grants, then applies narrower access or additional policy. Children
+keep separate conversations and sandbox files. Later parent changes do not
+rewrite a child's snapshot. Children cannot create children or schedules.
 
-With `initialMessage`, creation waits durably for the child's `doTurn` result
-and returns `{agentId, turnId, status, response, consumedSteering}` on success.
-Failures, stopped turns and interruptions return recoverable tool errors.
-With `initialMessage: null`, creation returns an idle child's ID/name/link.
-Child IDs derive from the parent, user,
-turn and tool-call ID, making retries idempotent. A new tool call creates a new
-child. This version allows one level of children, with no fixed agent-count cap per user.
+The parent Agent owns the child directory. Creation uses a deterministic child
+ID derived from parent ID, turn ID and tool-call ID, so replay does not create
+a duplicate. The child stores its parent ID. All coordination validates the
+active parent turn and allowed tools.
 
-`messageSubAgent({agentId, message})` uses the same wait/result path while keeping
-the child's conversation and sandbox. A busy child rejects overlapping tasks;
-different children can run in parallel, including through PTC. Waiting happens
-in the parent AgentSession, never while holding the parent Agent VO lock.
-The parent receives results as tool output, not as user messages or automatic
-follow-up turns. Treat child output as evidence, not privileged instructions.
+An initial message starts a durable child turn. The parent session waits for
+that exact invocation; its controller stays responsive. `messageSubAgent`
+reuses the child's conversation for follow-ups. Different children can run in
+parallel, directly or through PTC. A child accepts only one task at a time.
+Parent interruption, completion and abandoned PTC branches clean up recorded
+child turns; delayed cleanup cannot interrupt a newer follow-up.
 
-`listSubAgents({})` returns the caller's direct children with links, without
-reading their conversations or credentials. Use it to resolve an existing
-child's ID rather than guessing or recreating it in a later turn.
-
-`deleteSubAgent({agentId})` accepts only the calling agent's direct children.
-It removes the child's entire subtree, durably retires turns and
-sandboxes, and preserves shared user credentials/memories. History remains
-internally; deletion is not a permanent data purge. Use only for user-authorized
-deletion. Delegation handlers reject stale or interrupting parent turns. Parent
-interruption, completion and abandoned PTC branches clean up outstanding child
-tasks using exact turn IDs; delayed cleanup cannot interrupt newer follow-ups.
-Completed children remain available, releasing their sandbox lease normally.
-Users can read a child conversation and Interrupt it, but cannot send messages,
-steer, edit configuration or delete the child directly. See
-[sub-agent ownership](user-identity.md#sub-agents).
+`listSubAgents` returns direct children. `deleteSubAgent` retires a direct
+child's subtree and separate sandboxes. It preserves the parent's memories and
+operator configuration; retained conversation history is not purged. The UI
+permits child inspection, interruption and approvals; task input comes from
+the parent.
 
 ## Web search
 
@@ -441,6 +425,9 @@ Every built-in receives:
 type AgentToolContext = {
   agentId: string;
   turnId: string;
+  webSearchEnabled: boolean;
+  permissions: AgentTools;
+  toolSearch?: TurnToolSearch;
   sandbox: {
     client(): restate.Operation<SandboxClient>;
   };
@@ -455,11 +442,10 @@ The internal call context also contains `toolCallId`. Use:
 - `toolCallId` for stable operation identity;
 - `sandbox.client()` for a lazy, shared turn lease on the agent's sandbox.
 
-The context intentionally does not expose general orchestration hooks.
-Schedule creation validates the active turn through Agent and then addresses its
-immutable owning User. Cancellation and listing use that same User. Once an
-upsert completes, the schedule is an independent durable side effect and is
-not rolled back if the originating turn later ends or is interrupted.
+The context exposes capabilities used by concrete tools, without general
+orchestration hooks. Schedule tools address AgentScheduler with the current
+agent ID. Once an upsert completes, the schedule is an independent durable
+side effect; interruption of the creating turn does not roll it back.
 
 ## Adding a built-in tool
 
@@ -643,11 +629,9 @@ The annotation is an opt-in capability, not just documentation. An annotated
 handler can be selected by the model and is called with this endpoint's Restate
 authority. Its documentation and schema also enter the model prompt.
 
-Deployers must therefore treat the set of annotated handlers as trusted
-cluster configuration. This reference does not implement a tenant allowlist,
-per-Agent capability set, or an authorization broker in front of dynamic
-calls. A production system should add those controls before discovering
-handlers from a cluster shared with untrusted service owners.
+Treat the annotated handlers as trusted cluster configuration. Per-agent tool
+selections narrow the available catalog, but the example has no tenant identity
+or separate authorization broker for cluster capabilities.
 
 ## Adding a dynamically discovered tool
 
@@ -669,199 +653,45 @@ deployable independently.
 
 ## MCP tools
 
-The runtime can also discover tools from User-configured MCP Streamable HTTP
-endpoints. Every entry declares one protocol mode: `stateless` pins revision
-[`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28) and
-uses `server/discover`; `stateful` uses the 2025-era `initialize` handshake.
-The runtime does not guess or silently fall back between these modes.
+MCP servers contribute foreground tools to the same dispatcher as built-ins
+and discovered Restate handlers. Configure endpoints with `MCP_SERVERS_JSON`
+on the core process; see [MCP configuration](mcp-configuration.md) for examples,
+protocol selection and the environment credential boundary.
 
-MCP is a second external-tool backend, not a replacement for dynamic Restate
-handlers. Both produce serializable model manifests and both are snapshotted
-once per turn. Their execution remains distinct:
+Discovery records a turn-local snapshot of permitted remote definitions.
+`stateless` uses handshake-free 2026-07-28 discovery; `stateful` uses a supported
+2025-era initialize handshake. The selected protocol is explicit. In-memory
+catalog caches and stateful connections are optimizations. Cache identity
+includes the endpoint and credential fingerprint; a changed token does not
+reuse a catalog/session authenticated under the old token.
 
-- a dynamic Restate tool uses durable `restate.call`;
-- an MCP tool uses Streamable HTTP inside `restate.run`, either as an
-  independent stateless request or on a turn-scoped stateful connection.
+Model names use `mcp__<serverId>__<remoteName>` with deterministic normalization
+and collision handling. The original remote name and schema remain on the
+runtime target. `searchTools` loads permitted external schemas on demand;
+PTC dispatches through the same permissions and policy gate.
 
-### Configuration
+Each HTTP effect resolves the referenced token immediately before transport
+use. Missing credentials or changed configuration fail with a safe error.
+Provider exceptions are sanitized before being journaled. There are no OAuth
+signals, browser authorization actions or refresh-state storage. Stateful
+connections are released at turn completion and discarded after failed calls.
 
-Add each trusted server to the user's **Profile & connectors** page or trusted
-`User.upsertConnection`, then authorize it. Each new turn automatically includes
-the owner's authorized connections unless explicitly opted out in Agent tool
-access. `Agent.setTools` can save an empty selection to disable a connection or
-a nonempty selection to restrict its tools:
+Calls pass the snapshotted definition for output validation. Successful results
+are projected into bounded JSON-compatible model observations; remote `isError`
+results and failed HTTP effects become tool failures. Unsupported content is
+represented by summaries rather than hidden binary payloads in model context.
+Raw tool data stays outside the public conversation history.
 
-```json
-{
-  "id": "notion",
-  "type": "http",
-  "url": "https://mcp.notion.com/mcp",
-  "protocol": "stateless",
-  "auth": {"type": "oauth"}
-}
-```
+MCP calls include a stable `Idempotency-Key` derived from turn and tool-call IDs,
+but servers must implement deduplication themselves. The HTTP run permits one
+attempt to avoid eager retries. A crash after remote completion but before
+recording the result can repeat a side effect. Recorded successful results
+replay without another HTTP request.
 
-Fields:
-
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `id` | yes | Stable 1-64 character server identifier used in model-facing names |
-| `type` | yes | `http` for Streamable HTTP |
-| `url` | yes | MCP Streamable HTTP endpoint |
-| `protocol` | yes | `stateless` for 2026-07-28 discovery, or `stateful` for the 2025-era initialize protocol |
-| `auth.type` | yes | `none`, `oauth`, or `bearer` for a user-supplied access token |
-
-Server IDs are unique per User. Configuration is credential-free and User-owned;
-the Agent profile holds only tool overrides. User resolves default-on access
-and explicit overrides into concrete grants, and snapshots permitted
-connections into each turn with a durable connection revision. Credentials stay
-encrypted in User state and only `{serverId, encryptedToken}` enters a turn.
-Full OAuth state remains on the User/BFF boundary. See
-[user identity and grants](user-identity.md) and
-[credential encryption](credential-encryption.md).
-
-An MCP endpoint is a trusted outbound capability. Do not take URLs or tokens
-from conversation input. “All tools” grants include future tools; selected
-grants use raw remote names. Both direct calls and PTC enforce the same grants.
-
-### Compatibility gate
-
-An endpoint fits this integration when all of these conditions hold:
-
-- it uses Streamable HTTP rather than stdio or the deprecated standalone
-  HTTP+SSE transport;
-- its connection entry selects the matching protocol mode: handshake-free MCP
-  `2026-07-28` with `server/discover` for `stateless`, or the 2025-era
-  `initialize` handshake for `stateful`; and
-- it is anonymous, uses the MCP OAuth authorization-code flow supported by the
-  official client SDK, or accepts a configured bearer token.
-
-The runtime deliberately does not auto-detect or fall back between protocol
-modes. A mismatched entry fails discovery so configuration errors remain
-visible.
-
-### OAuth lifecycle
-
-1. Agent asks its owner User for the permitted connection/credential snapshot.
-2. Discovery or invocation requests authorization through the Agent, which
-   records a UI action and attaches its turn to the User's shared flow.
-3. The turn waits on its own named signal. The BFF authenticates the user and
-   handles discovery, refresh, registration, authorization code and PKCE.
-4. User stores encrypted flow state; OAuth callbacks are bound to the initiating
-   browser session. Save/completion compares encrypted flow versions.
-5. User saves credentials and notifies each attached Agent. Agent signals only
-   its matching active, non-interrupting turn with a minimal encrypted token.
-6. Interrupted turns detach independently. Other agents' authorization work
-   continues. Disconnecting a connection invalidates every turn's generation.
-
-A rejected replacement can trigger another authorization round, bounded to
-four rounds per call. Full refresh and registration state never enters the
-turn. [User identity](user-identity.md) details the ownership model.
-
-### Bearer-token lifecycle
-
-Bearer actions use the same waiter path without an OAuth redirect. A password
-input sends the token only to the authenticated same-origin BFF, which encrypts
-it before `User.completeMcpBearerAuthorization`. User stores it and notifies
-the waiting Agents. MCP execution decrypts only inside its HTTP run.
-
-Tokens have no automatic refresh. Saving one does not prove it is valid:
-discovery or a remote call must validate it. Never paste tokens into chat.
-
-### Discovery and names
-
-At turn start, `session/mcp-tools.ts` does the following for every configured
-server:
-
-1. For `stateless`, pins the official TypeScript MCP client to `2026-07-28`
-   and calls `server/discover`. For `stateful`, performs the 2025-era
-   `initialize` handshake and retains the connection for that turn.
-2. Calls `tools/list`; the SDK walks pagination and validates MCP wire types and
-   `x-mcp-header` declarations.
-3. Applies schema-size limits, deterministic sorting, and the per-server
-   tool-count limit.
-4. Returns the selected protocol verdict and exact tool definitions through
-   `restate.run`.
-5. Adds that stable result to the same turn catalog used for inference and
-   execution.
-
-Model-facing names are qualified to avoid cross-server collisions:
-
-```text
-mcp__github__search_issues
-mcp__slack__send_message
-```
-
-Characters outside `[A-Za-z0-9_-]` become `_`. Names longer than 64 characters
-or colliding with a built-in or Restate-discovered tool are shortened with a
-stable identity hash. The snapshotted target retains the original MCP name;
-execution never tries to reverse the alias.
-
-The process-local catalog cache is isolated by server configuration, protocol,
-and a hash of the current access token, but stores only protocol verdicts and
-tool definitions—not the token itself. It is capped at 256 least-recently-used
-entries. Stateless entries live for the smaller TTL advertised by
-`server/discover` and `tools/list`, capped at five minutes; a missing, invalid,
-or zero TTL disables reuse for the next turn. Stateful entries are immediately
-stale so a new turn always establishes its own session. Concurrent refreshes
-are coalesced. After a successful stateless read, a refresh failure may use the
-last-known-good catalog and retry after 30 seconds. The process cache is only an
-optimization; the `restate.run` result is the durable turn snapshot.
-
-### Invocation and results
-
-MCP calls are foreground tools and participate in the existing parallel tool
-batch. Stateless execution creates an ephemeral client and adopts the
-snapshotted discovery result without another probe. Stateful execution lazily
-reuses the connection initialized during discovery for subsequent calls in the
-same turn; process loss or a broken connection causes a safe re-initialization.
-Both modes call `tools/call` with the exact snapshotted `Tool` definition.
-Supplying that definition lets the SDK perform `x-mcp-header` mirroring and
-validate `structuredContent` against the advertised output schema without
-re-listing the catalog.
-
-Interruption and external cancellation abort the request signal. Under
-Streamable HTTP, closing a request-scoped SSE response is the MCP
-cancellation signal. Tool-level `isError` results become ordinary failed tool
-outcomes so the model can correct its action; protocol and transport failures
-are also projected as tool failures unless the enclosing Restate operation was
-interrupted or cancelled.
-
-The model observation contains MCP text, structured content, textual embedded
-resources, and resource-link metadata. Image, audio, and blob base64 payloads
-are omitted with their MIME type and encoded size retained. Rendered results
-are capped at 128,000 characters before entering model context. Raw results do
-not enter the canonical conversation transcript.
-
-### Delivery guarantees
-
-Each call carries:
-
-```text
-Idempotency-Key: <turnId>:<toolCallId>
-```
-
-This is a stable opt-in deduplication key for cooperating servers, not an MCP
-guarantee. MCP does not standardize idempotency, and an HTTP side effect may
-succeed before Restate records its response. Crash recovery can therefore
-repeat an uncommitted mutation. The runtime disables eager retry of the
-`tools/call` operation, but MCP tools must still be treated as potentially
-at-least-once. Prefer a Restate handler, or an MCP server that durably honors
-the key, for mutations that require deduplication.
-
-### Deliberate exclusions
-
-The MCP client advertises no elicitation, sampling, or roots capability and
-disables automatic multi-round-trip request fulfillment. A server that still
-returns `input_required` produces an actionable tool failure. Supporting form
-elicitation would require a new durable form-response protocol; the existing
-boolean approval state is not sufficient.
-
-This implementation also excludes MCP prompts, resources, the Tasks extension,
-`subscriptions/listen`, stdio, the deprecated standalone HTTP+SSE transport,
-explicit user-facing disconnect/revocation controls, and cross-turn session
-continuity. Prompts and resources should not be flattened into model-controlled
-tools without first defining their context and trust semantics.
+Catalogs and tool results may contain sensitive data supplied by the remote
+server. Credential isolation is not a general-purpose response redactor.
+Endpoints, remote schemas and descriptions remain a trusted operator choice
+and untrusted model input.
 
 ## Guardrails and tools
 
