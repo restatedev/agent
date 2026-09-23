@@ -69,11 +69,10 @@ test("schedules reject stale timers and deliver into the same agent with the cho
   const f = context("demo", {}, call => {
     assert.equal(call.service, "Agent");
     assert.equal(call.key, "demo");
-    if (call.method === "metadata") return {name: "demo"};
-    assert.equal(call.method, "deliver");
-    assert.deepEqual(call.parameter, {source: "schedule", sourceId: "reminder", message: "Check weather", whenBusy: "queue", interruptReason: 'Scheduled message "reminder" became due'});
+    assert.equal(call.method, "metadata", "delivery must not block the scheduler");
+    return {name: "demo"};
   });
-  const deliveries = () => f.calls.filter(call => call.method === "deliver");
+  const deliveries = () => f.sends.filter(send => send.method === "deliver");
   const spec = {scheduleId: "reminder", message: "Check weather", delaySeconds: 10, repeatEverySeconds: null, whenBusy: "queue"};
   assert.equal((await f.invoke(AgentScheduler.object.upsert, spec)).accepted, true);
   await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
@@ -81,6 +80,9 @@ test("schedules reject stale timers and deliver into the same agent with the cho
   f.state.get("schedules")[0].timerId = "inv-test";
   await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
   assert.equal(deliveries().length, 1);
+  assert.equal(deliveries()[0].service, "Agent");
+  assert.equal(deliveries()[0].key, "demo");
+  assert.deepEqual(deliveries()[0].parameter, {source: "schedule", sourceId: "reminder", message: "Check weather", whenBusy: "queue", interruptReason: 'Scheduled message "reminder" became due'});
   assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
   await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
   assert.equal(deliveries().length, 1, "late duplicate timers must not deliver again");

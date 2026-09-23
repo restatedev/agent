@@ -49,9 +49,9 @@ is idempotent; it prevents future delivery but does not retract a message
 already delivered. Retiring an Agent sends one-way retirement to its scheduler,
 which cancels timers, clears the registry and refuses new schedules.
 
-The scheduler may wait for the short `deliver` RPC while holding its own lock.
-Agent must not synchronously call back into that scheduler from delivery or
-retirement. Turn execution happens on AgentSession after routing.
+The scheduler sends `deliver` one-way rather than waiting on it, so its lock is
+never held behind the Agent's queue and a cancel is never stuck behind a
+delivery. Turn execution happens on AgentSession after routing.
 
 Focused tests cover stale timers, recurrence, retirement and delivery identity.
 The live `scheduling` eval checks one-shot wakeup and event ordering.

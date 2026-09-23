@@ -114,7 +114,10 @@ export const AgentScheduler = restate.implement(AgentSchedulerDefinition, {
         }
       }
       yield* publishChange();
-      yield* restate.client(AgentDefinition, schedulerKey()).deliver({
+      // Send, never call: waiting on Agent would hold this lock behind the
+      // Agent's queue, so a cancel arriving meanwhile could not stop this
+      // delivery and every upsert/cancel would wait on unrelated Agent work.
+      yield* restate.sendClient(AgentDefinition, schedulerKey()).deliver({
         source: "schedule",
         sourceId: schedule.scheduleId,
         message: schedule.message,
