@@ -296,18 +296,21 @@ test("only concrete subtools are policy checked, with normal human approval and 
             }
             throw new Error(`Unexpected RPC ${opts.service}/${opts.method}`);
           }),
-          agentStep({
-            context: toolContext(),
-            transcript: history(entries),
-            messages: [],
-            guardrailMessages: [],
-            guardrails: [{id: "cities", rule: "Deny Paris"}],
-            approvedActions: [],
-            rejectedGuardrails: [],
-            stepNumber: 1,
-            discoveredTools: [],
-            mcpTools: [],
-            pending: createPendingOperations(),
+          durable.gen(function* () {
+            return yield* agentStep({
+              context: toolContext(),
+              transcript: history(entries),
+              messages: [],
+              guardrailMessages: [],
+              guardrails: [{id: "cities", rule: "Deny Paris"}],
+              approvedActions: [],
+              rejectedGuardrails: [],
+              stepNumber: 1,
+              discoveredTools: [],
+              mcpTools: [],
+              pending: createPendingOperations(),
+              steering: durable.channel().receive,
+            });
           }),
         ),
       {replay},
@@ -468,6 +471,7 @@ test("turn interruption cancels a nested approval even between registration and 
             discoveredTools: [],
             mcpTools: [],
             pending: createPendingOperations(),
+            steering: durable.channel().receive,
           }),
         );
         return yield* settleStep(task, interrupt.receive);
@@ -486,4 +490,110 @@ test("turn interruption cancels a nested approval even between registration and 
         entry.calls.some((call) => call.status === "cancelled"),
     ),
   );
+});
+
+test("steering hands a still-running program to the turn instead of waiting for it", {
+  timeout: 8000,
+}, async (t) => {
+  const program = {
+    toolCallId: "program",
+    toolName: "executeProgram",
+    input: {
+      source:
+        "async tools => { await tools.sleep({durationSeconds: 60}); return 'program done'; }",
+    },
+  };
+  const weather = {
+    toolCallId: "weather",
+    toolName: "getWeather",
+    input: {city: "Berlin"},
+  };
+  stubModel(t, {
+    complete: () => ({
+      type: "tool_calls",
+      calls: [program, weather],
+      message: {
+        role: "assistant",
+        content: [program, weather].map((call) => ({type: "tool-call", ...call})),
+      },
+    }),
+  });
+  const result = await runHandler((ctx) =>
+    durable.execute(
+      contextWithFixtures(ctx, () => {
+        throw new Error("Unexpected RPC");
+      }),
+      durable.gen(function* () {
+        const steering = durable.channel();
+        const release = durable.channel();
+        const never = durable.channel();
+        let blocked = false;
+        const transcript = {
+          context() {
+            return {entries: []};
+          },
+          // The program's nested sleep starts: steer, and hold the program
+          // until the step has handed it off.
+          *append(...next) {
+            const sleeping = next.some(
+              (entry) =>
+                entry.type === "tools" &&
+                entry.phase === "started" &&
+                entry.calls[0]?.name === "sleep",
+            );
+            if (sleeping && !blocked) {
+              blocked = true;
+              yield* steering.send();
+              yield* release.receive;
+            }
+          },
+        };
+        const pending = createPendingOperations();
+        const step = yield* agentStep({
+          context: toolContext(),
+          transcript,
+          messages: [],
+          guardrailMessages: [],
+          guardrails: [],
+          approvedActions: [],
+          rejectedGuardrails: [],
+          stepNumber: 1,
+          discoveredTools: [],
+          mcpTools: [],
+          pending,
+          steering: steering.receive,
+        });
+        const applied = yield* pending.apply(
+          step.outcomes,
+          toolContext(),
+          step.step,
+          step.handoffs,
+        );
+        yield* release.send();
+        const completion = yield* pending.next(never.receive, never.receive);
+        return {
+          outcomes: step.outcomes.map(({call, status, result}) => ({
+            id: call.toolCallId,
+            status,
+            running: result?.status === "running",
+          })),
+          handedOff: [...step.handoffs.keys()],
+          registered: pending.size,
+          applied: applied.outcomes.length,
+          completion,
+        };
+      }),
+    ),
+  );
+  assert.deepEqual(result.output.outcomes, [
+    {id: "program", status: "pending", running: true},
+    {id: "weather", status: "succeeded", running: false},
+  ]);
+  assert.deepEqual(result.output.handedOff, ["program"]);
+  assert.equal(result.output.completion.type, "completion");
+  assert.equal(result.output.completion.event.call.toolCallId, "program");
+  assert.deepEqual(result.output.completion.event.outcome, {
+    status: "succeeded",
+    result: JSON.stringify("program done"),
+  });
 });

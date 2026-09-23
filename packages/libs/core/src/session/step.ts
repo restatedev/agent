@@ -1,15 +1,18 @@
 // One bounded agent step and its Turn-side task supervisor. The step sees an
 // immutable message snapshot, calls the agent model once, gates its proposed
 // action, and runs an allowed foreground tool batch in parallel. It owns no
-// state that survives its return.
+// state that survives its return: a program still running when steering
+// arrives is handed to the turn's pending operations instead.
 
 import type {Guardrail} from "@restate-agents/types";
 import {
   all,
   allSettled,
   type Future,
+  gen,
   InterruptedError,
   type Operation,
+  select,
   spawn,
   type Task,
 } from "@restatedev/restate-sdk-gen";
@@ -42,6 +45,8 @@ export type ToolStep = GuardrailDecisions & {
   action: ToolCallAction;
   outcomes: ToolOutcome[];
   pendingEvents: PendingEvent[];
+  /** Programs still running, keyed by call ID; their outcomes are pending. */
+  handoffs: Map<string, Task<ToolOutcome>>;
 };
 
 type AgentStepResult =
@@ -73,6 +78,7 @@ export function* agentStep({
   discoveredTools,
   mcpTools,
   pending,
+  steering,
 }: {
   context: AgentToolContext;
   transcript: TurnHistory;
@@ -86,6 +92,8 @@ export function* agentStep({
   discoveredTools: DiscoveredAgentTool[];
   mcpTools: McpAgentTool[];
   pending: ReturnType<typeof createPendingOperations>;
+  /** Resolves when steering is waiting to be read by the model. */
+  steering: Future<void>;
 }): Operation<AgentStepResult> {
   let activeTools:
     | {
@@ -95,6 +103,10 @@ export function* agentStep({
       }
     | undefined;
   const pendingEvents: PendingEvent[] = [];
+  // Set once the step has returned with programs still running. Later
+  // cancellations from those programs are recorded directly, because the turn
+  // has already consumed `pendingEvents`.
+  let handedOff = false;
 
   try {
     const action = yield* callModel({
@@ -153,6 +165,7 @@ export function* agentStep({
     }
 
     const tasks: Task<ToolOutcome>[] = [];
+    const settled: (ToolOutcome | undefined)[] = [];
     activeTools = {action, tasks, decisions};
     yield* transcript.append(
       ...(action.activity
@@ -183,54 +196,112 @@ export function* agentStep({
       },
     );
     tasks.push(
-      ...action.calls.map((call) =>
+      ...action.calls.map((call, index) =>
         spawn(
-          agentTools.execute(call, context, discoveredTools, mcpTools, {
-            transcript,
-            step: stepNumber,
-            *guard(nested) {
-              const guarded = yield* guardAction({
-                context,
+          gen(function* () {
+            const outcome = yield* agentTools.execute(
+              call,
+              context,
+              discoveredTools,
+              mcpTools,
+              {
                 transcript,
-                instructions,
-                guardrailMessages,
-                guardrails,
-                approvedActions: [
-                  ...approvedActions,
-                  ...decisions.approvedActions,
-                ],
-                rejectedGuardrails: [
-                  ...rejectedGuardrails,
-                  ...decisions.rejectedGuardrails,
-                ],
-                approvalPrefix: `guardrail-${stepNumber}-${nested.toolCallId}`,
-                proposed: {type: "tool_calls", calls: [nested]},
-              });
-              decisions.approvedActions.push(...guarded.approvedActions);
-              decisions.rejectedGuardrails.push(...guarded.rejectedGuardrails);
-              return guarded.decision === "blocked"
-                ? guarded.reason
-                : undefined;
-            },
-            *cancelPending(outcome) {
-              const applied = yield* pending.apply(
-                [outcome],
-                context,
-                stepNumber,
-              );
-              pendingEvents.push(...applied.events);
-              return applied.outcomes[0];
-            },
+                step: stepNumber,
+                *guard(nested) {
+                  const guarded = yield* guardAction({
+                    context,
+                    transcript,
+                    instructions,
+                    guardrailMessages,
+                    guardrails,
+                    approvedActions: [
+                      ...approvedActions,
+                      ...decisions.approvedActions,
+                    ],
+                    rejectedGuardrails: [
+                      ...rejectedGuardrails,
+                      ...decisions.rejectedGuardrails,
+                    ],
+                    approvalPrefix: `guardrail-${stepNumber}-${nested.toolCallId}`,
+                    proposed: {type: "tool_calls", calls: [nested]},
+                  });
+                  decisions.approvedActions.push(...guarded.approvedActions);
+                  decisions.rejectedGuardrails.push(
+                    ...guarded.rejectedGuardrails,
+                  );
+                  return guarded.decision === "blocked"
+                    ? guarded.reason
+                    : undefined;
+                },
+                *cancelPending(outcome) {
+                  const applied = yield* pending.apply(
+                    [outcome],
+                    context,
+                    stepNumber,
+                  );
+                  if (handedOff)
+                    yield* transcript.append(
+                      ...applied.events.flatMap((event) =>
+                        agentTools.transcriptEntries(event, context),
+                      ),
+                    );
+                  else pendingEvents.push(...applied.events);
+                  return applied.outcomes[0];
+                },
+              },
+            );
+            // Recorded as each tool settles, so a steering handoff knows
+            // which results are already final.
+            settled[index] = outcome;
+            return outcome;
           }),
         ),
       ),
     );
+    const toolsDone = all(tasks);
+    const finished = yield* select({tools: toolsDone, steering});
+    if (finished.tag === "tools")
+      return {
+        type: "tools",
+        step: stepNumber,
+        action,
+        outcomes: yield* toolsDone,
+        pendingEvents,
+        handoffs: new Map(),
+        ...decisions,
+      };
+
+    // Steering is waiting. A program can run for minutes (a retry loop with
+    // sleeps, an approval), so it must not hold the new input back: let
+    // ordinary tools finish, then hand still-running programs to the turn,
+    // which reports their result as a pending completion later. Approvals a
+    // program obtains after the handoff do not extend this step's decisions.
+    const isProgram = (index: number) =>
+      action.calls[index].toolName === PROGRAM_TOOL_NAME;
+    yield* all(tasks.filter((_, index) => !isProgram(index)));
+    const handoffs = new Map<string, Task<ToolOutcome>>();
+    const outcomes = action.calls.map((call, index): ToolOutcome => {
+      const outcome = settled[index];
+      if (outcome) return outcome;
+      handoffs.set(call.toolCallId, tasks[index]);
+      return {
+        call,
+        status: "pending",
+        result: {
+          operationId: call.toolCallId,
+          status: "running",
+          note: "New user input arrived while this program was running. It continues in the background and its result is reported when it finishes; cancel it with cancelOperation if it is no longer wanted.",
+        },
+      };
+    });
+    handedOff = handoffs.size > 0;
     return {
       type: "tools",
       step: stepNumber,
       action,
-      outcomes: yield* all(tasks),
+      outcomes,
       pendingEvents,
+      handoffs,
       ...decisions,
     };
   } catch (error) {
@@ -257,6 +328,7 @@ export function* agentStep({
         step: stepNumber,
         action,
         pendingEvents,
+        handoffs: new Map(),
         ...decisions,
         outcomes: action.calls.map((call, index): ToolOutcome => {
           const result = settled[index];

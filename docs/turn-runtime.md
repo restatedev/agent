@@ -50,7 +50,8 @@ deployed dynamic handlers as ordinary durable RPCs.
 - Graceful interruption and step-limit exhaustion share one guarded, tool-free
   finalization path over completed work.
 - The steering receiver runs alongside a step. Steering is drained only at
-  defined boundaries after the step settles.
+  defined boundaries after the step settles. A running program does not hold
+  the step open once steering arrives; see [Steering](#steering).
 - All allowed foreground calls in one model response are spawned before the
   step joins the batch.
 - The step returns declarative tool outcomes. `doTurn` applies them to the
@@ -126,7 +127,12 @@ waits. Provider errors are sanitized before journaling. See
   source.
 - Steering never cancels a step or existing pending operation.
 - If steering arrives during a tool step, tool outcomes are committed first,
-  then steering is appended and applied.
+  then steering is appended and applied. Ordinary tools finish first; an
+  `executeProgram` call still running is handed to the turn's pending
+  operations instead. Its outcome is a pending `{operationId, status:
+  "running"}` handle, the program keeps running with its own sleeps and
+  approvals, and its return value arrives later as a pending completion. The
+  model can let it finish or stop it with `cancelOperation`.
 - A side-effect-free text or model-error result is discarded as stale if
   steering arrived during its step.
 - While waiting for pending work, steering is consumed immediately and starts
@@ -213,8 +219,10 @@ the guest using recorded results and completion ordering, including native
 `Promise.all`, `Promise.any`, `Promise.race`, and `Promise.allSettled`.
 
 Within PTC, `sleep` and `humanApproval` are awaited to completion inside the
-program instead of returning a pending acknowledgement to the next model round.
-Steering is consumed after the foreground step settles. A race alone does not
+program instead of returning a pending acknowledgement to the next model round,
+so programs can compose them (for example, a retry loop with backoff). If
+steering arrives while the program runs, the step hands the program off to the
+turn's pending operations and the model reads the steering right away. A race alone does not
 cancel losing branches, but program return, failure, or turn interruption stops
 and joins outstanding children. Completed side effects are not undone.
 
