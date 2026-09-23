@@ -82,7 +82,7 @@ test("schedules reject stale timers and deliver into the same agent with the cho
   assert.equal(deliveries().length, 1);
   assert.equal(deliveries()[0].service, "Agent");
   assert.equal(deliveries()[0].key, "demo");
-  assert.deepEqual(deliveries()[0].parameter, {source: "schedule", sourceId: "reminder", message: "Check weather", whenBusy: "queue", interruptReason: 'Scheduled message "reminder" became due'});
+  assert.deepEqual(deliveries()[0].parameter, {source: "schedule", sourceId: "reminder", message: "Check weather", whenBusy: "queue", interruptReason: 'Scheduled message "reminder" became due', coalesce: true});
   assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
   await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
   assert.equal(deliveries().length, 1, "late duplicate timers must not deliver again");
@@ -144,4 +144,36 @@ test("model schedule tools are authorized against the live, non-interrupting tur
   await assert.rejects(f.invoke(Agent.object.createSchedule, {...spec, turnId: "turn"}), /cannot create schedules/);
   await assert.rejects(f.invoke(Agent.object.cancelSchedule, {scheduleId: "reminder", turnId: "turn"}), /cannot cancel schedules/);
   assert.equal(f.calls.length, 2);
+});
+
+test("a coalescing delivery is skipped while its previous run is queued or active", async t => {
+  const before = process.env.MCP_SERVERS_JSON;
+  process.env.MCP_SERVERS_JSON = "[]";
+  t.after(() => { if (before === undefined) delete process.env.MCP_SERVERS_JSON; else process.env.MCP_SERVERS_JSON = before; });
+  const delivery = whenBusy => ({source: "schedule", sourceId: "tick", message: "Tick", whenBusy, coalesce: true});
+  const userMessages = f => (f.state.get("pending") ?? []).filter(entry => entry.role === "user").length;
+
+  // Queue: a busy agent keeps at most one queued run per schedule.
+  const queued = context("demo", {turn: {id: "user-turn", tools, steeringBatches: []}});
+  for (let i = 0; i < 5; i++) await queued.invoke(Agent.object.deliver, delivery("queue"));
+  assert.equal(userMessages(queued), 1);
+  // Other producers and non-coalescing deliveries still queue.
+  await queued.invoke(Agent.object.deliver, {...delivery("queue"), sourceId: "other"});
+  await queued.invoke(Agent.object.deliver, {...delivery("queue"), coalesce: undefined});
+  assert.equal(userMessages(queued), 3);
+
+  // Interrupt: once a run is queued behind an interrupt, or is itself the
+  // active turn, later firings neither stack nor interrupt it again.
+  const f = context("demo", {turn: {id: "user-turn", tools, steeringBatches: []}});
+  await f.invoke(Agent.object.deliver, delivery("interrupt"));
+  assert.equal(f.signals.length, 1);
+  await f.invoke(Agent.object.deliver, delivery("interrupt"));
+  assert.equal(userMessages(f), 1);
+  const ended = await f.invoke(Agent.object.onTurnEnd, {turnId: "user-turn", status: "interrupted", reason: "due", consumedSteering: 0});
+  assert.equal(ended.status, "interrupted");
+  const successor = f.state.get("turn");
+  assert.ok(successor.deliveries.length > 0, "the successor turn records the delivery it carries");
+  await f.invoke(Agent.object.deliver, delivery("interrupt"));
+  assert.equal(f.state.get("turn").interruptReason, undefined, "the scheduled run is not interrupted by its own next firing");
+  assert.equal(userMessages(f), 0);
 });

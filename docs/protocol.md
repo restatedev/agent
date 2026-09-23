@@ -24,7 +24,7 @@ The fallback display name is the agent ID. Retired IDs cannot be restarted.
 | `ask` | `{message}` | Start while idle; enqueue FIFO while busy |
 | `steer` | JSON string | Add input to the active turn; return false if idle |
 | `interrupt` | `{reason, message?}` | Interrupt active turn; optionally queue a replacement |
-| `deliver` | `{source, sourceId?, message, whenBusy, interruptReason?}` | Route an external message with queue/steer/interrupt policy |
+| `deliver` | `{source, sourceId?, message, whenBusy, interruptReason?, coalesce?}` | Route an external message with queue/steer/interrupt policy; `coalesce` drops it while the same `source`/`sourceId` is queued or active |
 
 `ask` returns a discriminated result with `decision` (`start` or `queue`), stats,
 and `turnId` for a started turn (`activeTurnId` for queued input). Steering and interruption return whether the active turn accepted

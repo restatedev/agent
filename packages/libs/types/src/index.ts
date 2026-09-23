@@ -234,6 +234,12 @@ export const AgentDeliverySchema = z.object({
   message: MessageSchema,
   whenBusy: DeliveryWhenBusySchema,
   interruptReason: MessageSchema.optional(),
+  coalesce: z
+    .boolean()
+    .optional()
+    .describe(
+      "Drop this delivery while an earlier one with the same source and sourceId is still queued or part of the active turn.",
+    ),
 });
 export type AgentDelivery = z.infer<typeof AgentDeliverySchema>;
 

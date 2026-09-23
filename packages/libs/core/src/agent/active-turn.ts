@@ -21,6 +21,12 @@ type ActiveTurnState = {
   interruptReason?: string;
   /** Steering signals sent to this turn in FIFO order. */
   steeringBatches: AgentSessionSteering[];
+  /**
+   * `source/sourceId` of every external delivery this turn opened with or
+   * was steered by. A coalescing producer (a recurring schedule) is skipped
+   * while its previous delivery is still being worked on.
+   */
+  deliveries?: string[];
 };
 
 /** Information returned when an active turn is successfully retired. */
@@ -54,8 +60,37 @@ export function* start(
     id: started.id,
     tools: request.tools,
     steeringBatches: [],
+    deliveries: deliveryKeys(request.entries),
   });
   return started.id;
+}
+
+/**
+ * Whether a delivery from this producer is already queued for the next turn
+ * or part of the active one.
+ */
+export function* hasDelivery(
+  source: string,
+  sourceId: string,
+): restate.Operation<boolean> {
+  const key = deliveryKey(source, sourceId);
+  const active = yield* current();
+  if (active?.deliveries?.includes(key)) return true;
+  const pending =
+    (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
+  return deliveryKeys(pending).includes(key);
+}
+
+function deliveryKey(source: string, sourceId: string): string {
+  return JSON.stringify([source, sourceId]);
+}
+
+function deliveryKeys(entries: ConversationEntry[]): string[] {
+  return entries.flatMap((entry) =>
+    entry.role === "event" && entry.type === "delivery" && entry.sourceId
+      ? [deliveryKey(entry.source, entry.sourceId)]
+      : [],
+  );
 }
 
 /**
@@ -120,6 +155,10 @@ export function* steer(
   restate.state().set("turn", {
     ...active,
     steeringBatches: [...active.steeringBatches, steering],
+    deliveries: [
+      ...(active.deliveries ?? []),
+      ...deliveryKeys(steering.queued),
+    ],
   });
   restate
     .invocation(active.id)

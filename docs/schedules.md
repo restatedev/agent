@@ -47,6 +47,13 @@ When busy, the saved policy selects:
 | `steer` | Feed the active turn through ordered steering signals |
 | `interrupt` | Stop the current turn and queue the delivered replacement |
 
+Scheduled deliveries coalesce: while an earlier delivery from the same
+`scheduleId` is still queued, or is part of the active turn, a later firing is
+dropped instead of routed. A recurring schedule that fires faster than the
+agent works therefore keeps at most one pending run, and an `interrupt`
+schedule never interrupts the turn it started itself. The recurrence keeps its
+cadence; skipped firings are not caught up.
+
 Timer identity is stored with each schedule. Replaced or cancelled timer
 invocations cannot deliver if their invocation ID no longer matches. Cancelling
 is idempotent; it prevents future delivery but does not retract a message

@@ -425,6 +425,16 @@ export const Agent = restate.implement(AgentDefinition, {
       if (yield* restate.state().get<boolean>("deleted")) return;
       yield* requireTopLevelConversation();
       const current = yield* activeTurn.current();
+      // Coalescing producers never stack: a recurring schedule firing faster
+      // than the agent works would otherwise grow `pending` without bound
+      // (queue) or interrupt every successor turn it caused (interrupt).
+      if (
+        current &&
+        delivery.coalesce &&
+        delivery.sourceId &&
+        (yield* activeTurn.hasDelivery(delivery.source, delivery.sourceId))
+      )
+        return;
       if (!current) {
         yield* startTurn(agentKey(), [
           deliveryEvent(delivery, "start"),

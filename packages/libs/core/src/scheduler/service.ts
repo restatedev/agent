@@ -123,6 +123,8 @@ export const AgentScheduler = restate.implement(AgentSchedulerDefinition, {
         message: schedule.message,
         whenBusy: schedule.whenBusy,
         interruptReason: `Scheduled message "${schedule.scheduleId}" became due`,
+        // Skip a run while the previous one is still queued or running.
+        coalesce: true,
       });
     },
   },
