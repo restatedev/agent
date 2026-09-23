@@ -21,7 +21,6 @@
     "build": "tsc --noEmitOnError",
     "start": "NODE_ENV=production node ./dist/app.js",
     "dev": "tsx watch ./src/app.ts",
-    "example:conversation-history": "tsx ./examples/conversation-history.ts",
     "prebundle": "rm -rf dist",
     "bundle": "esbuild src/app.ts --bundle --format=esm --minify --sourcemap --platform=node --target=node22 --banner:js=\"import { createRequire as __restateCreateRequire } from 'node:module'; const require = __restateCreateRequire(import.meta.url); const __dirname = import.meta.dirname;\" --outfile=dist/app.js",
     "postbundle": "cd dist && zip -r index.zip app.js*"
