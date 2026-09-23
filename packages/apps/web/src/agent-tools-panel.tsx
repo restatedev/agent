@@ -7,8 +7,8 @@ import type {
   ToolSelection,
 } from "@restate-agents/types";
 import {useEffect, useRef, useState} from "react";
-import type {AgentClient} from "./agent-client";
 
+import type {AgentClient} from "./agent-client";
 import {
   mcpServerEnabled,
   toggleMcpServer,

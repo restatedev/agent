@@ -5,6 +5,7 @@
 // module owns tool mechanics.
 
 import {setTimeout} from "node:timers/promises";
+
 import {
   type AgentTools,
   AgentToolsSchema,
@@ -25,6 +26,7 @@ import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
+
 import {Agent} from "../agent/index.js";
 import type {ToolCall, ToolManifest} from "../gateway/index.js";
 import {approvalSignalName} from "../internal-types.js";
@@ -222,32 +224,26 @@ export function manifests(
     programToolManifest,
     ...definitions
       .filter((tool) => tool.name !== "webSearch" || context.webSearchEnabled)
-      .map(
-        (tool): ToolManifest => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
-          strict: true,
-        }),
-      ),
-    ...discovered.map(
-      (tool): ToolManifest => ({
+      .map((tool): ToolManifest => ({
         name: tool.name,
         description: tool.description,
-        inputSchema: tool.inputSchema,
-        // Third-party JSON Schema is not guaranteed to satisfy OpenAI's
-        // requirement that every object property appear in `required`.
-        strict: false,
-      }),
-    ),
-    ...mcpTools.map(
-      (tool): ToolManifest => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema,
-        strict: false,
-      }),
-    ),
+        inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
+        strict: true,
+      })),
+    ...discovered.map((tool): ToolManifest => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      // Third-party JSON Schema is not guaranteed to satisfy OpenAI's
+      // requirement that every object property appear in `required`.
+      strict: false,
+    })),
+    ...mcpTools.map((tool): ToolManifest => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      strict: false,
+    })),
   ].filter((tool) =>
     toolAllowed(tool.name, context.permissions, discovered, mcpTools, names),
   );

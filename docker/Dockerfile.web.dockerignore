@@ -8,7 +8,8 @@
 
 docs
 *.md
-biome.json
+.oxlintrc.json
+.oxfmtrc.json
 restate-data
 .restate
 

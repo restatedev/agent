@@ -1,4 +1,5 @@
 import type {AgentClient} from "@restate-agents/client";
+
 import type {AgentSnapshot, AgentSnapshotUpdate} from "../agent-client";
 
 type SnapshotClient = Pick<

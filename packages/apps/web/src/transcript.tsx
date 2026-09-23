@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import {useEffect, useMemo, useState} from "react";
+
 import type {SequencedEntry} from "./agent-client";
 import {Bubble, BubbleContent} from "./components/ui/bubble";
 import {Marker, MarkerContent, MarkerIcon} from "./components/ui/marker";
@@ -186,7 +187,7 @@ function TurnDetail({entry}: {entry: DetailEntry}) {
           <span className="step-chip">Step {entry.step}</span>
           <span
             // The renderer escapes every source character before adding formatting tags.
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized model output
+            // oxlint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{__html: renderInline(entry.message)}}
           />
         </div>
@@ -287,7 +288,7 @@ function TurnCard({row}: {row: TurnRow}) {
         {row.entries.map((entry, index) => (
           // Turn details form an append-only sequence, so their position is a
           // stable identity for the lifetime of the turn.
-          // biome-ignore lint/suspicious/noArrayIndexKey: see above
+          // oxlint-disable-next-line react/no-array-index-key
           <TurnDetail entry={entry} key={`${entry.type}-${index}`} />
         ))}
       </div>
@@ -309,16 +310,16 @@ function TurnContinuation({row}: {row: TurnRow}) {
               <div
                 className="turn-continuation-copy"
                 // The renderer escapes every source character before adding formatting tags.
-                // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized model output
+                // oxlint-disable-next-line react/no-danger
                 dangerouslySetInnerHTML={{__html: renderInline(entry.message)}}
                 // Turn details form an append-only sequence, so their position is stable.
-                // biome-ignore lint/suspicious/noArrayIndexKey: see above
+                // oxlint-disable-next-line react/no-array-index-key
                 key={`${entry.type}-${index}`}
               />
             ) : entry.type === "progress" &&
               entry.phase === "thinking" ? null : (
               // Turn details form an append-only sequence, so their position is stable.
-              // biome-ignore lint/suspicious/noArrayIndexKey: see above
+              // oxlint-disable-next-line react/no-array-index-key
               <TurnDetail entry={entry} key={`${entry.type}-${index}`} />
             ),
           )}
@@ -375,7 +376,7 @@ function AssistantMessage({item}: {item: SequencedEntry}) {
           <BubbleContent
             className="markdown"
             // The renderer escapes every source character before adding formatting tags.
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized model output
+            // oxlint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{__html: renderMarkdown(entry.text)}}
           />
         </Bubble>

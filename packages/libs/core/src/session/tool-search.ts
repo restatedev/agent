@@ -1,4 +1,5 @@
 import MiniSearch from "minisearch";
+
 import type {ToolManifest} from "../gateway/model.js";
 
 export const TOOL_SEARCH_NAME = "searchTools";

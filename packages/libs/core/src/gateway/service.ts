@@ -2,8 +2,10 @@
 // model calls. Provider-specific inference remains in model.ts.
 
 import {createHash} from "node:crypto";
+
 import {CancelledError, Opts} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
+
 import {executionRetention} from "../retention.js";
 import {
   AGENT_MODEL,

@@ -14,6 +14,7 @@ import type {
 import {AgentNotificationsDefinition} from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
+
 import {raceBranches} from "../race.js";
 import {coordinationRetention} from "../retention.js";
 

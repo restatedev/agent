@@ -5,8 +5,8 @@
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
-    "lint": "biome check .",
-    "format": "biome check --write .",
+    "lint": "oxlint packages && oxfmt --check 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx'",
+    "format": "oxlint --fix packages && oxfmt 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx'",
     "bundle": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core bundle",
     "start": "pnpm build && pnpm --parallel --filter @restate-agents/core --filter @restate-agents/web start",
     "start:service": "pnpm --filter @restate-agents/core... build && pnpm --filter @restate-agents/core start",
@@ -16,6 +16,7 @@
     "dev:ui": "pnpm --filter @restate-agents/client... build && pnpm --filter @restate-agents/web dev"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.16"
+    "oxfmt": "^0.70.0",
+    "oxlint": "^1.85.0"
   }
 }

@@ -6,6 +6,7 @@
 
 import {createHash} from "node:crypto";
 import {setTimeout as sleep} from "node:timers/promises";
+
 import {
   type CallToolResult,
   Client,
@@ -19,6 +20,7 @@ import {
 import type {McpServer} from "@restate-agents/types";
 import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
+
 import {McpConfigurationError, resolveMcpToken} from "./mcp-config.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";

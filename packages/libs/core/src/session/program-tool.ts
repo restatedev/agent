@@ -2,6 +2,7 @@
 // payloads only cross into QuickJS; the model receives the program's return.
 import {CancelledError} from "@restatedev/restate-sdk";
 import {type Operation, sendClient} from "@restatedev/restate-sdk-gen";
+
 import {Agent} from "../agent/index.js";
 import type {ToolCall} from "../gateway/index.js";
 import {PROGRAM_TOOL_NAME, ProgramInputSchema} from "../ptc/definition.js";

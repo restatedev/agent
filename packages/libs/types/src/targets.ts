@@ -2,6 +2,7 @@ import type {
   HandlerDescriptor,
   VirtualObjectDefinition,
 } from "@restatedev/restate-sdk-gen";
+
 import type {
   AgentDefinition,
   AgentNotificationsDefinition,

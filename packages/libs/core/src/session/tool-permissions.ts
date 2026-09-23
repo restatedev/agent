@@ -1,4 +1,5 @@
 import type {AgentTools, ToolSelection} from "@restate-agents/types";
+
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import type {McpAgentTool} from "./mcp-tools.js";
 

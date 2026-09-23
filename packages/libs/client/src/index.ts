@@ -27,6 +27,7 @@ import type {
   AskResult,
   Guardrail,
   HistoryPage,
+  ScheduleSpec,
 } from "@restate-agents/types";
 
 export {HttpCallError as IngressClientError} from "@restatedev/restate-sdk-clients";
@@ -270,7 +271,7 @@ export function createAgentClient({
     async schedules() {
       return invoke(scheduler.list(rpc.opts({input: serde.empty})));
     },
-    async schedule(spec: import("@restate-agents/types").ScheduleSpec) {
+    async schedule(spec: ScheduleSpec) {
       return invoke(scheduler.upsert(spec));
     },
     async cancelSchedule(scheduleId: string) {

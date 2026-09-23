@@ -15,6 +15,7 @@ import {AgentSessionDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
+
 import {Agent} from "../agent/index.js";
 import {
   callGuardrailModel,

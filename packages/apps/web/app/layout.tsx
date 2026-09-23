@@ -1,5 +1,6 @@
 import type {Metadata} from "next";
 import type {ReactNode} from "react";
+
 import "@fontsource-variable/source-sans-3/wght.css";
 import "@fontsource-variable/source-sans-3/wght-italic.css";
 import "../src/styles.css";

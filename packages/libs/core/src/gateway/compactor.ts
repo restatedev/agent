@@ -4,6 +4,7 @@
 import type {ConversationCompactionResult} from "@restate-agents/types";
 import {type Operation, run} from "@restatedev/restate-sdk-gen";
 import {generateText} from "ai";
+
 import {
   type ConversationCompactionInput,
   isDerivedConversationEvent,

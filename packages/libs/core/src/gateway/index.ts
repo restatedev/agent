@@ -8,8 +8,4 @@ export type {
   ToolCall,
   ToolManifest,
 } from "./model.js";
-export {
-  callGuardrailModel,
-  callModel,
-  ModelGateway,
-} from "./service.js";
+export {callGuardrailModel, callModel, ModelGateway} from "./service.js";

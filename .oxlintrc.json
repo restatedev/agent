@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "import",
+    "react",
+    "nextjs"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "require-yield": "off",
+    "react/react-in-jsx-scope": "off",
+    "react/set-state-in-effect": "warn",
+    "typescript/consistent-type-imports": "error",
+    "react/no-danger": "error",
+    "react/no-array-index-key": "error"
+  },
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/.next/**",
+    "**/next-env.d.ts"
+  ]
+}

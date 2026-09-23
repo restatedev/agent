@@ -1,10 +1,10 @@
 import "server-only";
-
 import {
   AgentClientError,
   createAgentClient,
   IngressClientError,
 } from "@restate-agents/client";
+
 import {UiRequestError} from "./request-guard";
 
 const DEFAULT_INGRESS_URL = "http://localhost:8080";

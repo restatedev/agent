@@ -28,8 +28,8 @@ import {
   useRef,
   useState,
 } from "react";
-import type {AgentClient, SequencedEntry} from "./agent-client";
 
+import type {AgentClient, SequencedEntry} from "./agent-client";
 import {AgentToolsPanel} from "./agent-tools-panel";
 import {Transcript} from "./transcript";
 import {useAgent} from "./use-agent";
@@ -413,7 +413,7 @@ function GuardrailEditor({
       {guardrails.map((guardrail, index) => (
         // Rows only append or delete in this local draft; their position is
         // stable until the complete guardrail list is saved.
-        // biome-ignore lint/suspicious/noArrayIndexKey: see above
+        // oxlint-disable-next-line react/no-array-index-key
         <div className="guardrail-row" key={`${index}-${guardrail.id}`}>
           <input
             aria-label="Guardrail ID"

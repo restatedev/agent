@@ -102,7 +102,9 @@ pnpm --filter @restate-agents/web test
 pnpm bundle
 ```
 
-- `lint` runs Biome across workspace source and configuration files.
+- `lint` runs oxlint on `packages` and checks oxfmt formatting of TypeScript
+  sources; `format` applies oxlint fixes and oxfmt. Type-checking is
+  TypeScript 7 (the native `tsc`), run by `build`.
 - `build` compiles the workspace and creates a production Next.js build.
 - `bundle` creates the deployable ESM bundle and catches packaging/import
   problems that type-checking alone may miss.
