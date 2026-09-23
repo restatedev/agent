@@ -218,7 +218,7 @@ journaled snapshot.
 
 Check the core process's `MCP_SERVERS_JSON`, selected protocol, connectivity
 and Agent tool grants. A changed connector requires a new turn. A `tokenEnv`
-reference must resolve in the core environment. Missing/invalid credentials
+reference must end in `_MCP_TOKEN` and resolve in the core environment. Missing/invalid credentials
 produce sanitized discovery warnings or tool failures, without an OAuth wait.
 
 Read [MCP configuration](mcp-configuration.md) and inspect the Restate discovery

@@ -30,7 +30,7 @@ test("configuration snapshots only credential references and replays without rea
 });
 
 test("configuration rejects inline tokens, duplicate IDs, and unsafe endpoints without echoing supplied data", () => {
-  for (const value of [[{...server, token: secret}], [server, server], [{...server, url: 'file:///tmp/private'}], [{...server, url: `https://name:${secret}@example.com`}], secret]) {
+  for (const value of [[{...server, token: secret}], [server, server], [{...server, url: 'file:///tmp/private'}], [{...server, url: `https://name:${secret}@example.com`}], [{...server, tokenEnv: "OPENAI_API_KEY"}], [{...server, tokenEnv: "_MCP_TOKEN"}], secret]) {
     assert.throws(() => readMcpConfiguration({MCP_SERVERS_JSON: JSON.stringify(value)}), error => !error.message.includes(secret) && /Invalid MCP_SERVERS_JSON/.test(error.message));
   }
   assert.throws(() => resolveMcpToken(server, {MCP_SERVERS_JSON: '[]', FIXTURE_MCP_TOKEN: secret}), /configuration changed/);

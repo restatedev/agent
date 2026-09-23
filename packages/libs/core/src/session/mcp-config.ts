@@ -31,7 +31,7 @@ export function readMcpConfiguration(env = process.env): McpServer[] {
   } catch {
     // Parsing errors can contain the supplied configuration. Never journal it.
     throw new McpConfigurationError(
-      "Invalid MCP_SERVERS_JSON: use unique HTTP server IDs, protocol, URL, and optional tokenEnv; never inline credentials",
+      "Invalid MCP_SERVERS_JSON: use unique HTTP server IDs, protocol, URL, and optional tokenEnv naming a *_MCP_TOKEN variable; never inline credentials",
     );
   }
 }

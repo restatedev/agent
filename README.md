@@ -123,7 +123,8 @@ export MCP_SERVERS_JSON='[{"id":"example","type":"http","url":"https://mcp.examp
 export EXAMPLE_MCP_TOKEN=your-server-token
 ```
 
-Omit `tokenEnv` for a public endpoint. Use `stateless` for the handshake-free
+Omit `tokenEnv` for a public endpoint; when set, it must name a variable
+ending in `_MCP_TOKEN`. Use `stateless` for the handshake-free
 2026-07-28 protocol or `stateful` for the supported 2025-era handshake.
 Configuration is snapshotted per turn; the token is resolved only inside the
 external HTTP operation. Tokens are never supplied as durable configuration,

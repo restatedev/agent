@@ -22,7 +22,13 @@ token; endpoints that require interactive OAuth are outside this example.
 
 `session/mcp-config.ts` validates a strict array of at most 32 servers with
 unique IDs, HTTP(S) URLs without embedded username/password, and optional
-uppercase environment-variable references. Do not put secrets in endpoint URLs.
+environment-variable references. A `tokenEnv` must be an uppercase name ending
+in `_MCP_TOKEN`, so a typo or copied entry cannot forward an unrelated process
+secret such as `OPENAI_API_KEY` to an MCP endpoint.
+
+Do not put secrets in endpoint URLs, including query strings. The URL and the
+`tokenEnv` name are not secret: they are recorded in every turn snapshot and
+returned to UI clients by `Agent.toolCatalog`.
 Malformed configuration produces a generic error without echoing the input.
 A turn cannot start while the configuration is malformed. If that happens when
 a finished turn would start its queued successor, the finished outcome is still

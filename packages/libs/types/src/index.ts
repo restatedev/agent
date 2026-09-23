@@ -44,10 +44,12 @@ export const McpServerSchema = z.object({
   type: z.literal("http"),
   url: z.string().trim().min(1),
   protocol: McpProtocolSchema,
-  // Name only. The core resolves the secret inside the HTTP effect.
+  // Name only. The core resolves the secret inside the HTTP effect. The
+  // required suffix keeps a typo or copied config from sending an unrelated
+  // process secret (OPENAI_API_KEY, RESTATE_AUTH_TOKEN) to an MCP endpoint.
   tokenEnv: z
     .string()
-    .regex(/^[A-Z_][A-Z0-9_]*$/)
+    .regex(/^[A-Z][A-Z0-9_]*_MCP_TOKEN$/)
     .optional(),
 });
 export type McpServer = z.infer<typeof McpServerSchema>;
