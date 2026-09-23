@@ -144,11 +144,12 @@ proposed teaching requirement, and this plan does not delete existing data.
 
 ## Review findings and validation
 
-Standards axis: one documented-contract drift finding. `PROJECT.md` still
-describes agent-local memories and AgentScheduler, while `docs/README.md`
-also mentions a scheduler per agent. Those descriptions disagree with the
-current user-owned implementation. Update these maps as part of the work.
-No runtime standards violation was established in the focused inspection.
+*Historical, recorded against `main` before implementation.* Standards axis:
+one documented-contract drift finding. `PROJECT.md` then described
+agent-local memories and AgentScheduler, and `docs/README.md` a scheduler per
+agent, while `main` kept both user-owned. This branch made those descriptions
+true again by moving memories and schedules onto the agent. No runtime
+standards violation was established in the focused inspection.
 
 Spec axis: no confirmed violation in the reviewed identity/session,
 ownership, and credential boundaries. The comparison used repository
@@ -190,3 +191,18 @@ schedule/delegation path. Run proportional build, bundle, and test checks.
 
 The disposable servers and Restate container were stopped after verification.
 The implementation is on `codex/pedagogical-reference`.
+
+## Review follow-ups — 2026-09-23
+
+A review of the branch led to these fixes, one commit each: scheduled
+deliveries are sent rather than awaited under the scheduler lock; model
+schedule changes are authorized against the live turn; recurring runs
+coalesce instead of stacking or interrupting their own turn; UI reads reject a
+non-loopback Host (DNS rebinding); retirement clears profile, memories and
+approvals; a successor that cannot start keeps its queued input; MCP discovery
+retries transient failures inside its effect; `tokenEnv` must end in
+`_MCP_TOKEN`; and the trust boundary is documented.
+
+After these changes: deterministic core tests 94 passed; web tests 13 passed;
+workspace build and Biome lint passed. Live model, MCP and Modal paths were
+still not exercised.
