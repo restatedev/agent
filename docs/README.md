@@ -16,8 +16,6 @@ request path begins with an agent ID, without an account or login prerequisite.
 
 [PROJECT.md](../PROJECT.md) maps the source tree. Coding agents should read
 [agent-guide.md](agent-guide.md) before changing runtime semantics.
-[The history review](pedagogical-reference-plan.md) records the transition
-from the former standalone application to this reference branch.
 
 ## Source of truth
 

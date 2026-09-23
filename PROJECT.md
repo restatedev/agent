@@ -59,4 +59,3 @@ reading data and fetches only changed topics on subsequent polls.
   memory, scheduling and delegation coverage.
 - `packages/apps/web/test`: snapshot loading, pagination and merging.
 - `docs/agent-guide.md`: invariants for maintainers and coding agents.
-- `docs/pedagogical-reference-plan.md`: history review and simplification scope.
