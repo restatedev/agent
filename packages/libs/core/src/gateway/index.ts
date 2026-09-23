@@ -3,7 +3,6 @@
 export {compactConversation} from "./compactor.js";
 export type {
   GuardrailApproval,
-  GuardrailDecision,
   ModelResult,
   ProposedAction,
   ToolCall,

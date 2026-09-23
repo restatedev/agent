@@ -36,7 +36,7 @@ export type GuestLimits = {
   maxToolCalls?: number;
 };
 export const MAX_SOURCE_LENGTH = 64_000;
-export const MAX_RESULT_LENGTH = 64_000;
+const MAX_RESULT_LENGTH = 64_000;
 
 export class Guest {
   private readonly rt: QuickJSRuntime;

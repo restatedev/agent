@@ -16,7 +16,7 @@ import {
 } from "./guest.js";
 
 /** The caller supplies already-durable tool operations, never plain host I/O. */
-export type ProgramTools = {
+type ProgramTools = {
   names: string[];
   execute(request: Request): Operation<Outcome>;
 };

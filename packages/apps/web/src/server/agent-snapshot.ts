@@ -67,7 +67,7 @@ export async function syncAgentSnapshot(
   );
 }
 
-export async function readAgentSnapshotUpdate(
+async function readAgentSnapshotUpdate(
   client: SnapshotClient,
   since: AgentSnapshot["notification"],
   notification: AgentSnapshot["notification"],

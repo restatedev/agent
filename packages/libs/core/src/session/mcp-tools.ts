@@ -83,7 +83,7 @@ export type McpAgentTool = {
   };
 };
 
-export type McpToolExecution =
+type McpToolExecution =
   | {status: "succeeded"; result: string}
   | {status: "failed"; error: string};
 
@@ -94,7 +94,7 @@ export type McpServerAvailability = {
   warnings: string[];
 };
 
-export type McpToolDiscovery = {
+type McpToolDiscovery = {
   tools: McpAgentTool[];
   servers: McpServerAvailability[];
 };

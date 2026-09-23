@@ -112,7 +112,7 @@ export const GUARDRAIL_MODEL = "gpt-5.6-terra";
 
 export const MAX_AGENT_OUTPUT_TOKENS = 64_000;
 /** Evaluated inside a journaled inference, never in replayed Turn control flow. */
-export function agentOutputBudget(): number {
+function agentOutputBudget(): number {
   const raw = process.env.AGENT_MODEL_MAX_OUTPUT_TOKENS ?? "32000";
   const value = Number(raw);
   if (
