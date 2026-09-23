@@ -29,7 +29,6 @@ import {
   HistoryPageSchema,
   HistoryRequestSchema,
   InterruptRequestSchema,
-  McpServerSchema,
   MemoryKeyRequestSchema,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
@@ -43,7 +42,7 @@ import {
   SetInstructionsSchema,
   SetWebSearchEnabledSchema,
   SubAgentConfigSchema,
-  ToolDescriptorSchema,
+  ToolCatalogSchema,
 } from "./index.js";
 import {
   AGENT_NOTIFICATIONS_SERVICE_NAME,
@@ -142,14 +141,7 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     output: z.boolean(),
   }),
   setTools: iface.schemas({input: AgentToolsSchema, output: z.void()}),
-  toolCatalog: iface.schemas({
-    input: z.void(),
-    output: z.object({
-      builtin: z.array(ToolDescriptorSchema),
-      dynamic: z.array(ToolDescriptorSchema),
-      mcp: z.array(McpServerSchema),
-    }),
-  }),
+  toolCatalog: iface.schemas({input: z.void(), output: ToolCatalogSchema}),
   updateMemory: iface.schemas({
     input: MemoryUpdateSchema,
     output: MemoryUpdateResultSchema,

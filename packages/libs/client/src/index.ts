@@ -19,15 +19,21 @@
 
 import type {
   AgentDelivery,
+  AgentMetadata,
   AgentNotificationSnapshot,
   AgentProfile,
   AgentTools,
   ApprovalRequest,
   ApprovalResolution,
   AskResult,
+  ChildAgent,
   Guardrail,
   HistoryPage,
+  ScheduleCancellationResult,
+  ScheduledMessage,
+  ScheduleMutationResult,
   ScheduleSpec,
+  ToolCatalog,
 } from "@restate-agents/types";
 
 export {HttpCallError as IngressClientError} from "@restatedev/restate-sdk-clients";
@@ -72,6 +78,129 @@ export type AgentClientOptions = {
   retry?: boolean | RetryPolicy;
 };
 
+/** Options for one notification long-poll window. */
+export type WatchOptions = {
+  /** Reusing a key after a network failure attaches to the parked wait. */
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+};
+
+/**
+ * Typed operations on one agent through Restate ingress.
+ *
+ * Every method maps to one public handler of `Agent`, `AgentSession`,
+ * `AgentNotifications` or `AgentScheduler` for this client's agent ID, except
+ * `follow`, which combines `history` and `watchNotifications` into a stream.
+ * Rejected calls throw {@link AgentClientError}.
+ */
+export interface AgentClient {
+  // ---- conversation ----
+
+  /** Starts a turn when the agent is idle, or queues the message for the next turn. */
+  ask(message?: string): Promise<AskResult>;
+
+  /**
+   * Redirects the active turn without cancelling running work.
+   *
+   * @returns false when no turn is listening (idle or already interrupting).
+   */
+  steer(message: string): Promise<boolean>;
+
+  /**
+   * Gracefully stops the active turn. The optional replacement message is
+   * queued and enters the transcript when the successor turn starts.
+   *
+   * @returns whether an interruption or replacement was accepted.
+   */
+  interrupt(reason: string, message?: string): Promise<boolean>;
+
+  /** Routes source-attributed input through the agent's busy-turn policy. */
+  deliver(delivery: AgentDelivery): Promise<void>;
+
+  /** Reads up to `limit` transcript entries starting at `fromSequence` (inclusive). */
+  history(fromSequence?: number, limit?: number): Promise<HistoryPage>;
+
+  /** Returns the agent's current notification watermarks. */
+  notifications(): Promise<AgentNotificationSnapshot>;
+
+  /**
+   * Waits up to `timeoutSeconds` for a notification revision newer than
+   * `afterRevision`, then returns the current watermarks.
+   */
+  watchNotifications(
+    afterRevision: number,
+    timeoutSeconds: number,
+    options?: WatchOptions,
+  ): Promise<AgentNotificationSnapshot>;
+
+  /**
+   * Yields transcript entries in sequence order until `signal` aborts,
+   * waiting for notifications whenever the cursor is caught up.
+   */
+  follow(options?: FollowOptions): AsyncGenerator<SequencedEntry, void, void>;
+
+  // ---- profile ----
+
+  /** Instructions, guardrails, memories and tool grants the next turn will snapshot. */
+  profile(): Promise<AgentProfile>;
+
+  /** Replaces the persistent instructions; null clears them. */
+  setInstructions(instructions: string | null): Promise<void>;
+
+  /** Replaces the complete guardrail list; an empty list clears it. */
+  setGuardrails(guardrails: Guardrail[]): Promise<void>;
+
+  /** Controls built-in web search for future turns; enabled by default. */
+  setWebSearchEnabled(enabled: boolean): Promise<void>;
+
+  /** Replaces the agent's tool grants for future turns. */
+  setTools(tools: AgentTools): Promise<void>;
+
+  /** Deletes one memory. @returns whether it existed. */
+  deleteMemory(key: string): Promise<boolean>;
+
+  /** Every tool this agent could be granted. */
+  toolCatalog(): Promise<ToolCatalog>;
+
+  // ---- lifecycle and children ----
+
+  /** The agent's display name and, for a child, its parent. */
+  metadata(): Promise<AgentMetadata>;
+
+  /** The agent's direct children. */
+  children(): Promise<ChildAgent[]>;
+
+  /**
+   * Retires a top-level agent: stops its work, retires its children,
+   * schedules and sandbox, and refuses new turns. Idempotent.
+   */
+  retire(): Promise<void>;
+
+  // ---- schedules ----
+
+  /** The agent's active schedules. */
+  schedules(): Promise<ScheduledMessage[]>;
+
+  /** Creates or replaces the schedule named by `spec.scheduleId`. */
+  schedule(spec: ScheduleSpec): Promise<ScheduleMutationResult>;
+
+  /** Cancels one schedule. Idempotent. */
+  cancelSchedule(scheduleId: string): Promise<ScheduleCancellationResult>;
+
+  // ---- human approvals ----
+
+  /** Every approval request currently awaiting a decision. */
+  approvals(): Promise<ApprovalRequest[]>;
+
+  /**
+   * Delivers one human decision to the waiting tool or policy gate.
+   *
+   * @returns false when the request is unknown or its turn is no longer
+   * eligible to receive the decision.
+   */
+  resolveApproval(resolution: ApprovalResolution): Promise<boolean>;
+}
+
 /** Failed ingress calls carry the HTTP status and the ingress error text. */
 export class AgentClientError extends Error {
   constructor(
@@ -88,7 +217,7 @@ export function createAgentClient({
   agentId,
   headers,
   retry = true,
-}: AgentClientOptions) {
+}: AgentClientOptions): AgentClient {
   const ingress = connect({
     url: ingressUrl.replace(/\/+$/, ""),
     headers,
@@ -136,7 +265,7 @@ export function createAgentClient({
   async function watchNotifications(
     afterRevision: number,
     timeoutSeconds: number,
-    options?: {idempotencyKey?: string; signal?: AbortSignal},
+    options?: WatchOptions,
   ): Promise<AgentNotificationSnapshot> {
     return invoke(
       notifications.watch(
@@ -149,29 +278,18 @@ export function createAgentClient({
   return {
     // ---- conversation ----
 
-    /** Starts a turn when the Agent is idle, queues for the next turn otherwise. */
     async ask(message?: string): Promise<AskResult> {
       return invoke(agent.ask({message: message ?? DEFAULT_ASK}));
     },
 
-    /**
-     * Redirects the active turn without cancelling running work.
-     *
-     * @returns false when no turn is listening (idle or already interrupting).
-     */
     async steer(message: string): Promise<boolean> {
       return invoke(agent.steer(message));
     },
 
-    /**
-     * Gracefully stops the active turn. The optional replacement message is
-     * queued and enters the transcript when the successor turn starts.
-     */
     async interrupt(reason: string, message?: string): Promise<boolean> {
       return invoke(agent.interrupt({reason, ...(message ? {message} : {})}));
     },
 
-    /** Routes source-attributed input through the Agent's busy-turn policy. */
     async deliver(delivery: AgentDelivery): Promise<void> {
       return invoke(agent.deliver(delivery));
     },
@@ -179,7 +297,6 @@ export function createAgentClient({
     history,
     watchNotifications,
 
-    /** Returns the Agent's current notification watermarks. */
     async notifications(): Promise<AgentNotificationSnapshot> {
       return invoke(
         notifications.snapshot(
@@ -188,12 +305,10 @@ export function createAgentClient({
       );
     },
 
-    /**
-     * Yields transcript entries in sequence order, forever: drains the cursor,
-     * then parks in one notification wait window per idempotency key and
-     * repeats. A network-failed window retries under the same key, attaching
-     * to the still-parked invocation instead of stacking a new one.
-     */
+    // Drains the cursor, then parks in one notification wait window per
+    // idempotency key and repeats. A network-failed window retries under the
+    // same key, attaching to the still-parked invocation instead of stacking
+    // a new one.
     async *follow({
       fromSequence = 1,
       timeoutSeconds = 55,
@@ -238,17 +353,14 @@ export function createAgentClient({
       );
     },
 
-    /** Replaces the persistent instructions; null clears them. */
     async setInstructions(instructions: string | null): Promise<void> {
       return invoke(agent.setInstructions({instructions}));
     },
 
-    /** Replaces the complete guardrail list; an empty list clears it. */
     async setGuardrails(guardrails: Guardrail[]): Promise<void> {
       return invoke(agent.setGuardrails({guardrails}));
     },
 
-    /** Controls built-in web search for future turns; enabled by default. */
     async setWebSearchEnabled(enabled: boolean): Promise<void> {
       return invoke(agent.setWebSearchEnabled({enabled}));
     },
@@ -291,16 +403,8 @@ export function createAgentClient({
       );
     },
 
-    /**
-     * Delivers one human decision to the waiting tool or policy gate.
-     *
-     * @returns false when the request is unknown or its turn is no longer
-     * eligible to receive the decision.
-     */
     async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
       return invoke(agent.resolveApproval(resolution));
     },
   };
 }
-
-export type AgentClient = ReturnType<typeof createAgentClient>;

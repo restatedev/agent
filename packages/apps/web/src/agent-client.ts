@@ -9,9 +9,9 @@ import type {
   ChildAgent,
   Guardrail,
   HistoryPage,
-  McpServer,
+  ScheduleCancellationResult,
   ScheduledMessage,
-  ToolDescriptor,
+  ToolCatalog,
 } from "@restate-agents/types";
 
 export type SequencedEntry = HistoryPage["entries"][number];
@@ -26,6 +26,53 @@ export type AgentSnapshot = {
 };
 export type AgentSnapshotUpdate = Pick<AgentSnapshot, "notification"> &
   Partial<Omit<AgentSnapshot, "notification">>;
+
+/**
+ * Browser-side operations on one agent through this app's
+ * `/api/agent/{agentId}/{operation}` proxy (see its route handler). A subset of
+ * the ingress client in `@restate-agents/client`, plus `snapshot`/`sync`,
+ * which batch the reads a page render needs. Rejected calls throw an error
+ * carrying the proxy's HTTP status.
+ */
+export interface AgentClient {
+  /** Loads everything the conversation view renders. */
+  snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot>;
+
+  /**
+   * Waits for notifications newer than `since`, then returns only the parts
+   * that changed, with history from `fromSequence`.
+   */
+  sync(
+    since: AgentNotificationSnapshot,
+    fromSequence: number,
+    options?: {idempotencyKey?: string; signal?: AbortSignal},
+  ): Promise<AgentSnapshotUpdate>;
+
+  /** Starts a turn when the agent is idle, or queues the message. */
+  ask(message?: string): Promise<AskResult>;
+
+  /** Redirects the active turn. @returns false when no turn is listening. */
+  steer(message: string): Promise<boolean>;
+
+  /** Stops the active turn, optionally queueing a replacement message. */
+  interrupt(reason: string, message?: string): Promise<boolean>;
+
+  profile(): Promise<AgentProfile>;
+  setInstructions(instructions: string | null): Promise<void>;
+  setGuardrails(guardrails: Guardrail[]): Promise<void>;
+  setWebSearchEnabled(enabled: boolean): Promise<void>;
+  setTools(tools: AgentTools): Promise<void>;
+  toolCatalog(): Promise<ToolCatalog>;
+
+  /** @returns whether the memory existed. */
+  deleteMemory(key: string): Promise<boolean>;
+
+  cancelSchedule(scheduleId: string): Promise<ScheduleCancellationResult>;
+
+  /** @returns false when the request or its turn is no longer eligible. */
+  resolveApproval(resolution: ApprovalResolution): Promise<boolean>;
+}
+
 type RequestOptions = {
   body?: unknown;
   idempotencyKey?: string;
@@ -70,7 +117,7 @@ async function request<T>(path: string, options: RequestOptions = {}) {
   return result as T;
 }
 
-export function createAgentClient(agentId: string) {
+export function createAgentClient(agentId: string): AgentClient {
   const base = `/api/agent/${encodeURIComponent(agentId)}`;
   const read = <T>(operation: string, parameters?: URLSearchParams) =>
     request<T>(`${base}/${operation}${parameters ? `?${parameters}` : ""}`);
@@ -118,17 +165,15 @@ export function createAgentClient(agentId: string) {
     async setTools(tools: AgentTools): Promise<void> {
       await write("tools", tools);
     },
-    async toolCatalog(): Promise<{
-      builtin: ToolDescriptor[];
-      dynamic: ToolDescriptor[];
-      mcp: McpServer[];
-    }> {
+    async toolCatalog(): Promise<ToolCatalog> {
       return read("tool-catalog");
     },
     async deleteMemory(key: string): Promise<boolean> {
       return write("delete-memory", {key});
     },
-    async cancelSchedule(scheduleId: string): Promise<unknown> {
+    async cancelSchedule(
+      scheduleId: string,
+    ): Promise<ScheduleCancellationResult> {
       return write("cancel-schedule", {scheduleId});
     },
     async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
@@ -136,5 +181,3 @@ export function createAgentClient(agentId: string) {
     },
   };
 }
-
-export type AgentClient = ReturnType<typeof createAgentClient>;

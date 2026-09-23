@@ -101,6 +101,14 @@ export const ToolDescriptorSchema = z.object({
   description: z.string(),
 });
 export type ToolDescriptor = z.infer<typeof ToolDescriptorSchema>;
+
+/** Every tool an agent could be granted: built-ins, discovered Restate handlers and configured MCP servers. */
+export const ToolCatalogSchema = z.object({
+  builtin: z.array(ToolDescriptorSchema),
+  dynamic: z.array(ToolDescriptorSchema),
+  mcp: z.array(McpServerSchema),
+});
+export type ToolCatalog = z.infer<typeof ToolCatalogSchema>;
 export const MemoryEntrySchema = z.object({
   key: z.string().trim().min(1),
   content: z.string().trim().min(1),
