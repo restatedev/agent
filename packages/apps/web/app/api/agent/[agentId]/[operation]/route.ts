@@ -13,11 +13,11 @@ import {
   syncAgentSnapshot,
 } from "../../../../../src/server/agent-snapshot";
 import {
-  agentClient,
-  errorResponse,
   requireSameOrigin,
+  trustedOrigin,
   UiRequestError,
-} from "../../../../../src/server/restate";
+} from "../../../../../src/server/request-guard";
+import {agentClient, errorResponse} from "../../../../../src/server/restate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -57,6 +57,8 @@ async function input<T>(request: Request): Promise<T> {
 
 export async function GET(request: Request, context: RouteContext) {
   try {
+    // Reads expose transcripts, memories and approvals; see trustedOrigin.
+    trustedOrigin(request);
     const {agentId, operation} = await context.params;
     const client = agentClient(agentId);
     const {searchParams} = new URL(request.url);

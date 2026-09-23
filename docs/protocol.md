@@ -126,6 +126,7 @@ The client also exposes profile setters, approvals, metadata, children, memory
 deletion, schedules and retirement. It maps empty-body handlers explicitly.
 
 The Next.js server exposes a limited `/api/agent/{agentId}/{operation}` adapter
-and same-origin writes. Restate credentials, if configured for connectivity,
+that accepts only a loopback Host (or the `APP_PUBLIC_URL` origin) and
+same-origin writes. Restate credentials, if configured for connectivity,
 stay in its server process. There are no login cookies or account ownership
 proofs. Keep both ingress and this local operator UI private.

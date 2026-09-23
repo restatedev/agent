@@ -5,6 +5,7 @@ import {
   createAgentClient,
   IngressClientError,
 } from "@restate-agents/client";
+import {UiRequestError} from "./request-guard";
 
 const DEFAULT_INGRESS_URL = "http://localhost:8080";
 
@@ -29,16 +30,6 @@ function requireAgentId(agentId: string) {
     throw new UiRequestError(400, "Agent ID must not exceed 256 characters");
   }
   return normalized;
-}
-
-export class UiRequestError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "UiRequestError";
-  }
 }
 
 export function agentClient(agentId: string) {
@@ -71,20 +62,4 @@ export function errorResponse(error: unknown) {
   // Unknown provider/SDK errors may carry request headers or token material.
   console.error("Unexpected UI proxy request failure");
   return Response.json({message: "Unexpected UI proxy error"}, {status: 500});
-}
-
-/** The UI is a local operator tool. Reject cross-origin browser writes. */
-export function requireSameOrigin(request: Request) {
-  const expected = new URL(process.env.APP_PUBLIC_URL ?? request.url);
-  // Next.js can reconstruct request.url with localhost even when the browser
-  // uses 127.0.0.1. Host retains the address the browser actually requested.
-  if (!process.env.APP_PUBLIC_URL) {
-    expected.host = request.headers.get("host") ?? expected.host;
-    // The default UI is local. Do not let an arbitrary Host header redefine
-    // the trusted origin when a domain is pointed at the loopback listener.
-    if (!["localhost", "127.0.0.1", "[::1]"].includes(expected.hostname))
-      throw new UiRequestError(403, "Untrusted local UI host");
-  }
-  if (request.headers.get("origin") !== expected.origin)
-    throw new UiRequestError(403, "Cross-origin action rejected");
 }
