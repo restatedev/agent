@@ -61,16 +61,12 @@
   box-sizing: border-box;
 }
 
-
-
 .agent-tool-list {display:grid;gap:4px;}
 .agent-tool-toggle {display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px;font-size:13px;}
 .agent-tool-toggle>span {min-width:0;overflow-wrap:anywhere;}
-.agent-tool-connect {display:inline-block;font-size:12px;color:var(--primary-bright);margin:0 0 8px;}
 .agent-tool-group {margin-top:14px;border-top:1px solid var(--border);padding-top:12px;}
 .agent-tool-group summary {font-size:13px;cursor:pointer;font-weight:600;}
 .agent-tool-group .agent-tool-list {margin-top:8px;max-height:280px;overflow:auto;}
-
 
 html,
 body,
@@ -220,38 +216,6 @@ svg {
   letter-spacing: 0.02em;
 }
 
-.connection-form {
-  display: flex;
-  max-width: 620px;
-  flex: 1;
-  align-items: end;
-  gap: 8px;
-}
-
-.connection-form label {
-  display: flex;
-  min-width: 0;
-  flex: 2;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.connection-form label > span {
-  color: var(--text-faint);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.connection-form input {
-  height: 32px;
-  border-radius: 7px;
-  padding: 5px 8px;
-  font-family: var(--mono);
-  font-size: 11px;
-}
-
 .topbar-actions {
   display: flex;
   margin-left: auto;
@@ -335,13 +299,6 @@ svg {
 
 .button.ghost {
   color: var(--text-muted);
-}
-
-.button.compact {
-  min-height: 32px;
-  border-radius: 7px;
-  padding: 5px 9px;
-  font-size: 12px;
 }
 
 .button.small {
@@ -1406,8 +1363,6 @@ svg {
   font-size: 11px;
 }
 
-
-
 .card-actions {
   display: flex;
   gap: 7px;
@@ -1654,11 +1609,6 @@ svg {
 
   .brand > div:last-child {
     display: flex;
-  }
-
-  .connection-form {
-    min-width: calc(100% - 60px);
-    order: 3;
   }
 
   .topbar-actions {
