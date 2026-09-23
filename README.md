@@ -120,9 +120,9 @@ signals addressed to its invocation ID, so they cannot land in the wrong turn.
 - **Concurrency has an owner.** Parallel tools are spawned and joined inside
   the turn, and completion order is journaled, so even promise races in
   generated programs replay deterministically.
-- **Ordinary code.** Most tools are plain functions inside the turn. Only
-  independent components (sandbox, scheduler) are services, and model calls are
-  journaled runs inside the turn.
+- **Ordinary code.** Tools, the sandbox lifecycle and model calls are plain
+  code and journaled runs inside the turn. There are only two services, both
+  keyed by agent ID: Agent and AgentSession.
 
 Replay does not make external side effects exactly-once: a crash between an
 MCP call completing and its result being recorded can repeat that call.
@@ -139,7 +139,7 @@ MCP call completing and its result being recorded can repeat that call.
 | Schedules | "Remind me in 2 minutes to check the weather" | `agent/schedules.ts` |
 | Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `ptc/runtime.ts` |
 | Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/tool-search.ts` |
-| Sandbox | Ask it to write and run a script | `sandbox/service.ts` |
+| Sandbox | Ask it to write and run a script | `sandbox/turn.ts` |
 | Compaction | Long conversations are summarized without rewriting the log | `session/history.ts`, `model/compactor.ts` |
 
 Paths are relative to `packages/libs/core/src`.

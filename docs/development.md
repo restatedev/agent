@@ -145,7 +145,7 @@ runtime trace.
 
 ### Useful correlations
 
-- `agentId` is the shared Agent, AgentSession, and Sandbox Virtual Object key.
+- `agentId` is the shared Agent and AgentSession Virtual Object key.
 - `turnId` is the `AgentSession/doTurn` invocation ID.
 - `toolCallId` is the stable pending-operation ID.
 - `approvalId` is the tool call or guardrail approval signal identity.
@@ -289,7 +289,7 @@ When changing a request or schema:
 | Change dynamic discovery | `src/session/dynamic-tools.ts` |
 | Change provider inference | `src/model/provider.ts` |
 | Change model retries/output recovery | `src/model/inference.ts` |
-| Change sandbox lifecycle | `src/sandbox/service.ts` |
+| Change sandbox lifecycle | `src/sandbox/turn.ts` |
 | Add a sandbox provider | `src/sandbox/provider.ts` and an adapter module |
 | Change public wire/domain schemas | `packages/libs/types/src/index.ts` |
 | Change Agent handler contracts | `packages/libs/types/src/services.ts` |

@@ -32,12 +32,12 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 - `session/program-tool.ts` adapts PTC child calls to that same dispatcher and
   policy gate. `ptc/runtime.ts` supervises their execution inline in `doTurn`;
   `ptc/guest.ts` owns the bounded QuickJS/WebAssembly guest.
-- `Sandbox`, keyed by `agentId`, owns external workspace state across turns.
-  One turn borrows lazily and releases on every handled exit.
+- `sandbox/turn.ts` owns the sandbox lifecycle. The ref lives in AgentSession
+  state; one turn acquires it lazily and suspends it on every handled exit.
 
 Built-in tool mechanics execute inside `doTurn`; they are not services merely
 for durability. Tools call Agent for Agent-owned state (including
-schedules), Sandbox for serialized resource lifecycle, and independently
+schedules) and independently
 deployed dynamic handlers as ordinary durable RPCs.
 
 ## Execution shape
@@ -45,8 +45,8 @@ deployed dynamic handlers as ordinary durable RPCs.
 - `doTurn` runs the state-machine loop directly. Each loop iteration spawns one
   `agentStep` and settles it against the durable interrupt signal.
 - Invocation cancellation rejects a parked operation at the handler boundary.
-  The catch path records local cancellation state, one-way releases the
-  sandbox, one-way reconciles Agent, and rethrows `CancelledError`.
+  The catch path records local cancellation state, suspends the sandbox,
+  one-way reconciles Agent, and rethrows `CancelledError`.
 - Graceful interruption and step-limit exhaustion share one guarded, tool-free
   finalization path over completed work.
 - The steering receiver runs alongside a step. Steering is drained only at
@@ -153,7 +153,7 @@ write history.
   results.
 - Sandbox file and command calls are one-shot foreground operations, each
   inside its own `restate.run` with cancellation propagation.
-- Parallel sandbox calls share one in-flight borrow; dependent operations must
+- Parallel sandbox calls share one in-flight acquisition; dependent operations must
   either be proposed in separate loop iterations or awaited in order inside a
   PTC program.
 - `manageMemory` atomically updates this Agent's collection (at most 32 entries).
@@ -195,7 +195,7 @@ Interrupting the turn aborts an in-flight attempt through the run's signal.
 
 An exhausted recovery ends the Turn as failed; it does not enter the generic
 "try again" loop or ask for yet another summary. The existing failure cleanup
-stops pending work, releases the sandbox and records the failure in history.
+stops pending work, suspends the sandbox and records the failure in history.
 Other model errors are limited to three consecutive unusable responses.
 Completed tools remain in history; recovered proposals still pass the normal
 guardrail/approval pipeline. Interruption/step-limit summaries use the same

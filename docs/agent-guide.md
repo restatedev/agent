@@ -30,8 +30,7 @@ Use executable contracts before prose:
 1. Public Zod schemas in `packages/libs/types/src/index.ts`, shared Restate
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
    internal handlers, and `src/model/provider.ts`;
-2. handler code in `src/agent/service.ts`, `src/session/service.ts`,
-   and `src/sandbox/service.ts`;
+2. handler code in `src/agent/service.ts` and `src/session/service.ts`;
 3. focused ownership modules;
 4. docs.
 
@@ -61,7 +60,7 @@ Preserve these unless the requested change explicitly replaces them:
    operations. It is consumed after the current step settles.
 6. Interruption ends the turn gracefully: stop and join unfinished work,
    retain completed results, and perform one tool-free finalization call.
-7. External invocation cancellation reconciles Sandbox and Agent ownership,
+7. External invocation cancellation suspends the sandbox and reconciles Agent,
    then rethrows `CancelledError`; it does not pretend to be a graceful model
    finalization.
 8. Foreground tools in one model response are spawned together and joined.
@@ -79,8 +78,9 @@ Preserve these unless the requested change explicitly replaces them:
 14. Built-in tools execute inside `AgentSession.doTurn`; do not turn them into service RPCs
     merely to make them durable. Use Restate operations and `restate.run`
     inside the handler.
-15. `Sandbox` belongs to the Agent across turns. A turn only borrows one lazy
-    lease and always releases it at its terminal boundary.
+15. The sandbox's files persist across turns; its compute does not. A turn
+    acquires it lazily on first use and always suspends it at its terminal
+    boundary. The ref lives in AgentSession state; there is no sandbox service.
 16. A discovered Restate handler is a foreground dynamic tool. The catalog
     snapshot used for model inference is the same snapshot used for execution.
 17. A configured MCP endpoint contributes foreground tools through its
@@ -173,7 +173,7 @@ The detailed turn-runtime list lives in
 | MCP tool discovery and invocation | `session/mcp-tools.ts` |
 | AI SDK provider behavior and model contracts | `model/provider.ts` |
 | Journaled model calls, retries, output recovery | `model/inference.ts` |
-| Agent sandbox lifecycle | `sandbox/service.ts` |
+| Turn-owned sandbox lifecycle | `sandbox/turn.ts` |
 | Provider contract and provider selection | `sandbox/provider.ts` |
 | Local filesystem demo adapter | `sandbox/local-provider.ts` |
 | Modal-specific compute/storage | `sandbox/modal-provider.ts` |
@@ -225,7 +225,8 @@ own relevance policy.
 
 ### New sandbox provider
 
-Implement `SandboxProvider` without moving lifecycle state out of `Sandbox`.
+Implement `SandboxProvider` without moving lifecycle into the adapter;
+`sandbox/turn.ts` decides when to provision, resume, suspend and destroy.
 Provider calls and client methods are external effects and must run under
 `restate.run` with bounded, idempotent behavior. Read [sandboxes.md](sandboxes.md).
 

@@ -20,7 +20,10 @@ import type {
   ChildAgent,
   ConversationEntry,
 } from "@restate-agents/types";
-import {AgentDefinition} from "@restate-agents/types/services";
+import {
+  AgentDefinition,
+  AgentSessionDefinition,
+} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
@@ -35,7 +38,6 @@ import {
   interactionRetention,
   noRetention,
 } from "../retention.js";
-import {Sandbox} from "../sandbox/index.js";
 import {discoverAgentTools} from "../session/dynamic-tools.js";
 import {configuredMcpServers, resolveMcpGrants} from "../session/mcp-config.js";
 import {dynamicToolId, selected} from "../session/tool-permissions.js";
@@ -296,8 +298,6 @@ export const Agent = restate.implement(AgentDefinition, {
       // `metadata` stays so a repeated retire still sees its parent, and
       // `turn` stays until the interrupted invocation reports to onTurnEnd.
       profile.clear();
-      // Do not wait for sandbox cleanup while holding Agent's lock: the active
-      // turn may need this controller.
       for (const child of yield* readChildren()) {
         yield* restate
           .sendClient(AgentDefinition, child.agentId)
@@ -306,7 +306,9 @@ export const Agent = restate.implement(AgentDefinition, {
       restate.state().clear("children");
       if (yield* schedules.clearAll())
         yield* notifications.publish("schedules");
-      yield* restate.sendClient(Sandbox, agentKey()).retire();
+      // One-way: AgentSession.retire queues behind the interrupted turn, which
+      // still needs this controller's lock to report its outcome.
+      yield* restate.sendClient(AgentSessionDefinition, agentKey()).retire();
       yield* notifications.publish("profile");
     },
     *metadata() {

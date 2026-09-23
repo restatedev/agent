@@ -31,10 +31,9 @@ import {approvalSignalName} from "../internal-types.js";
 import type {ToolCall, ToolManifest} from "../model/index.js";
 import {PROGRAM_TOOL_NAME, programToolManifest} from "../ptc/definition.js";
 import {
-  Sandbox,
+  openTurnSandbox,
   type SandboxClient,
-  type SandboxRef,
-  sandboxProvider,
+  type TurnSandbox,
 } from "../sandbox/index.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import type {TurnHistory} from "./history.js";
@@ -81,9 +80,7 @@ export type AgentToolContext = {
   webSearchEnabled: boolean;
   permissions: AgentTools;
   toolSearch?: TurnToolSearch;
-  sandbox: {
-    client(): restate.Operation<SandboxClient>;
-  };
+  sandbox: TurnSandbox;
 };
 
 /** Step-owned policy and lifecycle hooks used by PTC's concrete child calls. */
@@ -114,8 +111,8 @@ type AgentTool = {
 };
 
 /**
- * Creates the tool context and lazily borrows the Agent-owned sandbox once.
- * Parallel tools share the same in-flight borrow and later steps reuse it.
+ * Creates the tool context. The turn's sandbox is acquired lazily, once, by
+ * the first sandbox tool; parallel tools and later steps reuse it.
  */
 export function createAgentToolContext(
   agentId: string,
@@ -123,20 +120,12 @@ export function createAgentToolContext(
   webSearchEnabled: boolean,
   permissions: AgentTools,
 ): AgentToolContext {
-  let borrow: restate.Future<SandboxRef> | undefined;
-  let ref: SandboxRef | undefined;
   return {
     agentId,
     turnId,
     webSearchEnabled,
     permissions,
-    sandbox: {
-      *client(): restate.Operation<SandboxClient> {
-        borrow ??= restate.client(Sandbox, agentId).borrow({turnId});
-        ref ??= yield* borrow;
-        return sandboxProvider.connect(ref);
-      },
-    },
+    sandbox: openTurnSandbox(agentId),
   };
 }
 
