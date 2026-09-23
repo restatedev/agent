@@ -14,6 +14,17 @@ function subset(requested: ToolSelection, allowed: ToolSelection): boolean {
   );
 }
 
+// A child has no children of its own and no independent scheduled turns.
+const PARENT_ONLY_TOOLS = new Set([
+  "createSubAgent",
+  "messageSubAgent",
+  "listSubAgents",
+  "deleteSubAgent",
+  "createSchedule",
+  "listSchedules",
+  "cancelSchedule",
+]);
+
 /** Copy creation-time configuration, with runtime-enforced attenuation. */
 export function subAgentProfile(
   parent: AgentProfile,
@@ -41,22 +52,14 @@ export function subAgentProfile(
         " Built-in tools such as webSearch belong in builtin; dynamic names are service/handler IDs. Correct the selection, or use tools: null to inherit current access if no narrower restriction is needed.",
       {errorCode: 403},
     );
-  // Children run only on parent delegation: no nesting or scheduled turns.
-  // PTC still sees only these allowed tools.
+  // Remove inapplicable tools from both direct and PTC discovery. The child's
+  // immutable grants should describe what it can actually do.
   tools.builtin = {
     mode: "selected",
     names: (tools.builtin.mode === "all"
       ? [...builtins]
       : tools.builtin.names
-    ).filter(
-      (name) =>
-        ![
-          "createSubAgent",
-          "createSchedule",
-          "cancelSchedule",
-          "listSchedules",
-        ].includes(name),
-    ),
+    ).filter((name) => !PARENT_ONLY_TOOLS.has(name)),
   };
   tools.mcpDefault = "disabled";
   const guardrails = structuredClone(parent.guardrails);

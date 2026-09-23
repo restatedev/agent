@@ -36,6 +36,16 @@ export const AgentScheduler = restate.implement(AgentSchedulerDefinition, {
     *upsert(spec) {
       if (yield* restate.state().get<boolean>("deleted"))
         return {accepted: false as const, error: "Agent has been deleted"};
+      // The scheduler is callable directly, so child restrictions cannot rely
+      // on the model's tool list alone.
+      const agent = yield* restate
+        .client(AgentDefinition, schedulerKey())
+        .metadata();
+      if (agent.parentAgentId)
+        return {
+          accepted: false as const,
+          error: "Sub-agents cannot schedule messages",
+        };
       const existing = yield* getSchedule(spec.scheduleId);
       if (existing) {
         restate.invocation(existing.timerId).cancel();

@@ -69,22 +69,25 @@ test("schedules reject stale timers and deliver into the same agent with the cho
   const f = context("demo", {}, call => {
     assert.equal(call.service, "Agent");
     assert.equal(call.key, "demo");
+    if (call.method === "metadata") return {name: "demo"};
+    assert.equal(call.method, "deliver");
     assert.deepEqual(call.parameter, {source: "schedule", sourceId: "reminder", message: "Check weather", whenBusy: "queue", interruptReason: 'Scheduled message "reminder" became due'});
   });
+  const deliveries = () => f.calls.filter(call => call.method === "deliver");
   const spec = {scheduleId: "reminder", message: "Check weather", delaySeconds: 10, repeatEverySeconds: null, whenBusy: "queue"};
   assert.equal((await f.invoke(AgentScheduler.object.upsert, spec)).accepted, true);
   await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
-  assert.equal(f.calls.length, 0, "a stale invocation must not deliver");
+  assert.equal(deliveries().length, 0, "a stale invocation must not deliver");
   f.state.get("schedules")[0].timerId = "inv-test";
   await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
-  assert.equal(f.calls.length, 1);
+  assert.equal(deliveries().length, 1);
   assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
   await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
-  assert.equal(f.calls.length, 1, "late duplicate timers must not deliver again");
+  assert.equal(deliveries().length, 1, "late duplicate timers must not deliver again");
 });
 
 test("recurring schedules advance durable timers; retirement cancels all and prevents resurrection", async () => {
-  const f = context("demo", {}, () => null);
+  const f = context("demo", {}, call => call.method === "metadata" ? {name: "demo"} : null);
   const spec = {scheduleId: "repeat", message: "Check", delaySeconds: 2, repeatEverySeconds: 60, whenBusy: "queue"};
   await f.invoke(AgentScheduler.object.upsert, spec);
   const firstTimer = f.state.get("schedules")[0].timerId;
@@ -98,5 +101,18 @@ test("recurring schedules advance durable timers; retirement cancels all and pre
   await f.invoke(AgentScheduler.object.retire);
   assert.ok(f.cancelled.includes(next.timerId));
   assert.equal((await f.invoke(AgentScheduler.object.upsert, spec)).accepted, false);
+  assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
+});
+
+test("a directly invoked scheduler refuses child agents before creating a timer", async () => {
+  const f = context("child", {}, call => {
+    assert.equal(call.method, "metadata");
+    return {name: "child", parentAgentId: "parent"};
+  });
+  const spec = {scheduleId: "reminder", message: "Check", delaySeconds: 2, repeatEverySeconds: null, whenBusy: "queue"};
+  const result = await f.invoke(AgentScheduler.object.upsert, spec);
+  assert.equal(result.accepted, false);
+  assert.match(result.error, /Sub-agents cannot schedule/);
+  assert.equal(f.sends.length, 0);
   assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
 });

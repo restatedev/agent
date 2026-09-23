@@ -34,9 +34,7 @@ const McpServerIdSchema = z
   .trim()
   .min(1)
   .max(64)
-  .describe(
-    "A stable identifier for one MCP server. Reusing it replaces the existing server.",
-  );
+  .describe("A unique identifier for one operator-configured MCP server.");
 
 export const McpProtocolSchema = z.enum(["stateless", "stateful"]);
 export type McpProtocol = z.infer<typeof McpProtocolSchema>;

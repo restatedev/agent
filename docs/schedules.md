@@ -27,8 +27,9 @@ not a calendar/cron rule or a catch-up ledger. Exact input bounds live in
 `ScheduleSpecSchema`.
 
 The model tools `createSchedule`, `listSchedules`, and `cancelSchedule` use the
-same registry. The UI lists and cancels schedules. Children cannot create
-schedules: only their parent can initiate their turns.
+same registry. The UI lists and cancels schedules. `upsert` checks Agent
+metadata even for direct operator calls: children cannot create schedules,
+because only their parent can initiate their turns.
 
 ## Routing and lifecycle
 

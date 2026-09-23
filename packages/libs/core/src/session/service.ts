@@ -491,7 +491,7 @@ function mcpAvailabilityMessage(
       }),
       "This is runtime status, not a user request.",
       "A configured-but-unavailable server is still configured. Do not claim it is absent or unconfigured.",
-      "When the user's request needs an unavailable server, explain its exact availability problem and ask them to reconnect or correct its configuration.",
+      "When the user's request needs an unavailable server, explain its exact availability problem and ask them to check the operator's endpoint or credential configuration.",
     ].join("\n"),
   };
 }

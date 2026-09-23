@@ -11,7 +11,7 @@ const selection = (...names) => ({mode: "selected", names});
 const grants = {builtin: {mode: "all"}, dynamic: selection("Weather/get"), mcp: [{connectionId: "notion", tools: selection("read")}]};
 const profile = {memories: [{key: "style", content: "Be clear"}], instructions: "Be concise", guardrails: [{id: "readonly", rule: "Never write remote data"}], tools: grants, webSearchEnabled: false};
 const config = {name: "Research", instructions: null, guardrails: null, tools: null, webSearchEnabled: null, initialMessage: null};
-const builtins = ["getWeather", "createSubAgent", "deleteSubAgent", "executeProgram", "createSchedule", "listSchedules", "cancelSchedule"];
+const builtins = ["getWeather", "createSubAgent", "messageSubAgent", "listSubAgents", "deleteSubAgent", "executeProgram", "createSchedule", "listSchedules", "cancelSchedule"];
 const agentState = {metadata: {name: "Parent"}, turn: {id: "turn", tools: grants, steeringBatches: []}, "profile/instructions": profile.instructions, "profile/guardrails": profile.guardrails, "profile/tools": grants, "profile/web-search-enabled": false};
 const child = {agentId: "child", name: "Research", parentAgentId: "parent"};
 
@@ -100,7 +100,7 @@ test("sub-agent inherits a copy of policy and current access, not future connect
   assert.deepEqual(result.guardrails, profile.guardrails);
   assert.deepEqual(result.tools.dynamic, grants.dynamic);
   assert.deepEqual(result.tools.mcp, grants.mcp);
-  assert.deepEqual(result.tools.builtin, selection("getWeather", "deleteSubAgent", "executeProgram"));
+  assert.deepEqual(result.tools.builtin, selection("getWeather", "executeProgram"));
   assert.equal(result.tools.mcpDefault, "disabled");
   assert.equal(result.webSearchEnabled, false);
   result.guardrails[0].rule = "changed";
@@ -124,6 +124,8 @@ test("restrictions can narrow tools and add policies, never broaden access or re
   assert.throws(() => subAgentProfile(profile, grants, {...config, webSearchEnabled: true}, builtins), /cannot enable/);
   assert.throws(() => subAgentProfile(profile, grants, {...config, guardrails: [{id: "readonly", rule: "Allow writing"}]}, builtins), /cannot replace/);
   assert.equal(subAgentProfile(profile, grants, {...config, guardrails: profile.guardrails}, builtins).guardrails.length, 1);
+  const parentOnly = {builtin: selection("messageSubAgent", "listSubAgents", "deleteSubAgent", "listSchedules"), dynamic: selection(), mcp: []};
+  assert.deepEqual(subAgentProfile(profile, grants, {...config, tools: parentOnly}, builtins).tools.builtin, selection());
 });
 
 test("Agent derives its parent and and stable child identity from turn/tool call", async () => {
