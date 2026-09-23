@@ -1,10 +1,11 @@
 // Agent is the durable conversation controller. It is a Virtual Object keyed
 // by agent id, so its exclusive handlers serialize every decision about the
-// active turn, queued messages, persistent profile, approvals, and child agents.
+// active turn, queued messages, persistent profile, approvals, schedules, and
+// child agents. It also carries the agent's notification watermarks.
 //
 // It never runs turn execution itself. `ask` starts or queues work,
 // `interrupt` and `steer` resolve signals on the active AgentSession
-// invocation, external producers use `deliver` to enter those same routing
+// invocation, external producers and due schedules enter those same routing
 // decisions, and `onTurnEnd` accepts the invocation's high-level outcome.
 
 import {createHash} from "node:crypto";
@@ -12,7 +13,6 @@ import {createHash} from "node:crypto";
 import type {
   AgentDelivery,
   AgentMetadata,
-  AgentNotificationTopic,
   AgentProfile,
   AgentTools,
   ApprovalRequest,
@@ -20,11 +20,7 @@ import type {
   ChildAgent,
   ConversationEntry,
 } from "@restate-agents/types";
-import {
-  AgentDefinition,
-  AgentNotificationsDefinition,
-  AgentSchedulerDefinition,
-} from "@restate-agents/types/services";
+import {AgentDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
@@ -47,7 +43,9 @@ import * as agentTools from "../session/tools.js";
 import * as activeTurn from "./active-turn.js";
 import * as approvals from "./approval.js";
 import * as memory from "./memory.js";
+import * as notifications from "./notifications.js";
 import * as profile from "./profile.js";
+import * as schedules from "./schedules.js";
 import {subAgentProfile} from "./sub-agent.js";
 
 /** Durable per-Agent controller for turns, routing, profile, and user actions. */
@@ -74,38 +72,60 @@ export const Agent = restate.implement(AgentDefinition, {
           profile.setTools(initialProfile.tools);
           profile.setWebSearchEnabled(initialProfile.webSearchEnabled);
         }
-        yield* publishNotification("profile");
+        yield* notifications.publish("profile");
       }
     },
 
     // Model-created schedules outlive their Turn, so authorize them against
-    // the live Turn under this lock, like memory and sub-agent changes. The
-    // scheduler may call the shared `metadata` handler but never an exclusive
-    // Agent handler, so waiting on it here cannot close a lock cycle.
+    // the live Turn under this lock, like memory and sub-agent changes.
     *createSchedule({turnId, ...spec}) {
-      yield* requireNotDeleted();
-      const tools = yield* requireActiveTurnTools(turnId, "Schedule creation");
-      if (!selected(tools.builtin, "createSchedule"))
-        throw new TerminalError("This agent cannot create schedules", {
-          errorCode: 403,
-        });
-      return yield* restate
-        .client(AgentSchedulerDefinition, agentKey())
-        .upsert(spec);
+      yield* requireScheduleAccess(
+        turnId,
+        "createSchedule",
+        "Schedule creation",
+        "This agent cannot create schedules",
+      );
+      if ((yield* readMetadata()).parentAgentId)
+        return {
+          accepted: false as const,
+          error: "Sub-agents cannot schedule messages",
+        };
+      const result = yield* schedules.upsert(agentKey(), spec);
+      if (result.accepted) yield* notifications.publish("schedules");
+      return result;
     },
     *cancelSchedule({turnId, scheduleId}) {
-      yield* requireNotDeleted();
-      const tools = yield* requireActiveTurnTools(
+      yield* requireScheduleAccess(
         turnId,
+        "cancelSchedule",
         "Schedule cancellation",
+        "This agent cannot cancel schedules",
       );
-      if (!selected(tools.builtin, "cancelSchedule"))
-        throw new TerminalError("This agent cannot cancel schedules", {
-          errorCode: 403,
-        });
-      return yield* restate
-        .client(AgentSchedulerDefinition, agentKey())
-        .cancel({scheduleId});
+      const cancelled = yield* schedules.cancel(scheduleId);
+      if (cancelled) yield* notifications.publish("schedules");
+      return {accepted: true as const, cancelled};
+    },
+    *schedules() {
+      return yield* schedules.list();
+    },
+    /**
+     * A schedule's delayed timer. A stale or duplicate firing is ignored; a
+     * due schedule advances first, then routes like any external delivery.
+     */
+    *fire({scheduleId}) {
+      if (yield* restate.state().get<boolean>("deleted")) return;
+      const schedule = yield* schedules.advance(agentKey(), scheduleId);
+      if (!schedule) return;
+      yield* notifications.publish("schedules");
+      yield* route({
+        source: "schedule",
+        sourceId: schedule.scheduleId,
+        message: schedule.message,
+        whenBusy: schedule.whenBusy,
+        interruptReason: `Scheduled message "${schedule.scheduleId}" became due`,
+        // Skip a run while the previous one is still queued or running.
+        coalesce: true,
+      });
     },
     *createSubAgent({turnId, toolCallId, ...config}) {
       yield* requireNotDeleted();
@@ -135,7 +155,7 @@ export const Agent = restate.implement(AgentDefinition, {
         profile: inherited,
       });
       restate.state().set("children", [...children, child]);
-      yield* publishNotification("profile");
+      yield* notifications.publish("profile");
       return child;
     },
     *startSubAgentTask({turnId, toolCallId, agentId, message, source}) {
@@ -244,7 +264,7 @@ export const Agent = restate.implement(AgentDefinition, {
       yield* restate
         .sendClient(AgentDefinition, agentId)
         .retire({parentAgentId: agentKey()});
-      yield* publishNotification("profile");
+      yield* notifications.publish("profile");
       return true;
     },
     *listSubAgents({turnId}) {
@@ -269,7 +289,8 @@ export const Agent = restate.implement(AgentDefinition, {
       restate.state().clear("sub-agent-tasks");
       const current = yield* activeTurn.current();
       if (current) yield* activeTurn.interrupt("Agent deleted");
-      if (yield* approvals.clearAll()) yield* publishNotification("approvals");
+      if (yield* approvals.clearAll())
+        yield* notifications.publish("approvals");
       // `profile` is shared and has no deleted check; clearing is what keeps a
       // retired agent's memories and instructions from staying readable.
       // `metadata` stays so a repeated retire still sees its parent, and
@@ -283,9 +304,10 @@ export const Agent = restate.implement(AgentDefinition, {
           .retire({parentAgentId: agentKey()});
       }
       restate.state().clear("children");
-      yield* restate.sendClient(AgentSchedulerDefinition, agentKey()).retire();
+      if (yield* schedules.clearAll())
+        yield* notifications.publish("schedules");
       yield* restate.sendClient(Sandbox, agentKey()).retire();
-      yield* publishNotification("profile");
+      yield* notifications.publish("profile");
     },
     *metadata() {
       return yield* readMetadata();
@@ -299,7 +321,7 @@ export const Agent = restate.implement(AgentDefinition, {
       const present = (yield* memory.read()).some((entry) => entry.key === key);
       if (present) {
         yield* memory.apply([{operation: "delete", key}]);
-        yield* publishNotification("profile");
+        yield* notifications.publish("profile");
       }
       return present;
     },
@@ -307,7 +329,7 @@ export const Agent = restate.implement(AgentDefinition, {
       yield* requireNotDeleted();
       yield* requireTopLevelConversation();
       profile.setTools(tools);
-      yield* publishNotification("profile");
+      yield* notifications.publish("profile");
     },
     *toolCatalog() {
       const dynamic = yield* discoverAgentTools(agentTools.names);
@@ -420,70 +442,11 @@ export const Agent = restate.implement(AgentDefinition, {
       return yield* activeTurn.steer(message);
     },
 
-    /**
-     * Routes a message delivered by an external producer.
-     *
-     * Idle Agents start a Turn. Busy Agents apply the producer's queue,
-     * steer, or interrupt policy using the same active-turn primitives as
-     * direct user interaction.
-     */
+    /** Routes a message delivered by an external producer. */
     *deliver(delivery): restate.Operation<void> {
       if (yield* restate.state().get<boolean>("deleted")) return;
       yield* requireTopLevelConversation();
-      const current = yield* activeTurn.current();
-      // Coalescing producers never stack: a recurring schedule firing faster
-      // than the agent works would otherwise grow `pending` without bound
-      // (queue) or interrupt every successor turn it caused (interrupt).
-      if (
-        current &&
-        delivery.coalesce &&
-        delivery.sourceId &&
-        (yield* activeTurn.hasDelivery(delivery.source, delivery.sourceId))
-      )
-        return;
-      if (!current) {
-        yield* startTurn(agentKey(), [
-          deliveryEvent(delivery, "start"),
-          {role: "user", text: delivery.message, delivery: "turn"},
-        ]);
-        return;
-      }
-
-      if (
-        current.interruptReason !== undefined ||
-        delivery.whenBusy === "queue"
-      ) {
-        yield* activeTurn.enqueue(
-          deliveryEvent(delivery, "queue", current.id),
-          {
-            role: "user",
-            text: delivery.message,
-            delivery: "queued",
-          },
-        );
-        return;
-      }
-
-      if (delivery.whenBusy === "steer") {
-        yield* activeTurn.steer(
-          delivery.message,
-          deliveryEvent(delivery, "steer", current.id),
-        );
-        return;
-      }
-
-      yield* activeTurn.enqueue(
-        deliveryEvent(delivery, "interrupt", current.id),
-        {
-          role: "user",
-          text: delivery.message,
-          delivery: "queued",
-        },
-      );
-      yield* activeTurn.interrupt(
-        delivery.interruptReason ??
-          `${delivery.source} delivered a message that requested interruption`,
-      );
+      yield* route(delivery);
     },
 
     /**
@@ -504,7 +467,7 @@ export const Agent = restate.implement(AgentDefinition, {
       yield* requireNotDeleted();
       yield* requireTopLevelConversation();
       profile.setInstructions(instructions);
-      yield* publishNotification("profile");
+      yield* notifications.publish("profile");
     },
 
     /**
@@ -517,7 +480,7 @@ export const Agent = restate.implement(AgentDefinition, {
       yield* requireNotDeleted();
       yield* requireTopLevelConversation();
       profile.setGuardrails(guardrails);
-      yield* publishNotification("profile");
+      yield* notifications.publish("profile");
     },
 
     /** Enables or disables built-in web search for subsequent turns. */
@@ -525,7 +488,7 @@ export const Agent = restate.implement(AgentDefinition, {
       yield* requireNotDeleted();
       yield* requireTopLevelConversation();
       profile.setWebSearchEnabled(enabled);
-      yield* publishNotification("profile");
+      yield* notifications.publish("profile");
     },
 
     /**
@@ -546,7 +509,7 @@ export const Agent = restate.implement(AgentDefinition, {
       }
 
       const result = yield* memory.apply(changes);
-      if (result.applied) yield* publishNotification("profile");
+      if (result.applied) yield* notifications.publish("profile");
       return result;
     },
 
@@ -571,7 +534,7 @@ export const Agent = restate.implement(AgentDefinition, {
         return false;
       }
       if (registration === "added") {
-        yield* publishNotification("approvals");
+        yield* notifications.publish("approvals");
       }
       return true;
     },
@@ -582,7 +545,7 @@ export const Agent = restate.implement(AgentDefinition, {
      */
     *cancelApproval(request): restate.Operation<void> {
       if (yield* approvals.cancel(request)) {
-        yield* publishNotification("approvals");
+        yield* notifications.publish("approvals");
       }
     },
 
@@ -610,7 +573,7 @@ export const Agent = restate.implement(AgentDefinition, {
       if (!request) {
         return false;
       }
-      yield* publishNotification("approvals");
+      yield* notifications.publish("approvals");
       return true;
     },
 
@@ -633,7 +596,7 @@ export const Agent = restate.implement(AgentDefinition, {
         finished.outcome.turnId,
       );
       if (cancelledApprovals.length > 0) {
-        yield* publishNotification("approvals");
+        yield* notifications.publish("approvals");
       }
       const queuedMessages = finished.queuedEntries.filter(
         ({role}) => role === "user",
@@ -666,6 +629,27 @@ export const Agent = restate.implement(AgentDefinition, {
       }
       return finished.outcome;
     },
+
+    /** Advances a topic published by another owner (AgentSession history). */
+    *publish(topic): restate.Operation<void> {
+      yield* notifications.publish(topic);
+    },
+    *notifications() {
+      return yield* notifications.read();
+    },
+    *watch({afterRevision, timeoutSeconds}) {
+      return yield* notifications.watch(
+        agentKey(),
+        afterRevision,
+        timeoutSeconds,
+      );
+    },
+    *subscribe(subscription) {
+      return yield* notifications.subscribe(subscription);
+    },
+    *unsubscribe({awakeableId}): restate.Operation<void> {
+      yield* notifications.unsubscribe(awakeableId);
+    },
   },
   options: {
     enableLazyState: true,
@@ -673,6 +657,17 @@ export const Agent = restate.implement(AgentDefinition, {
       initialize: coordinationRetention,
       createSchedule: coordinationRetention,
       cancelSchedule: coordinationRetention,
+      schedules: {shared: true, ...noRetention},
+      fire: coordinationRetention,
+      publish: coordinationRetention,
+      notifications: {shared: true, ...coordinationRetention},
+      watch: {
+        shared: true,
+        inactivityTimeout: {seconds: 1},
+        ...coordinationRetention,
+      },
+      subscribe: coordinationRetention,
+      unsubscribe: coordinationRetention,
       createSubAgent: coordinationRetention,
       startSubAgentTask: coordinationRetention,
       startDelegatedTurn: coordinationRetention,
@@ -704,6 +699,57 @@ export const Agent = restate.implement(AgentDefinition, {
   },
 });
 
+// Idle Agents start a Turn. Busy Agents apply the producer's queue, steer, or
+// interrupt policy using the same active-turn primitives as direct user
+// interaction.
+function* route(delivery: AgentDelivery): restate.Operation<void> {
+  const current = yield* activeTurn.current();
+  // Coalescing producers never stack: a recurring schedule firing faster
+  // than the agent works would otherwise grow `pending` without bound
+  // (queue) or interrupt every successor turn it caused (interrupt).
+  if (
+    current &&
+    delivery.coalesce &&
+    delivery.sourceId &&
+    (yield* activeTurn.hasDelivery(delivery.source, delivery.sourceId))
+  )
+    return;
+  if (!current) {
+    yield* startTurn(agentKey(), [
+      deliveryEvent(delivery, "start"),
+      {role: "user", text: delivery.message, delivery: "turn"},
+    ]);
+    return;
+  }
+
+  if (current.interruptReason !== undefined || delivery.whenBusy === "queue") {
+    yield* activeTurn.enqueue(deliveryEvent(delivery, "queue", current.id), {
+      role: "user",
+      text: delivery.message,
+      delivery: "queued",
+    });
+    return;
+  }
+
+  if (delivery.whenBusy === "steer") {
+    yield* activeTurn.steer(
+      delivery.message,
+      deliveryEvent(delivery, "steer", current.id),
+    );
+    return;
+  }
+
+  yield* activeTurn.enqueue(deliveryEvent(delivery, "interrupt", current.id), {
+    role: "user",
+    text: delivery.message,
+    delivery: "queued",
+  });
+  yield* activeTurn.interrupt(
+    delivery.interruptReason ??
+      `${delivery.source} delivered a message that requested interruption`,
+  );
+}
+
 function* requireNotDeleted(): restate.Operation<void> {
   if (yield* restate.state().get<boolean>("deleted"))
     throw new TerminalError("Agent has been deleted", {errorCode: 410});
@@ -722,6 +768,21 @@ function* requireActiveTurnTools(
       {errorCode: 409},
     );
   return current.tools;
+}
+
+// Turn callers are checked against the live turn's grants; direct callers
+// (ingress, the UI) omit the turn ID.
+function* requireScheduleAccess(
+  turnId: string | undefined,
+  tool: "createSchedule" | "cancelSchedule",
+  action: string,
+  denied: string,
+): restate.Operation<void> {
+  yield* requireNotDeleted();
+  if (turnId === undefined) return;
+  const tools = yield* requireActiveTurnTools(turnId, action);
+  if (!selected(tools.builtin, tool))
+    throw new TerminalError(denied, {errorCode: 403});
 }
 
 // A retried creation call names the same child; delegation can only start
@@ -816,14 +877,6 @@ function* startTurn(
     ),
     entries: [...parked, ...entries],
   });
-}
-
-function* publishNotification(
-  topic: AgentNotificationTopic,
-): restate.Operation<void> {
-  yield* restate
-    .sendClient(AgentNotificationsDefinition, agentKey())
-    .publish(topic);
 }
 
 function deliveryEvent(

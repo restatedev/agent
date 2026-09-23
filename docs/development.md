@@ -145,8 +145,7 @@ runtime trace.
 
 ### Useful correlations
 
-- `agentId` is the shared Agent, AgentSession, AgentNotifications,
-  AgentScheduler, and Sandbox Virtual Object key.
+- `agentId` is the shared Agent, AgentSession, and Sandbox Virtual Object key.
 - `turnId` is the `AgentSession/doTurn` invocation ID.
 - `toolCallId` is the stable pending-operation ID.
 - `approvalId` is the tool call or guardrail approval signal identity.
@@ -279,11 +278,11 @@ When changing a request or schema:
 | Change Agent API or controller routing | `src/agent/service.ts` |
 | Change active-turn bookkeeping/signals | `src/agent/active-turn.ts` |
 | Change transcript storage | `src/session/history.ts` |
-| Change invalidation subscriptions | `src/notifications/service.ts` |
+| Change invalidation subscriptions | `src/agent/notifications.ts` |
 | Change instructions/guardrails | `src/agent/profile.ts` |
 | Change agent-local memories | `src/agent/memory.ts` |
 | Change approvals | `src/agent/approval.ts` |
-| Change schedules and timer delivery | `src/scheduler/service.ts` |
+| Change schedules and timer delivery | `src/agent/schedules.ts` |
 | Change the turn state machine | `src/session/service.ts` |
 | Change one inference/tool step | `src/session/step.ts` |
 | Add a built-in tool | `src/session/tools.ts` |

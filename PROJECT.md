@@ -29,17 +29,15 @@ Paths below are relative to `packages/libs/core/src`.
    implement external catalogs and calls. `mcp-config.ts` resolves operator
    configuration and credential references.
 6. `session/history.ts` owns append-only storage and compaction checkpoints.
-   `notifications/service.ts` supplies change watermarks to consumers.
-7. `agent/profile.ts`, `agent/memory.ts`, and `agent/approval.ts` own responsive
-   agent-local state. `agent/sub-agent.ts` attenuates child configuration;
+   `agent/notifications.ts` supplies change watermarks to consumers.
+7. `agent/profile.ts`, `agent/memory.ts`, `agent/approval.ts`, and
+   `agent/schedules.ts` own responsive agent-local state. `agent/sub-agent.ts` attenuates child configuration;
    delegation coordination stays in `agent/service.ts`.
-8. `scheduler/service.ts` owns per-agent timers. `sandbox/service.ts` owns
-   resource lifecycle. `model/inference.ts` makes the journaled model
+8. `sandbox/service.ts` owns resource lifecycle. `model/inference.ts` makes the journaled model
    calls and `model/provider.ts` owns provider behavior.
 9. `ptc/runtime.ts` and `ptc/guest.ts` implement replay-safe programmatic tools.
 
-`Agent`, `AgentSession`, `AgentNotifications`, `AgentScheduler`, and `Sandbox`
-share the agent ID as their key. There is no account object or browser-session
+`Agent`, `AgentSession`, and `Sandbox` share the agent ID as their key. There is no account object or browser-session
 service. Child metadata names its parent; the parent stores its child list.
 
 ## UI path

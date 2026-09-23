@@ -21,7 +21,6 @@ import {
   SubAgentConfigSchema,
   ToolSelectionSchema,
 } from "@restate-agents/types";
-import {AgentSchedulerDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
@@ -1017,9 +1016,7 @@ const listSchedulesTool = defineAgentTool({
     "List the Agent's active scheduled messages, including their next delivery time, recurrence, and busy-turn policy.",
   inputSchema: z.object({}),
   *run(_input, context): restate.Operation<ToolExecution> {
-    const active = yield* restate
-      .client(AgentSchedulerDefinition, context.agentId)
-      .list();
+    const active = yield* restate.client(Agent, context.agentId).schedules();
     return {
       status: "succeeded",
       result: JSON.stringify(

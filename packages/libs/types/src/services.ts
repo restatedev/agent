@@ -44,12 +44,7 @@ import {
   SubAgentConfigSchema,
   ToolCatalogSchema,
 } from "./index.js";
-import {
-  AGENT_NOTIFICATIONS_SERVICE_NAME,
-  AGENT_SCHEDULER_SERVICE_NAME,
-  AGENT_SERVICE_NAME,
-  AGENT_SESSION_SERVICE_NAME,
-} from "./targets.js";
+import {AGENT_SERVICE_NAME, AGENT_SESSION_SERVICE_NAME} from "./targets.js";
 
 /** Restate contract implemented by core and consumed by external clients. */
 export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
@@ -78,13 +73,42 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     input: AgentInitializationSchema,
     output: z.void(),
   }),
+  // A turn passes its ID and is checked against its live tool grants; a
+  // direct caller omits it.
   createSchedule: iface.schemas({
-    input: ScheduleSpecSchema.extend({turnId: z.string().min(1)}),
+    input: ScheduleSpecSchema.extend({turnId: z.string().min(1).optional()}),
     output: ScheduleMutationResultSchema,
   }),
   cancelSchedule: iface.schemas({
-    input: ScheduleIdRequestSchema.extend({turnId: z.string().min(1)}),
+    input: ScheduleIdRequestSchema.extend({
+      turnId: z.string().min(1).optional(),
+    }),
     output: ScheduleCancellationResultSchema,
+  }),
+  schedules: iface.schemas({
+    input: z.void(),
+    output: z.array(ScheduledMessageSchema),
+  }),
+  fire: iface.schemas({input: ScheduleIdRequestSchema, output: z.void()}),
+  publish: iface.schemas({
+    input: AgentNotificationTopicSchema,
+    output: z.void(),
+  }),
+  notifications: iface.schemas({
+    input: z.void(),
+    output: AgentNotificationSnapshotSchema,
+  }),
+  watch: iface.schemas({
+    input: AgentNotificationWatchRequestSchema,
+    output: AgentNotificationSnapshotSchema,
+  }),
+  subscribe: iface.schemas({
+    input: AgentNotificationSubscriptionSchema,
+    output: AgentNotificationSnapshotSchema.nullable(),
+  }),
+  unsubscribe: iface.schemas({
+    input: AgentNotificationUnsubscribeSchema,
+    output: z.void(),
   }),
   createSubAgent: iface.schemas({
     input: SubAgentConfigSchema.extend({
@@ -168,33 +192,6 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
   }),
 });
 
-/** Per-Agent invalidation stream consumed by transcript and state watchers. */
-export const AgentNotificationsDefinition = iface.object(
-  AGENT_NOTIFICATIONS_SERVICE_NAME,
-  {
-    publish: iface.schemas({
-      input: AgentNotificationTopicSchema,
-      output: z.void(),
-    }),
-    snapshot: iface.schemas({
-      input: z.void(),
-      output: AgentNotificationSnapshotSchema,
-    }),
-    watch: iface.schemas({
-      input: AgentNotificationWatchRequestSchema,
-      output: AgentNotificationSnapshotSchema,
-    }),
-    subscribe: iface.schemas({
-      input: AgentNotificationSubscriptionSchema,
-      output: AgentNotificationSnapshotSchema.nullable(),
-    }),
-    unsubscribe: iface.schemas({
-      input: AgentNotificationUnsubscribeSchema,
-      output: z.void(),
-    }),
-  },
-);
-
 /** AgentSession contract implemented by core and consumed by clients. */
 export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
   history: iface.schemas({
@@ -214,23 +211,3 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
     output: AgentTurnOutcomeSchema,
   }),
 });
-
-export const AgentSchedulerDefinition = iface.object(
-  AGENT_SCHEDULER_SERVICE_NAME,
-  {
-    retire: iface.schemas({input: z.void(), output: z.void()}),
-    upsert: iface.schemas({
-      input: ScheduleSpecSchema,
-      output: ScheduleMutationResultSchema,
-    }),
-    cancel: iface.schemas({
-      input: ScheduleIdRequestSchema,
-      output: ScheduleCancellationResultSchema,
-    }),
-    list: iface.schemas({
-      input: z.void(),
-      output: z.array(ScheduledMessageSchema),
-    }),
-    fire: iface.schemas({input: ScheduleIdRequestSchema, output: z.void()}),
-  },
-);

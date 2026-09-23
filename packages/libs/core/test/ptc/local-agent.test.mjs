@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import {Agent} from "../../src/agent/service.ts";
-import {AgentScheduler} from "../../src/scheduler/service.ts";
-import {AgentNotifications} from "../../src/notifications/service.ts";
 import {context} from "./state-fixture.mjs";
 
 const tools = {builtin: {mode: "all"}, dynamic: {mode: "selected", names: []}, mcp: []};
@@ -38,7 +36,7 @@ test("memory is isolated per agent and only the current non-interrupting turn ma
   assert.equal((await a.invoke(Agent.object.updateMemory, {turnId: "turn", changes})).applied, false);
   assert.equal(await a.invoke(Agent.object.deleteMemory, {key: "units"}), true);
   assert.deepEqual((await a.invoke(Agent.object.profile)).memories, []);
-  assert.ok(a.sends.some(send => send.service === "AgentNotifications" && send.parameter === "profile"));
+  assert.ok(a.state.get("notifications").versions.profile > 0);
 });
 
 test("memory batches respect the cap atomically and replacement preserves unrelated keys", async () => {
@@ -55,95 +53,99 @@ test("memory batches respect the cap atomically and replacement preserves unrela
   assert.equal(saved.find(entry => entry.key === "key-2").content, "value-2");
 });
 
-test("notifications publish locally with no account lookup or global feed", async () => {
+test("notifications advance locally and wake subscribers registered before the change", async () => {
   const f = context("demo");
-  await f.invoke(AgentNotifications.object.publish, "history");
-  const result = await f.invoke(AgentNotifications.object.snapshot);
+  assert.equal(await f.invoke(Agent.object.subscribe, {afterRevision: 0, awakeableId: "watcher"}), null);
+  await f.invoke(Agent.object.publish, "history");
+  const result = await f.invoke(Agent.object.notifications);
   assert.equal(result.versions.history, 1);
   assert.equal(result.revision, 1);
+  assert.deepEqual(f.signals, [{id: "watcher", value: result}]);
+  assert.equal(f.state.has("notification-subscriptions"), false);
+  // A watcher that registers after the change returns immediately.
+  assert.deepEqual(await f.invoke(Agent.object.subscribe, {afterRevision: 0, awakeableId: "late"}), result);
   assert.equal(f.calls.length, 0);
   assert.equal(f.sends.length, 0);
 });
 
-test("schedules reject stale timers and deliver into the same agent with the chosen routing policy", async () => {
-  const f = context("demo", {}, call => {
-    assert.equal(call.service, "Agent");
-    assert.equal(call.key, "demo");
-    assert.equal(call.method, "metadata", "delivery must not block the scheduler");
-    return {name: "demo"};
-  });
-  const deliveries = () => f.sends.filter(send => send.method === "deliver");
-  const spec = {scheduleId: "reminder", message: "Check weather", delaySeconds: 10, repeatEverySeconds: null, whenBusy: "queue"};
-  assert.equal((await f.invoke(AgentScheduler.object.upsert, spec)).accepted, true);
-  await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
-  assert.equal(deliveries().length, 0, "a stale invocation must not deliver");
+const withMcpServers = t => {
+  const before = process.env.MCP_SERVERS_JSON;
+  process.env.MCP_SERVERS_JSON = "[]";
+  t.after(() => { if (before === undefined) delete process.env.MCP_SERVERS_JSON; else process.env.MCP_SERVERS_JSON = before; });
+};
+const scheduleSpec = {scheduleId: "reminder", message: "Check weather", delaySeconds: 10, repeatEverySeconds: null, whenBusy: "queue"};
+
+test("schedules reject stale timers and route due messages into the same agent", async t => {
+  withMcpServers(t);
+  const f = context("demo");
+  const turns = () => f.sends.filter(send => send.method === "doTurn");
+  assert.equal((await f.invoke(Agent.object.createSchedule, scheduleSpec)).accepted, true);
+  const timer = f.sends.find(send => send.method === "fire");
+  assert.deepEqual([timer.service, timer.key, timer.delay], ["Agent", "demo", 10_000]);
+  await f.invoke(Agent.object.fire, {scheduleId: "reminder"});
+  assert.equal(turns().length, 0, "a stale invocation must not deliver");
   f.state.get("schedules")[0].timerId = "inv-test";
-  await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
-  assert.equal(deliveries().length, 1);
-  assert.equal(deliveries()[0].service, "Agent");
-  assert.equal(deliveries()[0].key, "demo");
-  assert.deepEqual(deliveries()[0].parameter, {source: "schedule", sourceId: "reminder", message: "Check weather", whenBusy: "queue", interruptReason: 'Scheduled message "reminder" became due', coalesce: true});
-  assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
-  await f.invoke(AgentScheduler.object.fire, {scheduleId: "reminder"});
-  assert.equal(deliveries().length, 1, "late duplicate timers must not deliver again");
+  await f.invoke(Agent.object.fire, {scheduleId: "reminder"});
+  assert.equal(turns().length, 1);
+  assert.equal(turns()[0].key, "demo");
+  assert.deepEqual(turns()[0].parameter.entries, [
+    {role: "event", type: "delivery", source: "schedule", sourceId: "reminder", whenBusy: "queue", routing: "start"},
+    {role: "user", text: "Check weather", delivery: "turn"},
+  ]);
+  assert.deepEqual(await f.invoke(Agent.object.schedules), []);
+  assert.ok(f.state.get("notifications").versions.schedules > 0);
+  await f.invoke(Agent.object.fire, {scheduleId: "reminder"});
+  assert.equal(turns().length, 1, "late duplicate timers must not deliver again");
 });
 
-test("recurring schedules advance durable timers; retirement cancels all and prevents resurrection", async () => {
-  const f = context("demo", {}, call => call.method === "metadata" ? {name: "demo"} : null);
-  const spec = {scheduleId: "repeat", message: "Check", delaySeconds: 2, repeatEverySeconds: 60, whenBusy: "queue"};
-  await f.invoke(AgentScheduler.object.upsert, spec);
+test("recurring schedules advance durable timers; retirement cancels all and prevents resurrection", async t => {
+  withMcpServers(t);
+  const f = context("demo");
+  const spec = {...scheduleSpec, scheduleId: "repeat", delaySeconds: 2, repeatEverySeconds: 60};
+  await f.invoke(Agent.object.createSchedule, spec);
   const firstTimer = f.state.get("schedules")[0].timerId;
-  await f.invoke(AgentScheduler.object.upsert, spec);
+  await f.invoke(Agent.object.createSchedule, spec);
   assert.ok(f.cancelled.includes(firstTimer));
   f.state.get("schedules")[0].timerId = "inv-test";
-  await f.invoke(AgentScheduler.object.fire, {scheduleId: "repeat"});
+  await f.invoke(Agent.object.fire, {scheduleId: "repeat"});
   const next = f.state.get("schedules")[0];
   assert.notEqual(next.timerId, "inv-test");
   assert.equal(next.nextRunAt, 1700000060000);
-  await f.invoke(AgentScheduler.object.retire);
+  await f.invoke(Agent.object.retire, {});
   assert.ok(f.cancelled.includes(next.timerId));
-  assert.equal((await f.invoke(AgentScheduler.object.upsert, spec)).accepted, false);
-  assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
+  await assert.rejects(f.invoke(Agent.object.createSchedule, spec), /deleted/);
+  assert.deepEqual(await f.invoke(Agent.object.schedules), []);
 });
 
-test("a directly invoked scheduler refuses child agents before creating a timer", async () => {
-  const f = context("child", {}, call => {
-    assert.equal(call.method, "metadata");
-    return {name: "child", parentAgentId: "parent"};
-  });
-  const spec = {scheduleId: "reminder", message: "Check", delaySeconds: 2, repeatEverySeconds: null, whenBusy: "queue"};
-  const result = await f.invoke(AgentScheduler.object.upsert, spec);
+test("child agents cannot schedule, even when called directly", async () => {
+  const f = context("child", {metadata: {name: "child", parentAgentId: "parent"}});
+  const result = await f.invoke(Agent.object.createSchedule, scheduleSpec);
   assert.equal(result.accepted, false);
   assert.match(result.error, /Sub-agents cannot schedule/);
   assert.equal(f.sends.length, 0);
-  assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
+  assert.deepEqual(await f.invoke(Agent.object.schedules), []);
 });
 
 test("model schedule tools are authorized against the live, non-interrupting turn", async () => {
-  const spec = {scheduleId: "reminder", message: "Check", delaySeconds: 2, repeatEverySeconds: null, whenBusy: "queue"};
-  const accepted = {accepted: true, replaced: false, schedule: {...spec, delaySeconds: undefined, nextRunAt: 1}};
-  const f = context("demo", {turn: {id: "turn", tools, steeringBatches: []}}, call => {
-    assert.equal(call.service, "AgentScheduler");
-    assert.equal(call.key, "demo");
-    return call.method === "upsert" ? accepted : {accepted: true, cancelled: true};
-  });
-  await assert.rejects(f.invoke(Agent.object.createSchedule, {...spec, turnId: "old"}), /active, non-interrupting Turn/);
+  const f = context("demo", {turn: {id: "turn", tools, steeringBatches: []}});
+  const installed = async () => (await f.invoke(Agent.object.schedules)).length;
+  await assert.rejects(f.invoke(Agent.object.createSchedule, {...scheduleSpec, turnId: "old"}), /active, non-interrupting Turn/);
   await assert.rejects(f.invoke(Agent.object.cancelSchedule, {scheduleId: "reminder", turnId: "old"}), /active, non-interrupting Turn/);
-  assert.equal(f.calls.length, 0);
+  assert.equal(await installed(), 0);
 
-  assert.equal((await f.invoke(Agent.object.createSchedule, {...spec, turnId: "turn"})).accepted, true);
-  assert.deepEqual(f.calls.at(-1).parameter, spec, "the turn ID is not forwarded to the scheduler");
+  assert.equal((await f.invoke(Agent.object.createSchedule, {...scheduleSpec, turnId: "turn"})).accepted, true);
+  assert.equal(await installed(), 1);
   assert.equal((await f.invoke(Agent.object.cancelSchedule, {scheduleId: "reminder", turnId: "turn"})).cancelled, true);
-  assert.equal(f.calls.length, 2);
+  assert.equal(await installed(), 0);
 
   f.state.get("turn").interruptReason = "Stop";
-  await assert.rejects(f.invoke(Agent.object.createSchedule, {...spec, turnId: "turn"}), /active, non-interrupting Turn/);
-  assert.equal(f.calls.length, 2, "an interrupted turn must not install a schedule");
+  await assert.rejects(f.invoke(Agent.object.createSchedule, {...scheduleSpec, turnId: "turn"}), /active, non-interrupting Turn/);
+  assert.equal(await installed(), 0, "an interrupted turn must not install a schedule");
 
   f.state.set("turn", {id: "turn", tools: {...tools, builtin: {mode: "selected", names: ["listSchedules"]}}, steeringBatches: []});
-  await assert.rejects(f.invoke(Agent.object.createSchedule, {...spec, turnId: "turn"}), /cannot create schedules/);
+  await assert.rejects(f.invoke(Agent.object.createSchedule, {...scheduleSpec, turnId: "turn"}), /cannot create schedules/);
   await assert.rejects(f.invoke(Agent.object.cancelSchedule, {scheduleId: "reminder", turnId: "turn"}), /cannot cancel schedules/);
-  assert.equal(f.calls.length, 2);
+  assert.equal(await installed(), 0);
 });
 
 test("a coalescing delivery is skipped while its previous run is queued or active", async t => {

@@ -1,45 +1,44 @@
 # Per-agent schedules
 
-`AgentScheduler/{agentId}` owns a small registry of delayed messages. Each
-occurrence delivers back to **the same conversation**, through `Agent.deliver`.
-A schedule persists independently of the turn that created it. There is no
-account scheduler or fresh agent per occurrence.
+Each Agent owns a small registry of delayed messages. Each occurrence delivers
+back to **the same conversation**, through the same routing as
+`Agent.deliver`. A schedule persists independently of the turn that created
+it. There is no account scheduler or fresh agent per occurrence.
 
 ## Contract
 
 ```sh
-curl localhost:8080/AgentScheduler/demo/upsert --json '{
+curl localhost:8080/Agent/demo/createSchedule --json '{
   "scheduleId":"reminder",
   "message":"Remind me to check the build",
   "delaySeconds":60,
   "repeatEverySeconds":null,
   "whenBusy":"queue"
 }'
-curl -X POST localhost:8080/AgentScheduler/demo/list
-curl localhost:8080/AgentScheduler/demo/cancel \
+curl -X POST localhost:8080/Agent/demo/schedules
+curl localhost:8080/Agent/demo/cancelSchedule \
   --json '{"scheduleId":"reminder"}'
 ```
 
-`upsert` creates or replaces a named schedule; the registry holds at most 32.
-`repeatEverySeconds: null` means one shot. A positive interval rearms the next
-delayed invocation when the current timer fires; this is interval scheduling,
-not a calendar/cron rule or a catch-up ledger. Exact input bounds live in
-`ScheduleSpecSchema`.
+`createSchedule` creates or replaces a named schedule; the registry holds at
+most 32. `repeatEverySeconds: null` means one shot. A positive interval rearms
+the next delayed invocation when the current timer fires; this is interval
+scheduling, not a calendar/cron rule or a catch-up ledger. Exact input bounds
+live in `ScheduleSpecSchema`.
 
 The model tools `createSchedule`, `listSchedules`, and `cancelSchedule` use the
-same registry. `createSchedule` and `cancelSchedule` go through
-`Agent.createSchedule`/`Agent.cancelSchedule`, which reject a stale or
-interrupting turn and a turn whose grant omits the tool before calling the
-scheduler, so an in-flight call cannot outlive an interrupt. The UI lists and
-cancels schedules directly. `upsert` checks Agent
-metadata even for direct operator calls: children cannot create schedules,
-because only their parent can initiate their turns.
+same handlers. The tools pass their `turnId`, so Agent rejects a stale or
+interrupting turn and a turn whose grant omits the tool; an in-flight call
+cannot outlive an interrupt. The UI and direct callers omit `turnId`. Children
+cannot create schedules, even when called directly, because only their parent
+can initiate their turns.
 
 ## Routing and lifecycle
 
-A valid timer advances or removes its schedule, publishes the `schedules`
-notification topic, and calls `Agent.deliver`. An idle Agent starts a turn.
-When busy, the saved policy selects:
+Each schedule stores the invocation ID of its next delayed `Agent.fire`. A
+valid firing advances or removes its schedule, publishes the `schedules`
+notification topic, and routes the message. An idle Agent starts a turn. When
+busy, the saved policy selects:
 
 | Policy | Behavior |
 | --- | --- |
@@ -54,14 +53,12 @@ agent works therefore keeps at most one pending run, and an `interrupt`
 schedule never interrupts the turn it started itself. The recurrence keeps its
 cadence; skipped firings are not caught up.
 
-Timer identity is stored with each schedule. Replaced or cancelled timer
-invocations cannot deliver if their invocation ID no longer matches. Cancelling
-is idempotent; it prevents future delivery but does not retract a message
-already delivered. Retiring an Agent sends one-way retirement to its scheduler,
-which cancels timers, clears the registry and refuses new schedules.
-
-The scheduler sends `deliver` one-way rather than waiting on it, so its lock is
-never held behind the Agent's queue and a cancel is never stuck behind a
-delivery. Turn execution happens on AgentSession after routing.
+Replaced or cancelled timer invocations cannot deliver, because their
+invocation ID no longer matches. Firing and cancellation share the Agent's
+exclusive lock, so a cancel either lands before a firing (which is then stale)
+or after its delivery. Cancelling is idempotent; it prevents future delivery
+but does not retract a message already delivered. Retiring an Agent cancels
+its timers and clears the registry, and a retired Agent refuses new schedules.
+Turn execution happens on AgentSession after routing.
 
 Focused tests cover stale timers, recurrence, retirement and delivery identity.

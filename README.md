@@ -88,7 +88,7 @@ flowchart LR
   Session -->|journaled run| Model[OpenAI]
   Session --> Tools[Tools and Sandbox]
   Session -->|onTurnEnd| Agent
-  Scheduler[AgentScheduler] -->|deliver| Agent
+  Agent -->|delayed fire| Agent
 ```
 
 ### One message, end to end
@@ -136,7 +136,7 @@ MCP call completing and its result being recorded can repeat that call.
 | Guardrails and approvals | Add a guardrail in the UI; ask for something it blocks | `session/guardrails.ts`, `agent/approval.ts` |
 | Memory | Ask the agent to remember a preference; up to 32 per agent | `agent/memory.ts` |
 | Sub-agents | Ask it to delegate research to a helper | `agent/sub-agent.ts`, `createSubAgent` in `session/tools.ts` |
-| Schedules | "Remind me in 2 minutes to check the weather" | `scheduler/service.ts` |
+| Schedules | "Remind me in 2 minutes to check the weather" | `agent/schedules.ts` |
 | Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `ptc/runtime.ts` |
 | Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/tool-search.ts` |
 | Sandbox | Ask it to write and run a script | `sandbox/service.ts` |
@@ -198,7 +198,7 @@ export EXAMPLE_MCP_TOKEN=your-server-token
 Anyone who can reach Restate ingress (port 8080) is fully trusted. Ingress
 exposes every handler, including internal ones. For example, the parent
 check on `Agent.retire` compares against a parent ID the caller supplies, and
-`Agent.deliver` and `AgentScheduler.upsert` accept any message or schedule
+`Agent.deliver` and `Agent.createSchedule` accept any message or schedule
 for any agent. These checks keep the model and the UI within their rules;
 they do not authenticate anyone.
 
