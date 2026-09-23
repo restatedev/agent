@@ -20,7 +20,7 @@ guide are relative to `packages/libs/core`.
    - built-in, discovered Restate, or MCP tools:
      [tools](tools.md);
    - sandbox lifecycle: [sandboxes](sandboxes.md);
-   - validation or evals: [development](development.md) and [evals](evals.md).
+   - validation: [development](development.md).
 5. State the behavior you intend to preserve before refactoring control flow.
 
 ## Source-of-truth order
@@ -143,8 +143,7 @@ The detailed turn-runtime list lives in
   descriptions and schemas enter the model prompt, credentials resolve inside HTTP effects from operator environment references, and HTTP calls may be repeated
   unless the remote server honors the stable idempotency key.
 - AgentSession history is the public conversation event log, not the complete
-  agent trajectory or Restate execution trace. The `transcript` wire name is
-  retained in evaluation results.
+  agent trajectory or Restate execution trace.
 - History is not the invalidation mechanism for every current-state area.
   Drain `AgentSession.history`, then use AgentNotifications versions to decide
   whether to re-read history, profile, approvals,
@@ -181,7 +180,6 @@ The detailed turn-runtime list lives in
 | Provider contract and provider selection | `sandbox/provider.ts` |
 | Local filesystem demo adapter | `sandbox/local-provider.ts` |
 | Modal-specific compute/storage | `sandbox/modal-provider.ts` |
-| Black-box protocol coverage | `eval.ts` |
 | External HTTP consumption | `packages/libs/client/src/index.ts` |
 
 If a proposed change spans several rows, keep each responsibility in its owner.
@@ -194,7 +192,7 @@ contract.
 
 Read [tools.md](tools.md). Keep name, description, Zod schema, execution, and
 pending completion together in `session/tools.ts`. Add it to `definitions`,
-preserve cancellation errors, and add a focused eval when behavior affects the
+preserve cancellation errors, and add a focused test when behavior affects the
 Agent protocol.
 
 ### Dynamic Restate tool
@@ -224,7 +222,7 @@ state and transcript effects, and add protocol coverage.
 
 Update `ConversationEventSchema`, then make an explicit exhaustive decision in
 `isDerivedConversationEvent`. Update `session/context.ts`,
-`gateway/compactor.ts`, external consumers, protocol docs, and eval
+`gateway/compactor.ts`, external consumers, protocol docs, and test
 assertions as applicable. Never let different consumers silently invent their
 own relevance policy.
 
@@ -246,11 +244,6 @@ pnpm --filter @restate-agents/web test
 pnpm bundle
 git diff --check
 ```
-
-For protocol changes, run the smallest relevant `Evals/all` subset first, then
-the complete suite when cost and runtime are justified. Evals are probabilistic
-where models are involved; assertions should target durable structure and
-semantics rather than exact prose.
 
 Review the final diff for:
 

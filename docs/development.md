@@ -118,29 +118,6 @@ git status --short
 
 Do not stage unrelated files in a dirty worktree.
 
-## Durable evals
-
-`Evals/all` is the evaluation harness. It runs selected evaluation tasks
-concurrently, with each trial isolated under a fresh `agentId`:
-
-```sh
-curl localhost:8080/Evals/all \
-  --json '{"timeoutSeconds":180}'
-```
-
-Run one or a few cases while iterating to reduce model cost:
-
-```sh
-curl localhost:8080/Evals/all \
-  --json '{"cases":["steering","interruption"],"timeoutSeconds":180}'
-```
-
-Evals use probabilistic live models. A failed language-quality grader may need
-careful event-log inspection or a repeated trial. Protocol ordering, correlation
-IDs, state, and handler decisions should remain deterministic.
-
-See [evals.md](evals.md) for case contracts and known gaps.
-
 ## Debugging map
 
 Use the Agent conversation event log and Restate execution trace for different
@@ -258,7 +235,7 @@ When changing `ask`, `steer`, `interrupt`, or turn completion:
 3. account for accepted-but-unconsumed steering;
 4. distinguish graceful interruption from external cancellation;
 5. ensure Agent active state is retired exactly once;
-6. add or update an eval for the full flow.
+6. add or update a test for the full flow.
 
 ### Turn loop
 
@@ -296,22 +273,6 @@ When changing a request or schema:
 5. preserve cancellation propagation;
 6. consider model and per-Agent flow-control keys.
 
-## Adding an evaluation task
-
-Add the task's case ID to `EvalCaseIdSchema`, implement its trial driver in
-`eval.ts`, and register it in the internal case table used by `all`.
-
-Prefer code-based graders that assert:
-
-- handler decisions;
-- conversation-event types and ordering;
-- stable IDs and correlations;
-- durable profile or schedule state;
-- terminal status.
-
-Avoid exact prose assertions. Use a focused cheap-model contract when the
-behavior can be tested without manufacturing many full agent runs.
-
 ## Where to make a change
 
 | Goal | Primary file |
@@ -335,6 +296,5 @@ behavior can be tested without manufacturing many full agent runs.
 | Change public wire/domain schemas | `packages/libs/types/src/index.ts` |
 | Change Agent handler contracts | `packages/libs/types/src/services.ts` |
 | Change the external client | `packages/libs/client/src/index.ts` |
-| Add protocol coverage | `src/eval.ts` |
 
 Paths without a package prefix are relative to `packages/libs/core`.

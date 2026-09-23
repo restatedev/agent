@@ -222,22 +222,14 @@ pnpm bundle                                # single-file core bundle
 ```
 
 The tests run real handlers against recorded journals and fakes; they need no
-Restate server or API key. The `Evals` service runs live end-to-end trials
-against a running deployment:
-
-```sh
-curl localhost:8080/Evals/all --json '{}'
-```
-
-See [development](docs/development.md) for debugging and
-[evals](docs/evals.md) for the trials. `docker/` holds runnable Dockerfiles
-for the service and the UI.
+Restate server or API key. See [development](docs/development.md) for
+debugging. `docker/` holds runnable Dockerfiles for the service and the UI.
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
-| `packages/libs/core` | The durable runtime: agent, session, scheduler, sandbox, model gateway, evals |
+| `packages/libs/core` | The durable runtime: agent, session, scheduler, sandbox, model gateway |
 | `packages/libs/types` | Zod wire schemas and Restate service contracts |
 | `packages/libs/client` | Typed ingress client for one agent |
 | `packages/apps/web` | Optional Next.js conversation UI and its thin server adapter |

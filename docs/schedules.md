@@ -65,4 +65,3 @@ never held behind the Agent's queue and a cancel is never stuck behind a
 delivery. Turn execution happens on AgentSession after routing.
 
 Focused tests cover stale timers, recurrence, retirement and delivery identity.
-The live `scheduling` eval checks one-shot wakeup and event ordering.

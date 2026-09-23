@@ -12,7 +12,7 @@ request path begins with an agent ID, without an account or login prerequisite.
 5. [Tools](tools.md): built-ins, PTC, dynamic Restate handlers and MCP.
 6. [MCP configuration](mcp-configuration.md): operator endpoints and environment credentials.
 7. [Schedules](schedules.md) and [sandboxes](sandboxes.md): durable timer and resource lifecycles.
-8. [Development](development.md) and [evals](evals.md): verification and debugging.
+8. [Development](development.md): verification and debugging.
 
 [PROJECT.md](../PROJECT.md) maps the source tree. Coding agents should read
 [agent-guide.md](agent-guide.md) before changing runtime semantics.

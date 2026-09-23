@@ -461,7 +461,7 @@ interruption of the creating turn does not roll it back.
 6. Put non-deterministic external work in `restate.run`, or call another
    Restate handler.
 7. Add it to `definitions`.
-8. Add or update an eval if it changes conversation semantics.
+8. Add or update a test if it changes conversation semantics.
 9. Run `pnpm lint`, `pnpm build`, and `pnpm bundle`.
 
 Before making a tool pending, verify that the model can do useful work before

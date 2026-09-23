@@ -37,7 +37,6 @@ Paths below are relative to `packages/libs/core/src`.
    resource lifecycle. `gateway/service.ts` and `gateway/model.ts` own model
    admission and provider behavior.
 9. `ptc/runtime.ts` and `ptc/guest.ts` implement replay-safe programmatic tools.
-10. `eval.ts` exercises the public protocol with isolated live trials.
 
 `Agent`, `AgentSession`, `AgentNotifications`, `AgentScheduler`, and `Sandbox`
 share the agent ID as their key. There is no account object or browser-session
