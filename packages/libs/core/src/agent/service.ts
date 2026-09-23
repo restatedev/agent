@@ -76,6 +76,35 @@ export const Agent = restate.implement(AgentDefinition, {
       }
     },
 
+    // Model-created schedules outlive their Turn, so authorize them against
+    // the live Turn under this lock, like memory and sub-agent changes. The
+    // scheduler may call the shared `metadata` handler but never an exclusive
+    // Agent handler, so waiting on it here cannot close a lock cycle.
+    *createSchedule({turnId, ...spec}) {
+      yield* requireNotDeleted();
+      const tools = yield* requireActiveTurnTools(turnId, "Schedule creation");
+      if (!selected(tools.builtin, "createSchedule"))
+        throw new TerminalError("This agent cannot create schedules", {
+          errorCode: 403,
+        });
+      return yield* restate
+        .client(AgentSchedulerDefinition, agentKey())
+        .upsert(spec);
+    },
+    *cancelSchedule({turnId, scheduleId}) {
+      yield* requireNotDeleted();
+      const tools = yield* requireActiveTurnTools(
+        turnId,
+        "Schedule cancellation",
+      );
+      if (!selected(tools.builtin, "cancelSchedule"))
+        throw new TerminalError("This agent cannot cancel schedules", {
+          errorCode: 403,
+        });
+      return yield* restate
+        .client(AgentSchedulerDefinition, agentKey())
+        .cancel({scheduleId});
+    },
     *createSubAgent({turnId, toolCallId, ...config}) {
       yield* requireNotDeleted();
       const metadata = yield* readMetadata();
@@ -613,6 +642,8 @@ export const Agent = restate.implement(AgentDefinition, {
     enableLazyState: true,
     handlers: {
       initialize: coordinationRetention,
+      createSchedule: coordinationRetention,
+      cancelSchedule: coordinationRetention,
       createSubAgent: coordinationRetention,
       startSubAgentTask: coordinationRetention,
       startDelegatedTurn: coordinationRetention,

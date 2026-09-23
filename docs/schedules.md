@@ -27,7 +27,11 @@ not a calendar/cron rule or a catch-up ledger. Exact input bounds live in
 `ScheduleSpecSchema`.
 
 The model tools `createSchedule`, `listSchedules`, and `cancelSchedule` use the
-same registry. The UI lists and cancels schedules. `upsert` checks Agent
+same registry. `createSchedule` and `cancelSchedule` go through
+`Agent.createSchedule`/`Agent.cancelSchedule`, which reject a stale or
+interrupting turn and a turn whose grant omits the tool before calling the
+scheduler, so an in-flight call cannot outlive an interrupt. The UI lists and
+cancels schedules directly. `upsert` checks Agent
 metadata even for direct operator calls: children cannot create schedules,
 because only their parent can initiate their turns.
 

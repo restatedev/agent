@@ -78,6 +78,14 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     input: AgentInitializationSchema,
     output: z.void(),
   }),
+  createSchedule: iface.schemas({
+    input: ScheduleSpecSchema.extend({turnId: z.string().min(1)}),
+    output: ScheduleMutationResultSchema,
+  }),
+  cancelSchedule: iface.schemas({
+    input: ScheduleIdRequestSchema.extend({turnId: z.string().min(1)}),
+    output: ScheduleCancellationResultSchema,
+  }),
   createSubAgent: iface.schemas({
     input: SubAgentConfigSchema.extend({
       turnId: z.string().min(1),

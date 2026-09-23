@@ -13,7 +13,9 @@ import {
   type ChildAgent,
   type ConversationEntry,
   type MemoryChange,
+  type ScheduleCancellationResult,
   ScheduleIdRequestSchema,
+  type ScheduleMutationResult,
   ScheduleSpecSchema,
   SubAgentConfigSchema,
   ToolSelectionSchema,
@@ -947,9 +949,23 @@ const createScheduleTool = defineAgentTool({
     "Create or replace a durable schedule for this Agent that will deliver a future user request. Once accepted, the schedule persists independently of this Turn. Reuse a scheduleId to update it. Use queue unless the user explicitly asks the due message to steer or interrupt active work.",
   inputSchema: ScheduleSpecSchema,
   *run(schedule, context): restate.Operation<ToolExecution> {
-    const result = yield* restate
-      .client(AgentSchedulerDefinition, context.agentId)
-      .upsert(schedule);
+    let result: ScheduleMutationResult;
+    try {
+      result = yield* restate
+        .client(Agent, context.agentId)
+        .createSchedule({...schedule, turnId: context.turnId});
+    } catch (error) {
+      // A rejected grant is feedback for the model. Stale turns (409),
+      // cancellation and infrastructure errors still escape, as for sub-agents.
+      if (
+        error instanceof TerminalError &&
+        !(error instanceof CancelledError) &&
+        error.code === 403
+      ) {
+        return {status: "failed", error: error.message};
+      }
+      throw error;
+    }
     if (!result.accepted) {
       return {status: "failed", error: result.error};
     }
@@ -972,9 +988,21 @@ const cancelScheduleTool = defineAgentTool({
     "Cancel one durable message scheduled for this Agent by its scheduleId. This is idempotent; cancelling an unknown schedule succeeds without changing anything.",
   inputSchema: ScheduleIdRequestSchema,
   *run({scheduleId}, context): restate.Operation<ToolExecution> {
-    const result = yield* restate
-      .client(AgentSchedulerDefinition, context.agentId)
-      .cancel({scheduleId});
+    let result: ScheduleCancellationResult;
+    try {
+      result = yield* restate
+        .client(Agent, context.agentId)
+        .cancelSchedule({scheduleId, turnId: context.turnId});
+    } catch (error) {
+      if (
+        error instanceof TerminalError &&
+        !(error instanceof CancelledError) &&
+        error.code === 403
+      ) {
+        return {status: "failed", error: error.message};
+      }
+      throw error;
+    }
     if (!result.accepted) {
       return {status: "failed", error: result.error};
     }

@@ -118,3 +118,30 @@ test("a directly invoked scheduler refuses child agents before creating a timer"
   assert.equal(f.sends.length, 0);
   assert.deepEqual(await f.invoke(AgentScheduler.object.list), []);
 });
+
+test("model schedule tools are authorized against the live, non-interrupting turn", async () => {
+  const spec = {scheduleId: "reminder", message: "Check", delaySeconds: 2, repeatEverySeconds: null, whenBusy: "queue"};
+  const accepted = {accepted: true, replaced: false, schedule: {...spec, delaySeconds: undefined, nextRunAt: 1}};
+  const f = context("demo", {turn: {id: "turn", tools, steeringBatches: []}}, call => {
+    assert.equal(call.service, "AgentScheduler");
+    assert.equal(call.key, "demo");
+    return call.method === "upsert" ? accepted : {accepted: true, cancelled: true};
+  });
+  await assert.rejects(f.invoke(Agent.object.createSchedule, {...spec, turnId: "old"}), /active, non-interrupting Turn/);
+  await assert.rejects(f.invoke(Agent.object.cancelSchedule, {scheduleId: "reminder", turnId: "old"}), /active, non-interrupting Turn/);
+  assert.equal(f.calls.length, 0);
+
+  assert.equal((await f.invoke(Agent.object.createSchedule, {...spec, turnId: "turn"})).accepted, true);
+  assert.deepEqual(f.calls.at(-1).parameter, spec, "the turn ID is not forwarded to the scheduler");
+  assert.equal((await f.invoke(Agent.object.cancelSchedule, {scheduleId: "reminder", turnId: "turn"})).cancelled, true);
+  assert.equal(f.calls.length, 2);
+
+  f.state.get("turn").interruptReason = "Stop";
+  await assert.rejects(f.invoke(Agent.object.createSchedule, {...spec, turnId: "turn"}), /active, non-interrupting Turn/);
+  assert.equal(f.calls.length, 2, "an interrupted turn must not install a schedule");
+
+  f.state.set("turn", {id: "turn", tools: {...tools, builtin: {mode: "selected", names: ["listSchedules"]}}, steeringBatches: []});
+  await assert.rejects(f.invoke(Agent.object.createSchedule, {...spec, turnId: "turn"}), /cannot create schedules/);
+  await assert.rejects(f.invoke(Agent.object.cancelSchedule, {scheduleId: "reminder", turnId: "turn"}), /cannot cancel schedules/);
+  assert.equal(f.calls.length, 2);
+});
