@@ -206,6 +206,7 @@ export const AgentSessionDefinition = iface.object(AGENT_SESSION_SERVICE_NAME, {
     input: ConversationCompactionResultSchema,
     output: z.void(),
   }),
+  retire: iface.schemas({input: z.void(), output: z.void()}),
   doTurn: iface.schemas({
     input: AgentTurnRequestSchema,
     output: AgentTurnOutcomeSchema,

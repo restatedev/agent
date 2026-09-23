@@ -9,8 +9,7 @@ send `Agent/{agentId}/ask` immediately. No account registration is required.
 | Component | Durable state and responsibility |
 | --- | --- |
 | `Agent` | Active invocation ID, queued input, steering reconciliation, profile, memories, approvals, schedules, notification watermarks, metadata and child directory |
-| `AgentSession` | Append-only conversation history, summary checkpoint, exclusive `doTurn` execution |
-| `Sandbox` | Workspace reference and borrow/release/suspend/retire lifecycle |
+| `AgentSession` | Append-only conversation history, summary checkpoint, sandbox reference, exclusive `doTurn` execution |
 
 A turn is one `AgentSession.doTurn` invocation. Its invocation ID is its
 `turnId`. The model plus harness form the operational agent; `Agent` is the

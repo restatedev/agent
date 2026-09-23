@@ -28,7 +28,8 @@ import {
   compactConversation,
   type GuardrailApproval,
 } from "../model/index.js";
-import {Sandbox} from "../sandbox/index.js";
+import {executionRetention} from "../retention.js";
+import {destroySandbox} from "../sandbox/index.js";
 import {
   buildModelContext,
   finalizationInstruction,
@@ -103,12 +104,21 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
     },
 
     /**
+     * Destroys the retired agent's sandbox and files. Exclusive, so it runs
+     * after any active turn has suspended the sandbox.
+     */
+    *retire(): restate.Operation<void> {
+      yield* destroySandbox();
+    },
+
+    /**
      * Executes one complete durable conversation Turn.
      *
      * The invocation owns transient model context, the step bound,
      * steering consumption, interruption, pending operations, and the
-     * agent-scoped sandbox lease. It releases the sandbox and reports exactly
-     * one terminal outcome to the owning Agent on every handled exit.
+     * agent's sandbox while it runs. It suspends the sandbox if a tool used
+     * it and reports exactly one terminal outcome to the owning Agent on
+     * every handled exit.
      *
      * External cancellation is caught at the handler boundary, where pending
      * tools are stopped, an interrupted outcome is reported, and cancellation
@@ -171,8 +181,8 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           };
 
           // Record local state without waiting for already-cancelled child
-          // tasks, then append the cancellation boundary and emit durable
-          // one-way cleanup for the owning services.
+          // tasks, append the cancellation boundary, suspend the sandbox, and
+          // emit durable one-way cleanup for the controller.
           const stopped = state?.pending.cancelAll(error) ?? [];
           if (transcript) {
             yield* transcript.append(
@@ -180,7 +190,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
               ...outcomeEntries(outcome),
             );
           }
-          yield* restate.sendClient(Sandbox, agentId).release({turnId});
+          if (state) yield* state.context.sandbox.release();
           yield* restate.sendClient(Agent, agentId).onTurnEnd(outcome);
           throw error;
         }
@@ -202,7 +212,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
       }
       // The controller reconciles late steering/interruption before the
       // session records the terminal outcome in the public transcript.
-      yield* restate.client(Sandbox, agentId).release({turnId});
+      if (state) yield* state.context.sandbox.release();
       const reconciled = yield* restate
         .client(Agent, agentId)
         .onTurnEnd(outcome);
@@ -232,6 +242,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
         idempotencyRetention: 0,
         journalRetention: 0,
       },
+      retire: executionRetention,
       doTurn: {
         journalRetention: {hours: 1},
         idempotencyRetention: {hours: 1},

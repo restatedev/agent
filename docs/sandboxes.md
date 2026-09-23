@@ -5,75 +5,48 @@ workspace. Files created in one agent run remain available to later runs for
 the same `agentId`. It is an external resource owned by the runtime, not agent
 memory or model context.
 
-`Sandbox` owns durable lifecycle. `SandboxProvider` owns vendor operations.
-Tools consume only `SandboxClient`.
+The turn owns the durable lifecycle (`sandbox/turn.ts`). `SandboxProvider`
+owns vendor operations. Tools consume only `SandboxClient`.
 
 ## Ownership model
 
-`Sandbox` is a Virtual Object keyed by the same `agentId` as `Agent`. Its state
-is one of:
+There is no sandbox service. `AgentSession`, keyed by `agentId`, stores the
+provider's `SandboxRef` under its `sandbox` state key. `doTurn` is exclusive
+per agent, so at most one turn uses the sandbox at a time and no lease or
+borrower check is needed.
 
-```ts
-type SandboxState =
-  | {status: "borrowed"; ref: SandboxRef; turnId: string}
-  | {status: "idle"; ref: SandboxRef; timerId: string}
-  | {status: "suspended"; ref: SandboxRef};
-```
+The turn does not provision eagerly. The first sandbox tool of a turn spawns
+one acquisition task: it resumes the stored ref, or provisions one if none
+exists, and stores the result. Parallel tools share that task, and later steps
+reuse its ref. Because acquisition is its own task, interrupting the tool that
+started it does not abandon a half-finished provision.
 
-The resource belongs to the Agent, while one turn at a time may borrow it.
-Agent serialization already guarantees one active turn, and Sandbox validates
-the borrower explicitly.
-
-The turn does not provision eagerly. The first sandbox tool lazily calls
-`Sandbox.borrow`. Parallel tools share one in-flight borrow future, and later
-steps reuse the resolved reference. `AgentSession.doTurn` releases the lease when it exits,
-including cancellation paths.
+When `doTurn` exits, including on failure and cancellation, it suspends the
+sandbox if the turn acquired one and stores the provider's updated ref. A turn
+that never used a sandbox tool does not touch it.
 
 ## Lifecycle
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Borrowed: first sandbox tool / provision
-  Suspended --> Borrowed: borrow / resume
-  Idle --> Borrowed: borrow / cancel idle timer
-  Borrowed --> Idle: turn release / schedule suspension
-  Idle --> Suspended: idle timer fires / suspend
-  Idle --> [*]: destroy
-  Suspended --> [*]: destroy
+  [*] --> Running: first sandbox tool / provision
+  Suspended --> Running: first sandbox tool / resume
+  Running --> Suspended: turn ends / suspend
+  Suspended --> [*]: AgentSession.retire / destroy
 ```
 
-The default idle delay is five minutes.
+Suspension keeps files and releases compute: the local provider does nothing,
+and the Modal provider terminates the Sandbox and keeps its Volume. Every turn
+that uses the sandbox therefore pays one resume; for Modal that is a new
+Sandbox start. Processes and anything outside the persistent workspace do not
+survive between turns.
 
-### `borrow({turnId})`
+### Retirement
 
-- Repeated borrow by the same turn is idempotent and returns the current ref.
-- A different turn cannot borrow an already borrowed resource.
-- An idle suspension timer is cancelled before reuse.
-- Missing state provisions a new sandbox.
-- Suspended state resumes compute and persists the provider's updated ref.
-
-### `release({turnId})`
-
-- Only the current borrower changes state.
-- Repeated or stale release is a no-op.
-- Release schedules a delayed self-send to `suspend` and stores its invocation
-  ID.
-- A later borrow cancels that delayed invocation.
-
-### `suspend()`
-
-The delayed invocation acts only when its invocation ID still matches the
-stored idle timer. This rejects stale timers after a borrow/release cycle. The
-provider may return an updated ref—for example, one with no live compute ID.
-
-### `destroy()`
-
-Destroy is rejected while borrowed. From idle or suspended state it cancels an
-idle timer when needed, asks the provider to destroy external resources, then
-clears VO state.
-
-`borrow`, `release`, `suspend`, and `destroy` are coordination handlers, not
-normal conversation APIs.
+`Agent.retire` sends `AgentSession.retire` one-way. That handler is exclusive,
+so it runs after the interrupted turn has suspended the sandbox. It asks the
+provider to destroy the resource, including its files, then clears the ref.
+Repeating it is a no-op.
 
 ## Provider boundary
 
@@ -259,8 +232,8 @@ switching a test Agent between providers.
 8. Enforce workspace path containment.
 9. Add the provider to `configuredProvider()` for new refs and `providerFor()`
    for existing refs.
-10. Exercise provision, repeated borrow, release/reborrow before timeout,
-    suspend/resume, command cancellation, and destroy.
+10. Exercise provision, parallel first use, suspend/resume across turns,
+    command cancellation, and destroy.
 
 Do not put provider selection or lifecycle recovery into individual tools.
 They should continue to depend only on `context.sandbox.client()`.

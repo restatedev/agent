@@ -33,11 +33,11 @@ Paths below are relative to `packages/libs/core/src`.
 7. `agent/profile.ts`, `agent/memory.ts`, `agent/approval.ts`, and
    `agent/schedules.ts` own responsive agent-local state. `agent/sub-agent.ts` attenuates child configuration;
    delegation coordination stays in `agent/service.ts`.
-8. `sandbox/service.ts` owns resource lifecycle. `model/inference.ts` makes the journaled model
+8. `sandbox/turn.ts` acquires and suspends the sandbox inside the turn. `model/inference.ts` makes the journaled model
    calls and `model/provider.ts` owns provider behavior.
 9. `ptc/runtime.ts` and `ptc/guest.ts` implement replay-safe programmatic tools.
 
-`Agent`, `AgentSession`, and `Sandbox` share the agent ID as their key. There is no account object or browser-session
+`Agent` and `AgentSession` share the agent ID as their key. There is no account object or browser-session
 service. Child metadata names its parent; the parent stores its child list.
 
 ## UI path

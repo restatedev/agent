@@ -436,9 +436,7 @@ type AgentToolContext = {
   webSearchEnabled: boolean;
   permissions: AgentTools;
   toolSearch?: TurnToolSearch;
-  sandbox: {
-    client(): restate.Operation<SandboxClient>;
-  };
+  sandbox: TurnSandbox; // client() and release()
 };
 ```
 
@@ -448,7 +446,7 @@ The internal call context also contains `toolCallId`. Use:
 - `turnId` for Agent-owned state that must be correlated with the current
   active turn, such as memory, approvals and schedules;
 - `toolCallId` for stable operation identity;
-- `sandbox.client()` for a lazy, shared turn lease on the agent's sandbox.
+- `sandbox.client()` for the agent's sandbox, acquired lazily once per turn.
 
 The context exposes capabilities used by concrete tools, without general
 orchestration hooks. Schedule mutations go through the Agent with the current
