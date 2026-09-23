@@ -13,6 +13,8 @@ yarn-error.log*
 
 # local launcher with live Modal credentials — must never be committed
 modal.sh
+# local ngrok agent config holds an API key — must never be committed
+ngrok.yml
 
 # vercel
 .vercel
