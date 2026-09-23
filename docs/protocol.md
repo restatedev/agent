@@ -104,8 +104,9 @@ permissions. Parent cleanup targets only its recorded child turn.
 
 `Agent.retire({})` retires a top-level agent. Child retirement requires matching
 parent metadata; it is an internal lifecycle call. Retirement is idempotent,
-interrupts active work, drops queued work, retires children/schedules/sandbox,
-and refuses new turns. It does not purge retained conversation history.
+interrupts active work, drops queued work and pending approvals, clears the
+profile and memories, retires children/schedules/sandbox, and refuses new
+turns. It does not purge retained conversation history.
 
 ## Typed clients and local UI
 

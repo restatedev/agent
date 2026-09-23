@@ -60,7 +60,7 @@ test("interrupt, turn end, retirement, and abandoned waits send idempotent exact
     assert.equal(cleanup[0].key, "child");
     assert.equal(cleanup[0].parameter.turnId, "child-turn");
     assert.equal(cleanup[0].parameter.parentAgentId, "parent");
-    assert.deepEqual(f.state.get("sub-agent-tasks"), []);
+    assert.deepEqual(f.state.get("sub-agent-tasks") ?? [], []);
     await f.invoke(Agent.object.finishSubAgentTask, {turnId: "parent-turn", toolCallId: "call-1"});
     assert.equal(f.sends.filter(call => call.method === "interruptDelegatedTurn").length, 1);
   }

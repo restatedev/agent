@@ -75,7 +75,8 @@ memories, guardrails and effective tools, then applies any narrower selection.
 The copy does not follow later parent changes. Children cannot create children
 or schedules; the parent initiates their tasks and follow-ups. Tool waits attach
 to the exact child turn. Cleanup never interrupts an unrelated successor turn.
-Retirement stops work and releases resources, while retained history remains.
+Retirement stops work, clears the profile, memories and approvals, and releases
+resources, while retained history remains.
 
 ## Scheduling
 

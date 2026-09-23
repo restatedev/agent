@@ -11,6 +11,9 @@ test("retirement interrupts the turn, drops queued work, and asynchronously reti
     turn: {id: "turn-1", steeringBatches: [], tools: {}},
     pending: [{role: "user", text: "queued"}],
     approvals: [{turnId: "turn-1", approvalId: "approval"}],
+    memories: [{key: "secret", content: "private"}],
+    "profile/instructions": "Be terse",
+    "sub-agent-tasks": [],
   });
   await f.invoke(Agent.object.retire, {});
   const sendsAfterRetire = f.sends.length;
@@ -19,6 +22,10 @@ test("retirement interrupts the turn, drops queued work, and asynchronously reti
   assert.equal(f.state.get("deleted"), true);
   assert.equal(f.state.has("pending"), false);
   assert.equal(f.state.has("approvals"), false);
+  assert.ok(f.sends.some(s => s.service === "AgentNotifications" && s.parameter === "approvals"));
+  for (const key of ["memories", "profile/instructions", "sub-agent-tasks"]) assert.equal(f.state.has(key), false, key);
+  assert.deepEqual((await f.invoke(Agent.object.profile)).memories, []);
+  assert.equal((await f.invoke(Agent.object.profile)).instructions, undefined);
   assert.equal(f.state.get("turn").interruptReason, "Agent deleted");
   assert.equal(f.signals[0].id, "turn-1");
   assert.ok(f.sends.some(s => s.service === "Sandbox" && s.method === "retire"));

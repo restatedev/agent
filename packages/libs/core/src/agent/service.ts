@@ -264,11 +264,15 @@ export const Agent = restate.implement(AgentDefinition, {
       restate.state().set("deleted", true);
       restate.state().clear("pending");
       yield* stopSubAgentTasks(undefined, "Parent deleted");
+      restate.state().clear("sub-agent-tasks");
       const current = yield* activeTurn.current();
-      if (current) {
-        yield* activeTurn.interrupt("Agent deleted");
-        yield* approvals.clearTurn(current.id);
-      }
+      if (current) yield* activeTurn.interrupt("Agent deleted");
+      if (yield* approvals.clearAll()) yield* publishNotification("approvals");
+      // `profile` is shared and has no deleted check; clearing is what keeps a
+      // retired agent's memories and instructions from staying readable.
+      // `metadata` stays so a repeated retire still sees its parent, and
+      // `turn` stays until the interrupted invocation reports to onTurnEnd.
+      profile.clear();
       // Do not wait for sandbox cleanup while holding Agent's lock: the active
       // turn may need this controller.
       for (const child of yield* readChildren()) {

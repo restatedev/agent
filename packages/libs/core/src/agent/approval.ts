@@ -64,6 +64,13 @@ export function* cancel({
   return cancelled;
 }
 
+/** Removes every pending approval, reporting whether any existed. */
+export function* clearAll(): restate.Operation<boolean> {
+  const pending = yield* list();
+  restate.state().clear(APPROVALS);
+  return pending.length > 0;
+}
+
 /** Removes every approval belonging to a completed Turn invocation. */
 export function* clearTurn(
   turnId: string,

@@ -63,3 +63,10 @@ export function setGuardrails(guardrails: Guardrail[]): void {
 export function setTools(tools: AgentTools): void {
   restate.state().set(TOOLS, tools);
 }
+
+/** Removes the whole profile, memories included, from a retired agent. */
+export function clear(): void {
+  for (const key of [INSTRUCTIONS, GUARDRAILS, TOOLS, WEB_SEARCH_ENABLED])
+    restate.state().clear(key);
+  memory.clear();
+}

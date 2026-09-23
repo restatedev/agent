@@ -37,3 +37,7 @@ export function* apply(
   else restate.state().clear(MEMORIES);
   return {applied: true, memoryCount: updated.length};
 }
+
+export function clear(): void {
+  restate.state().clear(MEMORIES);
+}
