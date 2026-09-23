@@ -82,3 +82,17 @@ test("discovery fails safely with a missing credential and does not send an anon
   assert.match(live.output.servers[0].warnings[0], /missing/);
   assert.equal(fetch.mock.callCount(), 0);
 });
+
+test("discovery retries transient failures inside one effect and journals only sanitized warnings", async t => {
+  environment(t);
+  let calls = 0;
+  const fetch = t.mock.method(globalThis, "fetch", async () => { calls++; throw Error(`Provider echoed ${secret}`); });
+  const live = await runHandler(ctx => durable.execute(ctx, discoverMcpTools([server], {agentId: "demo", turnId: "turn"}, [])));
+  assert.equal(calls, 3, "a transient failure is retried before giving up");
+  assert.equal(live.output.servers[0].status, "unavailable");
+  assert.ok(!text(live.journal).includes(secret));
+  assert.ok(!JSON.stringify(live.output).includes(secret));
+  const replay = await runHandler(ctx => durable.execute(ctx, discoverMcpTools([server], {agentId: "demo", turnId: "turn"}, [])), {replay: live.journal});
+  assert.deepEqual(replay.output, live.output);
+  assert.equal(fetch.mock.callCount(), 3, "replay performs no HTTP");
+});

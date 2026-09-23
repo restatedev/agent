@@ -53,7 +53,9 @@ tokens do not share authenticated catalog/session entries.
 Successful recorded HTTP results replay without another HTTP request. If an
 unfinished effect has to execute again, it uses the environment at execution
 time. Authentication failures become tool observations; they do not suspend
-for login or retry indefinitely. Stateful connections are released at turn end
+for login or retry indefinitely. Discovery, which is a read, retries other
+failures up to three times with a short backoff inside its effect, then marks
+the server unavailable for that turn with a sanitized warning. Stateful connections are released at turn end
 and discarded after failed calls.
 
 ## What may be recorded

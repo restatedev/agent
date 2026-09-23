@@ -5,6 +5,7 @@
 // then calls the exact snapshotted remote tool definition.
 
 import {createHash} from "node:crypto";
+import {setTimeout as sleep} from "node:timers/promises";
 import {
   type CallToolResult,
   Client,
@@ -31,6 +32,8 @@ const MAX_CACHE_TTL_MS = 5 * 60 * 1_000;
 const MAX_CACHED_CATALOGS = 256;
 const REFRESH_RETRY_INTERVAL_MS = 30 * 1_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60 * 1_000;
+const DISCOVERY_ATTEMPTS = 3;
+const DISCOVERY_BACKOFF_MS = 250;
 
 type McpServerSnapshot = McpServer & {turnId: string; timeoutMs: number};
 
@@ -275,16 +278,28 @@ function* discoverMcpServer(
   };
   return yield* restate.run(
     async ({signal}) => {
-      try {
-        const result = await discoverCached(config, server, signal);
-        return {
-          warnings: result.warnings,
-          ...(result.catalog ? {catalog: {...result.catalog, server}} : {}),
-        };
-      } catch (error) {
-        signal.throwIfAborted();
-        if (isCancellation(error)) throw error;
-        return {warnings: [`${config.id}: ${errorMessage(error)}`]};
+      // Discovery is a read, so a transient network failure is retried here,
+      // inside the effect. Letting Restate retry would require throwing out of
+      // the run, and the last attempt's error text would then be journaled;
+      // this way only the sanitized warning below is ever recorded.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const result = await discoverCached(config, server, signal);
+          return {
+            warnings: result.warnings,
+            ...(result.catalog ? {catalog: {...result.catalog, server}} : {}),
+          };
+        } catch (error) {
+          signal.throwIfAborted();
+          if (isCancellation(error)) throw error;
+          if (attempt < DISCOVERY_ATTEMPTS && isTransient(error)) {
+            await sleep(DISCOVERY_BACKOFF_MS * 4 ** (attempt - 1), undefined, {
+              signal,
+            });
+            continue;
+          }
+          return {warnings: [`${config.id}: ${errorMessage(error)}`]};
+        }
       }
     },
     {name: `discover-mcp-${config.id}`, retry: {maxAttempts: 1}},
@@ -735,6 +750,15 @@ function waitForRefresh(
 function isCancellation(error: unknown): boolean {
   return (
     error instanceof restate.InterruptedError || error instanceof CancelledError
+  );
+}
+
+/** Configuration and authorization failures do not heal by retrying. */
+function isTransient(error: unknown): boolean {
+  return !(
+    error instanceof McpConfigurationError ||
+    UnauthorizedError.isInstance(error) ||
+    InsufficientScopeError.isInstance(error)
   );
 }
 
