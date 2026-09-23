@@ -9,6 +9,17 @@ login, browser sessions, account ownership checks, or stored OAuth credentials.
 Run the UI and Restate ingress privately. Use fresh Restate state for this
 branch; the former standalone application's state is not migrated.
 
+**Trust boundary.** Anyone who can reach Restate ingress is fully trusted.
+Ingress exposes every handler, including the internal lifecycle ones: the
+parent checks on `Agent.retire`, `startDelegatedTurn` and
+`interruptDelegatedTurn` compare against a parent ID the caller supplies, and
+`Agent.initialize`, `Agent.deliver` and `AgentScheduler.upsert` accept any
+profile, message or schedule for any key. These checks keep the model and the
+UI inside their rules; they do not authenticate callers. The UI adds no
+authentication either: it accepts only a loopback Host and same-origin writes,
+which stops other websites, not other local processes. Never expose ingress
+(port 8080) or the UI (port 3000) beyond the machine or a network you trust.
+
 ## Run it
 
 You need Node.js 22+, pnpm, Restate Server/CLI, and an OpenAI API key.

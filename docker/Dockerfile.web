@@ -12,6 +12,14 @@
 #   APP_PUBLIC_URL      optional expected browser origin for same-origin checks
 #   PORT                HTTP listen port (default 3000)
 #   HOSTNAME            listen address (default 0.0.0.0)
+#
+# WARNING: the UI has no authentication and can ask, steer, change tools and
+# resolve approvals for any agent. The container listens on all interfaces,
+# so publish it on loopback only:
+#
+#   docker run -p 127.0.0.1:3000:3000 ... restate-agent-web
+#
+# A plain `-p 3000:3000` exposes that control API to the whole network.
 
 # syntax=docker/dockerfile:1
 
