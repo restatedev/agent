@@ -31,7 +31,6 @@ Use executable contracts before prose:
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
    internal handlers, and `src/model/provider.ts`;
 2. handler code in `src/agent/service.ts`, `src/session/service.ts`,
-   `src/notifications/service.ts`, `src/scheduler/service.ts`,
    and `src/sandbox/service.ts`;
 3. focused ownership modules;
 4. docs.
@@ -44,9 +43,9 @@ an unimplemented behavior is a bug.
 Preserve these unless the requested change explicitly replaces them:
 
 1. `Agent` is the responsive controller for one `agentId`. It owns active work,
-   pending input, profile/memories, approvals, metadata and child bookkeeping.
-   AgentSession owns history, AgentNotifications owns invalidation, and
-   AgentScheduler owns timers. No account or browser-session service exists.
+   pending input, profile/memories, approvals, schedules, metadata, child
+   bookkeeping and the notification watermarks. AgentSession owns history. No
+   account or browser-session service exists.
    Ingress and the optional local UI are trusted operator surfaces.
 
 2. `AgentSession`, keyed by the same `agentId`, owns the canonical transcript
@@ -97,12 +96,10 @@ Preserve these unless the requested change explicitly replaces them:
     deterministic controller, `AgentSession` owns session history and turn
     execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
     iteration, and the model plus harness/runtime is the operational agent.
-19. `AgentNotifications` carries invalidation only. AgentSession, Agent, and
-    AgentScheduler remain authoritative for history, profile/approvals/children,
-    and schedules respectively.
-20. AgentScheduler owns delayed calls and delivers to the same agent with an
-    explicit queue/steer/interrupt policy. It never waits for the whole turn.
-    Agent retirement sends scheduler cleanup one way to avoid callback deadlock.
+19. Notifications carry invalidation only. AgentSession stays authoritative for
+    history and Agent for profile, approvals, children and schedules.
+20. A schedule's delayed `Agent.fire` routes to the same agent with an explicit
+    queue/steer/interrupt policy. It never waits for the whole turn.
 21. Child agents inherit a creation-time copy of context and narrower access.
     Parent controllers coordinate exact child turns, but their sessions own
     child-result waits. Children cannot nest or create schedules.
@@ -145,7 +142,7 @@ The detailed turn-runtime list lives in
 - AgentSession history is the public conversation event log, not the complete
   agent trajectory or Restate execution trace.
 - History is not the invalidation mechanism for every current-state area.
-  Drain `AgentSession.history`, then use AgentNotifications versions to decide
+  Drain `AgentSession.history`, then use Agent's notification versions to decide
   whether to re-read history, profile, approvals,
   or schedules.
 - `activity` and `progress` are status communication, not chain-of-thought or
@@ -161,11 +158,11 @@ The detailed turn-runtime list lives in
 | User message routing and public controller handler | `agent/service.ts` |
 | Active turn ID, pending user queue, signal delivery/reconciliation | `agent/active-turn.ts` |
 | History chunks, cursor, writer, summary checkpoint | `session/history.ts` |
-| Notification revisions, subscriptions, and awakeables | `notifications/service.ts` |
+| Notification revisions, subscriptions, and awakeables | `agent/notifications.ts` |
 | Instructions, guardrails | `agent/profile.ts` |
 | Agent-local memories | `agent/memory.ts` |
 | Pending approval state and decision signal | `agent/approval.ts` |
-| Durable scheduled-message state, timers, and delivery | `scheduler/service.ts` |
+| Durable scheduled-message state and timers | `agent/schedules.ts` |
 | Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |

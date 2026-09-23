@@ -22,7 +22,7 @@ test("retirement interrupts the turn, drops queued work, and asynchronously reti
   assert.equal(f.state.get("deleted"), true);
   assert.equal(f.state.has("pending"), false);
   assert.equal(f.state.has("approvals"), false);
-  assert.ok(f.sends.some(s => s.service === "AgentNotifications" && s.parameter === "approvals"));
+  assert.ok(f.state.get("notifications").versions.approvals > 0);
   for (const key of ["memories", "profile/instructions", "sub-agent-tasks"]) assert.equal(f.state.has(key), false, key);
   assert.deepEqual((await f.invoke(Agent.object.profile)).memories, []);
   assert.equal((await f.invoke(Agent.object.profile)).instructions, undefined);

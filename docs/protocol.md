@@ -48,7 +48,7 @@ approval resolution.
 and `nextSequence`. Begin at 1 and use the returned cursor to paginate. The
 public log is append-only; compaction affects model context, not stored entries.
 
-`AgentNotifications.snapshot()` returns `{revision, versions}`; versions has
+`Agent.notifications()` returns `{revision, versions}`; versions has
 `history`, `profile`, `approvals`, and `schedules` counters. `watch` accepts
 `{afterRevision, timeoutSeconds}` and waits for a new revision or timeout. Keep
 the same idempotency key when retrying a single long-poll window; use a new key
@@ -57,7 +57,7 @@ after it completes. Notifications invalidate data; they do not carry it.
 Capture a notification watermark **before** reading authoritative state, drain
 history pages, and then watch. This avoids losing a change between a read and
 a subscription. Re-read only changed topics. Profile changes include metadata
-and child directory changes. Read schedules from AgentScheduler.
+and child directory changes.
 
 The browser's `snapshot` and `sync` endpoints implement this sequence in
 `packages/apps/web/src/server/agent-snapshot.ts`. There is no account-wide feed.
@@ -99,7 +99,7 @@ its allowed tools, while the session waits for the exact child invocation.
 Children copy creation-time context, retain separate state, and cannot broaden
 permissions. Parent cleanup targets only its recorded child turn.
 
-`AgentScheduler.upsert`, `list`, and `cancel` address the same agent key. See
+`Agent.createSchedule`, `schedules`, and `cancelSchedule` manage schedules. See
 [schedules](schedules.md) for payloads, recurrence and busy policies.
 
 `Agent.retire({})` retires a top-level agent. Child retirement requires matching

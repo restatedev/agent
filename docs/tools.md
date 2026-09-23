@@ -140,7 +140,7 @@ of the model contract, not cosmetic documentation.
 | `deleteSubAgent` | Delete a direct child's entire subtree | Foreground Agent RPC |
 | `createSchedule` | Create or replace a message timer for this conversation | Foreground Agent RPC (turn-checked) |
 | `cancelSchedule` | Idempotently cancel a schedule | Foreground Agent RPC (turn-checked) |
-| `listSchedules` | Read schedules for this agent | Foreground AgentScheduler RPC |
+| `listSchedules` | Read schedules for this agent | Foreground Agent RPC |
 | `listFiles` | List an agent sandbox directory | Foreground sandbox operation |
 | `readFile` | Read a UTF-8 sandbox file | Foreground sandbox operation |
 | `writeFile` | Replace a UTF-8 sandbox file | Foreground sandbox operation |
@@ -444,9 +444,8 @@ The internal call context also contains `toolCallId`. Use:
 
 The context exposes capabilities used by concrete tools, without general
 orchestration hooks. Schedule mutations go through the Agent with the current
-`turnId`, which authorizes them against the live turn and then calls
-AgentScheduler; `listSchedules` reads AgentScheduler directly. Once an upsert
-completes, the schedule is an independent durable side effect; a later
+`turnId`, which authorizes them against the live turn. Once saved, the
+schedule is an independent durable side effect; a later
 interruption of the creating turn does not roll it back.
 
 ## Adding a built-in tool

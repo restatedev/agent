@@ -41,10 +41,6 @@ export {HttpCallError as IngressClientError} from "@restatedev/restate-sdk-clien
 import {
   AgentIngressDefinition,
   type AgentIngressHandlers,
-  AgentNotificationsIngressDefinition,
-  type AgentNotificationsIngressHandlers,
-  AgentSchedulerIngressDefinition,
-  type AgentSchedulerIngressHandlers,
   AgentSessionIngressDefinition,
   type AgentSessionIngressHandlers,
   DEFAULT_ASK,
@@ -88,8 +84,8 @@ export type WatchOptions = {
 /**
  * Typed operations on one agent through Restate ingress.
  *
- * Every method maps to one public handler of `Agent`, `AgentSession`,
- * `AgentNotifications` or `AgentScheduler` for this client's agent ID, except
+ * Every method maps to one public handler of `Agent` or `AgentSession` for
+ * this client's agent ID, except
  * `follow`, which combines `history` and `watchNotifications` into a stream.
  * Rejected calls throw {@link AgentClientError}.
  */
@@ -231,14 +227,6 @@ export function createAgentClient({
     AgentSessionIngressDefinition,
     agentId,
   );
-  const notifications = ingress.objectClient<AgentNotificationsIngressHandlers>(
-    AgentNotificationsIngressDefinition,
-    agentId,
-  );
-  const scheduler = ingress.objectClient<AgentSchedulerIngressHandlers>(
-    AgentSchedulerIngressDefinition,
-    agentId,
-  );
   async function invoke<T>(operation: PromiseLike<T>): Promise<T> {
     try {
       return await operation;
@@ -268,10 +256,7 @@ export function createAgentClient({
     options?: WatchOptions,
   ): Promise<AgentNotificationSnapshot> {
     return invoke(
-      notifications.watch(
-        {afterRevision, timeoutSeconds},
-        rpc.opts(options ?? {}),
-      ),
+      agent.watch({afterRevision, timeoutSeconds}, rpc.opts(options ?? {})),
     );
   }
 
@@ -299,7 +284,7 @@ export function createAgentClient({
 
     async notifications(): Promise<AgentNotificationSnapshot> {
       return invoke(
-        notifications.snapshot(
+        agent.notifications(
           rpc.opts<void, AgentNotificationSnapshot>({input: serde.empty}),
         ),
       );
@@ -381,13 +366,13 @@ export function createAgentClient({
       return invoke(agent.deleteMemory({key}));
     },
     async schedules() {
-      return invoke(scheduler.list(rpc.opts({input: serde.empty})));
+      return invoke(agent.schedules(rpc.opts({input: serde.empty})));
     },
     async schedule(spec: ScheduleSpec) {
-      return invoke(scheduler.upsert(spec));
+      return invoke(agent.createSchedule(spec));
     },
     async cancelSchedule(scheduleId: string) {
-      return invoke(scheduler.cancel({scheduleId}));
+      return invoke(agent.cancelSchedule({scheduleId}));
     },
     async toolCatalog() {
       return invoke(agent.toolCatalog(rpc.opts({input: serde.empty})));

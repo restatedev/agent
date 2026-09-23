@@ -10,10 +10,9 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 
 ## Ownership
 
-- `Agent` owns active work, queued input, profile/memories, approvals, metadata,
-  child bookkeeping and external-message routing.
-- `AgentNotifications` owns invalidation revisions/subscriptions;
-  `AgentScheduler` owns per-agent schedules and durable delayed calls.
+- `Agent` owns active work, queued input, profile/memories, approvals,
+  schedules, metadata, child bookkeeping, external-message routing and the
+  notification revisions/subscriptions.
 - `AgentSession`, keyed by the same `agentId`, owns the append-only transcript
   and compaction checkpoint. Its exclusive `doTurn` owns cross-step execution.
 - `doTurn` opens history once, appends activated entries and builds model context
@@ -37,8 +36,8 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
   One turn borrows lazily and releases on every handled exit.
 
 Built-in tool mechanics execute inside `doTurn`; they are not services merely
-for durability. Tools call Agent for Agent-owned state, AgentScheduler for
-durable schedules, Sandbox for serialized resource lifecycle, and independently
+for durability. Tools call Agent for Agent-owned state (including
+schedules), Sandbox for serialized resource lifecycle, and independently
 deployed dynamic handlers as ordinary durable RPCs.
 
 ## Execution shape
@@ -153,7 +152,7 @@ write history.
   PTC program.
 - `manageMemory` atomically updates this Agent's collection (at most 32 entries).
   Agent accepts only its active, non-interrupting `turnId`.
-- Schedule tools persist on the same-key AgentScheduler. Once saved, that
+- Schedule tools persist on the same-key Agent. Once saved, that
   durable side effect survives the turn and is not a pending turn operation.
 
 - Assistant tool-call and matching tool-result messages are committed together
@@ -260,9 +259,9 @@ derived events are omitted from future model context and compaction where
 appropriate.
 
 Profile setters publish `profile` versions without transcript events. Every
-history append one-way publishes `history`; AgentScheduler publishes schedule
-changes. Consumers read authoritative history from AgentSession, context and
-approvals from Agent, and schedules from AgentScheduler, then use the per-agent
+history append sends `Agent.publish("history")` one way; schedule changes
+publish inline. Consumers read authoritative history from AgentSession and
+context, approvals and schedules from Agent, then use the per-agent
 notification versions to invalidate those snapshots.
 
 Every `completed`, `interrupted`, `stopped`, or `failed` outcome includes

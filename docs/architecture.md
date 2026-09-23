@@ -8,10 +8,8 @@ send `Agent/{agentId}/ask` immediately. No account registration is required.
 
 | Component | Durable state and responsibility |
 | --- | --- |
-| `Agent` | Active invocation ID, queued input, steering reconciliation, profile, memories, approvals, metadata and child directory |
+| `Agent` | Active invocation ID, queued input, steering reconciliation, profile, memories, approvals, schedules, notification watermarks, metadata and child directory |
 | `AgentSession` | Append-only conversation history, summary checkpoint, exclusive `doTurn` execution |
-| `AgentNotifications` | Revision and per-topic versions, subscriptions |
-| `AgentScheduler` | Schedule registry, next delayed invocation and recurrence |
 | `Sandbox` | Workspace reference and borrow/release/suspend/retire lifecycle |
 
 A turn is one `AgentSession.doTurn` invocation. Its invocation ID is its
@@ -79,8 +77,8 @@ resources, while retained history remains.
 
 ## Scheduling
 
-`AgentScheduler/{agentId}` sends delayed messages to the same Agent through
-`deliver`. Busy policy is explicit: queue, steer or interrupt. Repeating
+Each schedule is a delayed `Agent/{agentId}/fire` invocation that routes its
+message like any external delivery. Busy policy is explicit: queue, steer or interrupt. Repeating
 schedules rearm a durable timer; obsolete timer invocations are ignored.
 This example does not create a fresh agent for each occurrence. See
 [schedules](schedules.md) for the contract and cancellation semantics.
@@ -104,10 +102,10 @@ by `?agent=`, proxies supported operations, rejects a non-loopback Host on
 every request (DNS rebinding) and checks the Origin of writes.
 It has no authentication or tenant isolation. Its scripts bind to `127.0.0.1`.
 
-The server captures an `AgentNotifications` watermark before loading history,
+The server captures an Agent notification watermark before loading history,
 profile, approvals, metadata, children and schedules. It drains history pages,
 then long-polls changes and re-reads only changed topics. `profile` invalidates
-metadata and children too; `schedules` is published by AgentScheduler. Browser
+metadata and children too. Browser
 merging deduplicates sequences and never moves its history cursor backward.
 Each mounted conversation owns one cancellable poll; switching is navigation.
 
