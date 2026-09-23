@@ -20,7 +20,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import {useEffect, useMemo, useState} from "react";
+import {useMemo, useState} from "react";
 
 import type {SequencedEntry} from "./agent-client";
 import {Bubble, BubbleContent} from "./components/ui/bubble";
@@ -229,11 +229,14 @@ function TurnDetail({entry}: {entry: DetailEntry}) {
 
 function TurnCard({row}: {row: TurnRow}) {
   const [open, setOpen] = useState(!row.terminal);
-  useEffect(() => {
-    if (row.terminal) {
-      setOpen(false);
-    }
-  }, [row.terminal]);
+  // Collapse once when the turn finishes; the user may reopen it afterwards.
+  // Adjusted during render rather than in an effect to avoid a second render
+  // pass (https://react.dev/learn/you-might-not-need-an-effect).
+  const [seenTerminal, setSeenTerminal] = useState(row.terminal);
+  if (row.terminal !== seenTerminal) {
+    setSeenTerminal(row.terminal);
+    if (row.terminal) setOpen(false);
+  }
 
   let steps = 0;
   let tools = 0;

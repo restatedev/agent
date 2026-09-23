@@ -470,21 +470,14 @@ function ProfilePanel({
   notify: (message: string, error?: boolean) => void;
   refreshProfile: () => Promise<AgentProfile>;
 }) {
-  const [instructions, setInstructions] = useState("");
-  const [guardrails, setGuardrails] = useState<Guardrail[]>([]);
-  const [instructionsDirty, setInstructionsDirty] = useState(false);
-  const [guardrailsDirty, setGuardrailsDirty] = useState(false);
+  // Unedited fields follow the live profile; a draft exists only while the
+  // user has unsaved changes.
+  const [instructionsDraft, setInstructionsDraft] = useState<string>();
+  const [guardrailsDraft, setGuardrailsDraft] = useState<Guardrail[]>();
   const [savingWebSearch, setSavingWebSearch] = useState(false);
-  useEffect(() => {
-    if (!profile) return;
-    if (!instructionsDirty) setInstructions(profile.instructions ?? "");
-    if (!guardrailsDirty) setGuardrails(profile.guardrails);
-  }, [guardrailsDirty, instructionsDirty, profile]);
-
-  const changeGuardrails = (next: Guardrail[]) => {
-    setGuardrails(next);
-    setGuardrailsDirty(true);
-  };
+  const instructions = instructionsDraft ?? profile?.instructions ?? "";
+  const guardrails = guardrailsDraft ?? profile?.guardrails ?? [];
+  const instructionsDirty = instructionsDraft !== undefined;
 
   return (
     <div className="settings-sections">
@@ -554,10 +547,7 @@ function ProfilePanel({
           </div>
         </div>
         <textarea
-          onChange={(event) => {
-            setInstructions(event.target.value);
-            setInstructionsDirty(true);
-          }}
+          onChange={(event) => setInstructionsDraft(event.target.value)}
           placeholder="Prefer concise answers and metric units."
           rows={4}
           value={instructions}
@@ -568,7 +558,7 @@ function ProfilePanel({
             onClick={async () => {
               try {
                 await client.setInstructions(instructions.trim() || null);
-                setInstructionsDirty(false);
+                setInstructionsDraft(undefined);
                 notify(
                   instructions.trim()
                     ? "Instructions saved"
@@ -586,10 +576,7 @@ function ProfilePanel({
           <button
             className="button ghost small"
             disabled={!instructionsDirty}
-            onClick={() => {
-              setInstructions(profile?.instructions ?? "");
-              setInstructionsDirty(false);
-            }}
+            onClick={() => setInstructionsDraft(undefined)}
             type="button"
           >
             Revert
@@ -618,8 +605,7 @@ function ProfilePanel({
               }
               try {
                 await client.setGuardrails(next);
-                setGuardrails(next);
-                setGuardrailsDirty(false);
+                setGuardrailsDraft(undefined);
                 notify(
                   next.length
                     ? `${next.length} guardrail(s) saved`
@@ -639,7 +625,10 @@ function ProfilePanel({
           Natural-language policies evaluated before tool batches or responses
           are published.
         </p>
-        <GuardrailEditor guardrails={guardrails} onChange={changeGuardrails} />
+        <GuardrailEditor
+          guardrails={guardrails}
+          onChange={setGuardrailsDraft}
+        />
       </section>
     </div>
   );
@@ -722,6 +711,9 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     () => activeTurn(agent.entries, provisionalTurn, pendingTurnId),
     [agent.entries, pendingTurnId, provisionalTurn],
   );
+  // A just-started turn is shown before its first entry arrives; forget it
+  // once it is no longer active. Adjusted during render, not in an effect.
+  if (provisionalTurn && !turn) setProvisionalTurn(undefined);
   const notify = useCallback((message: string, error = false) => {
     const id = ++toastId.current;
     setToasts((current) => [...current, {id, message, error}]);
@@ -731,9 +723,6 @@ export function App({initialAgentId}: {initialAgentId: string}) {
     );
   }, []);
 
-  useEffect(() => {
-    if (!turn) setProvisionalTurn(undefined);
-  }, [turn]);
   useEffect(() => {
     document.title = `Restate Agent · ${initialAgentId}`;
   }, [initialAgentId]);

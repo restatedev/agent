@@ -1,26 +1,40 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 
-import {type AgentSnapshot, createAgentClient} from "./agent-client";
+import {
+  type AgentClient,
+  type AgentSnapshot,
+  createAgentClient,
+} from "./agent-client";
 import {mergeAgentSnapshot} from "./agent-snapshot";
+
+type Connection = {
+  /** The client this state was loaded through. */
+  client: AgentClient;
+  snapshot?: AgentSnapshot;
+  status: "connecting" | "connected" | "failed";
+  error?: string;
+};
 
 /** One mounted conversation owns one cursor and one cancellable long poll. */
 export function useAgent(agentId: string) {
   const client = useMemo(() => createAgentClient(agentId), [agentId]);
-  const [snapshot, setSnapshot] = useState<AgentSnapshot>();
+  const [stored, setConnection] = useState<Connection>({
+    client,
+    status: "connecting",
+  });
+  // State is tagged with its client, so a new agent ID renders as connecting
+  // with no data, without the effect having to reset state first.
+  const connection: Connection =
+    stored.client === client ? stored : {client, status: "connecting"};
+  const {snapshot, status, error} = connection;
   // The poll reads the latest merged result without restarting on each render.
   const latest = useRef<AgentSnapshot | undefined>(undefined);
-  const [status, setStatus] = useState<"connecting" | "connected" | "failed">(
-    "connecting",
-  );
-  const [error, setError] = useState<string>();
 
   useEffect(() => {
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let retry: (() => void) | undefined;
-    setSnapshot(undefined);
     latest.current = undefined;
-    setStatus("connecting");
     async function follow() {
       let windowKey = crypto.randomUUID();
       while (!abort.signal.aborted) {
@@ -38,15 +52,15 @@ export function useAgent(agentId: string) {
           if (abort.signal.aborted) return;
           windowKey = crypto.randomUUID();
           latest.current = current;
-          setSnapshot(current);
-          setStatus("connected");
-          setError(undefined);
+          setConnection({client, snapshot: current, status: "connected"});
         } catch (failure) {
           if (abort.signal.aborted) return;
-          setStatus("failed");
-          setError(
-            failure instanceof Error ? failure.message : String(failure),
-          );
+          setConnection({
+            client,
+            snapshot: latest.current,
+            status: "failed",
+            error: failure instanceof Error ? failure.message : String(failure),
+          });
           // Keep the window key so reconnecting attaches to the same wait.
           await new Promise<void>((resolve) => {
             retry = resolve;
@@ -66,8 +80,11 @@ export function useAgent(agentId: string) {
   const refreshProfile = useCallback(async () => {
     const profile = await client.profile();
     if (latest.current) {
-      latest.current = {...latest.current, profile};
-      setSnapshot(latest.current);
+      const updated = {...latest.current, profile};
+      latest.current = updated;
+      setConnection((current) =>
+        current.client === client ? {...current, snapshot: updated} : current,
+      );
     }
     return profile;
   }, [client]);
