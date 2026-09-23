@@ -158,6 +158,9 @@ export function createPendingOperations() {
      * @param outcomes - Ordered immediate results from the current tool step.
      * @param context - Agent and turn capabilities needed by completion tasks.
      * @param step - Number of the model step that produced these outcomes.
+     * @param handoffs - Foreground tasks the step stopped waiting for, keyed
+     *   by call ID. Their pending outcomes adopt the running task instead of
+     *   starting a `complete` phase.
      * @returns Outcomes for the current tool-call exchange plus terminal events
      *   discovered for operations created by earlier steps.
      */
@@ -165,20 +168,23 @@ export function createPendingOperations() {
       outcomes: ToolOutcome[],
       context: AgentToolContext,
       step: number,
+      handoffs: ReadonlyMap<string, restate.Task<ToolOutcome>> = new Map(),
     ): restate.Operation<{outcomes: ToolOutcome[]; events: PendingEvent[]}> {
-      const starting = outcomes.flatMap((outcome): PendingOperation[] =>
-        outcome.status === "pending"
-          ? [
-              {
-                step,
-                call: outcome.call,
-                task: restate.spawn(
-                  agentTools.complete(outcome.call, context, step),
-                ),
-              },
-            ]
-          : [],
-      );
+      const starting = outcomes.flatMap((outcome): PendingOperation[] => {
+        if (outcome.status !== "pending") return [];
+        const running = handoffs.get(outcome.call.toolCallId);
+        return [
+          {
+            step,
+            call: outcome.call,
+            task: restate.spawn(
+              running
+                ? adopt(step, outcome.call, running)
+                : agentTools.complete(outcome.call, context, step),
+            ),
+          },
+        ];
+      });
       const resolved: ToolOutcome[] = [];
       const events: PendingEvent[] = [];
 
@@ -345,4 +351,41 @@ export function createPendingOperations() {
       }));
     },
   };
+}
+
+// Reports a handed-off foreground tool as a pending completion. Stopping or
+// cancelling the operation interrupts this wrapper, which forwards the
+// interrupt into the running tool and joins it so its cleanup runs.
+function* adopt(
+  step: number,
+  call: ToolCall,
+  running: restate.Task<ToolOutcome>,
+): restate.Operation<PendingEvent> {
+  let outcome: ToolOutcome;
+  try {
+    outcome = yield* running;
+  } catch (error) {
+    running.interrupt(error);
+    yield* restate.allSettled([running]);
+    throw error;
+  }
+  switch (outcome.status) {
+    case "succeeded":
+      return {
+        step,
+        call,
+        outcome: {status: "succeeded", result: outcome.result},
+      };
+    case "failed":
+      return {step, call, outcome: {status: "failed", error: outcome.error}};
+    default:
+      return {
+        step,
+        call,
+        outcome: {
+          status: "failed",
+          error: `Unresolved foreground tool outcome: ${outcome.status}`,
+        },
+      };
+  }
 }

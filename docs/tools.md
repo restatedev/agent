@@ -317,6 +317,14 @@ completion arrives. Human approval returns its normal text decision; the program
 must inspect it before taking dependent actions. `cancelOperation` can target an
 existing turn-owned operation using an ID obtained from an earlier direct call.
 
+If steering arrives while a program is running, the step stops waiting for it.
+The program continues in the background as a turn-owned pending operation: the
+model receives `{pending: true, operationId, status: "running"}` for the
+`executeProgram` call, reads the steering, and later receives the program's
+return value as a runtime completion. `cancelOperation` with that operation ID
+stops the program. Approvals the program obtains after the handoff are not
+reused by later steps' guardrail checks.
+
 Racing does not cancel losing branches while the program runs. When its root
 returns or throws, outstanding child calls are interrupted and joined; await
 `Promise.allSettled` on those branches before returning if they must finish.

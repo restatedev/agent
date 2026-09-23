@@ -287,6 +287,7 @@ function* executeTurn(
         discoveredTools: state.discoveredTools,
         mcpTools: state.mcpTools,
         pending: state.pending,
+        steering: state.steeringInbox.ready,
       }),
     );
     const step = yield* settleStep(task, state.interrupt);
@@ -451,6 +452,7 @@ function* executeTurn(
             step.outcomes,
             state.context,
             step.step,
+            step.handoffs,
           );
           yield* appendToolTranscript(state, applied.events);
           state.messages.push(
