@@ -169,7 +169,8 @@ The UI (`packages/apps/web`, see [`env.example`](packages/apps/web/env.example))
 | --- | --- |
 | `RESTATE_INGRESS_URL` | Restate ingress for the UI server (default `http://localhost:8080`) |
 | `RESTATE_AUTH_TOKEN` | Bearer token for an authenticated ingress |
-| `APP_PUBLIC_URL` | Browser origin when the UI sits behind a proxy |
+| `APP_PUBLIC_URL` | Browser origin when the UI sits behind a proxy; its host becomes the only accepted Host |
+| `APP_ALLOWED_HOSTS` | Comma-separated extra Host values to accept, for proxies that rewrite Host |
 
 ### MCP servers
 
@@ -203,8 +204,8 @@ for any agent. These checks keep the model and the UI within their rules;
 they do not authenticate anyone.
 
 The UI (port 3000) has no authentication. It accepts only a loopback Host
-and same-origin writes, which stops other websites but not other programs on
-the machine.
+(or the `APP_PUBLIC_URL` host) and same-origin writes, which stops other
+websites, DNS rebinding included, but not other programs on the machine.
 
 Keep both ports on the local machine or a network you trust. When running
 the UI container, publish it on loopback only:
