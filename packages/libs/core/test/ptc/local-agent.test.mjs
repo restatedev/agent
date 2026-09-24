@@ -275,3 +275,35 @@ test("a watch with no change returns the current watermarks at its timeout", asy
   assert.equal(snapshot.revision, 0);
   assert.deepEqual(handlers, ["subscribe", "unsubscribe"]);
 });
+
+test("steering the turn never consumed opens its successor in FIFO order", async (t) => {
+  withMcpServers(t);
+  const f = context("demo", {
+    turn: {id: "turn", tools, steeringBatches: []},
+  });
+  await f.invoke(Agent.object.ask, {message: "queued first"});
+  assert.equal(await f.invoke(Agent.object.steer, {message: "steer one"}), true);
+  assert.equal(await f.invoke(Agent.object.steer, {message: "steer two"}), true);
+
+  // Both batches reached the turn as signals, the first carrying the queue.
+  const batches = f.signals.map((signal) => signal.value);
+  assert.deepEqual(
+    batches.map((batch) => batch.message),
+    ["steer one", "steer two"],
+  );
+  assert.equal(batches[0].queued[0].text, "queued first");
+
+  // The turn consumed only the first batch before it finished.
+  await f.invoke(Agent.object.onTurnEnd, {
+    turnId: "turn",
+    status: "completed",
+    response: "done",
+    consumedSteering: 1,
+  });
+
+  const successor = f.sends.find((send) => send.method === "doTurn");
+  const texts = successor.parameter.entries
+    .filter((entry) => entry.role === "user")
+    .map((entry) => entry.text);
+  assert.deepEqual(texts, ["steer two"]);
+});
