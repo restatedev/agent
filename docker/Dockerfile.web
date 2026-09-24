@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Container for the local demonstration UI. There is no application login.
 #
 # Build from the repository root:
@@ -21,11 +22,11 @@
 #
 # A plain `-p 3000:3000` exposes that control API to the whole network.
 
-# syntax=docker/dockerfile:1
 
 ARG NODE_VERSION=22
 
 FROM node:${NODE_VERSION}-bookworm-slim AS base
+# Keep PNPM_VERSION equal to `packageManager` in the root package.json.
 ARG PNPM_VERSION=11.9.0
 ENV npm_config_store_dir=/pnpm/store
 RUN npm install --global pnpm@${PNPM_VERSION}

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Production image for the Restate agent endpoint (@restate-agents/core).
 #
 # Build from the repository root (the build context must be the repo root so
@@ -18,16 +19,15 @@
 #                         http://localhost:9070) and RESTATE_ADMIN_TOKEN
 #   PORT                  listen port (default 9080)
 
-# syntax=docker/dockerfile:1
 
 # Track the latest Node 22 (the package's engines floor). Pin a digest here if
 # you need bit-for-bit reproducible builds.
 ARG NODE_VERSION=22
 
 FROM node:${NODE_VERSION}-bookworm-slim AS base
-# The repo has no packageManager field, so pin pnpm explicitly and keep it in
-# lockstep with the version developers use locally. pnpm reads npm-style env
-# config; a fixed store path lets the cache mounts below target it.
+# Keep PNPM_VERSION equal to `packageManager` in the root package.json. pnpm
+# reads npm-style env config; a fixed store path lets the cache mounts below
+# target it.
 ARG PNPM_VERSION=11.9.0
 ENV npm_config_store_dir=/pnpm/store
 RUN npm install --global pnpm@${PNPM_VERSION}

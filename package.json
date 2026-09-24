@@ -3,8 +3,13 @@
   "version": "0.0.1",
   "description": "Reference implementation of a durable agent on Restate.",
   "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "pnpm -r build",
+    "test": "pnpm -r test",
     "lint": "oxlint packages && oxfmt --check 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx'",
     "format": "oxlint --fix packages && oxfmt 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx'",
     "bundle": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core bundle",

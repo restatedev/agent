@@ -242,7 +242,7 @@ Run checks proportional to the change, normally:
 ```sh
 pnpm lint
 pnpm build
-pnpm --filter @restate-agents/core test:ptc
+pnpm --filter @restate-agents/core test
 pnpm --filter @restate-agents/web test
 pnpm bundle
 git diff --check

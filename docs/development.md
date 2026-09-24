@@ -92,17 +92,21 @@ Run the relevant deterministic checks before committing an implementation change
 ```sh
 pnpm lint
 pnpm build
-pnpm --filter @restate-agents/core test:ptc
-pnpm --filter @restate-agents/web test
+pnpm test
 pnpm bundle
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same checks on every pull request and
+also builds both container images.
 
 - `lint` runs oxlint on `packages` and checks oxfmt formatting of TypeScript
   sources; `format` applies oxlint fixes and oxfmt. Type-checking is
   TypeScript 7 (the native `tsc`), run by `build`.
 - `build` compiles the workspace and creates a production Next.js build.
-- `bundle` creates the deployable ESM bundle and catches packaging/import
-  problems that type-checking alone may miss.
+- `test` runs the core and web suites.
+- `bundle` creates the deployable ESM bundle, zipped as `dist/index.zip` (this
+  needs the `zip` command), and catches packaging/import problems that
+  type-checking alone may miss.
 
 Also inspect:
 

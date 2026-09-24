@@ -215,8 +215,7 @@ the UI container, publish it on loopback only:
 ```sh
 pnpm lint                                  # oxlint + oxfmt check
 pnpm build                                 # TypeScript 7 type-check and build, incl. Next.js
-pnpm --filter @restate-agents/core test:ptc
-pnpm --filter @restate-agents/web test
+pnpm test                                  # core and web test suites
 pnpm bundle                                # single-file core bundle
 ```
 
