@@ -32,8 +32,9 @@ import {
 import type {UiAgentClient, SequencedEntry} from "./agent-client";
 import {AgentToolsPanel} from "./agent-tools-panel";
 import {errorMessage, type Notify, runAction, shortTurn} from "./format";
+import {Switch} from "./switch";
 import {Transcript} from "./transcript";
-import {useAgent} from "./use-agent";
+import {type SaveProfile, useAgent} from "./use-agent";
 
 type Mode = "ask" | "steer" | "interrupt";
 type Tab = "approvals" | "profile";
@@ -119,6 +120,20 @@ function activeTurn(
     }
   }
   return active ? {turnId: active, ...turns.get(active)} : undefined;
+}
+
+/** Transient feedback toasts; errors stay up longer than confirmations. */
+function useToasts() {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const nextId = useRef(0);
+  const notify = useCallback((message: string, error = false) => {
+    const id = ++nextId.current;
+    setToasts((current) => [...current, {id, message, error}]);
+    const dismiss = () =>
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    window.setTimeout(dismiss, error ? 6_000 : 3_200);
+  }, []);
+  return {toasts, notify};
 }
 
 function Toasts({toasts}: {toasts: Toast[]}) {
@@ -451,12 +466,12 @@ function ProfilePanel({
   client,
   profile,
   notify,
-  refreshProfile,
+  saveProfile,
 }: {
   client: UiAgentClient;
   profile?: AgentProfile;
   notify: Notify;
-  refreshProfile: () => Promise<AgentProfile>;
+  saveProfile: SaveProfile;
 }) {
   // Unedited fields follow the live profile; a draft exists only while the
   // user has unsaved changes.
@@ -467,12 +482,46 @@ function ProfilePanel({
   const guardrails = guardrailsDraft ?? profile?.guardrails ?? [];
   const instructionsDirty = instructionsDraft !== undefined;
 
+  async function saveWebSearch(enabled: boolean) {
+    setSavingWebSearch(true);
+    const state = enabled ? "enabled" : "disabled";
+    await saveProfile(
+      {webSearchEnabled: enabled},
+      `Web search ${state} for future turns`,
+    );
+    setSavingWebSearch(false);
+  }
+
+  async function saveInstructions() {
+    const trimmed = instructions.trim();
+    const message = trimmed ? "Instructions saved" : "Instructions cleared";
+    const saved = await saveProfile({instructions: trimmed || null}, message);
+    if (saved) {
+      setInstructionsDraft(undefined);
+    }
+  }
+
+  async function saveGuardrails() {
+    const next = guardrails.filter(({id, rule}) => id.trim() || rule.trim());
+    if (next.some(({id, rule}) => !id.trim() || !rule.trim())) {
+      notify("Every guardrail needs both an id and a policy", true);
+      return;
+    }
+    const message = next.length
+      ? `${next.length} guardrail(s) saved`
+      : "Guardrails cleared";
+    const saved = await saveProfile({guardrails: next}, message);
+    if (saved) {
+      setGuardrailsDraft(undefined);
+    }
+  }
+
   return (
     <div className="settings-sections">
       <AgentToolsPanel
         client={client}
         profile={profile}
-        refresh={refreshProfile}
+        saveProfile={saveProfile}
         notify={notify}
       />
       <section className="settings-section">
@@ -484,35 +533,13 @@ function ProfilePanel({
               <small>Tavily · free keyless access</small>
             </span>
           </div>
-          <button
-            aria-label="Web search"
-            aria-checked={profile?.webSearchEnabled ?? true}
-            aria-describedby="web-search-description"
-            className="web-search-toggle"
+          <Switch
+            label="Web search"
+            checked={profile?.webSearchEnabled ?? true}
+            describedBy="web-search-description"
             disabled={!profile || savingWebSearch}
-            onClick={async () => {
-              if (!profile || savingWebSearch) return;
-              const enabled = !profile.webSearchEnabled;
-              setSavingWebSearch(true);
-              await runAction(notify, async () => {
-                await client.updateProfile({webSearchEnabled: enabled});
-                await refreshProfile();
-                return `Web search ${enabled ? "enabled" : "disabled"} for future turns`;
-              });
-              setSavingWebSearch(false);
-            }}
-            role="switch"
-            type="button"
-          >
-            <span className="web-search-toggle-track" aria-hidden="true">
-              <span />
-            </span>
-            {savingWebSearch
-              ? "Saving…"
-              : profile?.webSearchEnabled === false
-                ? "Disabled"
-                : "Enabled"}
-          </button>
+            onChange={(enabled) => void saveWebSearch(enabled)}
+          />
         </div>
         <p className="section-copy" id="web-search-description">
           Search queries are sent to Tavily. No API key needed; free access is
@@ -538,18 +565,7 @@ function ProfilePanel({
         <div className="inline-actions">
           <button
             className="button primary small"
-            onClick={() =>
-              runAction(notify, async () => {
-                await client.updateProfile({
-                  instructions: instructions.trim() || null,
-                });
-                setInstructionsDraft(undefined);
-                await refreshProfile();
-                return instructions.trim()
-                  ? "Instructions saved"
-                  : "Instructions cleared";
-              })
-            }
+            onClick={() => void saveInstructions()}
             type="button"
           >
             <Save /> Save
@@ -576,23 +592,7 @@ function ProfilePanel({
           </div>
           <button
             className="button primary small"
-            onClick={async () => {
-              const next = guardrails.filter(
-                ({id, rule}) => id.trim() || rule.trim(),
-              );
-              if (next.some(({id, rule}) => !id.trim() || !rule.trim())) {
-                notify("Every guardrail needs both an id and a policy", true);
-                return;
-              }
-              await runAction(notify, async () => {
-                await client.updateProfile({guardrails: next});
-                setGuardrailsDraft(undefined);
-                await refreshProfile();
-                return next.length
-                  ? `${next.length} guardrail(s) saved`
-                  : "Guardrails cleared";
-              });
-            }}
+            onClick={() => void saveGuardrails()}
             type="button"
           >
             <Save /> Save
@@ -619,7 +619,7 @@ function Inspector({
   profile,
   client,
   notify,
-  refreshProfile,
+  saveProfile,
 }: {
   readOnly: boolean;
   tab: Tab;
@@ -628,7 +628,7 @@ function Inspector({
   profile?: AgentProfile;
   client: UiAgentClient;
   notify: Notify;
-  refreshProfile: () => Promise<AgentProfile>;
+  saveProfile: SaveProfile;
 }) {
   const tabs: Array<{id: Tab; label: string; icon: typeof Activity}> = [
     {id: "approvals", label: "Approvals", icon: ShieldCheck},
@@ -669,7 +669,7 @@ function Inspector({
             client={client}
             notify={notify}
             profile={profile}
-            refreshProfile={refreshProfile}
+            saveProfile={saveProfile}
           />
         )}
       </div>
@@ -680,10 +680,9 @@ function Inspector({
 export function App({initialAgentId}: {initialAgentId: string}) {
   const [mode, setMode] = useState<Mode>("ask");
   const [tab, setTab] = useState<Tab>("approvals");
-  const [toasts, setToasts] = useState<Toast[]>([]);
   const [provisionalTurn, setProvisionalTurn] = useState<string>();
-  const toastId = useRef(0);
-  const agent = useAgent(initialAgentId);
+  const {toasts, notify} = useToasts();
+  const agent = useAgent(initialAgentId, notify);
   const agentName = agent.metadata?.name ?? initialAgentId;
   const readOnly = Boolean(agent.metadata?.parentAgentId);
   const pendingTurnId = agent.approvals[0]?.turnId;
@@ -694,14 +693,6 @@ export function App({initialAgentId}: {initialAgentId: string}) {
   // A just-started turn is shown before its first entry arrives; forget it
   // once it is no longer active. Adjusted during render, not in an effect.
   if (provisionalTurn && !turn) setProvisionalTurn(undefined);
-  const notify = useCallback((message: string, error = false) => {
-    const id = ++toastId.current;
-    setToasts((current) => [...current, {id, message, error}]);
-    window.setTimeout(
-      () => setToasts((current) => current.filter((toast) => toast.id !== id)),
-      error ? 6_000 : 3_200,
-    );
-  }, []);
 
   useEffect(() => {
     document.title = `Restate Agent · ${initialAgentId}`;
@@ -838,7 +829,7 @@ export function App({initialAgentId}: {initialAgentId: string}) {
           client={agent.client}
           notify={notify}
           profile={agent.profile}
-          refreshProfile={agent.refreshProfile}
+          saveProfile={agent.saveProfile}
           setTab={setTab}
           tab={tab}
         />

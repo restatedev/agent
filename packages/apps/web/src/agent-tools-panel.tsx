@@ -13,40 +13,10 @@ import {
 import {useEffect, useRef, useState} from "react";
 
 import type {UiAgentClient} from "./agent-client";
-import {errorMessage, type Notify, runAction} from "./format";
+import {errorMessage, type Notify} from "./format";
+import {ToolSwitch} from "./switch";
 import {toggleMcpServer, toggleTool} from "./tool-toggles";
-
-function ToolSwitch({
-  label,
-  checked,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  disabled: boolean;
-  onChange: (enabled: boolean) => void;
-}) {
-  return (
-    <div className="agent-tool-toggle">
-      <span>{label}</span>
-      <button
-        type="button"
-        className="web-search-toggle"
-        role="switch"
-        aria-label={label}
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
-      >
-        <span className="web-search-toggle-track" aria-hidden="true">
-          <span />
-        </span>
-        {checked ? "Enabled" : "Disabled"}
-      </button>
-    </div>
-  );
-}
+import type {SaveProfile} from "./use-agent";
 
 function ToolGroup({
   label,
@@ -95,12 +65,12 @@ function ToolGroup({
 export function AgentToolsPanel({
   client,
   profile,
-  refresh,
+  saveProfile,
   notify,
 }: {
   client: UiAgentClient;
   profile?: AgentProfile;
-  refresh: () => Promise<AgentProfile>;
+  saveProfile: SaveProfile;
   notify: Notify;
 }) {
   const [catalog, setCatalog] = useState<{
@@ -129,11 +99,7 @@ export function AgentToolsPanel({
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
-    await runAction(notify, async () => {
-      await client.updateProfile({tools});
-      await refresh();
-      return "Tool access saved for the next turn";
-    });
+    await saveProfile({tools}, "Tool access saved for the next turn");
     savingRef.current = false;
     setSaving(false);
   }
