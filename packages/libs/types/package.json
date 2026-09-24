@@ -18,6 +18,10 @@
     "./targets": {
       "types": "./dist/targets.d.ts",
       "default": "./dist/targets.js"
+    },
+    "./tool-grants": {
+      "types": "./dist/tool-grants.d.ts",
+      "default": "./dist/tool-grants.js"
     }
   },
   "scripts": {

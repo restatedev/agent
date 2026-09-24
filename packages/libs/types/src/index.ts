@@ -81,6 +81,7 @@ export const AgentToolsSchema = z.object({
     ),
 });
 export type AgentTools = z.infer<typeof AgentToolsSchema>;
+export {mcpServerGranted, toolSelected} from "./tool-grants.js";
 export const DEFAULT_AGENT_TOOLS: AgentTools = {
   builtin: {mode: "all"},
   dynamic: {mode: "selected", names: []},

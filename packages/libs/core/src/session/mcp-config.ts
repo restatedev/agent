@@ -3,6 +3,7 @@
 import {
   type AgentTools,
   type McpServer,
+  mcpServerGranted,
   McpServerSchema,
 } from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
@@ -71,13 +72,7 @@ export function grantedMcpServers(
   tools: AgentTools,
   servers: McpServer[],
 ): McpServer[] {
-  return servers.filter((server) =>
-    tools.mcp.some(
-      (grant) =>
-        grant.connectionId === server.id &&
-        (grant.tools.mode === "all" || grant.tools.names.length > 0),
-    ),
-  );
+  return servers.filter((server) => mcpServerGranted(tools, server.id));
 }
 
 /** Call only inside the HTTP effect; do not return the value from a run. */

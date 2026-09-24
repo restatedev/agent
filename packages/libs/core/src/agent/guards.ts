@@ -3,12 +3,15 @@
 // Handlers state their preconditions explicitly with one of these guards.
 // Nothing here checks deletion as a side effect.
 
-import type {AgentMetadata, AgentTools} from "@restate-agents/types";
+import {
+  type AgentMetadata,
+  type AgentTools,
+  toolSelected,
+} from "@restate-agents/types";
 import type {AgentDefinition} from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
-import {selected} from "../session/tool-permissions.js";
 import {objectKey} from "../state.js";
 import * as activeTurn from "./active-turn.js";
 
@@ -80,6 +83,6 @@ export function* requireTurnTool(
   denied: string,
 ): restate.Operation<AgentTools> {
   const tools = yield* requireActiveTurn(turnId, tool);
-  if (!selected(tools.builtin, tool)) throw forbidden(denied);
+  if (!toolSelected(tools.builtin, tool)) throw forbidden(denied);
   return tools;
 }

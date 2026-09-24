@@ -6,15 +6,14 @@ import type {
   ToolDescriptor,
   ToolSelection,
 } from "@restate-agents/types";
+import {
+  mcpServerGranted,
+  toolSelected,
+} from "@restate-agents/types/tool-grants";
 import {useEffect, useRef, useState} from "react";
 
 import type {AgentClient} from "./agent-client";
-import {
-  mcpServerEnabled,
-  toggleMcpServer,
-  toggleTool,
-  toolEnabled,
-} from "./tool-toggles";
+import {toggleMcpServer, toggleTool} from "./tool-toggles";
 
 function ToolSwitch({
   label,
@@ -79,7 +78,7 @@ function ToolGroup({
             <ToolSwitch
               key={name}
               label={name}
-              checked={toolEnabled(selection, name)}
+              checked={toolSelected(selection, name)}
               disabled={disabled}
               onChange={(enabled) =>
                 onChange(toggleTool(selection, names, name, enabled))
@@ -154,7 +153,7 @@ export function AgentToolsPanel({
           <ToolSwitch
             key={server.id}
             label={server.id}
-            checked={mcpServerEnabled(permissions, server.id)}
+            checked={mcpServerGranted(permissions, server.id)}
             disabled={saving}
             onChange={(enabled) =>
               void save(toggleMcpServer(permissions, server.id, enabled))
