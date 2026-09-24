@@ -33,9 +33,15 @@ import {executionRetention} from "../retention.js";
 import {destroySandbox} from "../sandbox/index.js";
 import {objectKey} from "../state.js";
 import {
+  approvalGrantedMessage,
   buildModelContext,
+  emptyResponseMessage,
   finalizationInstruction,
+  guardrailBlockedMessage,
+  mcpAvailabilityMessage,
+  rejectionsResetMessage,
   steeringMessage,
+  unusableResponseMessage,
 } from "./context.js";
 import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
 import type {TurnHistory} from "./history.js";
@@ -43,7 +49,6 @@ import * as history from "./history.js";
 import {
   discoverMcpTools,
   type McpAgentTool,
-  type McpServerAvailability,
   releaseMcpSessions,
   releaseMcpSessionsAfterCancellation,
 } from "./mcp-tools.js";
@@ -342,19 +347,7 @@ function* executeTurn(
     state.steps += 1;
     if (steering.length === 0 || step.type === "tools") {
       state.approvedActions.push(...step.approvedActions);
-      state.messages.push(
-        ...step.approvedActions.map(
-          ({guardrailId, question}): ModelMessage => ({
-            role: "user",
-            content: [
-              "[Runtime guardrail]",
-              `Human approval was granted for this proposal under guardrail ${JSON.stringify(guardrailId)}.`,
-              `Approved scope: ${JSON.stringify(question)}`,
-              "The runtime will evaluate later actions and reuse this approval only when they remain materially within that scope.",
-            ].join("\n"),
-          }),
-        ),
-      );
+      state.messages.push(...step.approvedActions.map(approvalGrantedMessage));
       for (const guardrailId of step.rejectedGuardrails) {
         state.rejectedGuardrails.add(guardrailId);
       }
@@ -382,19 +375,12 @@ function* executeTurn(
           throw new TerminalError(
             `The model returned unusable responses three times in a row. Last error: ${step.message}`,
           );
-        state.messages.push({
-          role: "user",
-          content: `Your last response could not be used (${step.message}). Try again with the available tools or give a final answer.`,
-        });
+        state.messages.push(unusableResponseMessage(step.message));
         continue;
 
       case "text": {
         if (!step.content.trim()) {
-          state.messages.push({
-            role: "user",
-            content:
-              "Your last response was empty. Call a tool or give a final answer.",
-          });
+          state.messages.push(emptyResponseMessage);
           continue;
         }
         if (state.pending.size === 0) {
@@ -446,15 +432,9 @@ function* executeTurn(
           };
         }
         state.blockedGuardrails.add(step.guardrailId);
-        state.messages.push({
-          role: "user",
-          content: [
-            "[Runtime guardrail]",
-            `The proposed action was blocked by guardrail ${JSON.stringify(step.guardrailId)}.`,
-            `Reason: ${step.reason}`,
-            "Do not repeat the blocked action. Choose a clearly compliant alternative, or return a concise tool-free refusal.",
-          ].join("\n"),
-        });
+        state.messages.push(
+          guardrailBlockedMessage(step.guardrailId, step.reason),
+        );
         continue;
 
       case "tools":
@@ -486,30 +466,6 @@ function* executeTurn(
     cause: "step_limit",
     reason: `The agent reached its ${MAX_STEPS}-step limit.`,
   });
-}
-
-function mcpAvailabilityMessage(
-  servers: McpServerAvailability[],
-): ModelMessage {
-  return {
-    role: "user",
-    content: [
-      "[Configured MCP server availability for this turn]",
-      ...servers.map((server) => {
-        if (server.status === "available") {
-          return `- ${JSON.stringify(server.serverId)}: available (${server.toolCount} tools)`;
-        }
-        const detail =
-          server.warnings.length > 0
-            ? server.warnings.join("; ")
-            : "tool discovery returned no catalog";
-        return `- ${JSON.stringify(server.serverId)}: configured but unavailable (${detail})`;
-      }),
-      "This is runtime status, not a user request.",
-      "A configured-but-unavailable server is still configured. Do not claim it is absent or unconfigured.",
-      "When the user's request needs an unavailable server, explain its exact availability problem and ask them to check the operator's endpoint or credential configuration.",
-    ].join("\n"),
-  };
 }
 
 type ProgressPhase = Extract<
@@ -683,11 +639,7 @@ function* consumeSteering(
   state.blockedGuardrails.clear();
   if (state.rejectedGuardrails.size > 0) {
     state.rejectedGuardrails.clear();
-    state.messages.push({
-      role: "user",
-      content:
-        "[Runtime guardrail] Prior human rejections do not automatically apply to the new steering update; policies will evaluate the updated action again.",
-    });
+    state.messages.push(rejectionsResetMessage);
   }
 
   for (const signal of steering) {
