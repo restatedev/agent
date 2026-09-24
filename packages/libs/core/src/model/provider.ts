@@ -296,13 +296,7 @@ export async function completeAgent(
   maxOutputTokens = agentOutputBudget(),
 ): Promise<ModelResult> {
   return withOpenAI(async (openai) => {
-    const {messages} = request;
-    // This runs inside the journaled model call: changing the flag affects new
-    // proposals, while recorded tool calls can still execute during replay.
-    const tools = request.tools.filter(
-      ({name}) =>
-        name !== "executeProgram" || process.env.AGENT_PTC_ENABLED !== "false",
-    );
+    const {messages, tools} = request;
     const toolOptions =
       tools.length > 0
         ? {

@@ -1,9 +1,21 @@
 import {z} from "zod";
 
-import type {ToolManifest} from "../model/provider.js";
+import type {ToolManifest} from "../model/index.js";
 import {MAX_SOURCE_LENGTH} from "./guest.js";
 
 export const PROGRAM_TOOL_NAME = "executeProgram";
+
+/**
+ * `AGENT_PTC_ENABLED=false` hides PTC from every catalog: the model's tools,
+ * tool search, the tool-permission UI and the other tools' descriptions.
+ *
+ * It is read once, at module load, so one process gives every turn the same
+ * catalog, and it only ever hides the tool from new proposals: the dispatcher
+ * still executes an `executeProgram` call already recorded in a journal, and
+ * the name stays reserved, so replaying an in-flight turn after a restart
+ * with the flag flipped does not diverge.
+ */
+export const PTC_ENABLED = process.env.AGENT_PTC_ENABLED !== "false";
 export const ProgramInputSchema = z.object({
   source: z
     .string()

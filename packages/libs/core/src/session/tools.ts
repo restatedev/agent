@@ -10,7 +10,11 @@ import {z} from "zod";
 
 import {errorMessage, isCancellation} from "../errors.js";
 import type {ToolCall, ToolManifest} from "../model/index.js";
-import {PROGRAM_TOOL_NAME, programToolManifest} from "../ptc/definition.js";
+import {
+  PROGRAM_TOOL_NAME,
+  programToolManifest,
+  PTC_ENABLED,
+} from "../ptc/definition.js";
 import {openTurnSandbox} from "../sandbox/index.js";
 import {type DiscoveredAgentTool, executeDynamicTool} from "./dynamic-tools.js";
 import {executeMcpTool, type McpAgentTool} from "./mcp-tools.js";
@@ -59,11 +63,17 @@ const definitions: readonly AgentTool[] = [
   sandbox.executeCommandTool,
 ];
 
-/** Names reserved by built-in tools and unavailable to dynamic discovery. */
+/**
+ * Names reserved by built-in tools and unavailable to dynamic discovery. PTC
+ * stays reserved (and executable) even when disabled; see PTC_ENABLED.
+ */
 export const names = [PROGRAM_TOOL_NAME, ...definitions.map(({name}) => name)];
 
+/** The PTC manifest when enabled; every catalog starts from this. */
+const programManifests = PTC_ENABLED ? [programToolManifest] : [];
+
 /** Every built-in tool, as the tool-permission UI lists them. */
-export const builtinCatalog = [programToolManifest, ...definitions].map(
+export const builtinCatalog = [...programManifests, ...definitions].map(
   ({name, description}) => ({name, description}),
 );
 
@@ -222,7 +232,7 @@ export function manifests(
   context: Pick<AgentToolContext, "webSearchEnabled" | "permissions">,
 ): ToolManifest[] {
   return [
-    programToolManifest,
+    ...programManifests,
     ...definitions
       .filter((tool) => tool.name !== "webSearch" || context.webSearchEnabled)
       .map((tool): ToolManifest => ({
