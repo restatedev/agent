@@ -199,7 +199,10 @@ The provider uses:
 - a deterministic sandbox name to recover an already-created resource after a
   Restate retry;
 - termination on suspend while retaining the Volume;
-- new compute mounted to the same Volume on resume;
+- new compute mounted to the same Volume on resume. A ref that still carries
+  a Sandbox ID (its turn was killed before it could suspend) is reused only
+  if `Sandbox.poll()` reports it still running; a finished, timed-out or
+  forgotten Sandbox is replaced by new compute on the same Volume;
 - Volume deletion on destroy.
 
 The ref contains the Volume name and a nullable live Sandbox ID:
