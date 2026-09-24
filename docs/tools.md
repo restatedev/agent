@@ -425,7 +425,13 @@ const waitTool = defineAgentTool({
 ```
 
 The stable `toolCallId` is also the operation ID. Pending completion becomes a
-runtime message in a later model round. A turn cannot finish while pending work
+runtime message in a later model round. Because the original call was already
+answered with `{pending: true}`, that message is a user-role message, so its
+outcome (for a handed-off program or sub-agent, arbitrary web, MCP or tool
+output) is never pasted in as text. `toRuntimeMessage` puts it in an
+`<untrusted-tool-output>` block as JSON, with `<`, `>` and `&` escaped so the
+payload cannot close the block, and the system prompt tells the model to treat
+that block as data. A turn cannot finish while pending work
 exists unless the model cancels it, the user interrupts, or the invocation is
 externally cancelled.
 
