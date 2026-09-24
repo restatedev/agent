@@ -40,17 +40,17 @@ const compiled = await build({
 const session = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString("base64")}`);
 const error = {type: "error", message: "unusable output"};
 beforeEach(() => {globalThis.__turnFailureFixture={steps:[],stepCalls:0,finalRequests:[],final:null,guardrail:{decision:"allow"}};});
-async function run({finalize=false, guardrails=[], replay}={}) {
+async function run({finalize=false, guardrails=[], replay, approvedActions=[], steering=[]}={}) {
   return runHandler(ctx => durable.execute(ctx,durable.gen(function*(){
     const events=[];
     let stops=0;
     const state={
       context:{agentId:"test",turnId:"turn"},
       messages:[{role:"user",content:"Research request"}],
-      guardrails,approvedActions:[],rejectedGuardrails:new Set(),blockedGuardrails:new Set(),
+      guardrails,approvedActions,rejectedGuardrails:new Set(),blockedGuardrails:new Set(),
       transcript:{*append(...entries){events.push(...entries);}},
       interrupt:durable.channel().receive,
-      steeringInbox:{drain:()=>[]}, consumedSteering:0,steps:0,
+      steeringInbox:{drain:()=>steering.splice(0)}, consumedSteering:0,steps:0,
       pending:{size:0,*stop(){stops++;return [];}},
       mcpServers:[],mcpCredentials:[],mcpTools:[],discoveredTools:[],
     };
@@ -58,7 +58,7 @@ async function run({finalize=false, guardrails=[], replay}={}) {
       const outcome=yield* (finalize
         ? session.finalizeEarlyExit(state,{status:"interrupted",reason:"User stopped the turn"})
         : session.executeTurn(state));
-      return {outcome,events,steps:state.steps,stops};
+      return {outcome,events,steps:state.steps,stops,approvals:state.approvedActions.length};
     }catch(e){return {error:e.message,events,steps:state.steps,stops};}
   })),{replay});
 }
@@ -119,4 +119,23 @@ test("a recovered final summary still passes through guardrails", async () => {
   const {output}=await run({finalize:true,guardrails:[{id:"g",description:"No sensitive summaries"}]});
   assert.match(output.outcome.response,/withheld by a guardrail/);
   assert.ok(!output.outcome.response.includes("Sensitive"));
+});
+
+test("empty answers count toward the unusable-response limit", async () => {
+  const empty={type:"text",content:"  "};
+  globalThis.__turnFailureFixture.steps=[empty,error,empty];
+  const {output}=await run();
+  assert.match(output.error,/three times in a row/);
+  assert.equal(output.steps,3);
+});
+
+test("steering clears guardrail approvals granted for the earlier request", async () => {
+  globalThis.__turnFailureFixture.steps=[{type:"text",content:"Done"}];
+  const {output}=await run({
+    approvedActions:[{guardrailId:"g",approvalId:"a",action:{type:"text",content:"old"}}],
+    steering:[{queued:[],message:"Do something else"}],
+  });
+  assert.equal(output.outcome.status,"completed");
+  assert.equal(output.outcome.consumedSteering,1);
+  assert.equal(output.approvals,0);
 });
