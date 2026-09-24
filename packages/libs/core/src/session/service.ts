@@ -396,7 +396,19 @@ function* executeTurn(
       continue;
     }
 
-    if (step.type !== "error") consecutiveModelErrors = 0;
+    // An error or an empty answer makes no progress; three in a row end
+    // the turn instead of spending the remaining steps.
+    const unusable =
+      step.type === "error"
+        ? step.message
+        : step.type === "text" && !step.content.trim()
+          ? "empty response"
+          : undefined;
+    if (unusable === undefined) consecutiveModelErrors = 0;
+    else if (++consecutiveModelErrors >= 3)
+      throw new TerminalError(
+        `The model returned unusable responses three times in a row. Last error: ${unusable}`,
+      );
     switch (step.type) {
       case "error":
         // Output recovery already ran inside callModel. Never restart it
@@ -404,10 +416,6 @@ function* executeTurn(
         if (step.code === "output_limit")
           throw new TerminalError(
             `${step.message} The turn stopped after bounded output recovery; completed tool results remain in the conversation.`,
-          );
-        if (++consecutiveModelErrors >= 3)
-          throw new TerminalError(
-            `The model returned unusable responses three times in a row. Last error: ${step.message}`,
           );
         state.messages.push(unusableResponseMessage(step.message));
         continue;
@@ -695,6 +703,9 @@ function* consumeSteering(
     return;
   }
 
+  // Steering changes the request, so earlier guardrail decisions no longer
+  // apply to it.
+  state.approvedActions.length = 0;
   state.blockedGuardrails.clear();
   if (state.rejectedGuardrails.size > 0) {
     state.rejectedGuardrails.clear();
@@ -719,6 +730,9 @@ function* consumeSteering(
         queuedMessages,
       },
     );
+    // Counted as each batch lands, so a failure part-way through does not
+    // make the Agent re-queue a batch the transcript already holds.
+    state.consumedSteering += 1;
   }
 
   const messages = steering.map(steeringMessage);
@@ -728,7 +742,6 @@ function* consumeSteering(
     state.guardrailInput = latest;
     state.guardrailEvidenceFrom = state.messages.length;
   }
-  state.consumedSteering += steering.length;
 }
 
 function outcomeEntries(outcome: AgentTurnOutcome): ConversationEntry[] {
