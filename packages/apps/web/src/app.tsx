@@ -860,7 +860,11 @@ export function App({initialAgentId}: {initialAgentId: string}) {
                 type="button"
                 onClick={() =>
                   runAction(notify, async () => {
-                    await agent.client.deleteMemory(entry.key);
+                    const existed = await agent.client.deleteMemory(entry.key);
+                    if (!existed) {
+                      return [`Memory "${entry.key}" was already gone`, true];
+                    }
+                    return `Memory "${entry.key}" deleted`;
                   })
                 }
               >
@@ -882,7 +886,19 @@ export function App({initialAgentId}: {initialAgentId: string}) {
                 type="button"
                 onClick={() =>
                   runAction(notify, async () => {
-                    await agent.client.cancelSchedule(schedule.scheduleId);
+                    const result = await agent.client.cancelSchedule(
+                      schedule.scheduleId,
+                    );
+                    if (!result.accepted) {
+                      return [result.error, true];
+                    }
+                    if (!result.cancelled) {
+                      return [
+                        `Schedule "${schedule.scheduleId}" was already gone`,
+                        true,
+                      ];
+                    }
+                    return `Schedule "${schedule.scheduleId}" cancelled`;
                   })
                 }
               >
