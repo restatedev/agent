@@ -398,10 +398,11 @@ function GuardrailEditor({
   return (
     <div className="guardrail-editor">
       {guardrails.map((guardrail, index) => (
-        // Rows only append or delete in this local draft; their position is
-        // stable until the complete guardrail list is saved.
+        // The inputs are fully controlled, so position is a safe identity. The
+        // ID is not: it changes as the user types, which would remount the row
+        // and drop focus on every keystroke.
         // oxlint-disable-next-line react/no-array-index-key
-        <div className="guardrail-row" key={`${index}-${guardrail.id}`}>
+        <div className="guardrail-row" key={index}>
           <input
             aria-label="Guardrail ID"
             className="guardrail-id"
@@ -633,13 +634,16 @@ function Inspector({
     {id: "approvals", label: "Approvals", icon: ShieldCheck},
   ];
   if (!readOnly) tabs.push({id: "profile", label: "Context", icon: Settings2});
+  // Metadata can reveal a parent (read-only child) after the user picked the
+  // Context tab; fall back to one that still exists instead of an empty panel.
+  const shown = tabs.some(({id}) => id === tab) ? tab : "approvals";
   return (
     <aside className="inspector">
       <div className="inspector-tabs" role="tablist">
         {tabs.map(({id, label, icon: Icon}) => (
           <button
-            aria-selected={tab === id}
-            data-active={tab === id}
+            aria-selected={shown === id}
+            data-active={shown === id}
             key={id}
             onClick={() => setTab(id)}
             role="tab"
@@ -653,14 +657,14 @@ function Inspector({
         ))}
       </div>
       <div className="inspector-content" role="tabpanel">
-        {tab === "approvals" && (
+        {shown === "approvals" && (
           <ApprovalsPanel
             approvals={approvals}
             client={client}
             notify={notify}
           />
         )}
-        {tab === "profile" && !readOnly && (
+        {shown === "profile" && (
           <ProfilePanel
             client={client}
             notify={notify}
