@@ -1,78 +1,20 @@
-/**
- * Supervises tool calls whose work continues beyond one agent step.
- *
- * ## Turns, steps, and model tool calls
- *
- * An AgentSession `doTurn` invocation is one **turn**: it starts with user
- * input and runs until the agent produces a final answer or the turn is
- * interrupted or stopped. A turn usually contains several **steps**. Each
- * step gives the model the conversation so far and accepts one response:
- * text, tool calls, or an invalid/error result. Tool calls proposed together
- * are executed in parallel as part of that step.
- *
- * ```text
- * turn
- *   |
- *   +-- step 1: model --> [tool A, tool B] --> tool results
- *   |                                         |
- *   +-- step 2: model <-----------------------+
- *   |             |
- *   |             +-- final text, or more tool calls
- *   |
- *   +-- step N: model --> final text --> turn completes
- * ```
- *
- * Most tools finish during the step that invokes them. Some tools instead
- * return a `pending` outcome containing an operation id. That outcome is sent
- * to the model immediately, so the current step can finish, while this module
- * starts the tool's separate `complete` phase. For example, `sleep` creates a
- * Restate durable timer and `humanApproval` waits for a durable signal.
- *
- * The completion is deliberately not another model-protocol tool result for
- * the same call. The original tool result already said that the operation was
- * accepted and is pending. Once the operation settles, the turn adds an
- * explicit runtime message to the conversation before asking the model what
- * to do next.
- *
- * ```text
- * model calls sleep
- *        |
- *        v
- * execute() --> { status: "pending", operationId }
- *        |                         |
- *        |                         +--> model may continue to another step
- *        v
- * apply() spawns complete() --> Restate durable sleep/signal
- *                                      |
- *                                      v
- * next() observes completion --> runtime message --> next model step
- * ```
- *
- * ## Why this registry exists
- *
- * A model step is a bounded unit of planning and foreground execution; it
- * owns no state after it returns. Pending work instead belongs to the whole
- * turn. This turn-scoped registry bridges those lifetimes by retaining each
- * pending call and its spawned Restate task across later model steps.
- *
- * Although the registry is an in-memory `Map`, its tasks run inside the
- * durable `doTurn` invocation. Restate journals the effects used by those
- * tasks (timers, signals, calls, and so on), suspends the invocation while it
- * is parked, and reconstructs the same deterministic control flow during
- * recovery. Thus a pending tool can survive both the step that created it and
- * process failure without becoming an independent application-level job.
- * It cannot outlive its enclosing turn: normal early exit stops pending work,
- * and invocation cancellation abandons it through `cancelAll`.
- *
- * The registry has two principal operations:
- *
- * - `apply` commits the outcomes of an accepted tool step. It starts the
- *   completion phase of new pending tools and applies model-requested
- *   cancellation to previously pending tools.
- * - `next` parks the turn until pending work completes, steering arrives, or
- *   the user interrupts the turn. It reports one event; the turn loop owns the
- *   resulting conversation update and policy decision.
- */
+// Pending operations: tool calls whose work outlives the step that made them.
+//
+// A step's model call may return tool results immediately, or a tool may
+// answer `pending` with an operation ID (`sleep` starts a durable timer,
+// `humanApproval` waits for a signal). The model sees that pending result at
+// once, so the step can finish; this registry runs the tool's `complete` phase
+// as a task of the turn. When it settles, the turn adds a runtime message
+// before the next model step rather than a second result for the same call.
+//
+//   model calls sleep -> execute() -> {status: "pending", operationId}
+//   apply() spawns complete() --------> durable timer / signal
+//   next() observes the completion ---> runtime message -> next model step
+//
+// The Map is in-memory, but its tasks run inside the durable doTurn
+// invocation, so Restate journals their effects and recovery rebuilds them.
+// Pending work never outlives its turn: an early exit stops it and
+// invocation cancellation abandons it through `cancelAll`.
 
 import * as restate from "@restatedev/restate-sdk-gen";
 
@@ -81,6 +23,7 @@ import type {ToolCall} from "../model/index.js";
 import {interruptAndJoin, raceBranches} from "../tasks.js";
 import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
+import {failed} from "./tools/define.js";
 
 type PendingOperation = {
   /** Step that originally emitted the pending tool result. */
@@ -115,55 +58,19 @@ export function createPendingOperations() {
     },
 
     /**
-     * Commits the pending-work effects of one accepted tool step.
+     * Commits the pending effects of one accepted tool step.
      *
-     * `agentStep` first executes every model-selected tool and returns a batch
-     * of `ToolOutcome`s. The AgentSession calls `apply` only after it has
-     * accepted that step's side effects. This method then interprets the two
-     * non-terminal outcome variants:
+     * - `pending` outcomes start their `complete` phase (or adopt the running
+     *   task a step handed off) and stay in `outcomes`, since they are the
+     *   immediate result of the model's call.
+     * - `cancel_requested` outcomes interrupt and join an operation from an
+     *   earlier step and become the `cancelOperation` call's result. The
+     *   target may already have finished: its real completion is then
+     *   reported and the cancellation says it was too late.
      *
-     * - `pending`: spawn `agentTools.complete(...)` immediately and retain the
-     *   resulting Restate task under the tool-call id. The original pending
-     *   outcome remains in the returned `outcomes`, because it is the immediate
-     *   result paired with the model's tool call.
-     * - `cancel_requested`: look up an operation retained by an earlier step,
-     *   interrupt its completion task, join it, and replace the cancellation
-     *   request with a terminal success or failure result for the
-     *   `cancelOperation` tool call.
-     *
-     * New completion tasks are spawned before cancellations are processed so
-     * independent durable work begins without waiting for cancellation joins.
-     * They are added to the registry only after cancellation processing
-     * succeeds. A cancellation can therefore target an operation from an
-     * earlier step, not a pending operation created in the same batch.
-     *
-     * Cancellation is a race, not a rewrite of history. If the target task has
-     * already completed when it is joined, its real completion is returned in
-     * `events`, and the cancellation tool reports that it was too late. If the
-     * interrupt wins, `events` contains a synthetic cancelled completion so
-     * the transcript and model both see how the pending operation ended.
-     * Missing operation ids become ordinary failed tool outcomes; they do not
-     * fail the turn.
-     *
-     * The result separates two protocols:
-     *
-     * - `outcomes` completes the current model tool-call exchange and preserves
-     *   the order of the model's calls.
-     * - `events` reports older pending operations that became terminal while
-     *   this batch was being applied.
-     *
-     * If applying the batch throws, every newly spawned but not-yet-registered
-     * task is interrupted and joined before the error escapes. Operations that
-     * were already registered remain owned by the turn.
-     *
-     * @param outcomes - Ordered immediate results from the current tool step.
-     * @param context - Agent and turn capabilities needed by completion tasks.
-     * @param step - Number of the model step that produced these outcomes.
-     * @param handoffs - Foreground tasks the step stopped waiting for, keyed
-     *   by call ID. Their pending outcomes adopt the running task instead of
-     *   starting a `complete` phase.
-     * @returns Outcomes for the current tool-call exchange plus terminal events
-     *   discovered for operations created by earlier steps.
+     * @returns `outcomes` for this step's tool calls, in order, and `events`
+     * for earlier operations that ended while applying them. If applying
+     * throws, the newly started tasks are stopped before the error escapes.
      */
     *apply(
       outcomes: ToolOutcome[],
@@ -222,11 +129,7 @@ export function createPendingOperations() {
             continue;
           }
 
-          events.push({
-            step: operation.step,
-            call: operation.call,
-            outcome: {status: "cancelled", reason: outcome.reason},
-          });
+          events.push(cancelledEvent(operation, outcome.reason));
           resolved.push({
             call: outcome.call,
             status: "succeeded",
@@ -248,45 +151,10 @@ export function createPendingOperations() {
     },
 
     /**
-     * Waits for the next event that can advance a turn with pending work.
-     *
-     * This is the synchronization boundary used after the model offers final
-     * text while one or more operations are still pending. Finishing the turn
-     * at that point would orphan its turn-scoped work, so the AgentSession
-     * parks here and races three durable sources:
-     *
-     * ```text
-     *                         +-- interrupt signal --> { type: "interrupted" }
-     * AgentSession.next() ----+-- steering ready ---> { type: "steering" }
-     *                         +-- any tool task ----> { type: "completion" }
-     * ```
-     *
-     * The caller must invoke `next` only while `size > 0`; otherwise there are
-     * no completion tasks to race. The supplied futures belong to the enclosing
-     * turn: `steeringReady` says that the steering inbox can be drained, while
-     * `interrupt` carries the reason the turn should stop.
-     *
-     * Exactly one event is returned per call:
-     *
-     * - A completion is removed from the registry before it is returned. The
-     *   caller records it, converts it to a runtime model message, and starts a
-     *   fresh model step. Other pending tasks continue running.
-     * - Steering only wakes the caller. This method neither drains steering nor
-     *   changes pending tasks; the turn incorporates the new messages and lets
-     *   the model decide whether existing work should continue or be cancelled.
-     * - Interruption likewise reports intent without stopping tasks here. The
-     *   turn's finalization path owns cancellation, transcript updates, and its
-     *   final response, keeping cleanup policy out of this readiness primitive.
-     *
-     * `raceBranches` cancels only its temporary losing waiters. It does not
-     * cancel the registered completion tasks merely because steering or an
-     * interrupt won this race.
-     *
-     * @param steeringReady - Resolves when the turn's steering inbox is
-     *   non-empty; the caller remains responsible for draining that inbox.
-     * @param interrupt - Resolves with the reason for interrupting this turn.
-     * @returns The single completion, steering, or interruption event that won
-     *   the durable race.
+     * Parks the turn until a pending operation completes, steering arrives or
+     * the turn is interrupted, and reports which. Call only while `size > 0`.
+     * A completion is removed from the registry; steering and interruption
+     * leave every task running, since the turn decides what happens next.
      */
     *next(
       steeringReady: restate.Future<void>,
@@ -307,6 +175,7 @@ export function createPendingOperations() {
       return {type: "completion", event: selected.value};
     },
 
+    /** Stops every operation and waits for each to settle. */
     *stop(reason: unknown): restate.Operation<PendingEvent[]> {
       const stopped = [...active.values()];
       active.clear();
@@ -317,14 +186,7 @@ export function createPendingOperations() {
       return settled.map((result, index) =>
         result.status === "fulfilled"
           ? result.value
-          : {
-              step: stopped[index].step,
-              call: stopped[index].call,
-              outcome: {
-                status: "cancelled",
-                reason: errorMessage(reason),
-              },
-            },
+          : cancelledEvent(stopped[index], errorMessage(reason)),
       );
     },
 
@@ -338,19 +200,19 @@ export function createPendingOperations() {
     cancelAll(reason: unknown): PendingEvent[] {
       const stopped = [...active.values()];
       active.clear();
-      for (const operation of stopped) {
-        operation.task.interrupt(reason);
-      }
-      return stopped.map(({step, call}) => ({
-        step,
-        call,
-        outcome: {
-          status: "cancelled",
-          reason: errorMessage(reason),
-        },
-      }));
+      for (const operation of stopped) operation.task.interrupt(reason);
+      return stopped.map((operation) =>
+        cancelledEvent(operation, errorMessage(reason)),
+      );
     },
   };
+}
+
+function cancelledEvent(
+  {step, call}: PendingOperation,
+  reason: string,
+): PendingEvent {
+  return {step, call, outcome: {status: "cancelled", reason}};
 }
 
 // Reports a handed-off foreground tool as a pending completion. Stopping or
@@ -368,23 +230,14 @@ function* adopt(
     yield* interruptAndJoin([running], error);
     throw error;
   }
-  switch (outcome.status) {
-    case "succeeded":
-      return {
-        step,
-        call,
-        outcome: {status: "succeeded", result: outcome.result},
-      };
-    case "failed":
-      return {step, call, outcome: {status: "failed", error: outcome.error}};
-    default:
-      return {
-        step,
-        call,
-        outcome: {
-          status: "failed",
-          error: `Unresolved foreground tool outcome: ${outcome.status}`,
-        },
-      };
-  }
+  // The tool's transcript was already recorded when it ran.
+  if (outcome.status === "succeeded")
+    return {step, call, outcome: {status: "succeeded", result: outcome.result}};
+  if (outcome.status === "failed")
+    return {step, call, outcome: failed(outcome.error)};
+  return {
+    step,
+    call,
+    outcome: failed(`Unresolved foreground tool outcome: ${outcome.status}`),
+  };
 }
