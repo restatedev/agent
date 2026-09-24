@@ -13,6 +13,7 @@ import {
   type DiscoverResult,
   InsufficientScopeError,
   type PriorDiscovery,
+  ProtocolError,
   StreamableHTTPClientTransport,
   type Tool,
   UnauthorizedError,
@@ -208,52 +209,39 @@ export function* executeMcpTool(
   }
 }
 
+type McpCallAttempt =
+  | {status: "succeeded"; value: CallToolResult}
+  | {status: "failed"; error: string};
+
 function* callMcpTool(
   input: Record<string, unknown>,
   context: {turnId: string; toolCallId: string},
   tool: McpAgentTool,
-): restate.Operation<
-  | {status: "succeeded"; value: CallToolResult}
-  | {status: "failed"; error: string}
-> {
+): restate.Operation<McpCallAttempt> {
   return yield* restate.run(
-    async ({signal}) => {
+    async ({signal}): Promise<McpCallAttempt> => {
+      const server = tool.target.server;
+      // Resolve the credential first and on its own: a configuration error
+      // means no connection was opened, so there is nothing to discard (and
+      // no token to key the stateful connection by).
       let token: string | undefined;
       try {
-        token = resolveMcpToken(tool.target.server);
-        const connection = await connectMcp(
-          tool.target.server,
-          token,
-          signal,
-          tool.target.prior,
-        );
-        try {
-          const value = await connection.client.callTool(
-            {name: tool.target.remoteName, arguments: input},
-            {
-              signal,
-              timeout: tool.target.server.timeoutMs,
-              maxTotalTimeout: tool.target.server.timeoutMs,
-              toolDefinition: tool.target.definition,
-              headers: {
-                "Idempotency-Key": `${context.turnId}:${context.toolCallId}`,
-              },
-            },
-          );
-          return {status: "succeeded" as const, value};
-        } finally {
-          if (tool.target.server.protocol === "stateless") {
-            await connection.client.close();
-          }
-        }
+        token = resolveMcpToken(server);
       } catch (error) {
-        if (tool.target.server.protocol === "stateful")
-          await discardStatefulConnection(tool.target.server, token);
+        return {status: "failed", error: sanitizedMessage(error)};
+      }
+      try {
+        const value = await callRemoteTool(input, context, tool, token, signal);
+        return {status: "succeeded", value};
+      } catch (error) {
+        if (server.protocol === "stateful") {
+          await discardStatefulConnection(server, token);
+        }
         signal.throwIfAborted();
         if (isCancellation(error)) throw error;
         // Provider errors can contain Authorization headers. Sanitize before
         // the failed HTTP effect is recorded in the journal.
-        return {status: "failed" as const, error: sanitizedMessage(error)};
+        return {status: "failed", error: callFailureMessage(error, token)};
       }
     },
     {
@@ -263,6 +251,35 @@ function* callMcpTool(
       retry: {maxAttempts: 1},
     },
   );
+}
+
+async function callRemoteTool(
+  input: Record<string, unknown>,
+  context: {turnId: string; toolCallId: string},
+  tool: McpAgentTool,
+  token: string | undefined,
+  signal: AbortSignal,
+): Promise<CallToolResult> {
+  const server = tool.target.server;
+  const connection = await connectMcp(server, token, signal, tool.target.prior);
+  try {
+    return await connection.client.callTool(
+      {name: tool.target.remoteName, arguments: input},
+      {
+        signal,
+        timeout: server.timeoutMs,
+        maxTotalTimeout: server.timeoutMs,
+        toolDefinition: tool.target.definition,
+        headers: {
+          "Idempotency-Key": `${context.turnId}:${context.toolCallId}`,
+        },
+      },
+    );
+  } finally {
+    if (server.protocol === "stateless") {
+      await connection.client.close();
+    }
+  }
 }
 
 function* discoverMcpServer(
@@ -665,11 +682,41 @@ function isTransient(error: unknown): boolean {
 
 // Provider errors can carry credentials, so only fixed messages are journaled.
 function sanitizedMessage(error: unknown): string {
-  if (error instanceof McpConfigurationError) return error.message;
+  if (error instanceof McpConfigurationError) {
+    return error.message;
+  }
   if (
     UnauthorizedError.isInstance(error) ||
     InsufficientScopeError.isInstance(error)
-  )
+  ) {
     return "MCP authorization failed; check the configured credential";
+  }
   return "MCP request failed; check the configured endpoint and credential";
+}
+
+const MAX_PROTOCOL_ERROR_CHARS = 1_000;
+
+/**
+ * The journaled, model-facing text of a failed tool call.
+ *
+ * Transport and HTTP errors stay fixed messages (see sanitizedMessage). A
+ * JSON-RPC error is different: it is the server's answer to the call (invalid
+ * params, unknown tool) or the client's own output-schema check, and the
+ * model needs its code and message to correct its input. Only those two
+ * fields pass through, bounded, with the resolved token redacted in case the
+ * server echoes it. Discovery keeps fixed messages: the model cannot act on
+ * them.
+ */
+function callFailureMessage(error: unknown, token: string | undefined): string {
+  if (!ProtocolError.isInstance(error)) {
+    return sanitizedMessage(error);
+  }
+  let message = error.message;
+  if (token) {
+    message = message.replaceAll(token, "[redacted]");
+  }
+  if (message.length > MAX_PROTOCOL_ERROR_CHARS) {
+    message = `${message.slice(0, MAX_PROTOCOL_ERROR_CHARS)}… [truncated]`;
+  }
+  return `MCP error ${error.code}: ${message}`;
 }

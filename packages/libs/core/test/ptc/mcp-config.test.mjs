@@ -73,6 +73,25 @@ test("provider failures are sanitized before journaling, without interactive aut
   assert.equal(fetch.mock.callCount(), 1);
 });
 
+test("a JSON-RPC tool error reaches the model with its code and message, never the token", async t => {
+  environment(t);
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    const body = JSON.parse(init.body);
+    const error = {code: -32602, message: `Invalid arguments: city is required (auth ${secret})`};
+    return Response.json({jsonrpc: "2.0", id: body.id, error});
+  });
+
+  const live = await runHandler(ctx =>
+    durable.execute(ctx, executeMcpTool({}, {turnId: "turn", toolCallId: "call"}, tool)),
+  );
+
+  assert.equal(live.output.status, "failed");
+  assert.match(live.output.error, /MCP error -32602: Invalid arguments: city is required/);
+  assert.match(live.output.error, /\[redacted\]/);
+  assert.ok(!live.output.error.includes(secret));
+  assert.ok(!text(live.journal).includes(secret));
+});
+
 test("discovery fails safely with a missing credential and does not send an anonymous request", async t => {
   environment(t); delete process.env.FIXTURE_MCP_TOKEN;
   const fetch = t.mock.method(globalThis, "fetch", async () => { throw Error("must not send"); });

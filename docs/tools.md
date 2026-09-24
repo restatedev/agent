@@ -713,7 +713,11 @@ PTC dispatches through the same permissions and policy gate.
 
 Each HTTP effect resolves the referenced token immediately before transport
 use. Missing credentials or changed configuration fail with a safe error.
-Provider exceptions are sanitized before being journaled. There are no OAuth
+Provider exceptions are sanitized before being journaled: transport, HTTP and
+auth failures become fixed messages. A JSON-RPC error answering a tool call
+(invalid params, unknown tool, or the client's output-schema check) keeps its
+code and message, bounded to 1,000 characters with the resolved token
+redacted, so the model can correct its input. There are no OAuth
 signals, browser authorization actions or refresh-state storage. Stateful
 connections are released at turn completion and discarded after failed calls.
 
