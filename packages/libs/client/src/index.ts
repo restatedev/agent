@@ -1,11 +1,6 @@
-// HTTP mini-client for the Agent protocol, talking to the Restate ingress.
-//
-// This file is the canonical external consumer of the protocol: one typed
-// method per public handler plus the consumption patterns a client needs —
-// the cursor + notification long-poll loop used to follow transcript updates.
-//
-// It wraps Restate's official ingress client with agent-specific operations
-// and the cursor + notification protocol used to follow a conversation.
+// Client for the Agent protocol over the Restate ingress: one typed method per
+// public handler, plus `follow`, the cursor and notification long-poll loop a
+// consumer needs to follow a conversation.
 //
 // @example
 //   const agent = createAgentClient({
@@ -253,45 +248,24 @@ export function createAgentClient({
     );
   }
 
+  // Handlers without input still need an explicit empty serde.
+  const noInput = <T>() => rpc.opts<void, T>({input: serde.empty});
+
   return {
-    // ---- conversation ----
-
-    async ask(message?: string): Promise<AskResult> {
-      return invoke(agent.ask({message: message ?? DEFAULT_ASK}));
-    },
-
-    async steer(message: string): Promise<boolean> {
-      return invoke(agent.steer(message));
-    },
-
-    async interrupt(reason: string, message?: string): Promise<boolean> {
-      return invoke(agent.interrupt({reason, ...(message ? {message} : {})}));
-    },
-
-    async deliver(delivery: AgentDelivery): Promise<void> {
-      return invoke(agent.deliver(delivery));
-    },
-
+    ask: (message) => invoke(agent.ask({message: message ?? DEFAULT_ASK})),
+    steer: (message) => invoke(agent.steer(message)),
+    interrupt: (reason, message) =>
+      invoke(agent.interrupt({reason, ...(message ? {message} : {})})),
+    deliver: (delivery) => invoke(agent.deliver(delivery)),
     history,
+    notifications: () => invoke(agent.notifications(noInput())),
     watchNotifications,
-
-    async notifications(): Promise<AgentNotificationSnapshot> {
-      return invoke(
-        agent.notifications(
-          rpc.opts<void, AgentNotificationSnapshot>({input: serde.empty}),
-        ),
-      );
-    },
 
     // Drains the cursor, then parks in one notification wait window per
     // idempotency key and repeats. A network-failed window retries under the
     // same key, attaching to the still-parked invocation instead of stacking
     // a new one.
-    async *follow({
-      fromSequence = 1,
-      timeoutSeconds = 55,
-      signal,
-    }: FollowOptions = {}): AsyncGenerator<SequencedEntry, void, void> {
+    async *follow({fromSequence = 1, timeoutSeconds = 55, signal} = {}) {
       let cursor = fromSequence;
       let revision = 0;
       let windowKey = crypto.randomUUID();
@@ -310,12 +284,8 @@ export function createAgentClient({
           revision = watched.revision;
           windowKey = crypto.randomUUID();
         } catch (error) {
-          if (signal?.aborted) {
-            return;
-          }
-          if (error instanceof AgentClientError) {
-            throw error;
-          }
+          if (signal?.aborted) return;
+          if (error instanceof AgentClientError) throw error;
           // Transient transport failure: back off and retry. The window key
           // is deliberately kept so the retry attaches rather than re-parks.
           await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -323,54 +293,20 @@ export function createAgentClient({
       }
     },
 
-    // ---- profile ----
+    profile: () => invoke(agent.profile(noInput())),
+    updateProfile: (update) => invoke(agent.updateProfile(update)),
+    deleteMemory: (key) => invoke(agent.deleteMemory({key})),
+    toolCatalog: () => invoke(agent.toolCatalog(noInput())),
 
-    async profile(): Promise<AgentProfile> {
-      return invoke(
-        agent.profile(rpc.opts<void, AgentProfile>({input: serde.empty})),
-      );
-    },
+    metadata: () => invoke(agent.metadata(noInput())),
+    children: () => invoke(agent.children(noInput())),
+    retire: () => invoke(agent.retire({})),
 
-    async updateProfile(update: ProfileUpdate): Promise<void> {
-      return invoke(agent.updateProfile(update));
-    },
-    async metadata() {
-      return invoke(agent.metadata(rpc.opts({input: serde.empty})));
-    },
-    async children() {
-      return invoke(agent.children(rpc.opts({input: serde.empty})));
-    },
-    async retire() {
-      return invoke(agent.retire({}));
-    },
-    async deleteMemory(key: string) {
-      return invoke(agent.deleteMemory({key}));
-    },
-    async schedules() {
-      return invoke(agent.schedules(rpc.opts({input: serde.empty})));
-    },
-    async schedule(spec: ScheduleSpec) {
-      return invoke(agent.createSchedule(spec));
-    },
-    async cancelSchedule(scheduleId: string) {
-      return invoke(agent.cancelSchedule({scheduleId}));
-    },
-    async toolCatalog() {
-      return invoke(agent.toolCatalog(rpc.opts({input: serde.empty})));
-    },
+    schedules: () => invoke(agent.schedules(noInput())),
+    schedule: (spec) => invoke(agent.createSchedule(spec)),
+    cancelSchedule: (scheduleId) => invoke(agent.cancelSchedule({scheduleId})),
 
-    // ---- human approvals ----
-
-    async approvals(): Promise<ApprovalRequest[]> {
-      return invoke(
-        agent.approvals(
-          rpc.opts<void, ApprovalRequest[]>({input: serde.empty}),
-        ),
-      );
-    },
-
-    async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
-      return invoke(agent.resolveApproval(resolution));
-    },
+    approvals: () => invoke(agent.approvals(noInput())),
+    resolveApproval: (resolution) => invoke(agent.resolveApproval(resolution)),
   };
 }
