@@ -2,8 +2,8 @@
 import {setTimeout} from "node:timers/promises";
 import {serve} from "@restatedev/restate-sdk";
 import {run, service} from "@restatedev/restate-sdk-gen";
-import type {Json, Outcome} from "../../src/ptc/guest.js";
-import {executeProgram} from "../../src/ptc/runtime.js";
+import type {Json, Outcome} from "../src/ptc/guest.js";
+import {executeProgram} from "../src/ptc/runtime.js";
 
 serve({
   port: 19880,

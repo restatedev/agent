@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import {mock, test} from "node:test";
-import {Agent} from "../../src/agent/service.ts";
+import {Agent} from "../src/agent/service.ts";
 import * as durable from "@restatedev/restate-sdk-gen";
-import {AgentSession} from "../../src/session/service.ts";
-import {sandboxProvider} from "../../src/sandbox/provider.ts";
-import {openTurnSandbox} from "../../src/sandbox/turn.ts";
+import {AgentSession} from "../src/session/service.ts";
+import {sandboxProvider} from "../src/sandbox/provider.ts";
+import {openTurnSandbox} from "../src/sandbox/turn.ts";
 import {context} from "./state-fixture.mjs";
 
 test("retirement interrupts the turn, drops queued work, and asynchronously retires resources", async () => {

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
-import * as agentTools from "../../src/session/tools.ts";
-import {Agent} from "../../src/agent/service.ts";
-import {subAgentProfile} from "../../src/agent/sub-agents.ts";
+import * as agentTools from "../src/session/tools.ts";
+import {Agent} from "../src/agent/service.ts";
+import {subAgentProfile} from "../src/agent/sub-agents.ts";
 import {context} from "./state-fixture.mjs";
 
 const selection = (...names) => ({mode: "selected", names});

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import * as durable from "@restatedev/restate-sdk-gen";
-import {configuredMcpServers, readMcpConfiguration, resolveMcpGrants, resolveMcpToken} from "../../src/session/mcp-config.ts";
-import {discoverMcpTools, executeMcpTool} from "../../src/session/mcp-tools.ts";
+import {configuredMcpServers, readMcpConfiguration, resolveMcpGrants, resolveMcpToken} from "../src/session/mcp-config.ts";
+import {discoverMcpTools, executeMcpTool} from "../src/session/mcp-tools.ts";
 import {runHandler} from "./harness.mjs";
 
 const server = {id: "fixture", type: "http", url: "https://fixture.example/mcp", protocol: "stateless", tokenEnv: "FIXTURE_MCP_TOKEN"};

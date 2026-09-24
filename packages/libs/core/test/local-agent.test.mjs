@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {Agent} from "../../src/agent/service.ts";
+import {Agent} from "../src/agent/service.ts";
 import {context} from "./state-fixture.mjs";
 
 const tools = {builtin: {mode: "all"}, dynamic: {mode: "selected", names: []}, mcp: []};

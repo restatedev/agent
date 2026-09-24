@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import MiniSearch from "minisearch";
 import * as durable from "@restatedev/restate-sdk-gen";
-import * as tools from "../../src/session/tools.ts";
-import {createToolSearch} from "../../src/session/tool-search.ts";
+import * as tools from "../src/session/tools.ts";
+import {createToolSearch} from "../src/session/tool-search.ts";
 import {runHandler} from "./harness.mjs";
 
 const schema = {type: "object", properties: {unreadOnly: {type: "boolean"}}, required: ["unreadOnly"]};

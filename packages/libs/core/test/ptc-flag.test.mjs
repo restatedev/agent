@@ -27,7 +27,7 @@ async function catalogWith(flag) {
   const {stdout} = await promisify(execFile)(
     process.execPath,
     ["--import", "tsx", "--input-type=module", "-e", probe],
-    {cwd: new URL("../..", import.meta.url), env},
+    {cwd: new URL("..", import.meta.url), env},
   );
   return JSON.parse(stdout.trim().split("\n").at(-1));
 }

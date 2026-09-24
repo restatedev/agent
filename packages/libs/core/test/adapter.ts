@@ -1,7 +1,7 @@
 import {type Context, TerminalError} from "@restatedev/restate-sdk";
 import {execute, gen, run} from "@restatedev/restate-sdk-gen";
-import type {GuestLimits, Json, Outcome} from "../../src/ptc/guest.js";
-import {executeProgram} from "../../src/ptc/runtime.js";
+import type {GuestLimits, Json, Outcome} from "../src/ptc/guest.js";
+import {executeProgram} from "../src/ptc/runtime.js";
 
 // Runs the production driver inside the real SDK scheduler. Each supplied test
 // tool owns a run, just as concrete agent tools own their durable operations.

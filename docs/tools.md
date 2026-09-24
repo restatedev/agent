@@ -355,13 +355,13 @@ is held by the host rather than exposed through guest globals.
 
 ### Verification
 
-`pnpm --filter @restate-agents/core test:ptc` checks guest replay, full and partial
+`pnpm --filter @restate-agents/core test` checks guest replay, full and partial
 real-SDK protocol replay, failures and limits, mixed tool dispatch, MCP auth
 retry, subtool policy enforcement, and child interruption. Protocol peers and
 outbound tool fixtures are local to the tests; no real provider credentials or
 model calls are needed.
 
-The optional `test:ptc:restart` command expects a disposable Restate server with
+The optional `test:restart` command expects a disposable Restate server with
 admin on port 19070 and ingress on 18080. It starts a test endpoint on 19880,
 registers it as `http://host.docker.internal:19880`, kills that endpoint after a
 race and its branches have completed, and restarts it. It asserts the recovered

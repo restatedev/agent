@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import {mock, test} from "node:test";
 import * as durable from "@restatedev/restate-sdk-gen";
-import {agentStep, settleStep} from "../../src/session/step.ts";
-import * as agentTools from "../../src/session/tools.ts";
-import {createPendingOperations} from "../../src/session/pending.ts";
-import {modelProvider} from "../../src/model/provider.ts";
+import {agentStep, settleStep} from "../src/session/step.ts";
+import * as agentTools from "../src/session/tools.ts";
+import {createPendingOperations} from "../src/session/pending.ts";
+import {modelProvider} from "../src/model/provider.ts";
 import {runHandler} from "./harness.mjs";
 
 const dynamic = {

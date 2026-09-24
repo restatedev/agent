@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import * as tools from "../../src/session/tools.ts";
+import * as tools from "../src/session/tools.ts";
 
 const call = {toolCallId: "call-1", toolName: "executeProgram", input: {}};
 

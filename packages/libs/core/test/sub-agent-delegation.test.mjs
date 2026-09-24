@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
-import {Agent} from "../../src/agent/service.ts";
-import * as tools from "../../src/session/tools.ts";
+import {Agent} from "../src/agent/service.ts";
+import * as tools from "../src/session/tools.ts";
 import {context} from "./state-fixture.mjs";
 import {runHandler} from "./harness.mjs";
 

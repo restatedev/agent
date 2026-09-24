@@ -9,8 +9,8 @@ import {
   InterruptedError,
   spawn,
 } from "@restatedev/restate-sdk-gen";
-import {Guest, ProgramError} from "../../src/ptc/guest.js";
-import {executeProgram} from "../../src/ptc/runtime.js";
+import {Guest, ProgramError} from "../src/ptc/guest.js";
+import {executeProgram} from "../src/ptc/runtime.js";
 
 function context(): Context {
   return {

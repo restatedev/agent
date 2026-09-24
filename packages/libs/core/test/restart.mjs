@@ -22,7 +22,7 @@ const source = `async tools => {
 function start() {
   const process = spawn(
     globalThis.process.execPath,
-    ["--import", "tsx", "test/ptc/restart-service.ts"],
+    ["--import", "tsx", "test/restart-service.ts"],
     {stdio: ["ignore", "pipe", "pipe"]},
   );
   const state = {process, output: ""};

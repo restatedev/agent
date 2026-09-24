@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import * as durable from "@restatedev/restate-sdk-gen";
-import * as history from "../../src/session/history.ts";
+import * as history from "../src/session/history.ts";
 import {context} from "./state-fixture.mjs";
 
 const user = (text) => ({role: "user", text, delivery: "turn"});

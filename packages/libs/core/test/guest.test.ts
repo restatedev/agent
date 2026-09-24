@@ -6,7 +6,7 @@ import {
   ProgramError,
   type Outcome,
   type Request,
-} from "../../src/ptc/guest.js";
+} from "../src/ptc/guest.js";
 import {executeWithTools as executeProgram} from "./adapter.js";
 const demoProgram = `async tools => {
   const completionOrder = [];

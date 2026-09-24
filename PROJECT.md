@@ -62,7 +62,9 @@ topics on subsequent polls.
 
 ## Validation and reference
 
-- `packages/libs/core/test/ptc`: deterministic runtime, control, PTC, MCP,
-  memory, scheduling and delegation coverage.
-- `packages/apps/web/test`: snapshot loading, pagination and merging.
+- `packages/libs/core/test`: deterministic runtime, control, history,
+  approvals, PTC, MCP, sandbox, memory, scheduling and delegation coverage.
+- `packages/libs/client/test`: the ingress client's follow loop.
+- `packages/apps/web/test`: snapshot loading, pagination, merging and the
+  request guard.
 - `docs/agent-guide.md`: invariants for maintainers and coding agents.

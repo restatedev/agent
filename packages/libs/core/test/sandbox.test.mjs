@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {localSandboxProvider} from "../../src/sandbox/local-provider.ts";
+import {localSandboxProvider} from "../src/sandbox/local-provider.ts";
 
 const options = () => ({signal: new AbortController().signal});
 
