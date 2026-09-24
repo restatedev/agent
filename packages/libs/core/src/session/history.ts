@@ -15,10 +15,7 @@ import type {
 import {AgentDefinition} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 
-import {
-  type ConversationCompactionInput,
-  isDerivedConversationEvent,
-} from "../internal-types.js";
+import type {ConversationCompactionInput} from "../internal-types.js";
 import {objectKey} from "../state.js";
 
 type StoredEntry = {
@@ -43,7 +40,10 @@ type ConversationContext = {
 
 /** Invocation-local access to an AgentSession's append-only transcript. */
 export type TurnHistory = {
-  /** Returns model context from the state loaded when this Turn began. */
+  /**
+   * Returns the summary and uncompacted entries loaded when this Turn began.
+   * Derived status events are included; `buildModelContext` drops them.
+   */
   context(): ConversationContext;
   /** Appends entries using the invocation-local sequence and tail chunk. */
   append(...entries: ConversationEntry[]): restate.Operation<void>;
@@ -71,7 +71,7 @@ export function* page(
     return {entries: [], nextSequence: fromSequence};
   }
 
-  const entries = yield* readEntries(meta, fromSequence).collect(limit);
+  const entries = yield* readEntries(meta, fromSequence, undefined, limit);
   const last = entries.at(-1);
   return {
     entries,
@@ -89,15 +89,19 @@ export function* page(
 export function* openTurn(): restate.Operation<TurnHistory> {
   const meta = yield* readMeta();
   const summary = yield* readSummary();
-  const uncompacted = yield* readEntries(
-    meta,
-    (summary?.through ?? 0) + 1,
-  ).collect();
+  const uncompacted = yield* readEntries(meta, (summary?.through ?? 0) + 1);
+  // The tail chunk receives this turn's appends. A full chunk is closed, so
+  // appending starts a new one; otherwise reuse the tail the walk above just
+  // loaded, and read it only when the summary already covers all of it.
   let index = Math.floor((meta.nextSequence - 1) / CHUNK_SIZE);
   let chunk: StoredEntry[] = [];
   if ((meta.nextSequence - 1) % CHUNK_SIZE !== 0) {
+    const first = index * CHUNK_SIZE + 1;
     chunk =
-      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
+      (summary?.through ?? 0) < first
+        ? uncompacted.filter(({sequence}) => sequence >= first)
+        : ((yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ??
+          []);
   }
   const agentId = objectKey();
 
@@ -105,9 +109,7 @@ export function* openTurn(): restate.Operation<TurnHistory> {
     context(): ConversationContext {
       return {
         summary: summary?.text,
-        entries: uncompacted.flatMap(({entry}): ConversationEntry[] =>
-          isDerivedConversationEvent(entry) ? [] : [entry],
-        ),
+        entries: uncompacted.map(({entry}) => entry),
       };
     },
 
@@ -130,19 +132,29 @@ export function* openTurn(): restate.Operation<TurnHistory> {
 
       restate.state().set(chunkKey(index), chunk);
       restate.state().set(HISTORY_META, meta);
+      // One notification per append keeps followers live during long tool
+      // batches. Callers batch entries that land together into one append.
       yield* restate.sendClient(AgentDefinition, agentId).publish("history");
     },
 
     *beginCompaction(): restate.Operation<
       ConversationCompactionPlan | undefined
     > {
+      const messages = (after: number) =>
+        uncompacted.filter(
+          ({sequence, entry}) => sequence > after && entry.role !== "event",
+        ).length;
+      if (messages(0) < COMPACT_AFTER_MESSAGES) return undefined;
+      // A reservation normally finishes during the next turn. One that has
+      // fallen a whole threshold behind lost its applyCompaction (the
+      // one-way compact call was cancelled or failed), so replace it rather
+      // than blocking compaction forever; a late result for it no longer
+      // matches the plan and is ignored.
       if (
-        meta.compaction ||
-        uncompacted.filter(({entry}) => entry.role !== "event").length <
-          COMPACT_AFTER_MESSAGES
-      ) {
+        meta.compaction &&
+        messages(meta.compaction.through) < COMPACT_AFTER_MESSAGES
+      )
         return undefined;
-      }
 
       meta.compaction = {
         baseThrough: summary?.through ?? 0,
@@ -168,7 +180,7 @@ export function* readCompaction(
     meta,
     plan.baseThrough + 1,
     plan.through,
-  ).collect()).map(({entry}) => entry);
+  )).map(({entry}) => entry);
   return {
     ...plan,
     previousSummary: summary?.text,
@@ -229,49 +241,27 @@ function* readSummary(): restate.Operation<ConversationSummary | undefined> {
   );
 }
 
-// Lazily walks a stable sequence range. Only the current chunk is loaded, so a
-// caller that stops reading also avoids every later state read.
-function readEntries(
+// Reads up to `limit` entries of a stable sequence range, one chunk at a time,
+// so a short page never reads the chunks after it.
+function* readEntries(
   meta: HistoryMeta,
   fromSequence = 1,
   throughSequence = meta.nextSequence - 1,
-) {
-  let sequence = Math.max(1, fromSequence);
+  limit = Number.POSITIVE_INFINITY,
+): restate.Operation<StoredEntry[]> {
   const through = Math.min(throughSequence, meta.nextSequence - 1);
-  let chunkIndex = -1;
-  let chunk: StoredEntry[] = [];
-
-  function* next(): restate.Operation<StoredEntry | undefined> {
-    if (sequence > through) {
-      return undefined;
+  const result: StoredEntry[] = [];
+  let sequence = Math.max(1, fromSequence);
+  while (sequence <= through && result.length < limit) {
+    const index = Math.floor((sequence - 1) / CHUNK_SIZE);
+    const chunk =
+      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
+    const last = Math.min(through, (index + 1) * CHUNK_SIZE);
+    for (; sequence <= last && result.length < limit; sequence += 1) {
+      const entry = chunk[(sequence - 1) % CHUNK_SIZE];
+      if (!entry) return result;
+      result.push(entry);
     }
-    const nextChunk = Math.floor((sequence - 1) / CHUNK_SIZE);
-    if (nextChunk !== chunkIndex) {
-      chunk =
-        (yield* restate
-          .sharedState()
-          .get<StoredEntry[]>(chunkKey(nextChunk))) ?? [];
-      chunkIndex = nextChunk;
-    }
-    const entry = chunk[(sequence - 1) % CHUNK_SIZE];
-    sequence += 1;
-    return entry;
   }
-
-  return {
-    next,
-    *collect(
-      limit = Number.POSITIVE_INFINITY,
-    ): restate.Operation<StoredEntry[]> {
-      const result: StoredEntry[] = [];
-      while (result.length < limit) {
-        const entry = yield* next();
-        if (!entry) {
-          break;
-        }
-        result.push(entry);
-      }
-      return result;
-    },
-  };
+  return result;
 }
