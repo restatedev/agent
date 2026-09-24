@@ -1,9 +1,5 @@
 import "server-only";
-import {
-  AgentClientError,
-  createAgentClient,
-  IngressClientError,
-} from "@restate-agents/client";
+import {AgentClientError, createAgentClient} from "@restate-agents/client";
 
 import {UiRequestError} from "./request-guard";
 
@@ -46,18 +42,6 @@ export function errorResponse(error: unknown) {
   }
   if (error instanceof UiRequestError || error instanceof AgentClientError) {
     return Response.json({message: error.message}, {status: error.status});
-  }
-  if (
-    error instanceof IngressClientError &&
-    error.status >= 400 &&
-    error.status < 500
-  ) {
-    let message = "Request rejected by the runtime";
-    try {
-      const body = JSON.parse(error.responseText);
-      if (typeof body.message === "string") message = body.message;
-    } catch {}
-    return Response.json({message}, {status: error.status});
   }
   // Unknown provider/SDK errors may carry request headers or token material.
   console.error("Unexpected UI proxy request failure");

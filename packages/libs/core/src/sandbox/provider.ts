@@ -1,6 +1,5 @@
-// Provider-neutral sandbox contracts and provider selection. Restate owns
-// lifecycle orchestration in service.ts; concrete adapters live beside this
-// module.
+// Provider-neutral sandbox contracts and provider selection. The turn owns
+// the lifecycle (turn.ts); concrete adapters live beside this module.
 
 import {TerminalError} from "@restatedev/restate-sdk";
 import {z} from "zod";

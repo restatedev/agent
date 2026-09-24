@@ -13,7 +13,7 @@ import type {
   ToolCatalog,
 } from "@restate-agents/types";
 
-export type SequencedEntry = HistoryPage["entries"][number];
+export type {SequencedEntry} from "@restate-agents/client";
 export type AgentSnapshot = {
   notification: AgentNotificationSnapshot;
   profile: AgentProfile;
@@ -25,49 +25,6 @@ export type AgentSnapshot = {
 };
 export type AgentSnapshotUpdate = Pick<AgentSnapshot, "notification"> &
   Partial<Omit<AgentSnapshot, "notification">>;
-
-/**
- * Browser-side operations on one agent through this app's
- * `/api/agent/{agentId}/{operation}` proxy (see its route handler). A subset of
- * the ingress client in `@restate-agents/client`, plus `snapshot`/`sync`,
- * which batch the reads a page render needs. Rejected calls throw an error
- * carrying the proxy's HTTP status.
- */
-export interface AgentClient {
-  /** Loads everything the conversation view renders. */
-  snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot>;
-
-  /**
-   * Waits for notifications newer than `since`, then returns only the parts
-   * that changed, with history from `fromSequence`.
-   */
-  sync(
-    since: AgentNotificationSnapshot,
-    fromSequence: number,
-    options?: {idempotencyKey?: string; signal?: AbortSignal},
-  ): Promise<AgentSnapshotUpdate>;
-
-  /** Starts a turn when the agent is idle, or queues the message. */
-  ask(message?: string): Promise<AskResult>;
-
-  /** Redirects the active turn. @returns false when no turn is listening. */
-  steer(message: string): Promise<boolean>;
-
-  /** Stops the active turn, optionally queueing a replacement message. */
-  interrupt(reason: string, message?: string): Promise<boolean>;
-
-  profile(): Promise<AgentProfile>;
-  updateProfile(update: ProfileUpdate): Promise<void>;
-  toolCatalog(): Promise<ToolCatalog>;
-
-  /** @returns whether the memory existed. */
-  deleteMemory(key: string): Promise<boolean>;
-
-  cancelSchedule(scheduleId: string): Promise<ScheduleCancellationResult>;
-
-  /** @returns false when the request or its turn is no longer eligible. */
-  resolveApproval(resolution: ApprovalResolution): Promise<boolean>;
-}
 
 type RequestOptions = {
   body?: unknown;
@@ -113,18 +70,30 @@ async function request<T>(path: string, options: RequestOptions = {}) {
   return result as T;
 }
 
-export function createAgentClient(agentId: string): AgentClient {
+/**
+ * Browser-side operations on one agent through this app's
+ * `/api/agent/{agentId}/{operation}` proxy (see its route handler): a subset
+ * of `@restate-agents/client`, plus `snapshot` and `sync`, which batch the
+ * reads a page render needs. Rejected calls throw with the proxy's status.
+ */
+export type AgentClient = ReturnType<typeof createAgentClient>;
+
+export function createAgentClient(agentId: string) {
   const base = `/api/agent/${encodeURIComponent(agentId)}`;
-  const read = <T>(operation: string, parameters?: URLSearchParams) =>
-    request<T>(`${base}/${operation}${parameters ? `?${parameters}` : ""}`);
+  const read = <T>(operation: string) => request<T>(`${base}/${operation}`);
   const write = <T>(operation: string, body: unknown) =>
     request<T>(`${base}/${operation}`, {body});
 
   return {
-    async snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot> {
+    /** Loads everything the conversation view renders. */
+    snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot> {
       return request(`${base}/snapshot`, options);
     },
-    async sync(
+    /**
+     * Waits for notifications newer than `since`, then returns only the parts
+     * that changed, with history from `fromSequence`.
+     */
+    sync(
       since: AgentNotificationSnapshot,
       fromSequence: number,
       options?: {idempotencyKey?: string; signal?: AbortSignal},
@@ -137,34 +106,22 @@ export function createAgentClient(agentId: string): AgentClient {
         options,
       );
     },
-    async ask(message?: string): Promise<AskResult> {
-      return write("ask", {message});
-    },
-    async steer(message: string): Promise<boolean> {
-      return write("steer", {message});
-    },
-    async interrupt(reason: string, message?: string): Promise<boolean> {
-      return write("interrupt", {reason, ...(message ? {message} : {})});
-    },
-    async profile(): Promise<AgentProfile> {
-      return read("profile");
-    },
-    async updateProfile(update: ProfileUpdate): Promise<void> {
-      await write("profile", update);
-    },
-    async toolCatalog(): Promise<ToolCatalog> {
-      return read("tool-catalog");
-    },
-    async deleteMemory(key: string): Promise<boolean> {
-      return write("delete-memory", {key});
-    },
-    async cancelSchedule(
-      scheduleId: string,
-    ): Promise<ScheduleCancellationResult> {
-      return write("cancel-schedule", {scheduleId});
-    },
-    async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
-      return write("resolve-approval", resolution);
-    },
+    /** Starts a turn when the agent is idle, or queues the message. */
+    ask: (message?: string) => write<AskResult>("ask", {message}),
+    /** Redirects the active turn. @returns false when no turn is listening. */
+    steer: (message: string) => write<boolean>("steer", {message}),
+    /** Stops the active turn, optionally queueing a replacement message. */
+    interrupt: (reason: string, message?: string) =>
+      write<boolean>("interrupt", {reason, ...(message ? {message} : {})}),
+    profile: () => read<AgentProfile>("profile"),
+    updateProfile: (update: ProfileUpdate) => write<null>("profile", update),
+    toolCatalog: () => read<ToolCatalog>("tool-catalog"),
+    /** @returns whether the memory existed. */
+    deleteMemory: (key: string) => write<boolean>("delete-memory", {key}),
+    cancelSchedule: (scheduleId: string) =>
+      write<ScheduleCancellationResult>("cancel-schedule", {scheduleId}),
+    /** @returns false when the request or its turn is no longer eligible. */
+    resolveApproval: (resolution: ApprovalResolution) =>
+      write<boolean>("resolve-approval", resolution),
   };
 }

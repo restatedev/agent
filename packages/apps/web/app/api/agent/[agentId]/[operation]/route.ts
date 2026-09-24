@@ -1,10 +1,14 @@
-import type {
-  AgentNotificationSnapshot,
-  ApprovalResolution,
-} from "@restate-agents/types";
+import type {AgentClient} from "@restate-agents/client";
 import {
+  type AgentNotificationSnapshot,
   AgentNotificationSnapshotSchema,
+  ApprovalResolutionSchema,
+  AskRequestSchema,
+  InterruptRequestSchema,
+  MemoryKeyRequestSchema,
   ProfileUpdateSchema,
+  ScheduleIdRequestSchema,
+  SteerRequestSchema,
 } from "@restate-agents/types";
 
 import {
@@ -26,33 +30,51 @@ type RouteContext = {
 };
 
 function json(value: unknown, init?: ResponseInit) {
-  return Response.json(value, {
+  return Response.json(value ?? null, {
     ...init,
-    headers: {"Cache-Control": "no-store"},
+    headers: {"Cache-Control": "private, no-store"},
   });
 }
 
-function integerParameter(
-  searchParams: URLSearchParams,
-  name: string,
-  fallback: number,
-) {
-  const raw = searchParams.get(name);
-  if (raw === null) return fallback;
-  const value = Number.parseInt(raw, 10);
-  if (!Number.isInteger(value) || value < 0) {
-    throw new UiRequestError(400, `${name} must be a non-negative integer`);
-  }
-  return value;
-}
+// The part of a zod schema the route uses.
+type Schema<T> = {
+  safeParse(
+    value: unknown,
+  ):
+    | {success: true; data: T}
+    | {success: false; error: {issues: {message: string}[]}};
+};
+type Mutation = {
+  input: Schema<unknown>;
+  run(client: AgentClient, body: never): Promise<unknown>;
+};
+const mutation = <T>(
+  input: Schema<T>,
+  run: (client: AgentClient, body: T) => Promise<unknown>,
+): Mutation => ({input, run});
 
-async function input<T>(request: Request): Promise<T> {
-  try {
-    return (await request.json()) as T;
-  } catch {
-    throw new UiRequestError(400, "Expected a JSON request body");
-  }
-}
+/** Every browser mutation, with the schema its JSON body must satisfy. */
+const MUTATIONS: Record<string, Mutation> = {
+  ask: mutation(AskRequestSchema, (client, {message}) => client.ask(message)),
+  steer: mutation(SteerRequestSchema, (client, {message}) =>
+    client.steer(message),
+  ),
+  interrupt: mutation(InterruptRequestSchema, (client, {reason, message}) =>
+    client.interrupt(reason, message),
+  ),
+  profile: mutation(ProfileUpdateSchema, (client, update) =>
+    client.updateProfile(update),
+  ),
+  "delete-memory": mutation(MemoryKeyRequestSchema, (client, {key}) =>
+    client.deleteMemory(key),
+  ),
+  "cancel-schedule": mutation(ScheduleIdRequestSchema, (client, {scheduleId}) =>
+    client.cancelSchedule(scheduleId),
+  ),
+  "resolve-approval": mutation(ApprovalResolutionSchema, (client, resolution) =>
+    client.resolveApproval(resolution),
+  ),
+};
 
 export async function GET(request: Request, context: RouteContext) {
   try {
@@ -60,69 +82,17 @@ export async function GET(request: Request, context: RouteContext) {
     trustedOrigin(request);
     const {agentId, operation} = await context.params;
     const client = agentClient(agentId);
-    const {searchParams} = new URL(request.url);
-
     switch (operation) {
       case "snapshot":
-        return json(await loadAgentSnapshot(client, request.signal), {
-          headers: {"Cache-Control": "private, no-store"},
-        });
-      case "sync": {
-        let since: AgentNotificationSnapshot;
-        try {
-          since = AgentNotificationSnapshotSchema.parse(
-            JSON.parse(searchParams.get("since") ?? "null"),
-          );
-        } catch {
-          throw new UiRequestError(400, "Invalid notification cursor");
-        }
-        const fromSequence = integerParameter(searchParams, "fromSequence", 1);
-        if (fromSequence < 1)
-          throw new UiRequestError(400, "fromSequence must be positive");
-        return json(
-          await syncAgentSnapshot(client, since, fromSequence, {
-            signal: request.signal,
-            idempotencyKey: request.headers.get("idempotency-key") ?? undefined,
-          }),
-          {headers: {"Cache-Control": "private, no-store"}},
-        );
-      }
-      case "history":
-        return json(
-          await client.history(
-            integerParameter(searchParams, "fromSequence", 1),
-            integerParameter(searchParams, "limit", 100),
-          ),
-        );
-      case "notifications":
-        return json(await client.notifications());
-      case "watch":
-        return json(
-          await client.watchNotifications(
-            integerParameter(searchParams, "afterRevision", 0),
-            integerParameter(searchParams, "timeoutSeconds", 25),
-            {
-              idempotencyKey:
-                request.headers.get("idempotency-key") ?? undefined,
-              signal: request.signal,
-            },
-          ),
-        );
-      case "tool-catalog":
-        return json(await client.toolCatalog());
+        return json(await loadAgentSnapshot(client, request.signal));
+      case "sync":
+        return json(await sync(client, request));
       case "profile":
         return json(await client.profile());
-      case "approvals":
-        return json(await client.approvals());
-      case "schedules":
-        return json(await client.schedules());
-      case "children":
-        return json(await client.children());
+      case "tool-catalog":
+        return json(await client.toolCatalog());
       default:
-        throw new UiRequestError(
-          404,
-          `Unknown agent read operation: ${operation}`,
-        );
+        throw new UiRequestError(404, `Unknown agent read: ${operation}`);
     }
   } catch (error) {
     return errorResponse(error);
@@ -133,51 +103,44 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     requireSameOrigin(request);
     const {agentId, operation} = await context.params;
-    const client = agentClient(agentId);
-
-    switch (operation) {
-      case "ask": {
-        const body = await input<{message?: string}>(request);
-        return json(await client.ask(body.message));
-      }
-      case "steer": {
-        const body = await input<{message: string}>(request);
-        return json(await client.steer(body.message));
-      }
-      case "interrupt": {
-        const body = await input<{reason: string; message?: string}>(request);
-        return json(await client.interrupt(body.reason, body.message));
-      }
-      case "profile": {
-        const parsed = ProfileUpdateSchema.safeParse(
-          await input<unknown>(request),
-        );
-        if (!parsed.success)
-          throw new UiRequestError(400, "Invalid profile update");
-        await client.updateProfile(parsed.data);
-        return json(null);
-      }
-      case "delete-memory": {
-        const body = await input<{key: string}>(request);
-        return json(await client.deleteMemory(body.key));
-      }
-      case "cancel-schedule": {
-        const body = await input<{scheduleId: string}>(request);
-        return json(await client.cancelSchedule(body.scheduleId));
-      }
-      case "resolve-approval":
-        return json(
-          await client.resolveApproval(
-            await input<ApprovalResolution>(request),
-          ),
-        );
-      default:
-        throw new UiRequestError(
-          404,
-          `Unknown agent mutation operation: ${operation}`,
-        );
-    }
+    const handler = MUTATIONS[operation];
+    if (!handler)
+      throw new UiRequestError(404, `Unknown agent mutation: ${operation}`);
+    const parsed = handler.input.safeParse(await body(request));
+    if (!parsed.success)
+      throw new UiRequestError(
+        400,
+        `Invalid ${operation} request: ${parsed.error.issues[0]?.message}`,
+      );
+    return json(await handler.run(agentClient(agentId), parsed.data as never));
   } catch (error) {
     return errorResponse(error);
+  }
+}
+
+async function sync(client: AgentClient, request: Request) {
+  const searchParams = new URL(request.url).searchParams;
+  let since: AgentNotificationSnapshot;
+  try {
+    since = AgentNotificationSnapshotSchema.parse(
+      JSON.parse(searchParams.get("since") ?? "null"),
+    );
+  } catch {
+    throw new UiRequestError(400, "Invalid notification cursor");
+  }
+  const fromSequence = Number(searchParams.get("fromSequence") ?? 1);
+  if (!Number.isSafeInteger(fromSequence) || fromSequence < 1)
+    throw new UiRequestError(400, "fromSequence must be a positive integer");
+  return syncAgentSnapshot(client, since, fromSequence, {
+    signal: request.signal,
+    idempotencyKey: request.headers.get("idempotency-key") ?? undefined,
+  });
+}
+
+async function body(request: Request): Promise<unknown> {
+  try {
+    return await request.json();
+  } catch {
+    throw new UiRequestError(400, "Expected a JSON request body");
   }
 }

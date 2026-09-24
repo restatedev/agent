@@ -13,6 +13,9 @@ export const AskRequestSchema = z.object({
   message: MessageSchema.default(DEFAULT_ASK),
 });
 
+/** `steer` as an HTTP body; the Agent handler itself takes the bare string. */
+export const SteerRequestSchema = z.object({message: MessageSchema});
+
 export const InterruptRequestSchema = z
   .object({
     reason: MessageSchema.describe(
