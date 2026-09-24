@@ -21,6 +21,7 @@ import type {McpServer} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 
 import {isCancellation} from "../errors.js";
+import {abortable, createRefreshingCache} from "../refresh-cache.js";
 import {McpConfigurationError, resolveMcpToken} from "./mcp-config.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
@@ -66,12 +67,6 @@ type McpCachedDiscoveryResult = {
   warnings: string[];
 };
 
-type CachedCatalog = {
-  catalog: McpCatalogDefinition;
-  refreshAfter: number;
-  lastAccessedAt: number;
-};
-
 /** A model-facing alias and its exact snapshotted MCP invocation target. */
 export type McpAgentTool = {
   name: string;
@@ -101,8 +96,10 @@ type McpToolDiscovery = {
   servers: McpServerAvailability[];
 };
 
-const cachedCatalogs = new Map<string, CachedCatalog>();
-const refreshes = new Map<string, Promise<McpCachedDiscoveryResult>>();
+const catalogs = createRefreshingCache<McpCatalogDefinition>({
+  retryAfterMs: REFRESH_RETRY_INTERVAL_MS,
+  maxEntries: MAX_CACHED_CATALOGS,
+});
 const statefulConnections = new Map<string, StatefulConnection>();
 
 /**
@@ -313,59 +310,25 @@ async function discoverCached(
   server: McpServerSnapshot,
   signal: AbortSignal,
 ): Promise<McpCachedDiscoveryResult> {
-  const now = Date.now();
   const token = resolveMcpToken(server);
-  if (config.protocol === "stateful") {
-    const refresh = fetchCatalog(config, server, token).then(
-      ({catalog, warnings}) => ({catalog, warnings}),
-    );
-    return waitForRefresh(refresh, signal);
-  }
-
-  const cacheKey = catalogCacheKey(config, token);
-  const cached = cachedCatalogs.get(cacheKey);
-  if (cached) {
-    cached.lastAccessedAt = now;
-  }
-  if (cached && now < cached.refreshAfter) {
-    return {catalog: cached.catalog, warnings: []};
-  }
-
-  const inFlight = refreshes.get(cacheKey);
-  if (inFlight) {
-    if (cached) {
-      return {catalog: cached.catalog, warnings: []};
-    }
-    return waitForRefresh(inFlight, signal);
-  }
-
-  const refresh = fetchCatalog(config, server, token)
-    .then(({catalog, ttlMs, warnings}) => {
-      storeCachedCatalog(cacheKey, {
-        catalog,
-        refreshAfter: Date.now() + Math.min(ttlMs, MAX_CACHE_TTL_MS),
-        lastAccessedAt: Date.now(),
-      });
-      return {catalog, warnings};
-    })
-    .catch((error: unknown): McpCachedDiscoveryResult => {
-      if (!cached) {
-        throw error;
-      }
-      cached.refreshAfter = Date.now() + REFRESH_RETRY_INTERVAL_MS;
-      cached.lastAccessedAt = Date.now();
-      return {
-        catalog: cached.catalog,
-        warnings: [
-          `${config.id}: refresh failed; using the last known catalog: ${sanitizedMessage(error)}`,
-        ],
-      };
-    })
-    .finally(() => {
-      refreshes.delete(cacheKey);
-    });
-  refreshes.set(cacheKey, refresh);
-  return waitForRefresh(refresh, signal);
+  const fetch = () =>
+    fetchCatalog(config, server, token).then(({catalog, ttlMs, warnings}) => ({
+      value: catalog,
+      ttlMs: Math.min(ttlMs, MAX_CACHE_TTL_MS),
+      warnings,
+    }));
+  // A stateful catalog belongs to its session, so it is never shared.
+  const {value, warnings} =
+    config.protocol === "stateful"
+      ? await abortable(fetch(), signal)
+      : await catalogs.get(
+          catalogCacheKey(config, token),
+          fetch,
+          (error) =>
+            `${config.id}: refresh failed; using the last known catalog: ${sanitizedMessage(error)}`,
+          signal,
+        );
+  return {catalog: value, warnings};
 }
 
 async function fetchCatalog(
@@ -419,25 +382,6 @@ async function fetchCatalog(
     if (server.protocol === "stateless") {
       await connection.client.close();
     }
-  }
-}
-
-function storeCachedCatalog(cacheKey: string, cached: CachedCatalog): void {
-  cachedCatalogs.set(cacheKey, cached);
-  if (cachedCatalogs.size <= MAX_CACHED_CATALOGS) {
-    return;
-  }
-
-  let oldestKey: string | undefined;
-  let oldestAccess = Number.POSITIVE_INFINITY;
-  for (const [candidateKey, candidate] of cachedCatalogs) {
-    if (candidateKey !== cacheKey && candidate.lastAccessedAt < oldestAccess) {
-      oldestKey = candidateKey;
-      oldestAccess = candidate.lastAccessedAt;
-    }
-  }
-  if (oldestKey) {
-    cachedCatalogs.delete(oldestKey);
   }
 }
 
@@ -714,38 +658,6 @@ function renderToolResult(result: CallToolResult): string {
     truncated: true,
     originalCharacters: rendered.length,
     preview: rendered.slice(0, MAX_RESULT_CHARS - 100),
-  });
-}
-
-function waitForRefresh(
-  refresh: Promise<McpCachedDiscoveryResult>,
-  signal: AbortSignal,
-): Promise<McpCachedDiscoveryResult> {
-  if (signal.aborted) {
-    return Promise.reject(
-      signal.reason ??
-        new DOMException("The operation was aborted", "AbortError"),
-    );
-  }
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(
-        signal.reason ??
-          new DOMException("The operation was aborted", "AbortError"),
-      );
-    };
-    signal.addEventListener("abort", onAbort, {once: true});
-    refresh.then(
-      (result) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(result);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error);
-      },
-    );
   });
 }
 
