@@ -68,6 +68,47 @@ let refreshInFlight: Promise<DiscoveryResult> | undefined;
  * Endpoint-local caching coalesces Admin API reads while the surrounding
  * `restate.run` makes the catalog deterministic for this invocation.
  */
+/** Calls one discovered handler with the model's `{key?, input?}` object. */
+export function* executeDynamicTool(
+  fields: Record<string, unknown>,
+  tool: DiscoveredAgentTool,
+): restate.Operation<
+  {status: "succeeded"; result: string} | {status: "failed"; error: string}
+> {
+  const {service, handler, keyed, acceptsInput} = tool.target;
+  if (keyed && (typeof fields.key !== "string" || fields.key.length === 0))
+    return {
+      status: "failed",
+      error: "dynamic Virtual Object and Workflow tools require a key",
+    };
+  if (acceptsInput && !("input" in fields))
+    return {status: "failed", error: "dynamic tool input is missing input"};
+  try {
+    const result = yield* restate.call<unknown, unknown>({
+      service,
+      method: handler,
+      ...(keyed ? {key: fields.key as string} : {}),
+      parameter: acceptsInput ? fields.input : undefined,
+      inputSerde: restate.serde.json,
+      outputSerde: restate.serde.json,
+      name: `dynamic-tool-${tool.name}`,
+    });
+    return {
+      status: "succeeded",
+      result:
+        typeof result === "string"
+          ? result
+          : (JSON.stringify(result) ?? "Handler completed without a result"),
+    };
+  } catch (error) {
+    if (isCancellation(error)) throw error;
+    return {
+      status: "failed",
+      error: `${tool.name} failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
 export function* discoverAgentTools(
   reservedNames: string[],
 ): restate.Operation<DiscoveredAgentTool[]> {
