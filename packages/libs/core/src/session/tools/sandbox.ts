@@ -27,6 +27,7 @@ export const listFilesTool = defineAgentTool({
       context,
       async (client, signal) =>
         JSON.stringify(await client.listFiles(path, {signal})),
+      IDEMPOTENT_RETRY,
     );
   },
 });
@@ -43,6 +44,7 @@ export const readFileTool = defineAgentTool({
       `Read ${path}`,
       context,
       async (client, signal) => client.readFile(path, {signal}),
+      IDEMPOTENT_RETRY,
     );
   },
 });
@@ -64,6 +66,8 @@ export const writeFileTool = defineAgentTool({
         await client.writeFile(path, content, {signal});
         return `Wrote ${Buffer.byteLength(content)} bytes to ${path}`;
       },
+      // Writing the complete contents again converges on the same file.
+      IDEMPOTENT_RETRY,
     );
   },
 });
@@ -106,14 +110,29 @@ export const executeCommandTool = defineAgentTool({
         );
         return JSON.stringify(result);
       },
+      // A shell command is not idempotent, and a transport error can arrive
+      // after it already ran remotely. Report the failure to the model, which
+      // can inspect the workspace, instead of silently running it again.
+      // (Crash recovery can still repeat an unjournaled command.)
+      {maxAttempts: 1},
     );
   },
 });
+
+// Reads, listings and whole-file writes are safe to repeat. The bound keeps a
+// dead or unreachable sandbox from retrying for the rest of the turn.
+const IDEMPOTENT_RETRY: restate.RetryOptions = {
+  maxAttempts: 3,
+  initialInterval: 500,
+  maxInterval: 2_000,
+  exponentiationFactor: 2,
+};
 
 function* runSandboxTool(
   name: string,
   context: ToolCallContext,
   operation: (client: SandboxClient, signal: AbortSignal) => Promise<string>,
+  retry: restate.RetryOptions,
 ): restate.Operation<ToolExecution> {
   let client: SandboxClient;
   try {
@@ -121,5 +140,5 @@ function* runSandboxTool(
   } catch (error) {
     return toolFailure(name, error);
   }
-  return yield* toolRun(name, ({signal}) => operation(client, signal));
+  return yield* toolRun(name, ({signal}) => operation(client, signal), retry);
 }

@@ -387,6 +387,16 @@ External side effects belong inside `restate.run` or a Restate RPC. Preserve
 `InterruptedError` and `CancelledError` instead of converting them into normal
 tool failures, so invocation cancellation can propagate through `doTurn`.
 
+Give every tool `run` an explicit retry policy. A `restate.run` without one
+retries until it succeeds, which is wrong for a model-facing call: a bounded
+failure is feedback the model can act on. Operations that are safe to repeat
+(`listFiles`, `readFile`, `writeFile`, `getWeather`, `webSearch`) use a small
+bounded retry. Operations that are not (`executeCommand`, MCP calls) use
+`{maxAttempts: 1}`: a transport error can arrive after the command already
+ran, and the model can inspect the result rather than have it silently run
+again. Crash recovery can still repeat an effect whose result was not yet
+journaled.
+
 Built-in tools are deliberately local handler code. Do not turn one into a
 Restate service merely to fit a generic abstraction.
 
