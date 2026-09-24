@@ -406,6 +406,19 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
           </MarkerContent>
         </Marker>
       );
+    case "stop":
+      // The runtime stopped the turn itself (today only at the step limit);
+      // like an interrupt, it finalizes without tools and says why.
+      return (
+        <Marker variant="separator" className="marker-important">
+          <MarkerIcon>
+            <Ban />
+          </MarkerIcon>
+          <MarkerContent>
+            Turn stopped · <em>{entry.reason}</em>
+          </MarkerContent>
+        </Marker>
+      );
     case "dispatch":
       return (
         <Marker variant="separator">
