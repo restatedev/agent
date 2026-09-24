@@ -1,16 +1,12 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 
-import {
-  type AgentClient,
-  type AgentSnapshot,
-  createAgentClient,
-} from "./agent-client";
-import {mergeAgentSnapshot} from "./agent-snapshot";
+import {createUiClient, type UiAgentClient} from "./agent-client";
+import {type AgentSnapshot, mergeAgentSnapshot} from "./agent-snapshot";
 import {errorMessage} from "./format";
 
 type Connection = {
   /** The client this state was loaded through. */
-  client: AgentClient;
+  client: UiAgentClient;
   snapshot?: AgentSnapshot;
   status: "connecting" | "connected" | "failed";
   error?: string;
@@ -18,7 +14,7 @@ type Connection = {
 
 /** One mounted conversation owns one cursor and one cancellable long poll. */
 export function useAgent(agentId: string) {
-  const client = useMemo(() => createAgentClient(agentId), [agentId]);
+  const client = useMemo(() => createUiClient(agentId), [agentId]);
   const [stored, setConnection] = useState<Connection>({
     client,
     status: "connecting",

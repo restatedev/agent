@@ -131,10 +131,18 @@ for await (const {entry} of agent.follow()) {
 The client also exposes profile setters, approvals, metadata, children, memory
 deletion, schedules and retirement. It maps empty-body handlers explicitly.
 
-The Next.js server exposes a limited `/api/agent/{agentId}/{operation}` adapter.
+The Next.js server exposes a limited `/api/agent/{agentId}/{operation}`
+adapter whose operation names match the Agent handlers. `GET` serves
+`snapshot` and `sync` (batched reads for one page render and its long poll),
+`profile` and `toolCatalog`. `POST` serves `ask`, `steer`, `interrupt`,
+`updateProfile`, `deleteMemory`, `cancelSchedule` and `resolveApproval`, each
+with a JSON body validated against the shared schema. Both tables live in
+`packages/apps/web/src/server/operations.ts`.
+
 Every request, reads included, must carry a loopback Host, or, when
 `APP_PUBLIC_URL` is set, that URL's host (or one listed in `APP_ALLOWED_HOSTS`
 for proxies that rewrite it); this is the DNS-rebinding defence. Writes must
-also carry a same-origin `Origin` header. Restate credentials, if configured for connectivity,
-stay in its server process. There are no login cookies or account ownership
-proofs. Keep both ingress and this local operator UI private.
+also carry a same-origin `Origin` header. Restate credentials, if configured
+for connectivity, stay in its server process. There are no login cookies or
+account ownership proofs. Keep both ingress and this local operator UI
+private.

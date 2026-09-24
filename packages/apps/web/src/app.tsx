@@ -29,7 +29,7 @@ import {
   useState,
 } from "react";
 
-import type {AgentClient, SequencedEntry} from "./agent-client";
+import type {UiAgentClient, SequencedEntry} from "./agent-client";
 import {AgentToolsPanel} from "./agent-tools-panel";
 import {errorMessage, type Notify, runAction, shortTurn} from "./format";
 import {Transcript} from "./transcript";
@@ -313,7 +313,7 @@ function ApprovalsPanel({
   notify,
 }: {
   approvals: ApprovalRequest[];
-  client: AgentClient;
+  client: UiAgentClient;
   notify: Notify;
 }) {
   const [reasons, setReasons] = useState<Record<string, string>>({});
@@ -453,7 +453,7 @@ function ProfilePanel({
   notify,
   refreshProfile,
 }: {
-  client: AgentClient;
+  client: UiAgentClient;
   profile?: AgentProfile;
   notify: Notify;
   refreshProfile: () => Promise<AgentProfile>;
@@ -626,7 +626,7 @@ function Inspector({
   setTab: (tab: Tab) => void;
   approvals: ApprovalRequest[];
   profile?: AgentProfile;
-  client: AgentClient;
+  client: UiAgentClient;
   notify: Notify;
   refreshProfile: () => Promise<AgentProfile>;
 }) {

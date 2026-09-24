@@ -12,7 +12,7 @@ import {
 } from "@restate-agents/types/tool-grants";
 import {useEffect, useRef, useState} from "react";
 
-import type {AgentClient} from "./agent-client";
+import type {UiAgentClient} from "./agent-client";
 import {errorMessage, type Notify, runAction} from "./format";
 import {toggleMcpServer, toggleTool} from "./tool-toggles";
 
@@ -98,7 +98,7 @@ export function AgentToolsPanel({
   refresh,
   notify,
 }: {
-  client: AgentClient;
+  client: UiAgentClient;
   profile?: AgentProfile;
   refresh: () => Promise<AgentProfile>;
   notify: Notify;
