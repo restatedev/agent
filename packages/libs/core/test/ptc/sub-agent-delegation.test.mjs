@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+import {TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 import {Agent} from "../../src/agent/service.ts";
 import * as tools from "../../src/session/tools.ts";
@@ -75,7 +76,7 @@ test("interrupt, turn end, retirement, and abandoned waits send idempotent exact
 
 // Real generator execution and recorded results, with transport replaced at
 // the context boundary. Replay must neither start nor run a child again.
-async function runDelegation({outcome, replay, ptc = false, create = false, interrupted = false, calls = []}) {
+async function runDelegation({outcome, replay, ptc = false, create = false, interrupted = false, childFailure, calls = []}) {
   return runHandler(ctx => durable.execute({
     ...ctx,
     request: () => ctx.request(),
@@ -92,7 +93,11 @@ async function runDelegation({outcome, replay, ptc = false, create = false, inte
     attach(id) {
       assert.equal(id, "child-turn");
       if (interrupted) throw new durable.InterruptedError();
-      return ctx.run("child-result", () => { calls.push({method: "child-result"}); return outcome; });
+      return ctx.run("child-result", () => {
+        calls.push({method: "child-result"});
+        if (childFailure) throw childFailure;
+        return outcome;
+      });
     },
     genericSend(opts) {
       assert.equal(opts.method, "finishSubAgentTask");
@@ -143,4 +148,22 @@ test("child failure/interruption becomes a recoverable tool result; parent inter
   const {output} = await runDelegation({interrupted: true, calls});
   assert.equal(output.interrupted, true);
   assert.ok(calls.some(call => call.method === "finishSubAgentTask"));
+});
+
+test("a child cancelled from outside is a failed tool result, not the parent's cancellation", async () => {
+  for (const ptc of [false, true]) {
+    const cancelled = new TerminalError("Cancelled", {errorCode: 409});
+    const {output} = await runDelegation({childFailure: cancelled, ptc});
+
+    assert.equal(output.status, "failed");
+    if (ptc) {
+      assert.match(output.error, /Program failed/);
+    } else {
+      assert.deepEqual(JSON.parse(output.error), {
+        agentId: "child",
+        status: "cancelled",
+        error: "Cancelled",
+      });
+    }
+  }
 });

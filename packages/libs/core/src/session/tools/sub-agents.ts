@@ -8,10 +8,12 @@ import {
   SubAgentConfigSchema,
   ToolSelectionSchema,
 } from "@restate-agents/types";
+import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
 import {Agent} from "../../agent/index.js";
+import {isCancellation} from "../../errors.js";
 import {
   agentCall,
   agentUrl,
@@ -112,28 +114,22 @@ function* runSubAgentTask(
   // Track/start under the short-lived parent controller lock, then wait here,
   // in AgentSession, where control signals can interrupt the pending tool.
   try {
-    return yield* agentCall(
+    const child = yield* agentCall(
       [400, 403, 410],
-      function* () {
-        const child = yield* restate
-          .client(Agent, context.agentId)
-          .startSubAgentTask({
-            agentId,
-            message,
-            source,
-            turnId: context.turnId,
-            toolCallId: context.toolCallId,
-          });
-        const outcome = yield* restate
-          .invocation<AgentTurnOutcome>(child.turnId)
-          .attach();
-        const result = JSON.stringify({agentId, ...outcome});
-        return outcome.status === "completed"
-          ? succeeded(result)
-          : failed(result);
-      },
+      () =>
+        restate.client(Agent, context.agentId).startSubAgentTask({
+          agentId,
+          message,
+          source,
+          turnId: context.turnId,
+          toolCallId: context.toolCallId,
+        }),
       `Sub-agent ${agentId}: `,
     );
+    if ("status" in child) {
+      return child;
+    }
+    return yield* awaitChildTurn(agentId, child.turnId);
   } finally {
     // Durable one-way cleanup also runs for a losing PTC branch. Parent
     // interrupt/onTurnEnd provides a second, idempotent cleanup path.
@@ -143,6 +139,40 @@ function* runSubAgentTask(
     });
   }
 }
+
+/**
+ * Waits for the child's turn and reports how it ended.
+ *
+ * A child turn normally returns an outcome, including a failed or interrupted
+ * one. It ends without one only when its invocation was cancelled from
+ * outside (the child's doTurn rethrows the cancellation, so attach rejects
+ * with a plain TerminalError, code 409) or crashed terminally. That is the
+ * child's failure, not the parent's: it must become a tool result the model
+ * can act on, not escape and fail the parent turn. It must also not be
+ * mistaken for the parent's own cancellation, which the SDK delivers as a
+ * CancelledError instance and isCancellation lets through.
+ */
+function* awaitChildTurn(
+  agentId: string,
+  childTurnId: string,
+): restate.Operation<ToolExecution> {
+  let outcome: AgentTurnOutcome;
+  try {
+    outcome = yield* restate.invocation<AgentTurnOutcome>(childTurnId).attach();
+  } catch (error) {
+    if (isCancellation(error) || !(error instanceof TerminalError)) {
+      throw error;
+    }
+    const status = error.code === 409 ? "cancelled" : "failed";
+    return failed(JSON.stringify({agentId, status, error: error.message}));
+  }
+  const result = JSON.stringify({agentId, ...outcome});
+  if (outcome.status === "completed") {
+    return succeeded(result);
+  }
+  return failed(result);
+}
+
 export const deleteSubAgentTool = defineAgentTool({
   name: "deleteSubAgent",
   description:
