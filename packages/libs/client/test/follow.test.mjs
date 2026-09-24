@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+
 import {AgentClientError, createAgentClient} from "../dist/index.js";
 
 function entry(sequence) {
-  return {sequence, entry: {role: "user", text: `m${sequence}`, delivery: "turn"}};
+  return {
+    sequence,
+    entry: {role: "user", text: `m${sequence}`, delivery: "turn"},
+  };
 }
 
 function json(body, status = 200) {
@@ -60,7 +64,10 @@ test("follow drains history pages, then waits for a notification before reading 
   assert.deepEqual(handlers, ["history", "history", "watch", "history"]);
   assert.deepEqual(requests[1].body, {fromSequence: 3, limit: 100});
   assert.equal(requests[2].body.afterRevision, 0);
-  assert.ok(requests[2].headers.get("idempotency-key"), "each wait window has an idempotency key");
+  assert.ok(
+    requests[2].headers.get("idempotency-key"),
+    "each wait window has an idempotency key",
+  );
 });
 
 test("follow stops on an ingress rejection instead of retrying it", async (t) => {

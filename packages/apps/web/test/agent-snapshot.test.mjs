@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 
 import {mergeAgentSnapshot} from "../src/agent-snapshot.ts";
-import {loadAgentSnapshot, syncAgentSnapshot} from "../src/server/agent-snapshot.ts";
+import {
+  loadAgentSnapshot,
+  syncAgentSnapshot,
+} from "../src/server/agent-snapshot.ts";
 
 function notification(revision = 1, versions = {}) {
   return {
@@ -58,7 +61,10 @@ function fixture(overrides = {}) {
     schedules: async () => [],
     metadata: async () => ({name: "demo"}),
     children: async () => [],
-    history: async (fromSequence) => ({entries: [], nextSequence: fromSequence}),
+    history: async (fromSequence) => ({
+      entries: [],
+      nextSequence: fromSequence,
+    }),
     ...overrides,
   };
   const client = {};

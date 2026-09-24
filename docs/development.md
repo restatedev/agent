@@ -99,8 +99,8 @@ pnpm bundle
 CI (`.github/workflows/ci.yml`) runs the same checks on every pull request and
 also builds both container images.
 
-- `lint` runs oxlint on `packages` and checks oxfmt formatting of TypeScript
-  sources; `format` applies oxlint fixes and oxfmt. Type-checking is
+- `lint` runs oxlint on `packages` and checks oxfmt formatting of sources,
+  tests and config files; `format` applies oxlint fixes and oxfmt. Type-checking is
   TypeScript 7 (the native `tsc`), run by `build`.
 - `build` compiles the workspace and creates a production Next.js build.
 - `test` runs the core and web suites.

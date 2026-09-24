@@ -104,7 +104,8 @@ test("behind a proxy, APP_PUBLIC_URL is the trusted origin", (t) => {
 
   requireSameOrigin(write("agents.example.com", PUBLIC_URL));
   assertForbidden(
-    () => requireSameOrigin(write("agents.example.com", "http://localhost:3000")),
+    () =>
+      requireSameOrigin(write("agents.example.com", "http://localhost:3000")),
     /Cross-origin/,
   );
 });

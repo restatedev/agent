@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+
 import {
   createEndpointHandler,
   service,
   TerminalError,
 } from "@restatedev/restate-sdk/fetch";
+
 import {executeWithTools as executeProgram} from "./adapter.ts";
 
 // In-memory service-protocol peer. Real SDK/core/guest, simulated server journal.
@@ -204,31 +206,38 @@ async function attempt(replay = [], program = source, failB = false) {
   return {journal, effects, issued, output};
 }
 
-test("real SDK protocol: race completion order survives full and partial journal replay", {
-  timeout: 8000,
-}, async () => {
-  const live = await attempt();
-  assert.equal(live.output.winner, "b");
-  const replay = await attempt(live.journal);
-  assert.deepEqual(replay.output, live.output);
-  assert.deepEqual(replay.issued, live.issued);
-  assert.deepEqual(replay.effects, []);
-  const cut = live.journal.findIndex((f) => f.readUInt16BE(0) === 0x8011);
-  const partial = await attempt(live.journal.slice(0, cut + 1));
-  assert.deepEqual(partial.output, live.output);
-  assert.deepEqual(partial.issued, live.issued);
-  assert.ok(
-    partial.effects.some(([name, key]) => name === "lookup" && key === "a"),
-  );
-  assert.ok(
-    !partial.effects.some(([name, key]) => name === "lookup" && key === "b"),
-  );
-});
+test(
+  "real SDK protocol: race completion order survives full and partial journal replay",
+  {
+    timeout: 8000,
+  },
+  async () => {
+    const live = await attempt();
+    assert.equal(live.output.winner, "b");
+    const replay = await attempt(live.journal);
+    assert.deepEqual(replay.output, live.output);
+    assert.deepEqual(replay.issued, live.issued);
+    assert.deepEqual(replay.effects, []);
+    const cut = live.journal.findIndex((f) => f.readUInt16BE(0) === 0x8011);
+    const partial = await attempt(live.journal.slice(0, cut + 1));
+    assert.deepEqual(partial.output, live.output);
+    assert.deepEqual(partial.issued, live.issued);
+    assert.ok(
+      partial.effects.some(([name, key]) => name === "lookup" && key === "a"),
+    );
+    assert.ok(
+      !partial.effects.some(([name, key]) => name === "lookup" && key === "b"),
+    );
+  },
+);
 
-test("real SDK protocol: rejection, fail-fast all, any and allSettled replay identically", {
-  timeout: 8000,
-}, async () => {
-  const rejectedProgram = `async tools => {
+test(
+  "real SDK protocol: rejection, fail-fast all, any and allSettled replay identically",
+  {
+    timeout: 8000,
+  },
+  async () => {
+    const rejectedProgram = `async tools => {
   const seen=[];
   const a=tools.lookup('a').then(v=>{seen.push(v);return v;});
   const b=tools.lookup('b').catch(e=>{seen.push(e.message);throw e;});
@@ -238,34 +247,35 @@ test("real SDK protocol: rejection, fail-fast all, any and allSettled replay ide
   try {await Promise.all([a,b]);} catch(e) {firstError=e.message;await tools.record(firstError);}
   return {firstError,any:await any,statuses:(await settled).map(x=>x.status),seen};
  }`;
-  const liveFailure = await attempt([], rejectedProgram, true);
-  const replayFailure = await attempt(
-    liveFailure.journal,
-    rejectedProgram,
-    true,
-  );
-  assert.deepEqual(replayFailure.output, liveFailure.output);
-  assert.deepEqual(replayFailure.issued, liveFailure.issued);
-  assert.deepEqual(replayFailure.effects, []);
-  const failureCut = liveFailure.journal.findIndex(
-    (f) => f.readUInt16BE(0) === 0x8011,
-  );
-  const partialFailure = await attempt(
-    liveFailure.journal.slice(0, failureCut + 1),
-    rejectedProgram,
-    true,
-  );
-  assert.deepEqual(partialFailure.output, liveFailure.output);
-  assert.deepEqual(partialFailure.issued, liveFailure.issued);
-  assert.deepEqual(liveFailure.output, {
-    firstError: "b failed",
-    any: "a",
-    statuses: ["fulfilled", "rejected"],
-    seen: ["b failed", "a"],
-  });
-  assert.ok(
-    !partialFailure.effects.some(
-      ([name, key]) => name === "lookup" && key === "b",
-    ),
-  );
-});
+    const liveFailure = await attempt([], rejectedProgram, true);
+    const replayFailure = await attempt(
+      liveFailure.journal,
+      rejectedProgram,
+      true,
+    );
+    assert.deepEqual(replayFailure.output, liveFailure.output);
+    assert.deepEqual(replayFailure.issued, liveFailure.issued);
+    assert.deepEqual(replayFailure.effects, []);
+    const failureCut = liveFailure.journal.findIndex(
+      (f) => f.readUInt16BE(0) === 0x8011,
+    );
+    const partialFailure = await attempt(
+      liveFailure.journal.slice(0, failureCut + 1),
+      rejectedProgram,
+      true,
+    );
+    assert.deepEqual(partialFailure.output, liveFailure.output);
+    assert.deepEqual(partialFailure.issued, liveFailure.issued);
+    assert.deepEqual(liveFailure.output, {
+      firstError: "b failed",
+      any: "a",
+      statuses: ["fulfilled", "rejected"],
+      seen: ["b failed", "a"],
+    });
+    assert.ok(
+      !partialFailure.effects.some(
+        ([name, key]) => name === "lookup" && key === "b",
+      ),
+    );
+  },
+);

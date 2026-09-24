@@ -1,5 +1,6 @@
-import type {NextConfig} from "next";
 import {join} from "node:path";
+
+import type {NextConfig} from "next";
 
 const dev = process.env.NODE_ENV === "development";
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+
 import type {Context} from "@restatedev/restate-sdk";
 import {
   allSettled,
@@ -9,6 +10,7 @@ import {
   InterruptedError,
   spawn,
 } from "@restatedev/restate-sdk-gen";
+
 import {Guest, ProgramError} from "../src/ptc/guest.js";
 import {executeProgram} from "../src/ptc/runtime.js";
 

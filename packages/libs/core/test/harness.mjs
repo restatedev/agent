@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+
 import {createEndpointHandler, service} from "@restatedev/restate-sdk/fetch";
 const cat = (...xs) => Buffer.concat(xs.map((x) => Buffer.from(x)));
 function vi(n) {

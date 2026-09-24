@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+
 import {Agent} from "../src/agent/service.ts";
 import {context} from "./state-fixture.mjs";
 
@@ -16,9 +17,15 @@ function approval(approvalId, turnId = "turn") {
 test("an approval is registered once and resolved into a signal to its turn", async () => {
   const f = context("demo", activeTurn("turn"));
 
-  assert.equal(await f.invoke(Agent.object.requestApproval, approval("a1")), true);
+  assert.equal(
+    await f.invoke(Agent.object.requestApproval, approval("a1")),
+    true,
+  );
   // Registering the identical request again is idempotent.
-  assert.equal(await f.invoke(Agent.object.requestApproval, approval("a1")), true);
+  assert.equal(
+    await f.invoke(Agent.object.requestApproval, approval("a1")),
+    true,
+  );
   assert.deepEqual(await f.invoke(Agent.object.approvals), [approval("a1")]);
 
   const resolved = await f.invoke(Agent.object.resolveApproval, {
@@ -40,14 +47,20 @@ test("a conflicting request reusing an approval ID is rejected", async () => {
 
   const conflicting = {...approval("a1"), question: "Delete everything?"};
 
-  assert.equal(await f.invoke(Agent.object.requestApproval, conflicting), false);
+  assert.equal(
+    await f.invoke(Agent.object.requestApproval, conflicting),
+    false,
+  );
   assert.deepEqual(await f.invoke(Agent.object.approvals), [approval("a1")]);
 });
 
 test("only the active, non-interrupting turn can register or receive approvals", async () => {
   const otherTurn = context("demo", activeTurn("turn"));
   assert.equal(
-    await otherTurn.invoke(Agent.object.requestApproval, approval("a1", "old-turn")),
+    await otherTurn.invoke(
+      Agent.object.requestApproval,
+      approval("a1", "old-turn"),
+    ),
     false,
   );
 
@@ -64,17 +77,26 @@ test("only the active, non-interrupting turn can register or receive approvals",
 });
 
 test("resolving an unknown approval, or cancelling another turn's, changes nothing", async () => {
-  const f = context("demo", {...activeTurn("turn"), approvals: [approval("a1")]});
+  const f = context("demo", {
+    ...activeTurn("turn"),
+    approvals: [approval("a1")],
+  });
 
   const resolved = await f.invoke(Agent.object.resolveApproval, {
     approvalId: "missing",
     decision: "rejected",
   });
-  await f.invoke(Agent.object.cancelApproval, {approvalId: "a1", turnId: "other"});
+  await f.invoke(Agent.object.cancelApproval, {
+    approvalId: "a1",
+    turnId: "other",
+  });
 
   assert.equal(resolved, false);
   assert.deepEqual(await f.invoke(Agent.object.approvals), [approval("a1")]);
 
-  await f.invoke(Agent.object.cancelApproval, {approvalId: "a1", turnId: "turn"});
+  await f.invoke(Agent.object.cancelApproval, {
+    approvalId: "a1",
+    turnId: "turn",
+  });
   assert.deepEqual(await f.invoke(Agent.object.approvals), []);
 });
