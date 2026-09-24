@@ -82,6 +82,7 @@ export const localSandboxProvider: SandboxProvider = {
             command.command,
             {
               cwd,
+              env: commandEnv(root),
               signal,
               timeout: command.timeoutMs,
               maxBuffer: 1024 * 1024,
@@ -112,6 +113,24 @@ export const localSandboxProvider: SandboxProvider = {
     };
   },
 };
+
+/**
+ * The environment of a model-issued command. `exec` would otherwise inherit
+ * the whole service environment, and a model running `env` would read
+ * OPENAI_API_KEY, MCP tokens, RESTATE_ADMIN_TOKEN and Modal credentials into
+ * its context (and the journal). Only what ordinary shell tools need is
+ * passed; HOME points into the workspace so dotfiles land there too. This
+ * narrows accidental disclosure only: the command still runs as the service
+ * user and can read the same files (see the module note).
+ */
+function commandEnv(root: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    HOME: root,
+    LANG: process.env.LANG ?? "C.UTF-8",
+    TERM: "dumb",
+  };
+}
 
 function localRef(ref: SandboxRef): Extract<SandboxRef, {provider: "local"}> {
   if (ref.provider !== "local") {

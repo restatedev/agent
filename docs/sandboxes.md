@@ -157,9 +157,16 @@ It creates directories lazily and enforces path containment. Suspend is a
 logical state change only; resume recreates the directory if needed. Destroy
 removes the directory recursively.
 
-This is a development adapter, not a security boundary:
+Commands run with a minimal environment: `PATH` and `LANG` from the service,
+`HOME` set to the workspace directory and `TERM=dumb`. They do not inherit the
+rest of the service environment, so a model running `env` cannot read
+`OPENAI_API_KEY`, MCP tokens, `RESTATE_ADMIN_TOKEN` or Modal credentials into
+its context and the journal.
 
-- commands run with the service process's identity and permissions;
+This is still a development adapter, not a security boundary:
+
+- commands run with the service process's identity and permissions, so they
+  can read any file the service can (including a `.env` file);
 - it does not isolate CPU, memory, network, or system calls;
 - `/tmp` may not survive host replacement;
 - a single service host sees only its own local filesystem.
