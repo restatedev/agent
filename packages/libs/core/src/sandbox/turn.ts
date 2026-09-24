@@ -45,36 +45,54 @@ export function openTurnSandbox(agentId: string): TurnSandbox {
   // Settled (never rejected) when the current attempt ends, however it ends.
   let attempt: restate.Channel<void> | undefined;
   let released = false;
+
+  // Runs one acquisition in the calling tool and wakes every waiter when it
+  // ends, whether it succeeded, failed or was interrupted.
+  function* ownAttempt(): restate.Operation<void> {
+    const done = restate.channel<void>();
+    attempt = done;
+    try {
+      ref = yield* acquire(agentId);
+    } finally {
+      attempt = undefined;
+      yield* done.send();
+    }
+  }
+
   return {
     *client() {
+      // A loop, because a waiter whose attempt ended without a ref (its owner
+      // was interrupted, or it failed) becomes the next owner.
       while (true) {
-        // A tool still running after the turn released the sandbox (an
-        // abandoned fiber) must not provision compute nobody will suspend.
-        if (released)
+        if (released) {
+          // A tool still running after the turn released the sandbox (an
+          // abandoned fiber) must not provision compute nobody will suspend.
           throw new TerminalError("the turn's sandbox was already released");
-        if (ref) return sandboxProvider.connect(ref);
+        }
+        if (ref) {
+          return sandboxProvider.connect(ref);
+        }
         if (attempt) {
           yield* attempt.receive;
-          continue;
-        }
-        const done = restate.channel<void>();
-        attempt = done;
-        try {
-          ref = yield* acquire(agentId);
-        } finally {
-          attempt = undefined;
-          yield* done.send();
+        } else {
+          yield* ownAttempt();
         }
       }
     },
 
     *release() {
-      if (released) return;
+      if (released) {
+        return;
+      }
       released = true;
       // An attempt still in flight (its tool was cancelled with the turn)
       // ends promptly; wait so a sandbox it did acquire is suspended.
-      while (attempt) yield* attempt.receive;
-      if (!ref) return;
+      while (attempt) {
+        yield* attempt.receive;
+      }
+      if (!ref) {
+        return;
+      }
       const acquired = ref;
       const suspended = yield* restate.run(
         ({signal}) => sandboxProvider.suspend(acquired, {signal}),

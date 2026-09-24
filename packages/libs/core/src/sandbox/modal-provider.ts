@@ -225,7 +225,9 @@ async function isRunning(
     return (await sandbox.poll()) === null;
   } catch (error) {
     // Modal forgets finished Sandboxes eventually.
-    if (error instanceof NotFoundError) return false;
+    if (error instanceof NotFoundError) {
+      return false;
+    }
     throw error;
   } finally {
     sandbox.detach();
