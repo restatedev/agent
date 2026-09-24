@@ -37,7 +37,8 @@ type PendingOperation = {
 type PendingStep =
   | {type: "steering"}
   | {type: "completion"; event: PendingEvent}
-  | {type: "interrupted"; reason: string};
+  | {type: "interrupted"; reason: string}
+  | {type: "idle"};
 
 /**
  * Creates the turn-scoped registry that supervises long-running tool work.
@@ -113,11 +114,13 @@ export function createPendingOperations() {
             continue;
           }
 
+          // Unregister before interrupting, so a concurrent `next` sees the
+          // rejection as a cancellation rather than a failure.
+          active.delete(operation.call.toolCallId);
           const [settled] = yield* interruptAndJoin(
             [operation.task],
             new restate.InterruptedError(outcome.reason),
           );
-          active.delete(operation.call.toolCallId);
 
           if (settled.status === "fulfilled") {
             events.push(settled.value);
@@ -152,27 +155,52 @@ export function createPendingOperations() {
 
     /**
      * Parks the turn until a pending operation completes, steering arrives or
-     * the turn is interrupted, and reports which. Call only while `size > 0`.
-     * A completion is removed from the registry; steering and interruption
-     * leave every task running, since the turn decides what happens next.
+     * the turn is interrupted, and reports which. A completion is removed from
+     * the registry; steering and interruption leave every task running, since
+     * the turn decides what happens next.
+     *
+     * A handed-off program may cancel another operation while the turn is
+     * parked here. `apply` then removes it and reports the cancellation to
+     * the program, so its rejected task is skipped rather than failing the
+     * turn. Reports `idle` once nothing is left to wait for.
      */
     *next(
       steeringReady: restate.Future<void>,
       interrupt: restate.Future<string>,
     ): restate.Operation<PendingStep> {
-      const selected = yield* raceBranches({
-        interrupt,
-        steering: steeringReady,
-        completion: restate.race([...active.values()].map(({task}) => task)),
-      });
-      if (selected.tag === "interrupt") {
-        return {type: "interrupted", reason: selected.value};
+      while (active.size > 0) {
+        const watched = [...active.values()];
+        const watchers = watched.map((operation) =>
+          restate.spawn(settledOf(operation)),
+        );
+        let selected;
+        try {
+          selected = yield* raceBranches({
+            interrupt,
+            steering: steeringReady,
+            completion: restate.race(watchers),
+          });
+        } finally {
+          yield* interruptAndJoin(
+            watchers,
+            new restate.InterruptedError("Pending wait settled"),
+          );
+        }
+        if (selected.tag === "interrupt") {
+          return {type: "interrupted", reason: selected.value};
+        }
+        if (selected.tag === "steering") {
+          return {type: "steering"};
+        }
+        const {operation, settled} = selected.value;
+        if (active.get(operation.call.toolCallId) !== operation) continue;
+        // Still registered, so nothing in this turn cancelled it: only
+        // invocation cancellation rejects a completion task.
+        if (settled.status === "rejected") throw settled.reason;
+        active.delete(operation.call.toolCallId);
+        return {type: "completion", event: settled.value};
       }
-      if (selected.tag === "steering") {
-        return {type: "steering"};
-      }
-      active.delete(selected.value.call.toolCallId);
-      return {type: "completion", event: selected.value};
+      return {type: "idle"};
     },
 
     /** Stops every operation and waits for each to settle. */
@@ -206,6 +234,13 @@ export function createPendingOperations() {
       );
     },
   };
+}
+
+// Waits for one operation without rethrowing its rejection, so `next` can
+// tell an operation cancelled by `apply` from a real failure.
+function* settledOf(operation: PendingOperation) {
+  const [settled] = yield* restate.allSettled([operation.task]);
+  return {operation, settled};
 }
 
 function cancelledEvent(

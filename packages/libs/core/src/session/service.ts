@@ -402,6 +402,9 @@ function* executeTurn(
           yield* consumeSteering(state);
           continue;
         }
+        // A handed-off program cancelled the last operation; its own result
+        // reports that, so the model simply takes another step.
+        if (next.type === "idle") continue;
         if (next.type === "completion") {
           yield* appendToolTranscript(state, [next.event]);
           state.messages.push(agentTools.toRuntimeMessage(next.event));
