@@ -148,14 +148,8 @@ export function transcriptEntries(
       (!pendingEvent &&
         result.status === "pending" &&
         interruptedPendingReason !== undefined));
-  if (cancelledApproval) {
-    entries.push({
-      role: "event",
-      type: "approval_cancelled",
-      approvalId: event.call.toolCallId,
-      turnId: context.turnId,
-    });
-  }
+  if (cancelledApproval)
+    entries.push(approvalCancelled(event.call.toolCallId, context.turnId));
   return entries;
 }
 
@@ -192,6 +186,39 @@ export function manifests(
   ].filter((tool) =>
     toolAllowed(tool.name, context.permissions, discovered, mcpTools, names),
   );
+}
+
+type ToolsEvent = Extract<ConversationEntry, {role: "event"; type: "tools"}>;
+
+/** A call as the transcript's tools events list it. */
+export function toolActivity(
+  call: ToolCall,
+  status?: ToolsEvent["calls"][number]["status"],
+): ToolsEvent["calls"][number] {
+  const summary = summarize(call);
+  return {
+    id: call.toolCallId,
+    name: call.toolName,
+    ...(summary ? {summary} : {}),
+    ...(status ? {status} : {}),
+  };
+}
+
+/** A transcript event for a batch of calls starting or finishing. */
+export function toolsEvent(
+  turnId: string,
+  step: number,
+  phase: ToolsEvent["phase"],
+  calls: ToolsEvent["calls"],
+): ToolsEvent {
+  return {role: "event", type: "tools", turnId, step, phase, calls};
+}
+
+export function approvalCancelled(
+  approvalId: string,
+  turnId: string,
+): ConversationEntry {
+  return {role: "event", type: "approval_cancelled", approvalId, turnId};
 }
 
 /** Returns the concise user-facing activity label for a tool call. */

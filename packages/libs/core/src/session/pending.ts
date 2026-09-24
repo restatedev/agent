@@ -78,7 +78,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 
 import {errorMessage} from "../errors.js";
 import type {ToolCall} from "../model/index.js";
-import {raceBranches} from "../race.js";
+import {interruptAndJoin, raceBranches} from "../tasks.js";
 import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
 
@@ -206,10 +206,10 @@ export function createPendingOperations() {
             continue;
           }
 
-          operation.task.interrupt(
+          const [settled] = yield* interruptAndJoin(
+            [operation.task],
             new restate.InterruptedError(outcome.reason),
           );
-          const [settled] = yield* restate.allSettled([operation.task]);
           active.delete(operation.call.toolCallId);
 
           if (settled.status === "fulfilled") {
@@ -239,10 +239,10 @@ export function createPendingOperations() {
         }
         return {outcomes: resolved, events};
       } catch (error) {
-        for (const operation of starting) {
-          operation.task.interrupt(error);
-        }
-        yield* restate.allSettled(starting.map(({task}) => task));
+        yield* interruptAndJoin(
+          starting.map(({task}) => task),
+          error,
+        );
         throw error;
       }
     },
@@ -310,10 +310,10 @@ export function createPendingOperations() {
     *stop(reason: unknown): restate.Operation<PendingEvent[]> {
       const stopped = [...active.values()];
       active.clear();
-      for (const operation of stopped) {
-        operation.task.interrupt(reason);
-      }
-      const settled = yield* restate.allSettled(stopped.map(({task}) => task));
+      const settled = yield* interruptAndJoin(
+        stopped.map(({task}) => task),
+        reason,
+      );
       return settled.map((result, index) =>
         result.status === "fulfilled"
           ? result.value
@@ -365,8 +365,7 @@ function* adopt(
   try {
     outcome = yield* running;
   } catch (error) {
-    running.interrupt(error);
-    yield* restate.allSettled([running]);
+    yield* interruptAndJoin([running], error);
     throw error;
   }
   switch (outcome.status) {

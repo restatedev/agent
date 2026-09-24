@@ -1,5 +1,4 @@
 import {
-  allSettled,
   InterruptedError,
   type Operation,
   select,
@@ -7,6 +6,7 @@ import {
   type Task,
 } from "@restatedev/restate-sdk-gen";
 
+import {interruptAndJoin} from "../tasks.js";
 import {
   Guest,
   type GuestLimits,
@@ -69,8 +69,7 @@ export function* executeProgram(
   } finally {
     // No child can call back into the VM. Dispose it before cleanup waits.
     guest?.dispose();
-    for (const task of pending.values()) task.interrupt(stopReason);
-    const settled = yield* allSettled([...pending.values()]);
+    const settled = yield* interruptAndJoin([...pending.values()], stopReason);
     // Infrastructure failures must not disappear merely because a program
     // returned without awaiting a tool that had already failed in the host.
     const failed = settled.find(

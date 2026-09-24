@@ -537,30 +537,26 @@ function* reportToolsFinished(
   outcomes: ToolOutcome[],
   interrupted = false,
 ): restate.Operation<void> {
-  yield* state.transcript.append({
-    role: "event",
-    type: "tools",
-    turnId: state.context.turnId,
-    step: step.step,
-    phase: "finished",
-    calls: outcomes.map((outcome) => {
-      const summary = agentTools.summarize(outcome.call);
-      return {
-        id: outcome.call.toolCallId,
-        name: outcome.call.toolName,
-        ...(summary ? {summary} : {}),
-        status:
+  yield* state.transcript.append(
+    agentTools.toolsEvent(
+      state.context.turnId,
+      step.step,
+      "finished",
+      outcomes.map((outcome) =>
+        agentTools.toolActivity(
+          outcome.call,
           interrupted &&
-          (outcome.status === "pending" ||
-            (outcome.status === "failed" &&
-              outcome.error.startsWith("interrupted before completion:")))
+            (outcome.status === "pending" ||
+              (outcome.status === "failed" &&
+                outcome.error.startsWith("interrupted before completion:")))
             ? "cancelled"
             : outcome.status === "cancel_requested"
               ? "failed"
               : outcome.status,
-      };
-    }),
-  });
+        ),
+      ),
+    ),
+  );
 }
 
 function toolTranscriptEntries(
@@ -574,27 +570,12 @@ function toolTranscriptEntries(
       state.context,
       interruptedPendingReason,
     );
-    if (!("outcome" in event)) {
-      return entries;
-    }
-    const summary = agentTools.summarize(event.call);
+    if (!("outcome" in event)) return entries;
     return [
       ...entries,
-      {
-        role: "event",
-        type: "tools",
-        turnId: state.context.turnId,
-        step: event.step,
-        phase: "finished",
-        calls: [
-          {
-            id: event.call.toolCallId,
-            name: event.call.toolName,
-            ...(summary ? {summary} : {}),
-            status: event.outcome.status,
-          },
-        ],
-      },
+      agentTools.toolsEvent(state.context.turnId, event.step, "finished", [
+        agentTools.toolActivity(event.call, event.outcome.status),
+      ]),
     ];
   });
 }

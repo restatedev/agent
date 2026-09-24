@@ -22,11 +22,19 @@ export function* awaitApproval(
       approvalSignalName(approvalId),
     );
   } catch (error) {
-    yield* restate
-      .sendClient(Agent, context.agentId)
-      .cancelApproval({approvalId, turnId: context.turnId});
+    yield* withdrawApproval(context, approvalId);
     throw error;
   }
+}
+
+/** Removes a request nobody is waiting for any more. One-way and idempotent. */
+export function* withdrawApproval(
+  context: Pick<AgentToolContext, "agentId" | "turnId">,
+  approvalId: string,
+): restate.Operation<void> {
+  yield* restate
+    .sendClient(Agent, context.agentId)
+    .cancelApproval({approvalId, turnId: context.turnId});
 }
 
 export const humanApprovalTool = defineAgentTool({

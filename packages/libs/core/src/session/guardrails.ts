@@ -1,22 +1,23 @@
 // Shared policy gate for model proposals and concrete tool calls emitted by PTC.
-import type {ApprovalDecision, Guardrail} from "@restate-agents/types";
-import {
-  client,
-  type Operation,
-  sendClient,
-  signal,
-} from "@restatedev/restate-sdk-gen";
+//
+// Every guardrail the proposal still has to satisfy is checked by the
+// guardrail model. A guardrail that requires approval asks a human and, once
+// approved, is dropped from the remaining set; the loop then re-checks the
+// rest until all allow, one denies, or a human rejects.
+
+import type {Guardrail} from "@restate-agents/types";
+import {client, type Operation} from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 
 import {Agent} from "../agent/index.js";
-import {approvalSignalName} from "../internal-types.js";
 import {
   callGuardrailModel,
   type GuardrailApproval,
   type ProposedAction,
 } from "../model/index.js";
 import type {TurnHistory} from "./history.js";
-import type {AgentToolContext} from "./tools.js";
+import {type AgentToolContext, approvalCancelled} from "./tools.js";
+import {awaitApproval} from "./tools/approval.js";
 
 export type GuardrailDecisions = {
   approvedActions: GuardrailApproval[];
@@ -50,28 +51,26 @@ export function* guardAction({
   approvalPrefix: string;
   proposed: ProposedAction;
 }): Operation<GuardResult> {
-  const approvedForAction = new Set<string>();
   const newlyApproved: GuardrailApproval[] = [];
-  let approvalNumber = 1;
-  let guarded:
-    | ({decision: "allow"} & GuardrailDecisions)
-    | ({
-        decision: "blocked";
-        guardrailId: string;
-        reason: string;
-      } & GuardrailDecisions);
+  const allow = (): GuardResult => ({
+    decision: "allow",
+    approvedActions: newlyApproved,
+    rejectedGuardrails: [],
+  });
+  const block = (
+    guardrailId: string,
+    reason: string,
+    rejected: string[] = [],
+  ): GuardResult => ({
+    decision: "blocked",
+    guardrailId,
+    reason,
+    approvedActions: newlyApproved,
+    rejectedGuardrails: rejected,
+  });
 
-  while (true) {
-    const remaining = guardrails.filter(({id}) => !approvedForAction.has(id));
-    if (remaining.length === 0) {
-      guarded = {
-        decision: "allow",
-        approvedActions: newlyApproved,
-        rejectedGuardrails: [],
-      };
-      break;
-    }
-
+  let remaining = guardrails;
+  for (let approvalNumber = 1; remaining.length > 0; approvalNumber++) {
     const decision = yield* callGuardrailModel({
       instructions,
       guardrails: remaining,
@@ -80,102 +79,61 @@ export function* guardAction({
       messages: guardrailMessages,
       action: proposed,
     });
-    if (decision.decision === "allow") {
-      guarded = {
-        decision: "allow",
-        approvedActions: newlyApproved,
-        rejectedGuardrails: [],
-      };
-      break;
-    }
-    if (decision.decision === "deny") {
-      guarded = {
-        decision: "blocked",
-        guardrailId: decision.guardrailId,
-        reason: decision.reason,
-        approvedActions: newlyApproved,
-        rejectedGuardrails: [],
-      };
-      break;
-    }
+    if (decision.decision === "allow") return allow();
+    if (decision.decision === "deny")
+      return block(decision.guardrailId, decision.reason);
 
-    const approvalId = `${approvalPrefix}-${approvalNumber}`;
     const request = {
-      approvalId,
+      approvalId: `${approvalPrefix}-${approvalNumber}`,
       turnId: context.turnId,
       question: decision.question,
       guardrailId: decision.guardrailId,
     };
-    const registered = yield* client(Agent, context.agentId).requestApproval(
-      request,
-    );
-    let resolution: ApprovalDecision | undefined;
-    if (registered) {
-      yield* transcript.append(
-        {role: "event", type: "approval_request", ...request},
-        {
-          role: "event",
-          type: "progress",
-          turnId: context.turnId,
-          phase: "waiting",
-          message: `Guardrail ${decision.guardrailId} requires human approval`,
-        },
+    if (!(yield* client(Agent, context.agentId).requestApproval(request)))
+      return block(
+        decision.guardrailId,
+        "human approval could not be registered",
       );
-      try {
-        resolution = yield* signal<ApprovalDecision>(
-          approvalSignalName(approvalId),
-        );
-        yield* transcript.append({
-          role: "event",
-          type: "approval",
-          ...request,
-          ...resolution,
-        });
-      } catch (error) {
-        yield* sendClient(Agent, context.agentId).cancelApproval({
-          approvalId,
-          turnId: context.turnId,
-        });
-        yield* transcript.append({
-          role: "event",
-          type: "approval_cancelled",
-          approvalId,
-          turnId: context.turnId,
-        });
-        throw error;
-      }
+    yield* transcript.append(
+      {role: "event", type: "approval_request", ...request},
+      {
+        role: "event",
+        type: "progress",
+        turnId: context.turnId,
+        phase: "waiting",
+        message: `Guardrail ${decision.guardrailId} requires human approval`,
+      },
+    );
+    let resolution;
+    try {
+      resolution = yield* awaitApproval(context, request.approvalId);
+    } catch (error) {
+      yield* transcript.append(
+        approvalCancelled(request.approvalId, context.turnId),
+      );
+      throw error;
     }
-
-    if (!resolution) {
-      guarded = {
-        decision: "blocked",
-        guardrailId: decision.guardrailId,
-        reason: "human approval could not be registered",
-        approvedActions: newlyApproved,
-        rejectedGuardrails: [],
-      };
-      break;
-    }
-    if (resolution.decision === "rejected") {
-      guarded = {
-        decision: "blocked",
-        guardrailId: decision.guardrailId,
-        reason: resolution.reason
+    yield* transcript.append({
+      role: "event",
+      type: "approval",
+      ...request,
+      ...resolution,
+    });
+    if (resolution.decision === "rejected")
+      return block(
+        decision.guardrailId,
+        resolution.reason
           ? `Human rejected the request: ${resolution.reason}`
           : "Human rejected the request",
-        approvedActions: newlyApproved,
-        rejectedGuardrails: [decision.guardrailId],
-      };
-      break;
-    }
+        [decision.guardrailId],
+      );
 
     newlyApproved.push({
       guardrailId: decision.guardrailId,
       question: decision.question,
       action: proposed,
     });
-    approvedForAction.add(decision.guardrailId);
-    approvalNumber += 1;
+    remaining = remaining.filter(({id}) => id !== decision.guardrailId);
   }
-  return guarded;
+  return allow();
 }

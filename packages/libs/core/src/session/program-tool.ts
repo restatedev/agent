@@ -1,9 +1,8 @@
 // PTC adapts the same tool dispatcher used for direct calls. Intermediate
 // payloads only cross into QuickJS; the model receives the program's return.
 import {CancelledError} from "@restatedev/restate-sdk";
-import {type Operation, sendClient} from "@restatedev/restate-sdk-gen";
+import type {Operation} from "@restatedev/restate-sdk-gen";
 
-import {Agent} from "../agent/index.js";
 import type {ToolCall} from "../model/index.js";
 import {PROGRAM_TOOL_NAME, ProgramInputSchema} from "../ptc/definition.js";
 import {
@@ -17,14 +16,17 @@ import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import type {McpAgentTool} from "./mcp-tools.js";
 import {
   type AgentToolContext,
+  approvalCancelled,
   complete,
   execute,
   manifests,
-  summarize,
+  toolActivity,
   type ToolExecutionScope,
   type ToolOutcome,
+  toolsEvent,
   transcriptEntries,
 } from "./tools.js";
+import {withdrawApproval} from "./tools/approval.js";
 
 export function* executeProgramTool(
   call: ToolCall,
@@ -92,20 +94,13 @@ function* executeNestedTool(
   const denied = yield* scope.guard(call);
   if (denied) return failure(`Tool blocked: ${denied}`);
 
-  const summary = summarize(call);
-  const activity = {
-    id: call.toolCallId,
-    name: call.toolName,
-    ...(summary ? {summary} : {}),
-  };
-  yield* scope.transcript.append({
-    role: "event",
-    type: "tools",
-    turnId: context.turnId,
-    step: scope.step,
-    phase: "started",
-    calls: [activity],
-  });
+  const report = (status?: "succeeded" | "failed" | "cancelled") =>
+    scope.transcript.append(
+      toolsEvent(context.turnId, scope.step, status ? "finished" : "started", [
+        toolActivity(call, status),
+      ]),
+    );
+  yield* report();
   let pendingApproval = false;
   let finished = false;
   try {
@@ -125,19 +120,7 @@ function* executeNestedTool(
         outcome = {call, ...event.outcome};
       }
     }
-    yield* scope.transcript.append({
-      role: "event",
-      type: "tools",
-      turnId: context.turnId,
-      step: scope.step,
-      phase: "finished",
-      calls: [
-        {
-          ...activity,
-          status: outcome.status === "succeeded" ? "succeeded" : "failed",
-        },
-      ],
-    });
+    yield* report(outcome.status === "succeeded" ? "succeeded" : "failed");
     finished = true;
     if (outcome.status === "failed") return failure(outcome.error);
     if (outcome.status !== "succeeded")
@@ -148,27 +131,14 @@ function* executeNestedTool(
   } catch (error) {
     // Close the registration-to-wait gap if interruption arrives while the
     // approval_request transcript is being published, before complete starts.
-    if (pendingApproval && !(error instanceof CancelledError)) {
-      yield* sendClient(Agent, context.agentId).cancelApproval({
-        approvalId: call.toolCallId,
-        turnId: context.turnId,
-      });
-      yield* scope.transcript.append({
-        role: "event",
-        type: "approval_cancelled",
-        approvalId: call.toolCallId,
-        turnId: context.turnId,
-      });
-    }
-    if (!finished && !(error instanceof CancelledError)) {
-      yield* scope.transcript.append({
-        role: "event",
-        type: "tools",
-        turnId: context.turnId,
-        step: scope.step,
-        phase: "finished",
-        calls: [{...activity, status: "cancelled"}],
-      });
+    if (!(error instanceof CancelledError)) {
+      if (pendingApproval) {
+        yield* withdrawApproval(context, call.toolCallId);
+        yield* scope.transcript.append(
+          approvalCancelled(call.toolCallId, context.turnId),
+        );
+      }
+      if (!finished) yield* report("cancelled");
     }
     throw error;
   }

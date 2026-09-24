@@ -1,3 +1,5 @@
+// Task supervision helpers for sdk-gen operations.
+
 import * as restate from "@restatedev/restate-sdk-gen";
 
 type FutureValue<F> = F extends restate.Future<infer Value> ? Value : never;
@@ -32,9 +34,21 @@ export function* raceBranches<
   try {
     return (yield* restate.race(waiters)) as RaceResult<Branches>;
   } finally {
-    for (const waiter of waiters) {
-      waiter.interrupt(new restate.InterruptedError("Race settled"));
-    }
-    yield* restate.allSettled(waiters);
+    yield* interruptAndJoin(
+      waiters,
+      new restate.InterruptedError("Race settled"),
+    );
   }
+}
+
+/**
+ * Interrupts every task and waits for all of them to settle, so their
+ * cleanup runs before the caller continues.
+ */
+export function* interruptAndJoin<T>(
+  tasks: readonly restate.Task<T>[],
+  reason: unknown,
+): restate.Operation<restate.FutureSettledResult<T>[]> {
+  for (const task of tasks) task.interrupt(reason);
+  return yield* restate.allSettled(tasks);
 }

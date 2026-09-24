@@ -7,7 +7,6 @@
 import type {Guardrail} from "@restate-agents/types";
 import {
   all,
-  allSettled,
   type Future,
   gen,
   InterruptedError,
@@ -25,7 +24,7 @@ import type {
 } from "../model/index.js";
 import {callModel} from "../model/index.js";
 import {PROGRAM_TOOL_NAME} from "../ptc/definition.js";
-import {raceBranches} from "../race.js";
+import {interruptAndJoin, raceBranches} from "../tasks.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import {type GuardrailDecisions, guardAction} from "./guardrails.js";
 import type {TurnHistory} from "./history.js";
@@ -179,21 +178,12 @@ export function* agentStep({
             },
           ]
         : []),
-      {
-        role: "event",
-        type: "tools",
-        turnId: context.turnId,
-        step: stepNumber,
-        phase: "started",
-        calls: action.calls.map((call) => {
-          const summary = agentTools.summarize(call);
-          return {
-            id: call.toolCallId,
-            name: call.toolName,
-            ...(summary ? {summary} : {}),
-          };
-        }),
-      },
+      agentTools.toolsEvent(
+        context.turnId,
+        stepNumber,
+        "started",
+        action.calls.map((call) => agentTools.toolActivity(call)),
+      ),
     );
     tasks.push(
       ...action.calls.map((call, index) =>
@@ -313,10 +303,7 @@ export function* agentStep({
     }
 
     const {action, tasks, decisions} = activeTools;
-    for (const task of tasks) {
-      task.interrupt(error);
-    }
-    const settled = yield* allSettled(tasks);
+    const settled = yield* interruptAndJoin(tasks, error);
     if (!(error instanceof AgentStepInterrupt)) {
       throw error;
     }
@@ -360,8 +347,10 @@ export function* settleStep(
     }
 
     const reason = selected.value;
-    task.interrupt(new AgentStepInterrupt(reason));
-    const [settled] = yield* allSettled([task]);
+    const [settled] = yield* interruptAndJoin(
+      [task],
+      new AgentStepInterrupt(reason),
+    );
     const completed =
       settled.status === "fulfilled" ? settled.value : undefined;
     const tools =
@@ -372,8 +361,7 @@ export function* settleStep(
           : undefined;
     return {type: "interrupted", reason, tools};
   } catch (error) {
-    task.interrupt(error);
-    yield* allSettled([task]);
+    yield* interruptAndJoin([task], error);
     throw error;
   }
 }

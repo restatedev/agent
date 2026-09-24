@@ -13,8 +13,8 @@ import type {
 import {AgentDefinition} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 
-import {raceBranches} from "../race.js";
 import {listState, objectKey} from "../state.js";
+import {raceBranches} from "../tasks.js";
 import type {AgentHandlers} from "./guards.js";
 
 const SNAPSHOT = "notifications";
