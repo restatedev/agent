@@ -22,13 +22,12 @@ import type {
   AgentMetadata,
   AgentNotificationSnapshot,
   AgentProfile,
-  AgentTools,
   ApprovalRequest,
   ApprovalResolution,
   AskResult,
   ChildAgent,
-  Guardrail,
   HistoryPage,
+  ProfileUpdate,
   ScheduleCancellationResult,
   ScheduledMessage,
   ScheduleMutationResult,
@@ -140,17 +139,11 @@ export interface AgentClient {
   /** Instructions, guardrails, memories and tool grants the next turn will snapshot. */
   profile(): Promise<AgentProfile>;
 
-  /** Replaces the persistent instructions; null clears them. */
-  setInstructions(instructions: string | null): Promise<void>;
-
-  /** Replaces the complete guardrail list; an empty list clears it. */
-  setGuardrails(guardrails: Guardrail[]): Promise<void>;
-
-  /** Controls built-in web search for future turns; enabled by default. */
-  setWebSearchEnabled(enabled: boolean): Promise<void>;
-
-  /** Replaces the agent's tool grants for future turns. */
-  setTools(tools: AgentTools): Promise<void>;
+  /**
+   * Changes the profile for future turns. Each given field is replaced whole;
+   * `instructions: null` and `guardrails: []` clear them.
+   */
+  updateProfile(update: ProfileUpdate): Promise<void>;
 
   /** Deletes one memory. @returns whether it existed. */
   deleteMemory(key: string): Promise<boolean>;
@@ -338,20 +331,8 @@ export function createAgentClient({
       );
     },
 
-    async setInstructions(instructions: string | null): Promise<void> {
-      return invoke(agent.setInstructions({instructions}));
-    },
-
-    async setGuardrails(guardrails: Guardrail[]): Promise<void> {
-      return invoke(agent.setGuardrails({guardrails}));
-    },
-
-    async setWebSearchEnabled(enabled: boolean): Promise<void> {
-      return invoke(agent.setWebSearchEnabled({enabled}));
-    },
-
-    async setTools(tools: AgentTools): Promise<void> {
-      return invoke(agent.setTools(tools));
+    async updateProfile(update: ProfileUpdate): Promise<void> {
+      return invoke(agent.updateProfile(update));
     },
     async metadata() {
       return invoke(agent.metadata(rpc.opts({input: serde.empty})));

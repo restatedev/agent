@@ -2,13 +2,12 @@ import type {
   AgentMetadata,
   AgentNotificationSnapshot,
   AgentProfile,
-  AgentTools,
   ApprovalRequest,
   ApprovalResolution,
   AskResult,
   ChildAgent,
-  Guardrail,
   HistoryPage,
+  ProfileUpdate,
   ScheduleCancellationResult,
   ScheduledMessage,
   ToolCatalog,
@@ -58,10 +57,7 @@ export interface AgentClient {
   interrupt(reason: string, message?: string): Promise<boolean>;
 
   profile(): Promise<AgentProfile>;
-  setInstructions(instructions: string | null): Promise<void>;
-  setGuardrails(guardrails: Guardrail[]): Promise<void>;
-  setWebSearchEnabled(enabled: boolean): Promise<void>;
-  setTools(tools: AgentTools): Promise<void>;
+  updateProfile(update: ProfileUpdate): Promise<void>;
   toolCatalog(): Promise<ToolCatalog>;
 
   /** @returns whether the memory existed. */
@@ -153,17 +149,8 @@ export function createAgentClient(agentId: string): AgentClient {
     async profile(): Promise<AgentProfile> {
       return read("profile");
     },
-    async setInstructions(instructions: string | null): Promise<void> {
-      await write("instructions", {instructions});
-    },
-    async setGuardrails(guardrails: Guardrail[]): Promise<void> {
-      await write("guardrails", {guardrails});
-    },
-    async setWebSearchEnabled(enabled: boolean): Promise<void> {
-      await write("web-search", {enabled});
-    },
-    async setTools(tools: AgentTools): Promise<void> {
-      await write("tools", tools);
+    async updateProfile(update: ProfileUpdate): Promise<void> {
+      await write("profile", update);
     },
     async toolCatalog(): Promise<ToolCatalog> {
       return read("tool-catalog");

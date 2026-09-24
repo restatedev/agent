@@ -15,7 +15,6 @@ import {
   AgentNotificationUnsubscribeSchema,
   AgentNotificationWatchRequestSchema,
   AgentProfileSchema,
-  AgentToolsSchema,
   AgentTurnOutcomeSchema,
   AgentTurnRequestSchema,
   ApprovalCancellationSchema,
@@ -33,14 +32,12 @@ import {
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
   MessageSchema,
+  ProfileUpdateSchema,
   ScheduleCancellationResultSchema,
   ScheduledMessageSchema,
   ScheduleIdRequestSchema,
   ScheduleMutationResultSchema,
   ScheduleSpecSchema,
-  SetGuardrailsSchema,
-  SetInstructionsSchema,
-  SetWebSearchEnabledSchema,
   SubAgentConfigSchema,
   ToolCatalogSchema,
 } from "./index.js";
@@ -60,15 +57,7 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
   steer: iface.schemas({input: MessageSchema, output: z.boolean()}),
   deliver: iface.schemas({input: AgentDeliverySchema, output: z.void()}),
   profile: iface.schemas({input: z.void(), output: AgentProfileSchema}),
-  setInstructions: iface.schemas({
-    input: SetInstructionsSchema,
-    output: z.void(),
-  }),
-  setGuardrails: iface.schemas({input: SetGuardrailsSchema, output: z.void()}),
-  setWebSearchEnabled: iface.schemas({
-    input: SetWebSearchEnabledSchema,
-    output: z.void(),
-  }),
+  updateProfile: iface.schemas({input: ProfileUpdateSchema, output: z.void()}),
   initialize: iface.schemas({
     input: AgentInitializationSchema,
     output: z.void(),
@@ -164,7 +153,6 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     input: MemoryKeyRequestSchema,
     output: z.boolean(),
   }),
-  setTools: iface.schemas({input: AgentToolsSchema, output: z.void()}),
   toolCatalog: iface.schemas({input: z.void(), output: ToolCatalogSchema}),
   updateMemory: iface.schemas({
     input: MemoryUpdateSchema,

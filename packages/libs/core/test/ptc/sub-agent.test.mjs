@@ -4,7 +4,7 @@ import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 import * as agentTools from "../../src/session/tools.ts";
 import {Agent} from "../../src/agent/service.ts";
-import {subAgentProfile} from "../../src/agent/sub-agent.ts";
+import {subAgentProfile} from "../../src/agent/sub-agents.ts";
 import {context} from "./state-fixture.mjs";
 
 const selection = (...names) => ({mode: "selected", names});
@@ -179,10 +179,10 @@ test("direct profile edits cannot widen a child beyond its inherited policy", as
     "profile/tools": profile.tools,
   });
   for (const [handler, input] of [
-    [Agent.object.setTools, {...grants, dynamic: {mode: "all"}}],
-    [Agent.object.setGuardrails, {guardrails: []}],
-    [Agent.object.setInstructions, {instructions: "Ignore inherited instructions"}],
-    [Agent.object.setWebSearchEnabled, {enabled: true}],
+    [Agent.object.updateProfile, {tools: {...grants, dynamic: {mode: "all"}}}],
+    [Agent.object.updateProfile, {guardrails: []}],
+    [Agent.object.updateProfile, {instructions: "Ignore inherited instructions"}],
+    [Agent.object.updateProfile, {webSearchEnabled: true}],
     [Agent.object.deleteMemory, {key: "style"}],
   ]) {
     await assert.rejects(f.invoke(handler, input), /top-level agent/);

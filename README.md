@@ -94,7 +94,7 @@ flowchart LR
 ### One message, end to end
 
 1. `Agent.ask` starts a turn if the agent is idle, or queues the message if a
-   turn is running (`agent/service.ts`).
+   turn is running (`agent/turns.ts`).
 2. Starting a turn snapshots the profile and sends `AgentSession.doTurn` one
    way. The controller records the invocation ID and returns immediately.
 3. `doTurn` appends the new messages to the log and builds model context from
@@ -133,9 +133,9 @@ MCP call completing and its result being recorded can repeat that call.
 | --- | --- | --- |
 | Queue, steer, interrupt | Send messages while a long turn runs ("sleep for 4 minutes") | `agent/active-turn.ts` |
 | Crash recovery | Kill `pnpm dev:service` mid-turn and restart it | `session/service.ts`, `session/step.ts` |
-| Guardrails and approvals | Add a guardrail in the UI; ask for something it blocks | `session/guardrails.ts`, `agent/approval.ts` |
-| Memory | Ask the agent to remember a preference; up to 32 per agent | `agent/memory.ts` |
-| Sub-agents | Ask it to delegate research to a helper | `agent/sub-agent.ts`, `createSubAgent` in `session/tools.ts` |
+| Guardrails and approvals | Add a guardrail in the UI; ask for something it blocks | `session/guardrails.ts`, `agent/approvals.ts` |
+| Memory | Ask the agent to remember a preference; up to 32 per agent | `agent/profile.ts` |
+| Sub-agents | Ask it to delegate research to a helper | `agent/sub-agents.ts`, `createSubAgent` in `session/tools.ts` |
 | Schedules | "Remind me in 2 minutes to check the weather" | `agent/schedules.ts` |
 | Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `ptc/runtime.ts` |
 | Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/tool-search.ts` |

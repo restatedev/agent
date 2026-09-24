@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {AgentProfileSchema, SetWebSearchEnabledSchema} from "@restate-agents/types";
+import {AgentProfileSchema, ProfileUpdateSchema} from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 import * as agentTools from "../../src/session/tools.ts";
@@ -22,8 +22,8 @@ test("web search profile defaults on and accepts only a boolean toggle", () => {
   const profile = {memories: [], guardrails: []};
   assert.equal(AgentProfileSchema.parse(profile).webSearchEnabled, true);
   assert.equal(AgentProfileSchema.parse({...profile, webSearchEnabled: false}).webSearchEnabled, false);
-  assert.equal(SetWebSearchEnabledSchema.safeParse({enabled: "false"}).success, false);
-  assert.equal(SetWebSearchEnabledSchema.safeParse({}).success, false);
+  assert.equal(ProfileUpdateSchema.safeParse({webSearchEnabled: "false"}).success, false);
+  assert.equal(ProfileUpdateSchema.safeParse({enabled: false}).success, false);
 });
 
 test("Tavily uses only keyless auth and returns bounded source evidence", async t => {

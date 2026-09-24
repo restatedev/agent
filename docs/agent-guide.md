@@ -30,7 +30,8 @@ Use executable contracts before prose:
 1. Public Zod schemas in `packages/libs/types/src/index.ts`, shared Restate
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
    internal handlers, and `src/model/provider.ts`;
-2. handler code in `src/agent/service.ts` and `src/session/service.ts`;
+2. handler code in `src/agent/*.ts` (grouped by concern) and
+   `src/session/service.ts`;
 3. focused ownership modules;
 4. docs.
 
@@ -155,13 +156,15 @@ The detailed turn-runtime list lives in
 
 | Change | Primary owner |
 | --- | --- |
-| User message routing and public controller handler | `agent/service.ts` |
+| User message routing and turn start/end | `agent/turns.ts` |
+| Authorization checks shared by Agent handlers | `agent/guards.ts` |
+| Agent creation and retirement | `agent/lifecycle.ts` |
 | Active turn ID, pending user queue, signal delivery/reconciliation | `agent/active-turn.ts` |
 | History chunks, cursor, writer, summary checkpoint | `session/history.ts` |
 | Notification revisions, subscriptions, and awakeables | `agent/notifications.ts` |
-| Instructions, guardrails | `agent/profile.ts` |
-| Agent-local memories | `agent/memory.ts` |
-| Pending approval state and decision signal | `agent/approval.ts` |
+| Instructions, guardrails, tool grants, memories | `agent/profile.ts` |
+| Pending approval state and decision signal | `agent/approvals.ts` |
+| Children, delegated tasks, inherited profile | `agent/sub-agents.ts` |
 | Durable scheduled-message state and timers | `agent/schedules.ts` |
 | Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |
 | One model/guardrail/foreground-tool transition | `session/step.ts` |

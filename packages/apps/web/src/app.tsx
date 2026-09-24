@@ -507,7 +507,7 @@ function ProfilePanel({
               const enabled = !profile.webSearchEnabled;
               setSavingWebSearch(true);
               try {
-                await client.setWebSearchEnabled(enabled);
+                await client.updateProfile({webSearchEnabled: enabled});
                 await refreshProfile();
                 notify(
                   `Web search ${enabled ? "enabled" : "disabled"} for future turns`,
@@ -557,7 +557,9 @@ function ProfilePanel({
             className="button primary small"
             onClick={async () => {
               try {
-                await client.setInstructions(instructions.trim() || null);
+                await client.updateProfile({
+                  instructions: instructions.trim() || null,
+                });
                 setInstructionsDraft(undefined);
                 notify(
                   instructions.trim()
@@ -604,7 +606,7 @@ function ProfilePanel({
                 return;
               }
               try {
-                await client.setGuardrails(next);
+                await client.updateProfile({guardrails: next});
                 setGuardrailsDraft(undefined);
                 notify(
                   next.length

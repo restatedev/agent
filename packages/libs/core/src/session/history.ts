@@ -13,13 +13,13 @@ import type {
   HistoryPage,
 } from "@restate-agents/types";
 import {AgentDefinition} from "@restate-agents/types/services";
-import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
 import {
   type ConversationCompactionInput,
   isDerivedConversationEvent,
 } from "../internal-types.js";
+import {objectKey} from "../state.js";
 
 type StoredEntry = {
   sequence: number;
@@ -99,10 +99,7 @@ export function* openTurn(): restate.Operation<TurnHistory> {
     chunk =
       (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
   }
-  const agentId = restate.handlerRequest().key;
-  if (!agentId) {
-    throw new TerminalError("history writers require an AgentSession key");
-  }
+  const agentId = objectKey();
 
   return {
     context(): ConversationContext {

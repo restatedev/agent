@@ -26,10 +26,6 @@ export const InterruptRequestSchema = z
     "Interrupt the active Turn, optionally preserving a replacement request for the next Turn.",
   );
 
-export const SetInstructionsSchema = z.object({
-  instructions: z.string().nullable(),
-});
-
 const McpServerIdSchema = z
   .string()
   .trim()
@@ -348,18 +344,13 @@ export const GuardrailSchema = z
   .describe("A natural-language policy evaluated before an agent action runs.");
 export type Guardrail = z.infer<typeof GuardrailSchema>;
 
-export const SetGuardrailsSchema = z.object({
-  guardrails: z
-    .array(GuardrailSchema)
-    .refine(
-      (guardrails) =>
-        new Set(guardrails.map(({id}) => id)).size === guardrails.length,
-      "guardrail ids must be unique",
-    )
-    .describe(
-      "The complete replacement policy list for future Turns. Use an empty list to clear all guardrails.",
-    ),
-});
+const GuardrailListSchema = z
+  .array(GuardrailSchema)
+  .refine(
+    (guardrails) =>
+      new Set(guardrails.map(({id}) => id)).size === guardrails.length,
+    "guardrail ids must be unique",
+  );
 
 export const AgentProfileSchema = z.object({
   memories: z.array(MemoryEntrySchema).max(32).default([]),
@@ -369,6 +360,21 @@ export const AgentProfileSchema = z.object({
   webSearchEnabled: z.boolean().default(true),
 });
 export type AgentProfile = z.infer<typeof AgentProfileSchema>;
+
+/**
+ * A profile change for subsequent turns. Omitted fields stay unchanged; each
+ * given field is replaced whole. `null` instructions clear them.
+ */
+export const ProfileUpdateSchema = z
+  .object({
+    instructions: z.string().nullable(),
+    guardrails: GuardrailListSchema,
+    tools: AgentToolsSchema,
+    webSearchEnabled: z.boolean(),
+  })
+  .partial()
+  .strict();
+export type ProfileUpdate = z.infer<typeof ProfileUpdateSchema>;
 
 export const AgentInitializationSchema = AgentMetadataSchema.extend({
   profile: AgentProfileSchema.optional(),
@@ -411,7 +417,6 @@ export const SubAgentConfigSchema = z.object({
     ),
 });
 export type SubAgentConfig = z.infer<typeof SubAgentConfigSchema>;
-export const SetWebSearchEnabledSchema = z.object({enabled: z.boolean()});
 
 // The decision delivered to a waiting tool or policy gate over a signal and
 // retained in history after successful delivery.

@@ -1,12 +1,10 @@
 import type {
   AgentNotificationSnapshot,
   ApprovalResolution,
-  Guardrail,
 } from "@restate-agents/types";
 import {
   AgentNotificationSnapshotSchema,
-  AgentToolsSchema,
-  SetWebSearchEnabledSchema,
+  ProfileUpdateSchema,
 } from "@restate-agents/types";
 
 import {
@@ -150,32 +148,13 @@ export async function POST(request: Request, context: RouteContext) {
         const body = await input<{reason: string; message?: string}>(request);
         return json(await client.interrupt(body.reason, body.message));
       }
-      case "instructions": {
-        const body = await input<{instructions: string | null}>(request);
-        await client.setInstructions(body.instructions);
-        return json(null);
-      }
-      case "guardrails": {
-        const body = await input<{guardrails: Guardrail[]}>(request);
-        await client.setGuardrails(body.guardrails);
-        return json(null);
-      }
-      case "web-search": {
-        const parsed = SetWebSearchEnabledSchema.safeParse(
+      case "profile": {
+        const parsed = ProfileUpdateSchema.safeParse(
           await input<unknown>(request),
         );
         if (!parsed.success)
-          throw new UiRequestError(400, "enabled must be a boolean");
-        await client.setWebSearchEnabled(parsed.data.enabled);
-        return json(null);
-      }
-      case "tools": {
-        const parsed = AgentToolsSchema.safeParse(
-          await input<unknown>(request),
-        );
-        if (!parsed.success)
-          throw new UiRequestError(400, "Invalid tool selection");
-        await client.setTools(parsed.data);
+          throw new UiRequestError(400, "Invalid profile update");
+        await client.updateProfile(parsed.data);
         return json(null);
       }
       case "delete-memory": {

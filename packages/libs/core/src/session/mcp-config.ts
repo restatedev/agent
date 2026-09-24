@@ -66,6 +66,20 @@ export function resolveMcpGrants(
   };
 }
 
+/** The servers a turn may connect to: granted with at least one tool. */
+export function grantedMcpServers(
+  tools: AgentTools,
+  servers: McpServer[],
+): McpServer[] {
+  return servers.filter((server) =>
+    tools.mcp.some(
+      (grant) =>
+        grant.connectionId === server.id &&
+        (grant.tools.mode === "all" || grant.tools.names.length > 0),
+    ),
+  );
+}
+
 /** Call only inside the HTTP effect; do not return the value from a run. */
 export function resolveMcpToken(
   server: McpServer,

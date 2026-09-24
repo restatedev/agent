@@ -275,13 +275,13 @@ When changing a request or schema:
 
 | Goal | Primary file |
 | --- | --- |
-| Change Agent API or controller routing | `src/agent/service.ts` |
+| Change Agent API or controller routing | `src/agent/service.ts`, `src/agent/turns.ts` |
 | Change active-turn bookkeeping/signals | `src/agent/active-turn.ts` |
 | Change transcript storage | `src/session/history.ts` |
 | Change invalidation subscriptions | `src/agent/notifications.ts` |
-| Change instructions/guardrails | `src/agent/profile.ts` |
-| Change agent-local memories | `src/agent/memory.ts` |
-| Change approvals | `src/agent/approval.ts` |
+| Change instructions/guardrails/memories | `src/agent/profile.ts` |
+| Change approvals | `src/agent/approvals.ts` |
+| Change sub-agents | `src/agent/sub-agents.ts` |
 | Change schedules and timer delivery | `src/agent/schedules.ts` |
 | Change the turn state machine | `src/session/service.ts` |
 | Change one inference/tool step | `src/session/step.ts` |

@@ -30,6 +30,7 @@ import {
 } from "../model/index.js";
 import {executionRetention} from "../retention.js";
 import {destroySandbox} from "../sandbox/index.js";
+import {objectKey} from "../state.js";
 import {
   buildModelContext,
   finalizationInstruction,
@@ -92,7 +93,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
       }
       const result = yield* compactConversation(input);
       yield* restate
-        .sendClient(AgentSession, sessionKey())
+        .sendClient(AgentSession, objectKey())
         .applyCompaction(result);
     },
 
@@ -125,7 +126,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
      * is rethrown to preserve Restate semantics.
      */
     *doTurn(req: AgentTurnRequest): restate.Operation<AgentTurnOutcome> {
-      const agentId = sessionKey();
+      const agentId = objectKey();
       const turnId = restate.handlerRequest().id;
       let state: AgentSessionState | undefined;
       let transcript: TurnHistory | undefined;
@@ -508,14 +509,6 @@ function mcpAvailabilityMessage(
       "When the user's request needs an unavailable server, explain its exact availability problem and ask them to check the operator's endpoint or credential configuration.",
     ].join("\n"),
   };
-}
-
-function sessionKey(): string {
-  const key = restate.handlerRequest().key;
-  if (!key) {
-    throw new TerminalError("AgentSession handlers require an agent key");
-  }
-  return key;
 }
 
 function errorMessage(error: unknown): string {

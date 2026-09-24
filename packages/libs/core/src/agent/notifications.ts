@@ -2,8 +2,8 @@
 //
 // Authoritative data stays with its owner: AgentSession owns history, while
 // Agent owns profile, approvals and schedules. This module only records
-// watermarks and wakes parked watchers. Agent-owned topics publish inline;
-// AgentSession sends `Agent.publish` after appending history.
+// watermarks and wakes parked watchers. Agent-owned modules publish when they
+// write; AgentSession calls `Agent.publish` after appending history.
 
 import type {
   AgentNotificationSnapshot,
@@ -14,17 +14,81 @@ import {AgentDefinition} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 
 import {raceBranches} from "../race.js";
+import {listState, objectKey} from "../state.js";
+import type {AgentHandlers} from "./guards.js";
 
 const SNAPSHOT = "notifications";
-const SUBSCRIPTIONS = "notification-subscriptions";
+const subscriptions = listState<AgentNotificationSubscription>(
+  "notification-subscriptions",
+);
 
 const EMPTY_SNAPSHOT: AgentNotificationSnapshot = {
   revision: 0,
-  versions: {
-    history: 0,
-    profile: 0,
-    approvals: 0,
-    schedules: 0,
+  versions: {history: 0, profile: 0, approvals: 0, schedules: 0},
+};
+
+export const handlers: AgentHandlers<
+  "publish" | "notifications" | "watch" | "subscribe" | "unsubscribe"
+> = {
+  /** Advances a topic owned by another object (AgentSession history). */
+  *publish(topic) {
+    yield* publish(topic);
+  },
+
+  *notifications() {
+    return yield* read();
+  },
+
+  /**
+   * Waits for a revision newer than `afterRevision`, for at most the window.
+   * Runs as a shared handler, so it parks outside Agent's exclusive lock; the
+   * exclusive `subscribe` rechecks the watermark, so a publish between the
+   * caller's read and registration still wakes it.
+   */
+  *watch({afterRevision, timeoutSeconds}) {
+    const changed = restate.awakeable<AgentNotificationSnapshot>();
+    const agent = restate.client(AgentDefinition, objectKey());
+    const available = yield* agent.subscribe({
+      afterRevision,
+      awakeableId: changed.id,
+    });
+    if (available) return available;
+    try {
+      const selected = yield* raceBranches({
+        notification: changed.promise,
+        timeout: restate.sleep(
+          timeoutSeconds * 1_000,
+          "notification watch window",
+        ),
+      });
+      if (selected.tag === "notification") return selected.value;
+      yield* agent.unsubscribe({awakeableId: changed.id});
+      return yield* read();
+    } catch (error) {
+      yield* restate
+        .sendClient(AgentDefinition, objectKey())
+        .unsubscribe({awakeableId: changed.id});
+      throw error;
+    }
+  },
+
+  /** Registers a caller-owned awakeable unless a change is already available. */
+  *subscribe(subscription) {
+    const snapshot = yield* read();
+    if (subscription.afterRevision < snapshot.revision) return snapshot;
+    yield* subscriptions.update((all) =>
+      all.some(({awakeableId}) => awakeableId === subscription.awakeableId)
+        ? all
+        : [...all, subscription],
+    );
+    return null;
+  },
+
+  /** Removes an abandoned subscription. Safe to repeat. */
+  *unsubscribe({awakeableId}) {
+    yield* subscriptions.update((all) =>
+      all.filter((subscription) => subscription.awakeableId !== awakeableId),
+    );
   },
 };
 
@@ -51,101 +115,10 @@ export function* publish(
   };
   restate.state().set(SNAPSHOT, snapshot);
 
-  const subscriptions = yield* readSubscriptions();
-  const ready = subscriptions.filter(
-    ({afterRevision}) => afterRevision < revision,
-  );
+  const all = yield* subscriptions.get();
+  const ready = all.filter(({afterRevision}) => afterRevision < revision);
   if (ready.length === 0) return;
-  storeSubscriptions(
-    subscriptions.filter(({afterRevision}) => afterRevision >= revision),
-  );
-  for (const {awakeableId} of ready) {
+  subscriptions.set(all.filter(({afterRevision}) => afterRevision >= revision));
+  for (const {awakeableId} of ready)
     restate.resolveAwakeable(awakeableId, snapshot);
-  }
-}
-
-/**
- * Registers a caller-owned awakeable unless a change is already available.
- * Must run in an exclusive Agent handler.
- */
-export function* subscribe(
-  subscription: AgentNotificationSubscription,
-): restate.Operation<AgentNotificationSnapshot | null> {
-  const snapshot = yield* read();
-  if (subscription.afterRevision < snapshot.revision) return snapshot;
-
-  const subscriptions = yield* readSubscriptions();
-  if (
-    !subscriptions.some(
-      ({awakeableId}) => awakeableId === subscription.awakeableId,
-    )
-  ) {
-    subscriptions.push(subscription);
-    restate.state().set(SUBSCRIPTIONS, subscriptions);
-  }
-  return null;
-}
-
-/** Removes an abandoned subscription. Safe to repeat. */
-export function* unsubscribe(awakeableId: string): restate.Operation<void> {
-  const subscriptions = yield* readSubscriptions();
-  const remaining = subscriptions.filter(
-    (subscription) => subscription.awakeableId !== awakeableId,
-  );
-  if (remaining.length !== subscriptions.length) storeSubscriptions(remaining);
-}
-
-/**
- * Waits for a revision newer than `afterRevision`, for at most the window.
- * Runs in a shared handler, so it parks outside Agent's exclusive lock; the
- * exclusive `subscribe` rechecks the watermark, so a publish between the
- * caller's read and registration still wakes it.
- */
-export function* watch(
-  agentId: string,
-  afterRevision: number,
-  timeoutSeconds: number,
-): restate.Operation<AgentNotificationSnapshot> {
-  const changed = restate.awakeable<AgentNotificationSnapshot>();
-  const agent = restate.client(AgentDefinition, agentId);
-  const available = yield* agent.subscribe({
-    afterRevision,
-    awakeableId: changed.id,
-  });
-  if (available) return available;
-
-  try {
-    const selected = yield* raceBranches({
-      notification: changed.promise,
-      timeout: restate.sleep(
-        timeoutSeconds * 1_000,
-        "notification watch window",
-      ),
-    });
-    if (selected.tag === "notification") return selected.value;
-    yield* agent.unsubscribe({awakeableId: changed.id});
-    return yield* read();
-  } catch (error) {
-    yield* restate
-      .sendClient(AgentDefinition, agentId)
-      .unsubscribe({awakeableId: changed.id});
-    throw error;
-  }
-}
-
-function* readSubscriptions(): restate.Operation<
-  AgentNotificationSubscription[]
-> {
-  return (
-    (yield* restate
-      .sharedState()
-      .get<AgentNotificationSubscription[]>(SUBSCRIPTIONS)) ?? []
-  );
-}
-
-function storeSubscriptions(
-  subscriptions: AgentNotificationSubscription[],
-): void {
-  if (subscriptions.length === 0) restate.state().clear(SUBSCRIPTIONS);
-  else restate.state().set(SUBSCRIPTIONS, subscriptions);
 }

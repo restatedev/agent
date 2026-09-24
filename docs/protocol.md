@@ -67,10 +67,7 @@ The browser's `snapshot` and `sync` endpoints implement this sequence in
 | Handler on Agent | Input / result |
 | --- | --- |
 | `profile` | No input; instructions, guardrails, memories, tools, webSearchEnabled |
-| `setInstructions` | `{instructions: string | null}` |
-| `setGuardrails` | `{guardrails: [{id, rule}]}` |
-| `setTools` | Complete `AgentTools` selection |
-| `setWebSearchEnabled` | `{enabled: boolean}` |
+| `updateProfile` | Any of `{instructions: string \| null, guardrails: [{id, rule}], tools: AgentTools, webSearchEnabled: boolean}`; each given field is replaced whole |
 | `deleteMemory` | `{key}`; returns whether an entry existed |
 | `metadata` | No input; `{name, parentAgentId?}` |
 | `children` | No input; direct children with IDs and metadata |

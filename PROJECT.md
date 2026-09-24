@@ -19,9 +19,11 @@ Start with [README.md](README.md) to run a local conversation and
 Paths below are relative to `packages/libs/core/src`.
 
 1. `app.ts` registers the runtime services.
-2. `agent/service.ts` routes input, snapshots profile/configuration, starts a
-   turn, and reconciles its completion. `active-turn.ts` owns active-work
-   bookkeeping and FIFO steering reconciliation.
+2. `agent/service.ts` assembles the Agent object from one handler group per
+   concern. `agent/turns.ts` routes input, snapshots profile/configuration,
+   starts a turn, and reconciles its completion; `active-turn.ts` owns
+   active-work bookkeeping and FIFO steering reconciliation. `agent/guards.ts`
+   holds the shared authorization checks.
 3. `session/service.ts` implements `doTurn`: open history once, build context,
    run bounded steps, handle pending work and control, then finalize.
 4. `session/step.ts` performs one model/policy/tool transition.
@@ -30,9 +32,10 @@ Paths below are relative to `packages/libs/core/src`.
    configuration and credential references.
 6. `session/history.ts` owns append-only storage and compaction checkpoints.
    `agent/notifications.ts` supplies change watermarks to consumers.
-7. `agent/profile.ts`, `agent/memory.ts`, `agent/approval.ts`, and
-   `agent/schedules.ts` own responsive agent-local state. `agent/sub-agent.ts` attenuates child configuration;
-   delegation coordination stays in `agent/service.ts`.
+7. `agent/profile.ts` (memories included), `agent/approvals.ts`,
+   `agent/schedules.ts` and `agent/sub-agents.ts` each own their state keys,
+   handlers and notification topic. `agent/lifecycle.ts` creates and retires
+   the agent.
 8. `sandbox/turn.ts` acquires and suspends the sandbox inside the turn. `model/inference.ts` makes the journaled model
    calls and `model/provider.ts` owns provider behavior.
 9. `ptc/runtime.ts` and `ptc/guest.ts` implement replay-safe programmatic tools.

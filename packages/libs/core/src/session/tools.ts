@@ -1168,6 +1168,11 @@ const definitions = [
 /** Names reserved by built-in tools and unavailable to dynamic discovery. */
 export const names = [PROGRAM_TOOL_NAME, ...definitions.map(({name}) => name)];
 
+/** Every built-in tool, as the tool-permission UI lists them. */
+export const builtinCatalog = [programToolManifest, ...definitions].map(
+  ({name, description}) => ({name, description}),
+);
+
 // The schema type parameter exists only to type `run`/`complete` inputs from
 // `inputSchema`; callers see a plain AgentTool.
 function defineAgentTool<Schema extends z.ZodType>(definition: {

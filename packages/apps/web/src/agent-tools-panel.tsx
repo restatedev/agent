@@ -130,7 +130,7 @@ export function AgentToolsPanel({
     savingRef.current = true;
     setSaving(true);
     try {
-      await client.setTools(tools);
+      await client.updateProfile({tools});
       await refresh();
       notify("Tool access saved for the next turn");
     } catch (error) {
