@@ -30,6 +30,10 @@ The fallback display name is the agent ID. Retired IDs cannot be restarted.
 | `interrupt` | `{reason, message?}` | Interrupt active turn; optionally queue a replacement |
 | `deliver` | `{source, sourceId?, message, whenBusy, interruptReason?, coalesce?}` | Route an external message with queue/steer/interrupt policy; `coalesce` drops it while the same `source`/`sourceId` is queued or active |
 
+A busy agent holds at most 32 queued user messages, and one turn accepts at
+most 32 steering messages. Past either limit, `ask`, `steer`, `interrupt`
+with a replacement, and `deliver` fail with HTTP 429.
+
 `ask` returns a discriminated result with `decision` (`start` or `queue`), stats,
 and `turnId` for a started turn (`activeTurnId` for queued input). Steering and interruption return whether the active turn accepted
 the control. Busy `ask` does not implicitly steer. An interruption reason is

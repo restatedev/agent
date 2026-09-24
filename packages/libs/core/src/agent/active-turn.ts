@@ -3,6 +3,7 @@
 // It knows nothing about conversation history, which AgentSession owns.
 
 import type {AgentTools, ConversationEntry} from "@restate-agents/types";
+import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
 import {
@@ -32,6 +33,18 @@ type ActiveTurn = {
 
 /** Entries waiting for the next turn, in FIFO order. */
 const pending = listState<ConversationEntry>("pending");
+
+/**
+ * Bounds input a busy agent holds: queued user messages, and steering
+ * batches sent to one turn. The whole list is rewritten on every change, so
+ * an unbounded producer would make each write, and the next turn's opening
+ * context, grow without limit.
+ */
+const MAX_QUEUED_MESSAGES = 32;
+const MAX_STEERING_BATCHES = 32;
+
+const tooManyRequests = (message: string) =>
+  new TerminalError(message, {errorCode: 429});
 
 export function* current(): restate.Operation<ActiveTurn | undefined> {
   return (yield* restate.state().get<ActiveTurn>("turn")) ?? undefined;
@@ -66,12 +79,30 @@ export function* start(request: AgentTurnRequest): restate.Operation<string> {
  * Adds entries to the next turn's queue.
  *
  * @returns The number of queued user messages.
+ * @throws 429 when the queue already holds its limit of user messages.
  */
 export function* enqueue(
   ...entries: ConversationEntry[]
 ): restate.Operation<number> {
-  const queued = yield* pending.update((items) => [...items, ...entries]);
-  return queued.filter(({role}) => role === "user").length;
+  const queued = [...(yield* pending.get()), ...entries];
+  const messages = userMessages(queued);
+  if (messages > MAX_QUEUED_MESSAGES) {
+    throw tooManyRequests(
+      `The agent is busy and already holds ${MAX_QUEUED_MESSAGES} queued messages`,
+    );
+  }
+  pending.set(queued);
+  return messages;
+}
+
+/**
+ * Puts entries a successor turn could not start with back on the queue. They
+ * were already accepted once, so the limit does not apply.
+ */
+export function* requeue(
+  ...entries: ConversationEntry[]
+): restate.Operation<void> {
+  yield* pending.update((items) => [...items, ...entries]);
 }
 
 /** Removes and returns every queued entry. */
@@ -129,6 +160,11 @@ export function* steer(
 ): restate.Operation<boolean> {
   const active = yield* current();
   if (!active || active.interruptReason !== undefined) return false;
+  if (active.steeringBatches.length >= MAX_STEERING_BATCHES) {
+    throw tooManyRequests(
+      `The active turn already received ${MAX_STEERING_BATCHES} steering messages`,
+    );
+  }
   const steering = {queued: [...(yield* drainPending()), ...extra], message};
   restate.state().set("turn", {
     ...active,
@@ -188,6 +224,10 @@ export function* finish(outcome: AgentTurnOutcome): restate.Operation<
       : outcome,
     queuedEntries: [...missedSteering, ...(yield* drainPending())],
   };
+}
+
+function userMessages(entries: ConversationEntry[]): number {
+  return entries.filter(({role}) => role === "user").length;
 }
 
 function deliveryKey(source: string, sourceId: string): string {

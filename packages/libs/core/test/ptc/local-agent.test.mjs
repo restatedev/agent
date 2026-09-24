@@ -244,3 +244,18 @@ test("a late interrupt does not hide a failed turn's error", async (t) => {
     },
   );
 });
+
+test("a busy agent rejects input beyond its queue limit", async () => {
+  const f = context("demo", {
+    turn: {id: "turn", tools, steeringBatches: []},
+  });
+  for (let i = 0; i < 32; i++) {
+    await f.invoke(Agent.object.ask, {message: `message ${i}`});
+  }
+
+  await assert.rejects(
+    f.invoke(Agent.object.ask, {message: "one too many"}),
+    /already holds 32 queued messages/,
+  );
+  assert.equal(f.state.get("pending").length, 32);
+});

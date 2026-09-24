@@ -47,7 +47,7 @@ export const Agent = restate.implement(AgentDefinition, {
       deliver: noRetention,
       onTurnEnd: internal(noRetention),
 
-      initialize: internal(coordinationRetention),
+      initialize: coordinationRetention,
       retire: coordinationRetention,
       metadata: shared(noRetention),
 

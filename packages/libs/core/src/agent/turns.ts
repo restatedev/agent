@@ -196,7 +196,7 @@ function* startSuccessor(
   } catch (error) {
     if (!(error instanceof TerminalError) || error instanceof CancelledError)
       throw error;
-    yield* activeTurn.enqueue(...queuedEntries);
+    yield* activeTurn.requeue(...queuedEntries);
   }
 }
 
