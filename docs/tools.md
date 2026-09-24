@@ -501,11 +501,11 @@ interruption of the creating turn does not roll it back.
    property.
 4. Return structured tool status rather than throwing ordinary domain errors.
 5. Re-throw Restate interruption and SDK cancellation errors.
-6. Put non-deterministic external work in `restate.run`, or call another
+6. Put non-deterministic external work in `restate.run` with an explicit
+   retry policy (see [Foreground tools](#foreground-tools)), or call another
    Restate handler.
-7. Add it to `definitions`.
-8. Add or update a test if it changes conversation semantics.
-9. Run `pnpm lint`, `pnpm build`, and `pnpm bundle`.
+7. Add or update a test if it changes conversation semantics.
+8. Run `pnpm lint`, `pnpm build`, and `pnpm bundle`.
 
 Before making a tool pending, verify that the model can do useful work before
 completion and that the runtime has a meaningful way to report, cancel, and later

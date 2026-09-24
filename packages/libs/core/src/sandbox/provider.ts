@@ -2,25 +2,18 @@
 // the lifecycle (turn.ts); concrete adapters live beside this module.
 
 import {TerminalError} from "@restatedev/restate-sdk";
-import {z} from "zod";
 
 import {localSandboxProvider} from "./local-provider.js";
 import {modalSandboxProvider} from "./modal-provider.js";
 
-export const SandboxRefSchema = z.discriminatedUnion("provider", [
-  z.object({
-    provider: z.literal("local"),
-    root: z.string(),
-  }),
-  z.object({
-    provider: z.literal("modal"),
-    sandboxId: z.string().nullable(),
-    volumeName: z.string(),
-  }),
-]);
-
-/** Durable, provider-specific identity needed to reconnect to a sandbox. */
-export type SandboxRef = z.infer<typeof SandboxRefSchema>;
+/**
+ * Durable, provider-specific identity needed to reconnect to a sandbox. Only
+ * this runtime writes it (to AgentSession state), so it is a plain type
+ * rather than a schema; each adapter checks the discriminant it expects.
+ */
+export type SandboxRef =
+  | {provider: "local"; root: string}
+  | {provider: "modal"; sandboxId: string | null; volumeName: string};
 
 /** Cancellation context passed to every external sandbox operation. */
 export type SandboxOperationOptions = {

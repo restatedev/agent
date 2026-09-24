@@ -240,7 +240,8 @@ switching a test Agent between providers.
 
 ## Adding a provider
 
-1. Add a new discriminant and serializable fields to `SandboxRefSchema`.
+1. Add a new discriminant and serializable fields to the `SandboxRef` union
+   in `sandbox/provider.ts`.
 2. Implement `SandboxProvider` in its own adapter module.
 3. Keep credentials and process-local SDK clients out of `SandboxRef`.
 4. Make `provision`, `suspend`, `resume`, and `destroy` safe under retry.
@@ -248,8 +249,9 @@ switching a test Agent between providers.
 6. Honor every `AbortSignal`.
 7. Detach or close process-local SDK handles after each operation.
 8. Enforce workspace path containment.
-9. Add the provider to `configuredProvider()` for new refs and `providerFor()`
-   for existing refs.
+9. Add the provider to the `SANDBOX_PROVIDER` switch in
+   `sandboxProvider.provision` for new refs, and to `providerFor()` for
+   existing refs.
 10. Exercise provision, parallel first use, suspend/resume across turns,
     command cancellation, and destroy.
 
