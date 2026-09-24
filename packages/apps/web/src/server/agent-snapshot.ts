@@ -1,11 +1,11 @@
 import type {AgentClient} from "@restate-agents/client";
 
-import type {AgentSnapshot, AgentSnapshotUpdate} from "../agent-client";
+import type {AgentSnapshot, AgentSnapshotUpdate} from "../agent-snapshot";
 
 type SnapshotClient = Pick<
   AgentClient,
   | "notifications"
-  | "watchNotifications"
+  | "watch"
   | "profile"
   | "approvals"
   | "schedules"
@@ -53,11 +53,7 @@ export async function syncAgentSnapshot(
   options: {signal: AbortSignal; idempotencyKey?: string},
 ): Promise<AgentSnapshotUpdate> {
   options.signal.throwIfAborted();
-  const notification = await client.watchNotifications(
-    since.revision,
-    25,
-    options,
-  );
+  const notification = await client.watch(since.revision, 25, options);
   options.signal.throwIfAborted();
   return readAgentSnapshotUpdate(
     client,
@@ -136,6 +132,8 @@ async function readHistory(
       throw new Error("History cursor did not advance");
     }
     nextSequence = page.nextSequence;
-    if (page.entries.length < 100) return {entries, nextSequence};
+    if (page.entries.length < 100) {
+      return {entries, nextSequence};
+    }
   }
 }

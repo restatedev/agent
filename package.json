@@ -3,10 +3,15 @@
   "version": "0.0.1",
   "description": "Reference implementation of a durable agent on Restate.",
   "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "pnpm -r build",
-    "lint": "oxlint packages && oxfmt --check 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx'",
-    "format": "oxlint --fix packages && oxfmt 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx'",
+    "test": "pnpm -r test",
+    "lint": "oxlint packages && oxfmt --check 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx' 'packages/**/test/**/*.ts' 'packages/**/test/**/*.mjs' 'packages/*/*/*.config.ts'",
+    "format": "oxlint --fix packages && oxfmt 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx' 'packages/**/test/**/*.ts' 'packages/**/test/**/*.mjs' 'packages/*/*/*.config.ts'",
     "bundle": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core bundle",
     "start": "pnpm build && pnpm --parallel --filter @restate-agents/core --filter @restate-agents/web start",
     "start:service": "pnpm --filter @restate-agents/core... build && pnpm --filter @restate-agents/core start",

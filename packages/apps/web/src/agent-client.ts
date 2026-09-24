@@ -1,76 +1,26 @@
+import type {AgentNotificationSnapshot} from "@restate-agents/types";
+
+// Type-only: the operation tables (and their zod schemas) stay on the server;
+// the browser gets just the body and result types they declare.
 import type {
-  AgentMetadata,
-  AgentNotificationSnapshot,
-  AgentProfile,
-  AgentTools,
-  ApprovalRequest,
-  ApprovalResolution,
-  AskResult,
-  ChildAgent,
-  Guardrail,
-  HistoryPage,
-  ScheduleCancellationResult,
-  ScheduledMessage,
-  ToolCatalog,
-} from "@restate-agents/types";
+  MutationBody,
+  MutationResult,
+  Mutations,
+  ReadResult,
+  Reads,
+} from "./server/operations";
 
-export type SequencedEntry = HistoryPage["entries"][number];
-export type AgentSnapshot = {
-  notification: AgentNotificationSnapshot;
-  profile: AgentProfile;
-  approvals: ApprovalRequest[];
-  schedules: ScheduledMessage[];
-  metadata: AgentMetadata;
-  children: ChildAgent[];
-  history: HistoryPage;
-};
-export type AgentSnapshotUpdate = Pick<AgentSnapshot, "notification"> &
-  Partial<Omit<AgentSnapshot, "notification">>;
+export type {SequencedEntry} from "@restate-agents/client";
 
-/**
- * Browser-side operations on one agent through this app's
- * `/api/agent/{agentId}/{operation}` proxy (see its route handler). A subset of
- * the ingress client in `@restate-agents/client`, plus `snapshot`/`sync`,
- * which batch the reads a page render needs. Rejected calls throw an error
- * carrying the proxy's HTTP status.
- */
-export interface AgentClient {
-  /** Loads everything the conversation view renders. */
-  snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot>;
-
-  /**
-   * Waits for notifications newer than `since`, then returns only the parts
-   * that changed, with history from `fromSequence`.
-   */
-  sync(
-    since: AgentNotificationSnapshot,
-    fromSequence: number,
-    options?: {idempotencyKey?: string; signal?: AbortSignal},
-  ): Promise<AgentSnapshotUpdate>;
-
-  /** Starts a turn when the agent is idle, or queues the message. */
-  ask(message?: string): Promise<AskResult>;
-
-  /** Redirects the active turn. @returns false when no turn is listening. */
-  steer(message: string): Promise<boolean>;
-
-  /** Stops the active turn, optionally queueing a replacement message. */
-  interrupt(reason: string, message?: string): Promise<boolean>;
-
-  profile(): Promise<AgentProfile>;
-  setInstructions(instructions: string | null): Promise<void>;
-  setGuardrails(guardrails: Guardrail[]): Promise<void>;
-  setWebSearchEnabled(enabled: boolean): Promise<void>;
-  setTools(tools: AgentTools): Promise<void>;
-  toolCatalog(): Promise<ToolCatalog>;
-
-  /** @returns whether the memory existed. */
-  deleteMemory(key: string): Promise<boolean>;
-
-  cancelSchedule(scheduleId: string): Promise<ScheduleCancellationResult>;
-
-  /** @returns false when the request or its turn is no longer eligible. */
-  resolveApproval(resolution: ApprovalResolution): Promise<boolean>;
+/** A rejected proxy call, with the proxy's HTTP status. */
+export class UiClientError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "UiClientError";
+  }
 }
 
 type RequestOptions = {
@@ -79,105 +29,125 @@ type RequestOptions = {
   signal?: AbortSignal;
 };
 
-class AgentClientError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "AgentClientError";
+function requestHeaders(options: RequestOptions): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (options.body !== undefined) {
+    headers["content-type"] = "application/json";
   }
+  if (options.idempotencyKey) {
+    headers["idempotency-key"] = options.idempotencyKey;
+  }
+  return headers;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}) {
+/** The proxy reports failures as `{message}`; fall back to the status line. */
+function failureMessage(response: Response, result: unknown) {
+  if (result && typeof result === "object" && "message" in result) {
+    return String(result.message);
+  }
+  return `${response.status} ${response.statusText}`;
+}
+
+async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  const hasBody = options.body !== undefined;
   const response = await fetch(path, {
-    method: options.body === undefined ? "GET" : "POST",
-    headers: {
-      ...(options.body === undefined
-        ? {}
-        : {"content-type": "application/json"}),
-      ...(options.idempotencyKey
-        ? {"idempotency-key": options.idempotencyKey}
-        : {}),
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    method: hasBody ? "POST" : "GET",
+    headers: requestHeaders(options),
+    body: hasBody ? JSON.stringify(options.body) : undefined,
     cache: "no-store",
     signal: options.signal,
   });
   const text = await response.text();
-  const result = text ? (JSON.parse(text) as T | {message?: string}) : null;
+  const result: unknown = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    throw new AgentClientError(
-      response.status,
-      (result && typeof result === "object" && "message" in result
-        ? result.message
-        : undefined) ?? `${response.status} ${response.statusText}`,
-    );
+    throw new UiClientError(response.status, failureMessage(response, result));
   }
   return result as T;
 }
 
-export function createAgentClient(agentId: string): AgentClient {
+/**
+ * Browser-side operations on one agent through this app's
+ * `/api/agent/{agentId}/{operation}` proxy. Operation names, bodies and
+ * results come from the proxy's READS and MUTATIONS tables, so this file
+ * only chooses method signatures. Rejected calls throw `UiClientError`.
+ */
+export type UiAgentClient = ReturnType<typeof createUiClient>;
+
+export function createUiClient(agentId: string) {
   const base = `/api/agent/${encodeURIComponent(agentId)}`;
-  const read = <T>(operation: string, parameters?: URLSearchParams) =>
-    request<T>(`${base}/${operation}${parameters ? `?${parameters}` : ""}`);
-  const write = <T>(operation: string, body: unknown) =>
-    request<T>(`${base}/${operation}`, {body});
+
+  function read<K extends keyof Reads>(
+    operation: K,
+    options: Omit<RequestOptions, "body"> & {query?: URLSearchParams} = {},
+  ): Promise<ReadResult<K>> {
+    const query = options.query ? `?${options.query}` : "";
+    return request(`${base}/${operation}${query}`, options);
+  }
+
+  function write<K extends keyof Mutations>(
+    operation: K,
+    body: MutationBody<K>,
+  ): Promise<MutationResult<K>> {
+    return request(`${base}/${operation}`, {body});
+  }
 
   return {
-    async snapshot(options?: {signal?: AbortSignal}): Promise<AgentSnapshot> {
-      return request(`${base}/snapshot`, options);
+    /** Loads everything the conversation view renders. */
+    snapshot(options?: {signal?: AbortSignal}) {
+      return read("snapshot", options);
     },
-    async sync(
+    /**
+     * Waits for notifications newer than `since`, then returns only the parts
+     * that changed, with history from `fromSequence`.
+     */
+    sync(
       since: AgentNotificationSnapshot,
       fromSequence: number,
       options?: {idempotencyKey?: string; signal?: AbortSignal},
-    ): Promise<AgentSnapshotUpdate> {
-      return request(
-        `${base}/sync?${new URLSearchParams({
-          since: JSON.stringify(since),
-          fromSequence: String(fromSequence),
-        })}`,
-        options,
-      );
+    ) {
+      const query = new URLSearchParams({
+        since: JSON.stringify(since),
+        fromSequence: String(fromSequence),
+      });
+      return read("sync", {...options, query});
     },
-    async ask(message?: string): Promise<AskResult> {
+    /** Starts a turn when the agent is idle, or queues the message. */
+    ask(message: string) {
       return write("ask", {message});
     },
-    async steer(message: string): Promise<boolean> {
+    /** Redirects the active turn. Resolves false when no turn is listening. */
+    steer(message: string) {
       return write("steer", {message});
     },
-    async interrupt(reason: string, message?: string): Promise<boolean> {
-      return write("interrupt", {reason, ...(message ? {message} : {})});
+    /** Stops the active turn, optionally queueing a replacement message. */
+    interrupt(reason: string, message?: string) {
+      if (message) {
+        return write("interrupt", {reason, message});
+      }
+      return write("interrupt", {reason});
     },
-    async profile(): Promise<AgentProfile> {
+    profile() {
       return read("profile");
     },
-    async setInstructions(instructions: string | null): Promise<void> {
-      await write("instructions", {instructions});
+    updateProfile(update: MutationBody<"updateProfile">) {
+      return write("updateProfile", update);
     },
-    async setGuardrails(guardrails: Guardrail[]): Promise<void> {
-      await write("guardrails", {guardrails});
+    toolCatalog() {
+      return read("toolCatalog");
     },
-    async setWebSearchEnabled(enabled: boolean): Promise<void> {
-      await write("web-search", {enabled});
+    /** Resolves whether the memory existed. */
+    deleteMemory(key: string) {
+      return write("deleteMemory", {key});
     },
-    async setTools(tools: AgentTools): Promise<void> {
-      await write("tools", tools);
+    cancelSchedule(scheduleId: string) {
+      return write("cancelSchedule", {scheduleId});
     },
-    async toolCatalog(): Promise<ToolCatalog> {
-      return read("tool-catalog");
-    },
-    async deleteMemory(key: string): Promise<boolean> {
-      return write("delete-memory", {key});
-    },
-    async cancelSchedule(
-      scheduleId: string,
-    ): Promise<ScheduleCancellationResult> {
-      return write("cancel-schedule", {scheduleId});
-    },
-    async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
-      return write("resolve-approval", resolution);
+    /** Resolves false when the request or its turn is no longer eligible. */
+    resolveApproval(resolution: MutationBody<"resolveApproval">) {
+      return write("resolveApproval", resolution);
     },
   };
 }

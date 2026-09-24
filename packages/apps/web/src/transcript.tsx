@@ -40,15 +40,15 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "./components/ui/message-scroller";
+import {shortTurn} from "./format";
 import {renderInline, renderMarkdown} from "./markdown";
-
-type TranscriptEntry = SequencedEntry["entry"];
-type EventEntry = Extract<TranscriptEntry, {role: "event"}>;
-type DetailEntry = Extract<
-  EventEntry,
-  {type: "progress" | "activity" | "tools" | "steer" | "approval_cancelled"}
->;
-type AssistantEntry = Extract<TranscriptEntry, {role: "assistant"}>;
+import {
+  type AssistantEntry,
+  type DetailEntry,
+  describeToolBatch,
+  isDetailEntry,
+  type ToolsEntry,
+} from "./transcript-entries";
 
 type EntryRow = {
   kind: "entry";
@@ -66,18 +66,6 @@ type TurnRow = {
 
 type TranscriptRow = EntryRow | TurnRow;
 
-const detailTypes = new Set<EventEntry["type"]>([
-  "progress",
-  "activity",
-  "tools",
-  "steer",
-  "approval_cancelled",
-]);
-
-function shortTurn(turnId: string) {
-  return turnId.length > 14 ? `${turnId.slice(0, 14)}…` : turnId;
-}
-
 function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
   // Read terminal status first so every segment of a finished turn renders
   // consistently, even when a user message splits its details into two rows.
@@ -93,17 +81,8 @@ function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
   let currentTurn: TurnRow | undefined;
   for (const item of entries) {
     const {entry} = item;
-    if (
-      entry.role === "event" &&
-      detailTypes.has(entry.type) &&
-      "turnId" in entry
-    ) {
+    if (isDetailEntry(entry)) {
       const turnId = entry.turnId;
-      if (!turnId) {
-        rows.push({kind: "entry", item});
-        currentTurn = undefined;
-        continue;
-      }
       if (!currentTurn || currentTurn.turnId !== turnId) {
         currentTurn = {
           kind: "turn",
@@ -116,7 +95,7 @@ function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
         seenTurns.add(turnId);
         rows.push(currentTurn);
       }
-      currentTurn.entries.push(entry as DetailEntry);
+      currentTurn.entries.push(entry);
       continue;
     }
     rows.push({kind: "entry", item});
@@ -141,29 +120,44 @@ function phaseIcon(phase: string) {
   }
 }
 
-function ToolLines({entry}: {entry: Extract<DetailEntry, {type: "tools"}>}) {
+type ToolCall = ToolsEntry["calls"][number];
+
+/** A started batch shows play; a finished one shows each call's outcome. */
+function ToolCallIcon({
+  phase,
+  call,
+}: {
+  phase: ToolsEntry["phase"];
+  call: ToolCall;
+}) {
+  if (phase === "started") {
+    return <Play />;
+  }
+  switch (call.status) {
+    case "succeeded":
+      return <Check />;
+    case "failed":
+      return <X />;
+    case "cancelled":
+      return <Ban />;
+    default:
+      return <Hourglass />;
+  }
+}
+
+function ToolLines({entry}: {entry: ToolsEntry}) {
   return (
     <div className="tool-lines">
       {entry.calls.map((call) => {
-        const icon =
-          entry.phase === "started" ? (
-            <Play />
-          ) : call.status === "succeeded" ? (
-            <Check />
-          ) : call.status === "failed" ? (
-            <X />
-          ) : call.status === "cancelled" ? (
-            <Ban />
-          ) : (
-            <Hourglass />
-          );
         return (
           <div
             className="tool-line"
             data-status={call.status}
             key={`${entry.phase}-${call.id}`}
           >
-            <span className="tool-icon">{icon}</span>
+            <span className="tool-icon">
+              <ToolCallIcon phase={entry.phase} call={call} />
+            </span>
             <span>{call.summary ?? call.name}</span>
           </div>
         );
@@ -227,6 +221,34 @@ function TurnDetail({entry}: {entry: DetailEntry}) {
   }
 }
 
+function TurnStatusIcon({status}: {status: TurnRow["terminal"]}) {
+  switch (status) {
+    case "completed":
+      return <CheckCircle2 />;
+    case "failed":
+      return <X />;
+    case "interrupted":
+    case "stopped":
+      return <Ban />;
+    default:
+      return <Sparkles className="thinking-icon" />;
+  }
+}
+
+function plural(count: number, noun: string) {
+  const suffix = count === 1 ? "" : "s";
+  return `${count} ${noun}${suffix}`;
+}
+
+/** "3 steps · 2 tool calls", or "Starting" before the first step. */
+function turnSummary(steps: number, tools: number) {
+  const progress = steps > 0 ? plural(steps, "step") : "Starting";
+  if (tools === 0) {
+    return progress;
+  }
+  return `${progress} · ${plural(tools, "tool call")}`;
+}
+
 function TurnCard({row}: {row: TurnRow}) {
   const [open, setOpen] = useState(!row.terminal);
   // Collapse once when the turn finishes; the user may reopen it afterwards.
@@ -235,7 +257,9 @@ function TurnCard({row}: {row: TurnRow}) {
   const [seenTerminal, setSeenTerminal] = useState(row.terminal);
   if (row.terminal !== seenTerminal) {
     setSeenTerminal(row.terminal);
-    if (row.terminal) setOpen(false);
+    if (row.terminal) {
+      setOpen(false);
+    }
   }
 
   let steps = 0;
@@ -251,22 +275,9 @@ function TurnCard({row}: {row: TurnRow}) {
     if (entry.type === "activity" || entry.type === "progress") {
       live = entry.message;
     } else if (entry.type === "tools") {
-      live = `${entry.phase === "started" ? "Running" : "Finished"} ${entry.calls
-        .map((call) => call.summary ?? call.name)
-        .join(", ")}`;
+      live = describeToolBatch(entry);
     }
   }
-
-  const statusIcon =
-    row.terminal === "completed" ? (
-      <CheckCircle2 />
-    ) : row.terminal === "failed" ? (
-      <X />
-    ) : row.terminal === "interrupted" || row.terminal === "stopped" ? (
-      <Ban />
-    ) : (
-      <Sparkles className="thinking-icon" />
-    );
 
   return (
     <details
@@ -276,13 +287,12 @@ function TurnCard({row}: {row: TurnRow}) {
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
-        <span className="turn-status-icon">{statusIcon}</span>
+        <span className="turn-status-icon">
+          <TurnStatusIcon status={row.terminal} />
+        </span>
         <span className="turn-summary-copy">
-          <strong>{row.terminal ? row.terminal : "Working"}</strong>
-          <span>
-            {steps > 0 ? `${steps} step${steps === 1 ? "" : "s"}` : "Starting"}
-            {tools > 0 ? ` · ${tools} tool call${tools === 1 ? "" : "s"}` : ""}
-          </span>
+          <strong>{row.terminal ?? "Working"}</strong>
+          <span>{turnSummary(steps, tools)}</span>
         </span>
         {!row.terminal && <span className="turn-live shimmer">{live}</span>}
         <ChevronRight className="turn-chevron" />
@@ -299,6 +309,27 @@ function TurnCard({row}: {row: TurnRow}) {
   );
 }
 
+/**
+ * One detail of a turn that resumed after a user message: activity reads as
+ * agent prose, and "thinking" progress is noise once the agent is talking.
+ */
+function ContinuationDetail({entry}: {entry: DetailEntry}) {
+  if (entry.type === "activity") {
+    return (
+      <div
+        className="turn-continuation-copy"
+        // The renderer escapes every source character before adding formatting tags.
+        // oxlint-disable-next-line react/no-danger
+        dangerouslySetInnerHTML={{__html: renderInline(entry.message)}}
+      />
+    );
+  }
+  if (entry.type === "progress" && entry.phase === "thinking") {
+    return null;
+  }
+  return <TurnDetail entry={entry} />;
+}
+
 function TurnContinuation({row}: {row: TurnRow}) {
   return (
     <Message className="turn-continuation">
@@ -308,24 +339,11 @@ function TurnContinuation({row}: {row: TurnRow}) {
       <MessageContent>
         <MessageHeader>Agent</MessageHeader>
         <div className="turn-continuation-flow">
-          {row.entries.map((entry, index) =>
-            entry.type === "activity" ? (
-              <div
-                className="turn-continuation-copy"
-                // The renderer escapes every source character before adding formatting tags.
-                // oxlint-disable-next-line react/no-danger
-                dangerouslySetInnerHTML={{__html: renderInline(entry.message)}}
-                // Turn details form an append-only sequence, so their position is stable.
-                // oxlint-disable-next-line react/no-array-index-key
-                key={`${entry.type}-${index}`}
-              />
-            ) : entry.type === "progress" &&
-              entry.phase === "thinking" ? null : (
-              // Turn details form an append-only sequence, so their position is stable.
-              // oxlint-disable-next-line react/no-array-index-key
-              <TurnDetail entry={entry} key={`${entry.type}-${index}`} />
-            ),
-          )}
+          {row.entries.map((entry, index) => (
+            // Turn details form an append-only sequence, so their position is stable.
+            // oxlint-disable-next-line react/no-array-index-key
+            <ContinuationDetail entry={entry} key={`${entry.type}-${index}`} />
+          ))}
         </div>
       </MessageContent>
     </Message>
@@ -342,7 +360,9 @@ function Badge({children, tone}: {children: string; tone?: string}) {
 
 function UserMessage({item}: {item: SequencedEntry}) {
   const entry = item.entry;
-  if (entry.role !== "user") return null;
+  if (entry.role !== "user") {
+    return null;
+  }
   return (
     <Message align="end">
       <MessageAvatar>
@@ -367,7 +387,9 @@ function UserMessage({item}: {item: SequencedEntry}) {
 
 function AssistantMessage({item}: {item: SequencedEntry}) {
   const entry = item.entry;
-  if (entry.role !== "assistant") return null;
+  if (entry.role !== "assistant") {
+    return null;
+  }
   return (
     <Message>
       <MessageAvatar>
@@ -396,7 +418,9 @@ function AssistantMessage({item}: {item: SequencedEntry}) {
 
 function LifecycleEvent({item}: {item: SequencedEntry}) {
   const entry = item.entry;
-  if (entry.role !== "event") return null;
+  if (entry.role !== "event") {
+    return null;
+  }
   switch (entry.type) {
     case "interrupt":
       return (
@@ -406,6 +430,19 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
           </MarkerIcon>
           <MarkerContent>
             Turn interrupted · <em>{entry.reason}</em>
+          </MarkerContent>
+        </Marker>
+      );
+    case "stop":
+      // The runtime stopped the turn itself (today only at the step limit);
+      // like an interrupt, it finalizes without tools and says why.
+      return (
+        <Marker variant="separator" className="marker-important">
+          <MarkerIcon>
+            <Ban />
+          </MarkerIcon>
+          <MarkerContent>
+            Turn stopped · <em>{entry.reason}</em>
           </MarkerContent>
         </Marker>
       );
@@ -493,13 +530,37 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
 }
 
 function Entry({item}: {item: SequencedEntry}) {
-  if (item.entry.role === "user") return <UserMessage item={item} />;
-  if (item.entry.role === "assistant") return <AssistantMessage item={item} />;
+  if (item.entry.role === "user") {
+    return <UserMessage item={item} />;
+  }
+  if (item.entry.role === "assistant") {
+    return <AssistantMessage item={item} />;
+  }
   return <LifecycleEvent item={item} />;
 }
 
+/** Stable across polls: a turn row starts at a fixed sequence. */
+function rowId(row: TranscriptRow) {
+  if (row.kind === "turn") {
+    return `turn-${row.turnId}-${row.sequence}`;
+  }
+  return `entry-${row.item.sequence}`;
+}
+
+function Row({row}: {row: TranscriptRow}) {
+  if (row.kind === "entry") {
+    return <Entry item={row.item} />;
+  }
+  if (row.continuation) {
+    return <TurnContinuation row={row} />;
+  }
+  return <TurnCard row={row} />;
+}
+
 function isAnchor(row: TranscriptRow) {
-  if (row.kind === "turn") return false;
+  if (row.kind === "turn") {
+    return false;
+  }
   const {entry} = row.item;
   return (
     (entry.role === "user" && entry.delivery !== "queued") ||
@@ -540,27 +601,11 @@ export function Transcript({
             )}
             {rows.map((row) => (
               <MessageScrollerItem
-                key={
-                  row.kind === "turn"
-                    ? `turn-${row.turnId}-${row.sequence}`
-                    : `entry-${row.item.sequence}`
-                }
-                messageId={
-                  row.kind === "turn"
-                    ? `turn-${row.turnId}-${row.sequence}`
-                    : `entry-${row.item.sequence}`
-                }
+                key={rowId(row)}
+                messageId={rowId(row)}
                 scrollAnchor={isAnchor(row)}
               >
-                {row.kind === "turn" ? (
-                  row.continuation ? (
-                    <TurnContinuation row={row} />
-                  ) : (
-                    <TurnCard row={row} />
-                  )
-                ) : (
-                  <Entry item={row.item} />
-                )}
+                <Row row={row} />
               </MessageScrollerItem>
             ))}
           </MessageScrollerContent>

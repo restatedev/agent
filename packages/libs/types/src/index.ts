@@ -3,15 +3,13 @@
 
 import {z} from "zod";
 
-import {DEFAULT_ASK} from "./targets.js";
-
-export {DEFAULT_ASK} from "./targets.js";
-
 export const MessageSchema = z.string().trim().min(1);
 
 export const AskRequestSchema = z.object({
-  message: MessageSchema.default(DEFAULT_ASK),
+  message: MessageSchema,
 });
+
+export const SteerRequestSchema = z.object({message: MessageSchema});
 
 export const InterruptRequestSchema = z
   .object({
@@ -26,10 +24,6 @@ export const InterruptRequestSchema = z
     "Interrupt the active Turn, optionally preserving a replacement request for the next Turn.",
   );
 
-export const SetInstructionsSchema = z.object({
-  instructions: z.string().nullable(),
-});
-
 const McpServerIdSchema = z
   .string()
   .trim()
@@ -37,8 +31,7 @@ const McpServerIdSchema = z
   .max(64)
   .describe("A unique identifier for one operator-configured MCP server.");
 
-export const McpProtocolSchema = z.enum(["stateless", "stateful"]);
-export type McpProtocol = z.infer<typeof McpProtocolSchema>;
+const McpProtocolSchema = z.enum(["stateless", "stateful"]);
 
 export const McpServerSchema = z.object({
   id: McpServerIdSchema,
@@ -71,17 +64,16 @@ export const AgentToolsSchema = z.object({
   dynamic: ToolSelectionSchema,
   // Profile entries override the configured servers; selected/[] disables one.
   mcp: z
-    .array(
-      z.object({connectionId: McpServerIdSchema, tools: ToolSelectionSchema}),
-    )
+    .array(z.object({serverId: McpServerIdSchema, tools: ToolSelectionSchema}))
     .max(32)
     .refine(
       (items) =>
-        new Set(items.map((item) => item.connectionId)).size === items.length,
+        new Set(items.map((item) => item.serverId)).size === items.length,
       "Connection IDs must be unique",
     ),
 });
 export type AgentTools = z.infer<typeof AgentToolsSchema>;
+export {mcpServerGranted, toolSelected} from "./tool-grants.js";
 export const DEFAULT_AGENT_TOOLS: AgentTools = {
   builtin: {mode: "all"},
   dynamic: {mode: "selected", names: []},
@@ -348,18 +340,13 @@ export const GuardrailSchema = z
   .describe("A natural-language policy evaluated before an agent action runs.");
 export type Guardrail = z.infer<typeof GuardrailSchema>;
 
-export const SetGuardrailsSchema = z.object({
-  guardrails: z
-    .array(GuardrailSchema)
-    .refine(
-      (guardrails) =>
-        new Set(guardrails.map(({id}) => id)).size === guardrails.length,
-      "guardrail ids must be unique",
-    )
-    .describe(
-      "The complete replacement policy list for future Turns. Use an empty list to clear all guardrails.",
-    ),
-});
+const GuardrailListSchema = z
+  .array(GuardrailSchema)
+  .refine(
+    (guardrails) =>
+      new Set(guardrails.map(({id}) => id)).size === guardrails.length,
+    "guardrail ids must be unique",
+  );
 
 export const AgentProfileSchema = z.object({
   memories: z.array(MemoryEntrySchema).max(32).default([]),
@@ -369,6 +356,21 @@ export const AgentProfileSchema = z.object({
   webSearchEnabled: z.boolean().default(true),
 });
 export type AgentProfile = z.infer<typeof AgentProfileSchema>;
+
+/**
+ * A profile change for subsequent turns. Omitted fields stay unchanged; each
+ * given field is replaced whole. `null` instructions clear them.
+ */
+export const ProfileUpdateSchema = z
+  .object({
+    instructions: z.string().nullable(),
+    guardrails: GuardrailListSchema,
+    tools: AgentToolsSchema,
+    webSearchEnabled: z.boolean(),
+  })
+  .partial()
+  .strict();
+export type ProfileUpdate = z.infer<typeof ProfileUpdateSchema>;
 
 export const AgentInitializationSchema = AgentMetadataSchema.extend({
   profile: AgentProfileSchema.optional(),
@@ -411,7 +413,6 @@ export const SubAgentConfigSchema = z.object({
     ),
 });
 export type SubAgentConfig = z.infer<typeof SubAgentConfigSchema>;
-export const SetWebSearchEnabledSchema = z.object({enabled: z.boolean()});
 
 // The decision delivered to a waiting tool or policy gate over a signal and
 // retained in history after successful delivery.

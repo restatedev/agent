@@ -4,9 +4,6 @@
   "description": "Durable Restate services for the reference agent runtime.",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,8 +13,8 @@
     }
   },
   "scripts": {
-    "test:ptc": "tsc -p test/ptc/tsconfig.json && node --import tsx --test test/ptc/*.test.ts test/ptc/*.test.mjs",
-    "test:ptc:restart": "node --import tsx test/ptc/restart.mjs",
+    "test": "tsc -p test/tsconfig.json && node --import tsx --test test/*.test.ts test/*.test.mjs",
+    "test:restart": "node --import tsx test/restart.mjs",
     "build": "tsc --noEmitOnError",
     "start": "NODE_ENV=production node ./dist/app.js",
     "dev": "tsx watch ./src/app.ts",

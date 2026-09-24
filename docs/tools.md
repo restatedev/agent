@@ -93,7 +93,9 @@ or new search configuration are required.
 
 ## Built-in tools
 
-Built-ins live in `packages/libs/core/src/session/tools.ts`. A definition owns
+Built-ins live in `packages/libs/core/src/session/tools/`, one module per
+family (`local`, `approval`, `sub-agents`, `agent-state`, `sandbox`), and are
+registered in `session/tools.ts`. A definition owns
 its name, model-facing description, Zod input schema, validation, durable
 behavior, and optional pending completion:
 
@@ -104,12 +106,17 @@ const exampleTool = defineAgentTool({
   inputSchema: z.object({
     value: z.string().describe("What this field means."),
   }),
-  *run({value}, context): restate.Operation<ToolExecution> {
+  *run({value}) {
     // Durable handler code.
-    return {status: "succeeded", result: value};
+    return succeeded(value);
   },
 });
 ```
+
+`tools/define.ts` also has `toolRun(name, action, retry)` for a tool whose
+work is one journaled side effect, `agentCall(codes, op)` for calls into the
+Agent whose rejections the model should see, and `toolFailure(name, error)`.
+All of them rethrow cancellation.
 
 Add the definition to the `definitions` array. The rest follows from that one
 registration:
@@ -225,9 +232,13 @@ the existing agent loop, not a separate agent or a replacement tool backend.
 PTC is enabled by default. Set `AGENT_PTC_ENABLED=false` on the core service to
 disable it, for example `AGENT_PTC_ENABLED=false pnpm dev:service`.
 Only the exact value `false` disables PTC; leaving the variable unset or setting
-it to `true` enables it. When disabled, new model calls omit the PTC tool and its
-instructions.
-Already-recorded program calls retain their normal execution and replay behavior.
+it to `true` enables it. The flag is read once when the service starts
+(`PTC_ENABLED` in `ptc/definition.ts`). When disabled, `executeProgram` is left
+out of every catalog: the model's tools (`manifests()`), the tool-search index,
+the tool-permission UI (`builtinCatalog`) and the `searchTools` description.
+Its name stays reserved, and already-recorded program calls retain their
+normal execution and replay behavior, so restarting with the flag flipped does
+not break an in-flight turn.
 
 The model can use `executeProgram({source})` to coordinate the same static,
 Restate-discovered, and MCP tools that it can call directly. The source evaluates
@@ -252,7 +263,7 @@ async tools => {
 `tools["exact-tool-name"]({...})` works for names that are not JavaScript
 identifiers. Successful calls return parsed JSON when their result is JSON,
 otherwise a string. MCP results retain `content` and `structuredContent` and
-the existing size/attachment filtering. Failed tool outcomes reject promises.
+the existing attachment filtering. Failed tool outcomes reject promises.
 Only the returned JSON or deterministic program error becomes an observation
 for the agent model. Child activity and approval events still appear in the
 transcript without raw arguments or results.
@@ -344,13 +355,13 @@ is held by the host rather than exposed through guest globals.
 
 ### Verification
 
-`pnpm --filter @restate-agents/core test:ptc` checks guest replay, full and partial
+`pnpm --filter @restate-agents/core test` checks guest replay, full and partial
 real-SDK protocol replay, failures and limits, mixed tool dispatch, MCP auth
 retry, subtool policy enforcement, and child interruption. Protocol peers and
 outbound tool fixtures are local to the tests; no real provider credentials or
 model calls are needed.
 
-The optional `test:ptc:restart` command expects a disposable Restate server with
+The optional `test:restart` command expects a disposable Restate server with
 admin on port 19070 and ingress on 18080. It starts a test endpoint on 19880,
 registers it as `http://host.docker.internal:19880`, kills that endpoint after a
 race and its branches have completed, and restarts it. It asserts the recovered
@@ -376,9 +387,29 @@ All calls proposed in one model response are spawned in parallel, then joined.
 One failure is data returned to the model; it does not discard sibling
 results.
 
+Results and errors of every tool kind are capped once, at 128,000 characters,
+where they become model messages (`toModelMessage` and `toRuntimeMessage` in
+`session/tools.ts`); a longer text is cut and ends with a
+`[truncated by the runtime: …]` marker. Tools do not add their own model-facing
+caps. A source that could journal unbounded data limits it inside its run
+instead: web search responses (1 MB), sandbox file reads and command
+stdout/stderr (1,000,000 characters each). PTC programs see results before the
+central cap and can filter them; the program's own return is limited to 64,000
+characters.
+
 External side effects belong inside `restate.run` or a Restate RPC. Preserve
 `InterruptedError` and `CancelledError` instead of converting them into normal
 tool failures, so invocation cancellation can propagate through `doTurn`.
+
+Give every tool `run` an explicit retry policy. A `restate.run` without one
+retries until it succeeds, which is wrong for a model-facing call: a bounded
+failure is feedback the model can act on. Operations that are safe to repeat
+(`listFiles`, `readFile`, `writeFile`, `getWeather`, `webSearch`) use a small
+bounded retry. Operations that are not (`executeCommand`, MCP calls) use
+`{maxAttempts: 1}`: a transport error can arrive after the command already
+ran, and the model can inspect the result rather than have it silently run
+again. Crash recovery can still repeat an effect whose result was not yet
+journaled.
 
 Built-in tools are deliberately local handler code. Do not turn one into a
 Restate service merely to fit a generic abstraction.
@@ -408,7 +439,13 @@ const waitTool = defineAgentTool({
 ```
 
 The stable `toolCallId` is also the operation ID. Pending completion becomes a
-runtime message in a later model round. A turn cannot finish while pending work
+runtime message in a later model round. Because the original call was already
+answered with `{pending: true}`, that message is a user-role message, so its
+outcome (for a handed-off program or sub-agent, arbitrary web, MCP or tool
+output) is never pasted in as text. `toRuntimeMessage` puts it in an
+`<untrusted-tool-output>` block as JSON, with `<`, `>` and `&` escaped so the
+payload cannot close the block, and the system prompt tells the model to treat
+that block as data. A turn cannot finish while pending work
 exists unless the model cancels it, the user interrupts, or the invocation is
 externally cancelled.
 
@@ -456,18 +493,19 @@ interruption of the creating turn does not roll it back.
 
 ## Adding a built-in tool
 
-1. Define it beside the existing tools in `session/tools.ts`.
+1. Define it in the matching `session/tools/*.ts` family with
+   `defineAgentTool`, and register it in `definitions` in `session/tools.ts`.
 2. Give it a unique model-safe name and a precise description.
 3. Define the complete Zod object schema. Make nullable fields explicitly
    nullable rather than optional when strict model schemas require every
    property.
 4. Return structured tool status rather than throwing ordinary domain errors.
 5. Re-throw Restate interruption and SDK cancellation errors.
-6. Put non-deterministic external work in `restate.run`, or call another
+6. Put non-deterministic external work in `restate.run` with an explicit
+   retry policy (see [Foreground tools](#foreground-tools)), or call another
    Restate handler.
-7. Add it to `definitions`.
-8. Add or update a test if it changes conversation semantics.
-9. Run `pnpm lint`, `pnpm build`, and `pnpm bundle`.
+7. Add or update a test if it changes conversation semantics.
+8. Run `pnpm lint`, `pnpm build`, and `pnpm bundle`.
 
 Before making a tool pending, verify that the model can do useful work before
 completion and that the runtime has a meaningful way to report, cancel, and later
@@ -679,12 +717,17 @@ PTC dispatches through the same permissions and policy gate.
 
 Each HTTP effect resolves the referenced token immediately before transport
 use. Missing credentials or changed configuration fail with a safe error.
-Provider exceptions are sanitized before being journaled. There are no OAuth
+Provider exceptions are sanitized before being journaled: transport, HTTP and
+auth failures become fixed messages. A JSON-RPC error answering a tool call
+(invalid params, unknown tool, or the client's output-schema check) keeps its
+code and message, bounded to 1,000 characters with the resolved token
+redacted, so the model can correct its input. There are no OAuth
 signals, browser authorization actions or refresh-state storage. Stateful
 connections are released at turn completion and discarded after failed calls.
 
 Calls pass the snapshotted definition for output validation. Successful results
-are projected into bounded JSON-compatible model observations; remote `isError`
+are projected into JSON-compatible model observations, bounded by the central
+result cap; remote `isError`
 results and failed HTTP effects become tool failures. Unsupported content is
 represented by summaries rather than hidden binary payloads in model context.
 Raw tool data stays outside the public conversation history.
@@ -724,7 +767,10 @@ proposal.
 
 The canonical history records structured tool lifecycle summaries—tool names,
 counts, and final statuses—so clients can show useful progress. It deliberately
-does not persist raw arguments or results.
+does not persist raw arguments or results. A built-in's activity label is a
+fixed `summary` string on its definition (`"Read a file"`, `"Searched tools"`),
+not a function of its input, so paths, queries, commands and names cannot
+leak into the transcript through a label.
 
 Use the Restate invocation tree and journal for:
 

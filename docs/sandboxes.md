@@ -15,11 +15,19 @@ provider's `SandboxRef` under its `sandbox` state key. `doTurn` is exclusive
 per agent, so at most one turn uses the sandbox at a time and no lease or
 borrower check is needed.
 
-The turn does not provision eagerly. The first sandbox tool of a turn spawns
-one acquisition task: it resumes the stored ref, or provisions one if none
-exists, and stores the result. Parallel tools share that task, and later steps
-reuse its ref. Because acquisition is its own task, interrupting the tool that
-started it does not abandon a half-finished provision.
+The turn does not provision eagerly. The first sandbox tool of a turn acquires
+the sandbox inline: it resumes the stored ref, or provisions one if none
+exists, and stores the result. Parallel tools wait for that attempt instead of
+starting their own, and later steps reuse its ref.
+
+Acquisition is deliberately not a task spawned by the first tool. sdk-gen
+cascades `interrupt` down a task's spawn subtree, so such a task would die with
+its tool (a PTC `Promise.race` loser, a cancelled handed-off program) and every
+other sandbox tool of the turn would inherit its rejection. Instead, when the
+owning tool is interrupted, the next waiting tool takes over and acquires again;
+provider operations are retry-safe (see below), so a half-finished provision is
+recovered rather than duplicated. A failed attempt is not cached either: later
+tools try again and report their own failure to the model.
 
 When `doTurn` exits, including on failure and cancellation, it suspends the
 sandbox if the turn acquired one and stores the provider's updated ref. A turn
@@ -149,9 +157,16 @@ It creates directories lazily and enforces path containment. Suspend is a
 logical state change only; resume recreates the directory if needed. Destroy
 removes the directory recursively.
 
-This is a development adapter, not a security boundary:
+Commands run with a minimal environment: `PATH` and `LANG` from the service,
+`HOME` set to the workspace directory and `TERM=dumb`. They do not inherit the
+rest of the service environment, so a model running `env` cannot read
+`OPENAI_API_KEY`, MCP tokens, `RESTATE_ADMIN_TOKEN` or Modal credentials into
+its context and the journal.
 
-- commands run with the service process's identity and permissions;
+This is still a development adapter, not a security boundary:
+
+- commands run with the service process's identity and permissions, so they
+  can read any file the service can (including a `.env` file);
 - it does not isolate CPU, memory, network, or system calls;
 - `/tmp` may not survive host replacement;
 - a single service host sees only its own local filesystem.
@@ -184,7 +199,10 @@ The provider uses:
 - a deterministic sandbox name to recover an already-created resource after a
   Restate retry;
 - termination on suspend while retaining the Volume;
-- new compute mounted to the same Volume on resume;
+- new compute mounted to the same Volume on resume. A ref that still carries
+  a Sandbox ID (its turn was killed before it could suspend) is reused only
+  if `Sandbox.poll()` reports it still running; a finished, timed-out or
+  forgotten Sandbox is replaced by new compute on the same Volume;
 - Volume deletion on destroy.
 
 The ref contains the Volume name and a nullable live Sandbox ID:
@@ -222,7 +240,8 @@ switching a test Agent between providers.
 
 ## Adding a provider
 
-1. Add a new discriminant and serializable fields to `SandboxRefSchema`.
+1. Add a new discriminant and serializable fields to the `SandboxRef` union
+   in `sandbox/provider.ts`.
 2. Implement `SandboxProvider` in its own adapter module.
 3. Keep credentials and process-local SDK clients out of `SandboxRef`.
 4. Make `provision`, `suspend`, `resume`, and `destroy` safe under retry.
@@ -230,8 +249,9 @@ switching a test Agent between providers.
 6. Honor every `AbortSignal`.
 7. Detach or close process-local SDK handles after each operation.
 8. Enforce workspace path containment.
-9. Add the provider to `configuredProvider()` for new refs and `providerFor()`
-   for existing refs.
+9. Add the provider to the `SANDBOX_PROVIDER` switch in
+   `sandboxProvider.provision` for new refs, and to `providerFor()` for
+   existing refs.
 10. Exercise provision, parallel first use, suspend/resume across turns,
     command cancellation, and destroy.
 

@@ -3,6 +3,7 @@
 import {
   type AgentTools,
   type McpServer,
+  mcpServerGranted,
   McpServerSchema,
 } from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
@@ -56,14 +57,22 @@ export function resolveMcpGrants(
   return {
     ...tools,
     mcp: servers.flatMap((server) => {
-      const grant = tools.mcp.find((item) => item.connectionId === server.id);
+      const grant = tools.mcp.find((item) => item.serverId === server.id);
       return grant
         ? [grant]
         : tools.mcpDefault === "disabled"
           ? []
-          : [{connectionId: server.id, tools: {mode: "all" as const}}];
+          : [{serverId: server.id, tools: {mode: "all" as const}}];
     }),
   };
+}
+
+/** The servers a turn may connect to: granted with at least one tool. */
+export function grantedMcpServers(
+  tools: AgentTools,
+  servers: McpServer[],
+): McpServer[] {
+  return servers.filter((server) => mcpServerGranted(tools, server.id));
 }
 
 /** Call only inside the HTTP effect; do not return the value from a run. */

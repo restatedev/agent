@@ -1,11 +1,8 @@
-import type {AgentTools, ToolSelection} from "@restate-agents/types";
+import {type AgentTools, toolSelected as selected} from "@restate-agents/types";
 
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import type {McpAgentTool} from "./mcp-tools.js";
 
-export function selected(selection: ToolSelection, name: string): boolean {
-  return selection.mode === "all" || selection.names.includes(name);
-}
 /** Dynamic permissions use stable service/handler identity, not a mutable alias. */
 export function dynamicToolId(tool: DiscoveredAgentTool): string {
   return `${tool.target.service}/${tool.target.handler}`;
@@ -23,7 +20,7 @@ export function toolAllowed(
   const remote = mcp.find((t) => t.name === name);
   if (!remote) return false;
   const grant = permissions.mcp.find(
-    (g) => g.connectionId === remote.target.server.id,
+    (g) => g.serverId === remote.target.server.id,
   );
   return Boolean(grant && selected(grant.tools, remote.target.remoteName));
 }

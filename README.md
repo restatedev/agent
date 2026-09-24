@@ -56,7 +56,7 @@ port 8080, which you can call directly:
 curl localhost:8080/Agent/demo/ask --json '{"message":"What is the weather in Berlin?"}'
 
 # Redirect the running turn without cancelling its tools
-curl localhost:8080/Agent/demo/steer --json '"Use Fahrenheit"'
+curl localhost:8080/Agent/demo/steer --json '{"message":"Use Fahrenheit"}'
 
 # Stop it, optionally queueing a replacement request
 curl localhost:8080/Agent/demo/interrupt --json '{"reason":"Changed my mind"}'
@@ -94,7 +94,7 @@ flowchart LR
 ### One message, end to end
 
 1. `Agent.ask` starts a turn if the agent is idle, or queues the message if a
-   turn is running (`agent/service.ts`).
+   turn is running (`agent/turns.ts`).
 2. Starting a turn snapshots the profile and sends `AgentSession.doTurn` one
    way. The controller records the invocation ID and returns immediately.
 3. `doTurn` appends the new messages to the log and builds model context from
@@ -133,9 +133,9 @@ MCP call completing and its result being recorded can repeat that call.
 | --- | --- | --- |
 | Queue, steer, interrupt | Send messages while a long turn runs ("sleep for 4 minutes") | `agent/active-turn.ts` |
 | Crash recovery | Kill `pnpm dev:service` mid-turn and restart it | `session/service.ts`, `session/step.ts` |
-| Guardrails and approvals | Add a guardrail in the UI; ask for something it blocks | `session/guardrails.ts`, `agent/approval.ts` |
-| Memory | Ask the agent to remember a preference; up to 32 per agent | `agent/memory.ts` |
-| Sub-agents | Ask it to delegate research to a helper | `agent/sub-agent.ts`, `createSubAgent` in `session/tools.ts` |
+| Guardrails and approvals | Add a guardrail in the UI; ask for something it blocks | `session/guardrails.ts`, `agent/approvals.ts` |
+| Memory | Ask the agent to remember a preference; up to 32 per agent | `agent/profile.ts` |
+| Sub-agents | Ask it to delegate research to a helper | `agent/sub-agents.ts`, `session/tools/sub-agents.ts` |
 | Schedules | "Remind me in 2 minutes to check the weather" | `agent/schedules.ts` |
 | Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `ptc/runtime.ts` |
 | Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/tool-search.ts` |
@@ -159,6 +159,7 @@ The agent service (`packages/libs/core`):
 | `OPENAI_API_KEY` | Required for model calls |
 | `MCP_SERVERS_JSON` | MCP servers the agents may use; see below |
 | `SANDBOX_PROVIDER` | `local` (default) or `modal`, which also needs `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` |
+| `MODAL_APP_NAME`, `MODAL_SANDBOX_NAMESPACE`, `MODAL_SANDBOX_IMAGE`, `MODAL_SANDBOX_TIMEOUT_MS` | Optional Modal settings; see [sandboxes](docs/sandboxes.md) |
 | `AGENT_PTC_ENABLED` | Set to `false` to hide `executeProgram` |
 | `AGENT_MODEL_MAX_OUTPUT_TOKENS` | Output budget per model call, 1024–64000 (default 32000) |
 | `RESTATE_ADMIN_URL`, `RESTATE_ADMIN_TOKEN` | Admin API used to discover dynamic tools |
@@ -169,7 +170,8 @@ The UI (`packages/apps/web`, see [`env.example`](packages/apps/web/env.example))
 | --- | --- |
 | `RESTATE_INGRESS_URL` | Restate ingress for the UI server (default `http://localhost:8080`) |
 | `RESTATE_AUTH_TOKEN` | Bearer token for an authenticated ingress |
-| `APP_PUBLIC_URL` | Browser origin when the UI sits behind a proxy |
+| `APP_PUBLIC_URL` | Browser origin when the UI sits behind a proxy; its host becomes the only accepted Host |
+| `APP_ALLOWED_HOSTS` | Comma-separated extra Host values to accept, for proxies that rewrite Host |
 
 ### MCP servers
 
@@ -203,8 +205,8 @@ for any agent. These checks keep the model and the UI within their rules;
 they do not authenticate anyone.
 
 The UI (port 3000) has no authentication. It accepts only a loopback Host
-and same-origin writes, which stops other websites but not other programs on
-the machine.
+(or the `APP_PUBLIC_URL` host) and same-origin writes, which stops other
+websites, DNS rebinding included, but not other programs on the machine.
 
 Keep both ports on the local machine or a network you trust. When running
 the UI container, publish it on loopback only:
@@ -215,8 +217,7 @@ the UI container, publish it on loopback only:
 ```sh
 pnpm lint                                  # oxlint + oxfmt check
 pnpm build                                 # TypeScript 7 type-check and build, incl. Next.js
-pnpm --filter @restate-agents/core test:ptc
-pnpm --filter @restate-agents/web test
+pnpm test                                  # core and web test suites
 pnpm bundle                                # single-file core bundle
 ```
 

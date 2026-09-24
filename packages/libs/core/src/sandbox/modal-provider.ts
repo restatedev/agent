@@ -62,7 +62,12 @@ export const modalSandboxProvider: SandboxProvider = {
 
   async resume(ref, {signal}) {
     const current = modalRef(ref);
-    if (current.sandboxId) {
+    // A stored ID normally means the previous turn never suspended (its
+    // invocation was killed). That compute may have outlived the turn, or it
+    // may have hit its Modal timeout or been stopped out of band. Reuse it
+    // only while it is still running; otherwise start new compute on the
+    // same Volume, so the files survive either way.
+    if (current.sandboxId && (await isRunning(current.sandboxId, signal))) {
       return current;
     }
     signal.throwIfAborted();
@@ -203,6 +208,27 @@ async function withSandbox<T>(
     const result = await operation(sandbox);
     signal.throwIfAborted();
     return result;
+  } finally {
+    sandbox.detach();
+  }
+}
+
+async function isRunning(
+  sandboxId: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  signal.throwIfAborted();
+  // fromId only builds a handle; poll asks Modal. It returns the exit code of
+  // a finished Sandbox, or null while it still runs.
+  const sandbox = await modal().sandboxes.fromId(sandboxId);
+  try {
+    return (await sandbox.poll()) === null;
+  } catch (error) {
+    // Modal forgets finished Sandboxes eventually.
+    if (error instanceof NotFoundError) {
+      return false;
+    }
+    throw error;
   } finally {
     sandbox.detach();
   }

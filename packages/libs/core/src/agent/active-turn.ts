@@ -1,8 +1,9 @@
-// Active-turn management for one Agent virtual object. This component owns the
-// `turn` and `pending` state keys plus the AgentSession invocation and signals.
-// It deliberately knows nothing about conversation history.
+// The Agent's active turn: the `turn` and `pending` state keys, plus the
+// AgentSession.doTurn invocation and its interrupt and steering signals.
+// It knows nothing about conversation history, which AgentSession owns.
 
 import type {AgentTools, ConversationEntry} from "@restate-agents/types";
+import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
 import {
@@ -12,12 +13,12 @@ import {
   type AgentTurnRequest,
 } from "../internal-types.js";
 import {AgentSession} from "../session/index.js";
+import {listState, objectKey} from "../state.js";
 
-/** Durable state for the invocation currently owned by the Agent. */
-type ActiveTurnState = {
-  tools: AgentTools;
+type ActiveTurn = {
   /** AgentSession.doTurn invocation ID and signal target. */
   id: string;
+  tools: AgentTools;
   /** The accepted interruption while its terminal outcome is still pending. */
   interruptReason?: string;
   /** Steering signals sent to this turn in FIFO order. */
@@ -30,40 +31,90 @@ type ActiveTurnState = {
   deliveries?: string[];
 };
 
-/** Information returned when an active turn is successfully retired. */
-type FinishedTurn = {
-  /** Final outcome after reconciling a late accepted interruption. */
-  outcome: AgentTurnOutcome;
-  /** Transcript entries that must open the next turn, in original order. */
-  queuedEntries: ConversationEntry[];
-};
+/** Entries waiting for the next turn, in FIFO order. */
+const pending = listState<ConversationEntry>("pending");
 
-/** Returns the current turn. */
-export function* current(): restate.Operation<ActiveTurnState | undefined> {
-  return (yield* restate.state().get<ActiveTurnState>("turn")) ?? undefined;
+/**
+ * Bounds input a busy agent holds: queued user messages, and steering
+ * batches sent to one turn. The whole list is rewritten on every change, so
+ * an unbounded producer would make each write, and the next turn's opening
+ * context, grow without limit.
+ */
+const MAX_QUEUED_MESSAGES = 32;
+const MAX_STEERING_BATCHES = 32;
+
+const tooManyRequests = (message: string) =>
+  new TerminalError(message, {errorCode: 429});
+
+export function* current(): restate.Operation<ActiveTurn | undefined> {
+  return (yield* restate.state().get<ActiveTurn>("turn")) ?? undefined;
+}
+
+/** Whether `turnId` is the active turn and is not being interrupted. */
+export function* accepting(turnId: string): restate.Operation<boolean> {
+  const active = yield* current();
+  return active?.id === turnId && active.interruptReason === undefined;
 }
 
 /**
  * Starts an AgentSession invocation and records it as the active turn.
+ * The caller ensures no turn is active.
  *
- * The exclusive Agent caller is responsible for ensuring no turn is active.
- *
- * @returns The new invocation ID.
+ * @returns The new invocation ID, which is also the turn ID.
  */
-export function* start(
-  agentId: string,
-  request: AgentTurnRequest,
-): restate.Operation<string> {
+export function* start(request: AgentTurnRequest): restate.Operation<string> {
   const started = yield* restate
-    .sendClient(AgentSession, agentId)
+    .sendClient(AgentSession, objectKey())
     .doTurn(request);
   restate.state().set("turn", {
     id: started.id,
     tools: request.tools,
     steeringBatches: [],
     deliveries: deliveryKeys(request.entries),
-  });
+  } satisfies ActiveTurn);
   return started.id;
+}
+
+/**
+ * Adds entries to the next turn's queue.
+ *
+ * @returns The number of queued user messages.
+ * @throws 429 when the queue already holds its limit of user messages.
+ */
+export function* enqueue(
+  ...entries: ConversationEntry[]
+): restate.Operation<number> {
+  const queued = [...(yield* pending.get()), ...entries];
+  const messages = userMessages(queued);
+  if (messages > MAX_QUEUED_MESSAGES) {
+    throw tooManyRequests(
+      `The agent is busy and already holds ${MAX_QUEUED_MESSAGES} queued messages`,
+    );
+  }
+  pending.set(queued);
+  return messages;
+}
+
+/**
+ * Puts entries a successor turn could not start with back on the queue. They
+ * were already accepted once, so the limit does not apply.
+ */
+export function* requeue(
+  ...entries: ConversationEntry[]
+): restate.Operation<void> {
+  yield* pending.update((items) => [...items, ...entries]);
+}
+
+/** Removes and returns every queued entry. */
+export function* drainPending(): restate.Operation<ConversationEntry[]> {
+  const entries = yield* pending.get();
+  pending.clear();
+  return entries;
+}
+
+/** Drops the queue of a retired agent. */
+export function clearPending(): void {
+  pending.clear();
 }
 
 /**
@@ -75,64 +126,19 @@ export function* hasDelivery(
   sourceId: string,
 ): restate.Operation<boolean> {
   const key = deliveryKey(source, sourceId);
-  const active = yield* current();
-  if (active?.deliveries?.includes(key)) return true;
-  const pending =
-    (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
-  return deliveryKeys(pending).includes(key);
-}
-
-function deliveryKey(source: string, sourceId: string): string {
-  return JSON.stringify([source, sourceId]);
-}
-
-function deliveryKeys(entries: ConversationEntry[]): string[] {
-  return entries.flatMap((entry) =>
-    entry.role === "event" && entry.type === "delivery" && entry.sourceId
-      ? [deliveryKey(entry.source, entry.sourceId)]
-      : [],
-  );
+  if ((yield* current())?.deliveries?.includes(key)) return true;
+  return deliveryKeys(yield* pending.get()).includes(key);
 }
 
 /**
- * Adds transcript entries to the FIFO batch for the next turn.
+ * Signals the active turn to interrupt and marks it as winding down.
  *
- * @returns The new number of pending user messages.
+ * @returns Whether this call sent the interrupt: `false` when no turn is
+ * active or one was already sent.
  */
-export function* enqueue(
-  ...entries: ConversationEntry[]
-): restate.Operation<number> {
-  const pending =
-    (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
-  pending.push(...entries);
-  restate.state().set("pending", pending);
-  return pending.filter(({role}) => role === "user").length;
-}
-
-/** Removes and returns every pending entry. */
-export function* drainPending(): restate.Operation<ConversationEntry[]> {
-  const pending =
-    (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
-  if (pending.length > 0) restate.state().clear("pending");
-  return pending;
-}
-
-/**
- * Signals the active invocation to interrupt and marks it as winding down.
- *
- * @returns `true` when this call sent the first interrupt, `false` when one
- * was already pending, or `undefined` when no Turn is active.
- */
-export function* interrupt(
-  reason: string,
-): restate.Operation<boolean | undefined> {
+export function* interrupt(reason: string): restate.Operation<boolean> {
   const active = yield* current();
-  if (!active) {
-    return undefined;
-  }
-  if (active.interruptReason !== undefined) {
-    return false;
-  }
+  if (!active || active.interruptReason !== undefined) return false;
   restate
     .invocation(active.id)
     .signal<string>(AGENT_SESSION_SIGNALS.interrupt)
@@ -142,25 +148,24 @@ export function* interrupt(
 }
 
 /**
- * Promotes queued messages and a new instruction into the active Turn.
+ * Sends the queued entries, `extra` entries and a new instruction to the
+ * active turn as one steering batch.
  *
- * Pending messages are drained into the signal as a separate FIFO list.
- *
- * @returns Whether an active turn accepted the steering signal.
+ * @returns Whether an active, non-interrupting turn received it. The queue is
+ * left untouched otherwise.
  */
 export function* steer(
   message: string,
-  ...entries: ConversationEntry[]
+  ...extra: ConversationEntry[]
 ): restate.Operation<boolean> {
   const active = yield* current();
-  if (!active || active.interruptReason !== undefined) {
-    return false;
+  if (!active || active.interruptReason !== undefined) return false;
+  if (active.steeringBatches.length >= MAX_STEERING_BATCHES) {
+    throw tooManyRequests(
+      `The active turn already received ${MAX_STEERING_BATCHES} steering messages`,
+    );
   }
-
-  const pending =
-    (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
-  restate.state().clear("pending");
-  const steering = {queued: [...pending, ...entries], message};
+  const steering = {queued: [...(yield* drainPending()), ...extra], message};
   restate.state().set("turn", {
     ...active,
     steeringBatches: [...active.steeringBatches, steering],
@@ -177,46 +182,62 @@ export function* steer(
 }
 
 /**
- * Retires the matching active turn and drains its pending-message batch.
+ * Retires the active turn when `outcome` belongs to it.
  *
- * Stale or duplicate outcomes are ignored. A late accepted interruption is
- * reflected in the final outcome, and every unconsumed steering entry is
- * recovered for the successor turn.
+ * A late accepted interruption overrides the reported status, and steering
+ * the turn never consumed is recovered ahead of the queue.
  *
- * @returns Reconciliation information, or `undefined` for an outcome that
- * does not belong to the active turn.
+ * @returns The reconciled outcome and the entries that must open the next
+ * turn, or `undefined` for a stale or duplicate outcome.
  */
-export function* finish(
-  outcome: AgentTurnOutcome,
-): restate.Operation<FinishedTurn | undefined> {
+export function* finish(outcome: AgentTurnOutcome): restate.Operation<
+  | {
+      outcome: AgentTurnOutcome;
+      queuedEntries: ConversationEntry[];
+    }
+  | undefined
+> {
   const active = yield* current();
-  if (active?.id !== outcome.turnId) {
-    return undefined;
-  }
-
+  if (active?.id !== outcome.turnId) return undefined;
   restate.state().clear("turn");
-  const pending =
-    (yield* restate.state().get<ConversationEntry[]>("pending")) ?? [];
-  restate.state().clear("pending");
 
-  const missedSteeringEntries = active.steeringBatches
+  const missedSteering = active.steeringBatches
     .slice(outcome.consumedSteering)
     .flatMap(({queued, message}): ConversationEntry[] => [
       ...queued,
       {role: "user", text: message, delivery: "queued"},
     ]);
-  const reconciled =
-    active.interruptReason !== undefined && outcome.status !== "interrupted"
+  // A failure keeps its error; any other ending becomes the interruption
+  // the user asked for.
+  const interrupted =
+    active.interruptReason !== undefined &&
+    (outcome.status === "completed" || outcome.status === "stopped");
+  return {
+    outcome: interrupted
       ? {
           turnId: outcome.turnId,
-          status: "interrupted" as const,
-          reason: active.interruptReason,
-          ...("response" in outcome ? {response: outcome.response} : {}),
+          status: "interrupted",
+          reason: active.interruptReason!,
+          response: outcome.response,
           consumedSteering: outcome.consumedSteering,
         }
-      : outcome;
-  return {
-    outcome: reconciled,
-    queuedEntries: [...missedSteeringEntries, ...pending],
+      : outcome,
+    queuedEntries: [...missedSteering, ...(yield* drainPending())],
   };
+}
+
+function userMessages(entries: ConversationEntry[]): number {
+  return entries.filter(({role}) => role === "user").length;
+}
+
+function deliveryKey(source: string, sourceId: string): string {
+  return JSON.stringify([source, sourceId]);
+}
+
+function deliveryKeys(entries: ConversationEntry[]): string[] {
+  return entries.flatMap((entry) =>
+    entry.role === "event" && entry.type === "delivery" && entry.sourceId
+      ? [deliveryKey(entry.source, entry.sourceId)]
+      : [],
+  );
 }

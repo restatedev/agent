@@ -27,8 +27,8 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 - `session/steering.ts` owns the background durable-signal receiver and
   transient FIFO. `session/pending.ts` owns completion tasks that survive
   across steps.
-- `session/tools.ts` owns concrete tool definitions, validation, execution,
-  completion, and model/transcript projections.
+- `session/tools.ts` dispatches calls and owns model/transcript projections;
+  concrete tool definitions live in `session/tools/`.
 - `session/program-tool.ts` adapts PTC child calls to that same dispatcher and
   policy gate. `ptc/runtime.ts` supervises their execution inline in `doTurn`;
   `ptc/guest.ts` owns the bounded QuickJS/WebAssembly guest.
@@ -45,8 +45,11 @@ deployed dynamic handlers as ordinary durable RPCs.
 - `doTurn` runs the state-machine loop directly. Each loop iteration spawns one
   `agentStep` and settles it against the durable interrupt signal.
 - Invocation cancellation rejects a parked operation at the handler boundary.
-  The catch path records local cancellation state, suspends the sandbox,
-  one-way reconciles Agent, and rethrows `CancelledError`.
+  The catch path first one-way reconciles Agent, then records local
+  cancellation state, suspends the sandbox, and rethrows `CancelledError`.
+  Cancellation during cleanup or during the normal `onTurnEnd` call takes the
+  same path, and a cleanup failure becomes a failed outcome, so every exit
+  clears the Agent's active turn.
 - Graceful interruption and step-limit exhaustion share one guarded, tool-free
   finalization path over completed work.
 - The steering receiver runs alongside a step. Steering is drained only at
@@ -132,7 +135,8 @@ waits. Provider errors are sanitized before journaling. See
   operations instead. Its outcome is a pending `{operationId, status:
   "running"}` handle, the program keeps running with its own sleeps and
   approvals, and its return value arrives later as a pending completion. The
-  model can let it finish or stop it with `cancelOperation`.
+  model can let it finish or stop it with `cancelOperation`, and a program may
+  itself cancel another pending operation while the turn waits.
 - A side-effect-free text or model-error result is discarded as stale if
   steering arrived during its step.
 - While waiting for pending work, steering is consumed immediately and starts
@@ -196,7 +200,8 @@ Interrupting the turn aborts an in-flight attempt through the run's signal.
 An exhausted recovery ends the Turn as failed; it does not enter the generic
 "try again" loop or ask for yet another summary. The existing failure cleanup
 stops pending work, suspends the sandbox and records the failure in history.
-Other model errors are limited to three consecutive unusable responses.
+Other model errors and empty answers are limited to three consecutive
+unusable responses.
 Completed tools remain in history; recovered proposals still pass the normal
 guardrail/approval pipeline. Interruption/step-limit summaries use the same
 bounded output recovery with tools disabled and retain final-output guardrails.
@@ -239,7 +244,9 @@ failure handling, and the replay-safe `AGENT_PTC_ENABLED=false` opt-out.
   joins every foreground tool, retains fulfilled outcomes, and represents
   interrupted calls honestly.
 - A pending outcome returned by an interrupted foreground batch is recorded as
-  cancelled because its completion task is never started.
+  cancelled because its completion task is never started. A program the step
+  handed off in the same moment is interrupted and joined; if it finished
+  anyway, its real result is kept.
 - Older pending tasks are stopped and joined. Completion races that already
   won remain completed.
 - The run adds retained results and the finalization instruction to working

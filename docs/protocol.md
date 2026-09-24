@@ -1,8 +1,12 @@
 # Agent protocol
 
 The schemas in `packages/libs/types/src/index.ts` and declarations in
-`services.ts` are authoritative. This guide covers the supported ingress path;
-internal coordination handlers remain visible to trusted Restate operators.
+`services.ts` are authoritative. This guide covers the supported ingress path.
+Internal coordination handlers (`onTurnEnd`, approval registration, sub-agent
+coordination, notifications plumbing, and every `AgentSession` handler except
+`history`) are marked `ingressPrivate`, so ingress rejects them; the Restate
+admin API still shows them to operators. This needs restate-server 1.4 or
+newer.
 
 ## Addressing and creation
 
@@ -22,9 +26,13 @@ The fallback display name is the agent ID. Retired IDs cannot be restarted.
 | Handler on `Agent/{agentId}` | Input | Effect |
 | --- | --- | --- |
 | `ask` | `{message}` | Start while idle; enqueue FIFO while busy |
-| `steer` | JSON string | Add input to the active turn; return false if idle |
+| `steer` | `{message}` | Add input to the active turn; return false if idle |
 | `interrupt` | `{reason, message?}` | Interrupt active turn; optionally queue a replacement |
 | `deliver` | `{source, sourceId?, message, whenBusy, interruptReason?, coalesce?}` | Route an external message with queue/steer/interrupt policy; `coalesce` drops it while the same `source`/`sourceId` is queued or active |
+
+A busy agent holds at most 32 queued user messages, and one turn accepts at
+most 32 steering messages. Past either limit, `ask`, `steer`, `interrupt`
+with a replacement, and `deliver` fail with HTTP 429.
 
 `ask` returns a discriminated result with `decision` (`start` or `queue`), stats,
 and `turnId` for a started turn (`activeTurnId` for queued input). Steering and interruption return whether the active turn accepted
@@ -32,7 +40,7 @@ the control. Busy `ask` does not implicitly steer. An interruption reason is
 control input to the old turn; a replacement message is separate user input.
 
 ```sh
-curl localhost:8080/Agent/demo/steer --json '"Also include Paris"'
+curl localhost:8080/Agent/demo/steer --json '{"message":"Also include Paris"}'
 curl localhost:8080/Agent/demo/interrupt \
   --json '{"reason":"Change of plan","message":"Only check Berlin"}'
 ```
@@ -67,10 +75,7 @@ The browser's `snapshot` and `sync` endpoints implement this sequence in
 | Handler on Agent | Input / result |
 | --- | --- |
 | `profile` | No input; instructions, guardrails, memories, tools, webSearchEnabled |
-| `setInstructions` | `{instructions: string | null}` |
-| `setGuardrails` | `{guardrails: [{id, rule}]}` |
-| `setTools` | Complete `AgentTools` selection |
-| `setWebSearchEnabled` | `{enabled: boolean}` |
+| `updateProfile` | Any of `{instructions: string \| null, guardrails: [{id, rule}], tools: AgentTools, webSearchEnabled: boolean}`; each given field is replaced whole |
 | `deleteMemory` | `{key}`; returns whether an entry existed |
 | `metadata` | No input; `{name, parentAgentId?}` |
 | `children` | No input; direct children with IDs and metadata |
@@ -126,8 +131,18 @@ for await (const {entry} of agent.follow()) {
 The client also exposes profile setters, approvals, metadata, children, memory
 deletion, schedules and retirement. It maps empty-body handlers explicitly.
 
-The Next.js server exposes a limited `/api/agent/{agentId}/{operation}` adapter
-that accepts only a loopback Host (or the `APP_PUBLIC_URL` origin) and
-same-origin writes. Restate credentials, if configured for connectivity,
-stay in its server process. There are no login cookies or account ownership
-proofs. Keep both ingress and this local operator UI private.
+The Next.js server exposes a limited `/api/agent/{agentId}/{operation}`
+adapter whose operation names match the Agent handlers. `GET` serves
+`snapshot` and `sync` (batched reads for one page render and its long poll),
+`profile` and `toolCatalog`. `POST` serves `ask`, `steer`, `interrupt`,
+`updateProfile`, `deleteMemory`, `cancelSchedule` and `resolveApproval`, each
+with a JSON body validated against the shared schema. Both tables live in
+`packages/apps/web/src/server/operations.ts`.
+
+Every request, reads included, must carry a loopback Host, or, when
+`APP_PUBLIC_URL` is set, that URL's host (or one listed in `APP_ALLOWED_HOSTS`
+for proxies that rewrite it); this is the DNS-rebinding defence. Writes must
+also carry a same-origin `Origin` header. Restate credentials, if configured
+for connectivity, stay in its server process. There are no login cookies or
+account ownership proofs. Keep both ingress and this local operator UI
+private.

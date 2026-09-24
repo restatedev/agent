@@ -30,7 +30,8 @@ Use executable contracts before prose:
 1. Public Zod schemas in `packages/libs/types/src/index.ts`, shared Restate
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
    internal handlers, and `src/model/provider.ts`;
-2. handler code in `src/agent/service.ts` and `src/session/service.ts`;
+2. handler code in `src/agent/*.ts` (grouped by concern) and
+   `src/session/service.ts`;
 3. focused ownership modules;
 4. docs.
 
@@ -111,7 +112,6 @@ The detailed turn-runtime list lives in
 
 - `ask` does not classify intent. It starts while idle and queues while busy.
   The caller explicitly chooses `steer` or `interrupt`.
-- `steer` accepts a JSON string at ingress, not `{message: ...}`.
 - A void-input ingress handler must receive no body and no `content-type`.
 - Restate signal resolutions with the same name form the durable sequence used
   by steering. The in-memory steering inbox is only a turn-local consumer.
@@ -126,8 +126,8 @@ The detailed turn-runtime list lives in
   explicit model-selected pending tool.
 - Resolved approval events are model-relevant. Approval-request and
   cancellation events are derived client status and are not model context.
-- Process-local caches (`session/dynamic-tools.ts`, `session/mcp-tools.ts`,
-  provider clients) are
+- Process-local caches (`refresh-cache.ts`, used by dynamic and MCP
+  discovery, and provider clients) are
   optimizations, never durable sources of truth.
 - A sandbox reference carries its provider. Changing `SANDBOX_PROVIDER` does
   not migrate an already-provisioned Agent sandbox.
@@ -155,19 +155,22 @@ The detailed turn-runtime list lives in
 
 | Change | Primary owner |
 | --- | --- |
-| User message routing and public controller handler | `agent/service.ts` |
+| User message routing and turn start/end | `agent/turns.ts` |
+| Authorization checks shared by Agent handlers | `agent/guards.ts` |
+| Agent creation and retirement | `agent/lifecycle.ts` |
 | Active turn ID, pending user queue, signal delivery/reconciliation | `agent/active-turn.ts` |
 | History chunks, cursor, writer, summary checkpoint | `session/history.ts` |
 | Notification revisions, subscriptions, and awakeables | `agent/notifications.ts` |
-| Instructions, guardrails | `agent/profile.ts` |
-| Agent-local memories | `agent/memory.ts` |
-| Pending approval state and decision signal | `agent/approval.ts` |
+| Instructions, guardrails, tool grants, memories | `agent/profile.ts` |
+| Pending approval state and decision signal | `agent/approvals.ts` |
+| Children, delegated tasks, inherited profile | `agent/sub-agents.ts` |
 | Durable scheduled-message state and timers | `agent/schedules.ts` |
 | Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |
 | Pending tool tasks and cancellation races | `session/pending.ts` |
-| Built-in tool schema, execution, result projection | `session/tools.ts` |
+| Built-in tool schema and execution | `session/tools/*.ts` |
+| Tool registry, dispatch, result and transcript projection | `session/tools.ts` |
 | Transcript-to-model projection | `session/context.ts` |
 | Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
 | MCP tool discovery and invocation | `session/mcp-tools.ts` |
@@ -188,9 +191,11 @@ contract.
 ### Built-in tool
 
 Read [tools.md](tools.md). Keep name, description, Zod schema, execution, and
-pending completion together in `session/tools.ts`. Add it to `definitions`,
-preserve cancellation errors, and add a focused test when behavior affects the
-Agent protocol.
+pending completion together in one `session/tools/*.ts` family module, built
+with `defineAgentTool` and the helpers in `tools/define.ts` (`toolRun`,
+`agentCall`, `toolFailure`, which preserve cancellation errors). Register it
+in `definitions` in `session/tools.ts`, and add a focused test when behavior
+affects the Agent protocol.
 
 ### Dynamic Restate tool
 
@@ -237,7 +242,7 @@ Run checks proportional to the change, normally:
 ```sh
 pnpm lint
 pnpm build
-pnpm --filter @restate-agents/core test:ptc
+pnpm --filter @restate-agents/core test
 pnpm --filter @restate-agents/web test
 pnpm bundle
 git diff --check

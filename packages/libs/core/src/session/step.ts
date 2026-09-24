@@ -7,8 +7,8 @@
 import type {Guardrail} from "@restate-agents/types";
 import {
   all,
-  allSettled,
   type Future,
+  type FutureSettledResult,
   gen,
   InterruptedError,
   type Operation,
@@ -25,18 +25,21 @@ import type {
 } from "../model/index.js";
 import {callModel} from "../model/index.js";
 import {PROGRAM_TOOL_NAME} from "../ptc/definition.js";
-import {raceBranches} from "../race.js";
+import {interruptAndJoin, raceBranches} from "../tasks.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
 import {type GuardrailDecisions, guardAction} from "./guardrails.js";
 import type {TurnHistory} from "./history.js";
 import type {McpAgentTool} from "./mcp-tools.js";
 import type {createPendingOperations} from "./pending.js";
-import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
+import type {
+  AgentToolContext,
+  PendingEvent,
+  ToolExecutionScope,
+  ToolOutcome,
+} from "./tools.js";
 import * as agentTools from "./tools.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
-
-export type {GuardrailDecisions} from "./guardrails.js";
 
 /** A model tool-call action paired with its foreground execution outcomes. */
 export type ToolStep = GuardrailDecisions & {
@@ -49,7 +52,7 @@ export type ToolStep = GuardrailDecisions & {
   handoffs: Map<string, Task<ToolOutcome>>;
 };
 
-type AgentStepResult =
+export type AgentStepResult =
   | (GuardrailDecisions & Extract<ModelResult, {type: "text" | "error"}>)
   | ToolStep
   | (GuardrailDecisions & {
@@ -107,6 +110,27 @@ export function* agentStep({
   // cancellations from those programs are recorded directly, because the turn
   // has already consumed `pendingEvents`.
   let handedOff = false;
+  // Gates a proposal against the guardrails, given approvals and rejections
+  // already made in this turn.
+  const gate = (
+    proposed: ProposedAction,
+    approvalPrefix: string,
+    decided: GuardrailDecisions,
+  ) =>
+    guardAction({
+      context,
+      transcript,
+      instructions,
+      guardrailMessages,
+      guardrails,
+      approvedActions: [...approvedActions, ...decided.approvedActions],
+      rejectedGuardrails: [
+        ...rejectedGuardrails,
+        ...decided.rejectedGuardrails,
+      ],
+      approvalPrefix,
+      proposed,
+    });
 
   try {
     const action = yield* callModel({
@@ -137,16 +161,9 @@ export function* agentStep({
             approvedActions: [],
             rejectedGuardrails: [],
           }
-        : yield* guardAction({
-            context,
-            transcript,
-            instructions,
-            guardrailMessages,
-            guardrails,
-            approvedActions,
-            rejectedGuardrails,
-            approvalPrefix: `guardrail-${stepNumber}`,
-            proposed,
+        : yield* gate(proposed, `guardrail-${stepNumber}`, {
+            approvedActions: [],
+            rejectedGuardrails: [],
           });
     const decisions = {
       approvedActions: guarded.approvedActions,
@@ -179,22 +196,40 @@ export function* agentStep({
             },
           ]
         : []),
-      {
-        role: "event",
-        type: "tools",
-        turnId: context.turnId,
-        step: stepNumber,
-        phase: "started",
-        calls: action.calls.map((call) => {
-          const summary = agentTools.summarize(call);
-          return {
-            id: call.toolCallId,
-            name: call.toolName,
-            ...(summary ? {summary} : {}),
-          };
-        }),
-      },
+      agentTools.toolsEvent(
+        context.turnId,
+        stepNumber,
+        "started",
+        action.calls.map((call) => agentTools.toolActivity(call)),
+      ),
     );
+    // PTC's nested calls are gated one by one, and their approvals extend
+    // this step's decisions.
+    const scope: ToolExecutionScope = {
+      transcript,
+      step: stepNumber,
+      *guard(nested) {
+        const guarded = yield* gate(
+          {type: "tool_calls", calls: [nested]},
+          `guardrail-${stepNumber}-${nested.toolCallId}`,
+          decisions,
+        );
+        decisions.approvedActions.push(...guarded.approvedActions);
+        decisions.rejectedGuardrails.push(...guarded.rejectedGuardrails);
+        return guarded.decision === "blocked" ? guarded.reason : undefined;
+      },
+      *cancelPending(outcome) {
+        const applied = yield* pending.apply([outcome], context, stepNumber);
+        if (handedOff)
+          yield* transcript.append(
+            ...applied.events.flatMap((event) =>
+              agentTools.transcriptEntries(event, context),
+            ),
+          );
+        else pendingEvents.push(...applied.events);
+        return applied.outcomes[0];
+      },
+    };
     tasks.push(
       ...action.calls.map((call, index) =>
         spawn(
@@ -204,51 +239,7 @@ export function* agentStep({
               context,
               discoveredTools,
               mcpTools,
-              {
-                transcript,
-                step: stepNumber,
-                *guard(nested) {
-                  const guarded = yield* guardAction({
-                    context,
-                    transcript,
-                    instructions,
-                    guardrailMessages,
-                    guardrails,
-                    approvedActions: [
-                      ...approvedActions,
-                      ...decisions.approvedActions,
-                    ],
-                    rejectedGuardrails: [
-                      ...rejectedGuardrails,
-                      ...decisions.rejectedGuardrails,
-                    ],
-                    approvalPrefix: `guardrail-${stepNumber}-${nested.toolCallId}`,
-                    proposed: {type: "tool_calls", calls: [nested]},
-                  });
-                  decisions.approvedActions.push(...guarded.approvedActions);
-                  decisions.rejectedGuardrails.push(
-                    ...guarded.rejectedGuardrails,
-                  );
-                  return guarded.decision === "blocked"
-                    ? guarded.reason
-                    : undefined;
-                },
-                *cancelPending(outcome) {
-                  const applied = yield* pending.apply(
-                    [outcome],
-                    context,
-                    stepNumber,
-                  );
-                  if (handedOff)
-                    yield* transcript.append(
-                      ...applied.events.flatMap((event) =>
-                        agentTools.transcriptEntries(event, context),
-                      ),
-                    );
-                  else pendingEvents.push(...applied.events);
-                  return applied.outcomes[0];
-                },
-              },
+              scope,
             );
             // Recorded as each tool settles, so a steering handoff knows
             // which results are already final.
@@ -313,11 +304,20 @@ export function* agentStep({
     }
 
     const {action, tasks, decisions} = activeTools;
-    for (const task of tasks) {
-      task.interrupt(error);
-    }
-    const settled = yield* allSettled(tasks);
+    const settled = yield* interruptAndJoin(tasks, error);
     if (!(error instanceof AgentStepInterrupt)) {
+      // The turn fails or is cancelled without these outcomes, so close the
+      // batch here: every call that was started gets a finished status.
+      yield* transcript.append(
+        agentTools.toolsEvent(
+          context.turnId,
+          stepNumber,
+          "finished",
+          action.calls.map((call, index) =>
+            agentTools.toolActivity(call, abandonedStatus(settled[index])),
+          ),
+        ),
+      );
       throw error;
     }
     return {
@@ -360,8 +360,10 @@ export function* settleStep(
     }
 
     const reason = selected.value;
-    task.interrupt(new AgentStepInterrupt(reason));
-    const [settled] = yield* allSettled([task]);
+    const [settled] = yield* interruptAndJoin(
+      [task],
+      new AgentStepInterrupt(reason),
+    );
     const completed =
       settled.status === "fulfilled" ? settled.value : undefined;
     const tools =
@@ -372,10 +374,30 @@ export function* settleStep(
           : undefined;
     return {type: "interrupted", reason, tools};
   } catch (error) {
-    task.interrupt(error);
-    yield* allSettled([task]);
+    yield* interruptAndJoin([task], error);
     throw error;
   }
 }
 
 class AgentStepInterrupt extends InterruptedError {}
+
+type ToolActivityStatus = Parameters<typeof agentTools.toolActivity>[1];
+
+// The finished status of a call whose step failed or was cancelled. A call
+// that never settled, or settled as pending, is cancelled: its completion
+// phase will never run.
+function abandonedStatus(
+  result: FutureSettledResult<ToolOutcome> | undefined,
+): ToolActivityStatus {
+  if (result?.status !== "fulfilled") {
+    return "cancelled";
+  }
+  switch (result.value.status) {
+    case "pending":
+      return "cancelled";
+    case "cancel_requested":
+      return "failed";
+    default:
+      return result.value.status;
+  }
+}

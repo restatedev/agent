@@ -1,23 +1,78 @@
-// Durable profile for one Agent virtual object. Instructions, guardrails, and
-// tool grants, web search, and memories belong to this agent.
+// The agent's durable profile: instructions, guardrails, tool grants, web
+// search and memories. A turn receives a snapshot when it starts and never
+// reads this state directly, so changes apply from the next turn.
 
-import type {AgentProfile, AgentTools, Guardrail} from "@restate-agents/types";
-import {DEFAULT_AGENT_TOOLS} from "@restate-agents/types";
+import {
+  type AgentProfile,
+  type AgentTools,
+  DEFAULT_AGENT_TOOLS,
+  type Guardrail,
+  type MemoryChange,
+  type MemoryEntry,
+  type ProfileUpdate,
+} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 
-import * as memory from "./memory.js";
+import {discoverAgentTools} from "../session/dynamic-tools.js";
+import {configuredMcpServers} from "../session/mcp-config.js";
+import {dynamicToolId} from "../session/tool-permissions.js";
+import * as agentTools from "../session/tools.js";
+import {listState} from "../state.js";
+import * as activeTurn from "./active-turn.js";
+import {type AgentHandlers, requireDirectAccess} from "./guards.js";
+import * as notifications from "./notifications.js";
 
 const INSTRUCTIONS = "profile/instructions";
 const GUARDRAILS = "profile/guardrails";
 const TOOLS = "profile/tools";
 const WEB_SEARCH_ENABLED = "profile/web-search-enabled";
+const memories = listState<MemoryEntry>("memories");
+const MAX_MEMORIES = 32;
 
-/**
- * Handler-scoped access to persistent profile state for the current Agent.
- *
- * Mutations rely on exclusive Agent handler serialization. A Turn receives a
- * snapshot and never reads this state directly.
- */
+export const handlers: AgentHandlers<
+  "profile" | "updateProfile" | "deleteMemory" | "updateMemory" | "toolCatalog"
+> = {
+  *profile() {
+    return yield* read();
+  },
+
+  *updateProfile(update) {
+    yield* requireDirectAccess();
+    yield* write(update);
+  },
+
+  *deleteMemory({key}) {
+    yield* requireDirectAccess();
+    const all = yield* memories.get();
+    if (!all.some((entry) => entry.key === key)) return false;
+    yield* applyMemory([{operation: "delete", key}]);
+    return true;
+  },
+
+  /** Applies one atomic batch requested by the active, non-interrupting turn. */
+  *updateMemory({turnId, changes}) {
+    if (!(yield* activeTurn.accepting(turnId)))
+      return {
+        applied: false,
+        error: "memory update rejected because its Turn is no longer active",
+      };
+    return yield* applyMemory(changes);
+  },
+
+  /** Every tool an operator can grant, for the tool-permission UI. */
+  *toolCatalog() {
+    const dynamic = yield* discoverAgentTools(agentTools.names);
+    return {
+      builtin: agentTools.builtinCatalog,
+      mcp: yield* configuredMcpServers(),
+      dynamic: dynamic.map((tool) => ({
+        name: dynamicToolId(tool),
+        description: tool.description,
+      })),
+    };
+  },
+};
+
 export function* read(): restate.Operation<AgentProfile> {
   const [instructions, guardrails, tools, webSearchEnabled] =
     yield* restate.all([
@@ -29,44 +84,55 @@ export function* read(): restate.Operation<AgentProfile> {
   return {
     ...(instructions ? {instructions} : {}),
     guardrails: guardrails ?? [],
-    memories: yield* memory.read(),
+    memories: yield* memories.get(),
     tools: tools ?? structuredClone(DEFAULT_AGENT_TOOLS),
     webSearchEnabled: webSearchEnabled ?? true,
   };
 }
 
-/** Controls the built-in web search capability for future turns. */
-export function setWebSearchEnabled(enabled: boolean): void {
-  restate.state().set(WEB_SEARCH_ENABLED, enabled);
-}
-
-/** Replaces or clears the persistent user-authored instructions. */
-export function setInstructions(instructions: string | null): void {
-  const value = instructions?.trim();
-  if (value) {
-    restate.state().set(INSTRUCTIONS, value);
-  } else {
-    restate.state().clear(INSTRUCTIONS);
+/** Replaces each given field and publishes the change. */
+export function* write(update: ProfileUpdate): restate.Operation<void> {
+  const state = restate.state();
+  if (update.instructions !== undefined) {
+    const value = update.instructions?.trim();
+    if (value) state.set(INSTRUCTIONS, value);
+    else state.clear(INSTRUCTIONS);
   }
+  if (update.guardrails)
+    if (update.guardrails.length > 0) state.set(GUARDRAILS, update.guardrails);
+    else state.clear(GUARDRAILS);
+  if (update.tools) state.set(TOOLS, update.tools);
+  if (update.webSearchEnabled !== undefined)
+    state.set(WEB_SEARCH_ENABLED, update.webSearchEnabled);
+  yield* notifications.publish("profile");
 }
 
-/** Replaces the complete user-authored natural-language policy set. */
-export function setGuardrails(guardrails: Guardrail[]): void {
-  if (guardrails.length > 0) {
-    restate.state().set(GUARDRAILS, guardrails);
-  } else {
-    restate.state().clear(GUARDRAILS);
+/** Keyed changes applied atomically, so unrelated entries are never replaced. */
+export function* applyMemory(changes: MemoryChange[]) {
+  const updated = [...(yield* memories.get())];
+  for (const change of changes) {
+    const index = updated.findIndex(({key}) => key === change.key);
+    if (change.operation === "delete") {
+      if (index >= 0) updated.splice(index, 1);
+    } else {
+      const entry = {key: change.key, content: change.content};
+      if (index >= 0) updated[index] = entry;
+      else updated.push(entry);
+    }
   }
-}
-
-/** Replaces explicit per-agent capabilities for subsequent turns. */
-export function setTools(tools: AgentTools): void {
-  restate.state().set(TOOLS, tools);
+  if (updated.length > MAX_MEMORIES)
+    return {
+      applied: false as const,
+      error: `agent memory is limited to ${MAX_MEMORIES} entries`,
+    };
+  memories.set(updated);
+  yield* notifications.publish("profile");
+  return {applied: true as const, memoryCount: updated.length};
 }
 
 /** Removes the whole profile, memories included, from a retired agent. */
 export function clear(): void {
   for (const key of [INSTRUCTIONS, GUARDRAILS, TOOLS, WEB_SEARCH_ENABLED])
     restate.state().clear(key);
-  memory.clear();
+  memories.clear();
 }

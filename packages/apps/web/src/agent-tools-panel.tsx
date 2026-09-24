@@ -6,47 +6,17 @@ import type {
   ToolDescriptor,
   ToolSelection,
 } from "@restate-agents/types";
+import {
+  mcpServerGranted,
+  toolSelected,
+} from "@restate-agents/types/tool-grants";
 import {useEffect, useRef, useState} from "react";
 
-import type {AgentClient} from "./agent-client";
-import {
-  mcpServerEnabled,
-  toggleMcpServer,
-  toggleTool,
-  toolEnabled,
-} from "./tool-toggles";
-
-function ToolSwitch({
-  label,
-  checked,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  disabled: boolean;
-  onChange: (enabled: boolean) => void;
-}) {
-  return (
-    <div className="agent-tool-toggle">
-      <span>{label}</span>
-      <button
-        type="button"
-        className="web-search-toggle"
-        role="switch"
-        aria-label={label}
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
-      >
-        <span className="web-search-toggle-track" aria-hidden="true">
-          <span />
-        </span>
-        {checked ? "Enabled" : "Disabled"}
-      </button>
-    </div>
-  );
-}
+import type {UiAgentClient} from "./agent-client";
+import {errorMessage, type Notify} from "./format";
+import {ToolSwitch} from "./switch";
+import {toggleMcpServer, toggleTool} from "./tool-toggles";
+import type {SaveProfile} from "./use-agent";
 
 function ToolGroup({
   label,
@@ -79,7 +49,7 @@ function ToolGroup({
             <ToolSwitch
               key={name}
               label={name}
-              checked={toolEnabled(selection, name)}
+              checked={toolSelected(selection, name)}
               disabled={disabled}
               onChange={(enabled) =>
                 onChange(toggleTool(selection, names, name, enabled))
@@ -95,13 +65,13 @@ function ToolGroup({
 export function AgentToolsPanel({
   client,
   profile,
-  refresh,
+  saveProfile,
   notify,
 }: {
-  client: AgentClient;
+  client: UiAgentClient;
   profile?: AgentProfile;
-  refresh: () => Promise<AgentProfile>;
-  notify: (message: string, error?: boolean) => void;
+  saveProfile: SaveProfile;
+  notify: Notify;
 }) {
   const [catalog, setCatalog] = useState<{
     builtin: ToolDescriptor[];
@@ -115,10 +85,14 @@ export function AgentToolsPanel({
     client
       .toolCatalog()
       .then((result) => {
-        if (active) setCatalog(result);
+        if (active) {
+          setCatalog(result);
+        }
       })
       .catch((error) => {
-        if (active) notify(String(error), true);
+        if (active) {
+          notify(errorMessage(error), true);
+        }
       });
     return () => {
       active = false;
@@ -126,22 +100,19 @@ export function AgentToolsPanel({
   }, [client, notify]);
 
   async function save(tools: AgentTools) {
-    if (savingRef.current) return;
+    if (savingRef.current) {
+      return;
+    }
     savingRef.current = true;
     setSaving(true);
-    try {
-      await client.setTools(tools);
-      await refresh();
-      notify("Tool access saved for the next turn");
-    } catch (error) {
-      notify(String(error), true);
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
+    await saveProfile({tools}, "Tool access saved for the next turn");
+    savingRef.current = false;
+    setSaving(false);
   }
 
-  if (!profile) return <p>Loading tool access…</p>;
+  if (!profile) {
+    return <p>Loading tool access…</p>;
+  }
   const permissions = profile.tools;
   return (
     <section className="settings-section">
@@ -154,7 +125,7 @@ export function AgentToolsPanel({
           <ToolSwitch
             key={server.id}
             label={server.id}
-            checked={mcpServerEnabled(permissions, server.id)}
+            checked={mcpServerGranted(permissions, server.id)}
             disabled={saving}
             onChange={(enabled) =>
               void save(toggleMcpServer(permissions, server.id, enabled))

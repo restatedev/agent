@@ -13,7 +13,8 @@
     }
   },
   "scripts": {
-    "build": "tsc --noEmitOnError"
+    "build": "tsc --noEmitOnError",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@restate-agents/types": "workspace:*",

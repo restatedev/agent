@@ -13,15 +13,18 @@ import {
   type DiscoverResult,
   InsufficientScopeError,
   type PriorDiscovery,
+  ProtocolError,
   StreamableHTTPClientTransport,
   type Tool,
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import type {McpServer} from "@restate-agents/types";
-import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
+import {isCancellation} from "../errors.js";
+import {abortable, createRefreshingCache} from "../refresh-cache.js";
 import {McpConfigurationError, resolveMcpToken} from "./mcp-config.js";
+import {failed, succeeded, type ToolResult} from "./tools/define.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
 const MCP_CLIENT = {name: "restate-agent-reference", version: "0.0.1"};
@@ -29,7 +32,6 @@ const MAX_MODEL_TOOL_NAME = 64;
 const MAX_TOOLS_PER_SERVER = 128;
 const MAX_DESCRIPTION_CHARS = 4_000;
 const MAX_INPUT_SCHEMA_CHARS = 64_000;
-const MAX_RESULT_CHARS = 128_000;
 const MAX_CACHE_TTL_MS = 5 * 60 * 1_000;
 const MAX_CACHED_CATALOGS = 256;
 const REFRESH_RETRY_INTERVAL_MS = 30 * 1_000;
@@ -66,12 +68,6 @@ type McpCachedDiscoveryResult = {
   warnings: string[];
 };
 
-type CachedCatalog = {
-  catalog: McpCatalogDefinition;
-  refreshAfter: number;
-  lastAccessedAt: number;
-};
-
 /** A model-facing alias and its exact snapshotted MCP invocation target. */
 export type McpAgentTool = {
   name: string;
@@ -85,10 +81,6 @@ export type McpAgentTool = {
   };
 };
 
-type McpToolExecution =
-  | {status: "succeeded"; result: string}
-  | {status: "failed"; error: string};
-
 export type McpServerAvailability = {
   serverId: string;
   status: "available" | "unavailable";
@@ -101,8 +93,10 @@ type McpToolDiscovery = {
   servers: McpServerAvailability[];
 };
 
-const cachedCatalogs = new Map<string, CachedCatalog>();
-const refreshes = new Map<string, Promise<McpCachedDiscoveryResult>>();
+const catalogs = createRefreshingCache<McpCatalogDefinition>({
+  retryAfterMs: REFRESH_RETRY_INTERVAL_MS,
+  maxEntries: MAX_CACHED_CATALOGS,
+});
 const statefulConnections = new Map<string, StatefulConnection>();
 
 /**
@@ -192,72 +186,59 @@ export function* executeMcpTool(
   input: Record<string, unknown>,
   context: {turnId: string; toolCallId: string},
   tool: McpAgentTool,
-): restate.Operation<McpToolExecution> {
+): restate.Operation<ToolResult> {
   try {
     const attempt = yield* callMcpTool(input, context, tool);
-    if (attempt.status === "failed") return attempt;
-    const result = attempt.value;
-    const rendered = renderToolResult(result);
-    return result.isError
-      ? {status: "failed", error: rendered}
-      : {status: "succeeded", result: rendered};
+    if (attempt.status === "failed") {
+      return attempt;
+    }
+    const rendered = renderToolResult(attempt.value);
+    if (attempt.value.isError) {
+      return failed(rendered);
+    }
+    return succeeded(rendered);
   } catch (error) {
+    // Not toolFailure: the raw error could carry credentials.
     if (isCancellation(error)) {
       throw error;
     }
-    return {
-      status: "failed",
-      error: `${tool.name} failed: ${errorMessage(error)}`,
-    };
+    return failed(`${tool.name} failed: ${sanitizedMessage(error)}`);
   }
 }
+
+type McpCallAttempt =
+  | {status: "succeeded"; value: CallToolResult}
+  | Extract<ToolResult, {status: "failed"}>;
 
 function* callMcpTool(
   input: Record<string, unknown>,
   context: {turnId: string; toolCallId: string},
   tool: McpAgentTool,
-): restate.Operation<
-  | {status: "succeeded"; value: CallToolResult}
-  | {status: "failed"; error: string}
-> {
+): restate.Operation<McpCallAttempt> {
   return yield* restate.run(
-    async ({signal}) => {
+    async ({signal}): Promise<McpCallAttempt> => {
+      const server = tool.target.server;
+      // Resolve the credential first and on its own: a configuration error
+      // means no connection was opened, so there is nothing to discard (and
+      // no token to key the stateful connection by).
       let token: string | undefined;
       try {
-        token = resolveMcpToken(tool.target.server);
-        const connection = await connectMcp(
-          tool.target.server,
-          token,
-          signal,
-          tool.target.prior,
-        );
-        try {
-          const value = await connection.client.callTool(
-            {name: tool.target.remoteName, arguments: input},
-            {
-              signal,
-              timeout: tool.target.server.timeoutMs,
-              maxTotalTimeout: tool.target.server.timeoutMs,
-              toolDefinition: tool.target.definition,
-              headers: {
-                "Idempotency-Key": `${context.turnId}:${context.toolCallId}`,
-              },
-            },
-          );
-          return {status: "succeeded" as const, value};
-        } finally {
-          if (tool.target.server.protocol === "stateless") {
-            await connection.client.close();
-          }
-        }
+        token = resolveMcpToken(server);
       } catch (error) {
-        if (tool.target.server.protocol === "stateful")
-          await discardStatefulConnection(tool.target.server, token);
+        return failed(sanitizedMessage(error));
+      }
+      try {
+        const value = await callRemoteTool(input, context, tool, token, signal);
+        return {status: "succeeded", value};
+      } catch (error) {
+        if (server.protocol === "stateful") {
+          await discardStatefulConnection(server, token);
+        }
         signal.throwIfAborted();
         if (isCancellation(error)) throw error;
         // Provider errors can contain Authorization headers. Sanitize before
         // the failed HTTP effect is recorded in the journal.
-        return {status: "failed" as const, error: errorMessage(error)};
+        return failed(callFailureMessage(error, token));
       }
     },
     {
@@ -267,6 +248,35 @@ function* callMcpTool(
       retry: {maxAttempts: 1},
     },
   );
+}
+
+async function callRemoteTool(
+  input: Record<string, unknown>,
+  context: {turnId: string; toolCallId: string},
+  tool: McpAgentTool,
+  token: string | undefined,
+  signal: AbortSignal,
+): Promise<CallToolResult> {
+  const server = tool.target.server;
+  const connection = await connectMcp(server, token, signal, tool.target.prior);
+  try {
+    return await connection.client.callTool(
+      {name: tool.target.remoteName, arguments: input},
+      {
+        signal,
+        timeout: server.timeoutMs,
+        maxTotalTimeout: server.timeoutMs,
+        toolDefinition: tool.target.definition,
+        headers: {
+          "Idempotency-Key": `${context.turnId}:${context.toolCallId}`,
+        },
+      },
+    );
+  } finally {
+    if (server.protocol === "stateless") {
+      await connection.client.close();
+    }
+  }
 }
 
 function* discoverMcpServer(
@@ -300,7 +310,7 @@ function* discoverMcpServer(
             });
             continue;
           }
-          return {warnings: [`${config.id}: ${errorMessage(error)}`]};
+          return {warnings: [`${config.id}: ${sanitizedMessage(error)}`]};
         }
       }
     },
@@ -313,59 +323,25 @@ async function discoverCached(
   server: McpServerSnapshot,
   signal: AbortSignal,
 ): Promise<McpCachedDiscoveryResult> {
-  const now = Date.now();
   const token = resolveMcpToken(server);
-  if (config.protocol === "stateful") {
-    const refresh = fetchCatalog(config, server, token).then(
-      ({catalog, warnings}) => ({catalog, warnings}),
-    );
-    return waitForRefresh(refresh, signal);
-  }
-
-  const cacheKey = catalogCacheKey(config, token);
-  const cached = cachedCatalogs.get(cacheKey);
-  if (cached) {
-    cached.lastAccessedAt = now;
-  }
-  if (cached && now < cached.refreshAfter) {
-    return {catalog: cached.catalog, warnings: []};
-  }
-
-  const inFlight = refreshes.get(cacheKey);
-  if (inFlight) {
-    if (cached) {
-      return {catalog: cached.catalog, warnings: []};
-    }
-    return waitForRefresh(inFlight, signal);
-  }
-
-  const refresh = fetchCatalog(config, server, token)
-    .then(({catalog, ttlMs, warnings}) => {
-      storeCachedCatalog(cacheKey, {
-        catalog,
-        refreshAfter: Date.now() + Math.min(ttlMs, MAX_CACHE_TTL_MS),
-        lastAccessedAt: Date.now(),
-      });
-      return {catalog, warnings};
-    })
-    .catch((error: unknown): McpCachedDiscoveryResult => {
-      if (!cached) {
-        throw error;
-      }
-      cached.refreshAfter = Date.now() + REFRESH_RETRY_INTERVAL_MS;
-      cached.lastAccessedAt = Date.now();
-      return {
-        catalog: cached.catalog,
-        warnings: [
-          `${config.id}: refresh failed; using the last known catalog: ${errorMessage(error)}`,
-        ],
-      };
-    })
-    .finally(() => {
-      refreshes.delete(cacheKey);
-    });
-  refreshes.set(cacheKey, refresh);
-  return waitForRefresh(refresh, signal);
+  const fetch = () =>
+    fetchCatalog(config, server, token).then(({catalog, ttlMs, warnings}) => ({
+      value: catalog,
+      ttlMs: Math.min(ttlMs, MAX_CACHE_TTL_MS),
+      warnings,
+    }));
+  // A stateful catalog belongs to its session, so it is never shared.
+  const {value, warnings} =
+    config.protocol === "stateful"
+      ? await abortable(fetch(), signal)
+      : await catalogs.get(
+          catalogCacheKey(config, token),
+          fetch,
+          (error) =>
+            `${config.id}: refresh failed; using the last known catalog: ${sanitizedMessage(error)}`,
+          signal,
+        );
+  return {catalog: value, warnings};
 }
 
 async function fetchCatalog(
@@ -419,25 +395,6 @@ async function fetchCatalog(
     if (server.protocol === "stateless") {
       await connection.client.close();
     }
-  }
-}
-
-function storeCachedCatalog(cacheKey: string, cached: CachedCatalog): void {
-  cachedCatalogs.set(cacheKey, cached);
-  if (cachedCatalogs.size <= MAX_CACHED_CATALOGS) {
-    return;
-  }
-
-  let oldestKey: string | undefined;
-  let oldestAccess = Number.POSITIVE_INFINITY;
-  for (const [candidateKey, candidate] of cachedCatalogs) {
-    if (candidateKey !== cacheKey && candidate.lastAccessedAt < oldestAccess) {
-      oldestKey = candidateKey;
-      oldestAccess = candidate.lastAccessedAt;
-    }
-  }
-  if (oldestKey) {
-    cachedCatalogs.delete(oldestKey);
   }
 }
 
@@ -701,58 +658,14 @@ function renderToolResult(result: CallToolResult): string {
         return {type: "unsupported"};
     }
   });
-  const rendered = JSON.stringify({
+  // The model-facing size cap is applied centrally in session/tools.ts; a
+  // PTC program sees the whole result and can filter it.
+  return JSON.stringify({
     ...(result.structuredContent !== undefined
       ? {structuredContent: result.structuredContent}
       : {}),
     content,
   });
-  if (rendered.length <= MAX_RESULT_CHARS) {
-    return rendered;
-  }
-  return JSON.stringify({
-    truncated: true,
-    originalCharacters: rendered.length,
-    preview: rendered.slice(0, MAX_RESULT_CHARS - 100),
-  });
-}
-
-function waitForRefresh(
-  refresh: Promise<McpCachedDiscoveryResult>,
-  signal: AbortSignal,
-): Promise<McpCachedDiscoveryResult> {
-  if (signal.aborted) {
-    return Promise.reject(
-      signal.reason ??
-        new DOMException("The operation was aborted", "AbortError"),
-    );
-  }
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(
-        signal.reason ??
-          new DOMException("The operation was aborted", "AbortError"),
-      );
-    };
-    signal.addEventListener("abort", onAbort, {once: true});
-    refresh.then(
-      (result) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(result);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error);
-      },
-    );
-  });
-}
-
-function isCancellation(error: unknown): boolean {
-  return (
-    error instanceof restate.InterruptedError || error instanceof CancelledError
-  );
 }
 
 /** Configuration and authorization failures do not heal by retrying. */
@@ -764,12 +677,43 @@ function isTransient(error: unknown): boolean {
   );
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof McpConfigurationError) return error.message;
+// Provider errors can carry credentials, so only fixed messages are journaled.
+function sanitizedMessage(error: unknown): string {
+  if (error instanceof McpConfigurationError) {
+    return error.message;
+  }
   if (
     UnauthorizedError.isInstance(error) ||
     InsufficientScopeError.isInstance(error)
-  )
+  ) {
     return "MCP authorization failed; check the configured credential";
+  }
   return "MCP request failed; check the configured endpoint and credential";
+}
+
+const MAX_PROTOCOL_ERROR_CHARS = 1_000;
+
+/**
+ * The journaled, model-facing text of a failed tool call.
+ *
+ * Transport and HTTP errors stay fixed messages (see sanitizedMessage). A
+ * JSON-RPC error is different: it is the server's answer to the call (invalid
+ * params, unknown tool) or the client's own output-schema check, and the
+ * model needs its code and message to correct its input. Only those two
+ * fields pass through, bounded, with the resolved token redacted in case the
+ * server echoes it. Discovery keeps fixed messages: the model cannot act on
+ * them.
+ */
+function callFailureMessage(error: unknown, token: string | undefined): string {
+  if (!ProtocolError.isInstance(error)) {
+    return sanitizedMessage(error);
+  }
+  let message = error.message;
+  if (token) {
+    message = message.replaceAll(token, "[redacted]");
+  }
+  if (message.length > MAX_PROTOCOL_ERROR_CHARS) {
+    message = `${message.slice(0, MAX_PROTOCOL_ERROR_CHARS)}… [truncated]`;
+  }
+  return `MCP error ${error.code}: ${message}`;
 }

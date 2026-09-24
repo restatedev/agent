@@ -11,32 +11,66 @@ export class UiRequestError extends Error {
   }
 }
 
+const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
+
+/** Normalizes a Host header the way the browser's origin would spell it. */
+function parseHost(host: string, protocol: string) {
+  try {
+    return new URL(`${protocol}//${host}`);
+  } catch {
+    throw new UiRequestError(400, "Invalid Host header");
+  }
+}
+
+/** Extra Host values a rewriting proxy may send, from APP_ALLOWED_HOSTS. */
+function allowedProxyHosts() {
+  return (process.env.APP_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 /**
- * The origin this UI is served from. Without APP_PUBLIC_URL only a loopback
- * Host is trusted.
+ * The origin this UI is served from: APP_PUBLIC_URL when set, otherwise the
+ * loopback address the browser used.
  *
  * Every route, reads included, must pass this check. A DNS-rebinding page
- * (attacker.example re-resolved to 127.0.0.1) is same-origin with itself, so
- * the browser lets it read responses and sends no cross-origin Origin header
- * on GET. Its Host header still names the attacker's domain, which is what
- * this rejects.
+ * (attacker.example re-resolved to our address) is same-origin with itself,
+ * so the browser lets it read responses and sends no cross-origin Origin
+ * header on GET. Its Host header still names the attacker's domain, which is
+ * what this rejects: behind a proxy the Host must be the public one (or one
+ * listed in APP_ALLOWED_HOSTS, for proxies that rewrite it), locally it must
+ * be a loopback name.
  */
 export function trustedOrigin(request: Request): string {
-  const expected = new URL(process.env.APP_PUBLIC_URL ?? request.url);
+  const publicUrl = process.env.APP_PUBLIC_URL;
+  if (publicUrl) {
+    const expected = new URL(publicUrl);
+    const host = parseHost(
+      request.headers.get("host") ?? "",
+      expected.protocol,
+    ).host;
+    if (host !== expected.host && !allowedProxyHosts().includes(host)) {
+      throw new UiRequestError(403, "Untrusted UI host");
+    }
+    return expected.origin;
+  }
   // Next.js can reconstruct request.url with localhost even when the browser
   // uses 127.0.0.1. Host retains the address the browser actually requested.
-  if (!process.env.APP_PUBLIC_URL) {
-    expected.host = request.headers.get("host") ?? expected.host;
-    // The default UI is local. Do not let an arbitrary Host header redefine
-    // the trusted origin when a domain is pointed at the loopback listener.
-    if (!["localhost", "127.0.0.1", "[::1]"].includes(expected.hostname))
-      throw new UiRequestError(403, "Untrusted local UI host");
+  const fallback = new URL(request.url);
+  const actual = parseHost(
+    request.headers.get("host") ?? fallback.host,
+    fallback.protocol,
+  );
+  if (!LOOPBACK_HOSTNAMES.includes(actual.hostname)) {
+    throw new UiRequestError(403, "Untrusted local UI host");
   }
-  return expected.origin;
+  return actual.origin;
 }
 
 /** The UI is a local operator tool. Reject cross-origin browser writes. */
 export function requireSameOrigin(request: Request) {
-  if (request.headers.get("origin") !== trustedOrigin(request))
+  if (request.headers.get("origin") !== trustedOrigin(request)) {
     throw new UiRequestError(403, "Cross-origin action rejected");
+  }
 }

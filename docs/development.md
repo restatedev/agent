@@ -21,9 +21,7 @@ pnpm install
 ## Start the stack
 
 Follow [the root quickstart](../README.md#quickstart) to start a fresh private
-Restate server, the core endpoint, and the optional localhost UI. There is no
-Google configuration, login bypass, account registration or application secret
-key. Existing standalone-app state is not migrated.
+Restate server, the core endpoint, and the optional localhost UI.
 
 The core listens on 9080; Restate ingress is normally 8080 and its Admin API/UI
 9070. `pnpm dev:service` and `pnpm dev:ui` build their required workspace
@@ -50,8 +48,7 @@ Do not send credentials as handler arguments.
 `docker/Dockerfile` and `docker/Dockerfile.web` are runnable packaging examples.
 The latter builds Next.js standalone output and serves the local UI on port
 3000. Publish container ports only on loopback for local use, for example
-`-p 127.0.0.1:3000:3000`. The web image publishing workflow has been removed.
-The remaining core image workflow is separate from deployment.
+`-p 127.0.0.1:3000:3000`.
 
 ## Smoke test
 
@@ -62,7 +59,7 @@ curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
 ```
 
-Read its conversation event log (`history`/`transcript` in the wire contract):
+Read its conversation event log (`AgentSession.history`):
 
 ```sh
 curl localhost:8080/AgentSession/demo/history \
@@ -85,10 +82,8 @@ curl localhost:8080/Agent/demo/ask \
   --json '{"message":"Sleep for 30 seconds, then tell me that you finished."}'
 
 curl localhost:8080/Agent/demo/steer \
-  --json '"Also include the weather in Paris."'
+  --json '{"message":"Also include the weather in Paris."}'
 ```
-
-`steer` accepts a JSON string, not `{message: ...}`.
 
 ## Validation commands
 
@@ -97,17 +92,21 @@ Run the relevant deterministic checks before committing an implementation change
 ```sh
 pnpm lint
 pnpm build
-pnpm --filter @restate-agents/core test:ptc
-pnpm --filter @restate-agents/web test
+pnpm test
 pnpm bundle
 ```
 
-- `lint` runs oxlint on `packages` and checks oxfmt formatting of TypeScript
-  sources; `format` applies oxlint fixes and oxfmt. Type-checking is
+CI (`.github/workflows/ci.yml`) runs the same checks on every pull request and
+also builds both container images.
+
+- `lint` runs oxlint on `packages` and checks oxfmt formatting of sources,
+  tests and config files; `format` applies oxlint fixes and oxfmt. Type-checking is
   TypeScript 7 (the native `tsc`), run by `build`.
 - `build` compiles the workspace and creates a production Next.js build.
-- `bundle` creates the deployable ESM bundle and catches packaging/import
-  problems that type-checking alone may miss.
+- `test` runs the core and web suites.
+- `bundle` creates the deployable ESM bundle, zipped as `dist/index.zip` (this
+  needs the `zip` command), and catches packaging/import problems that
+  type-checking alone may miss.
 
 Also inspect:
 
@@ -275,17 +274,17 @@ When changing a request or schema:
 
 | Goal | Primary file |
 | --- | --- |
-| Change Agent API or controller routing | `src/agent/service.ts` |
+| Change Agent API or controller routing | `src/agent/service.ts`, `src/agent/turns.ts` |
 | Change active-turn bookkeeping/signals | `src/agent/active-turn.ts` |
 | Change transcript storage | `src/session/history.ts` |
 | Change invalidation subscriptions | `src/agent/notifications.ts` |
-| Change instructions/guardrails | `src/agent/profile.ts` |
-| Change agent-local memories | `src/agent/memory.ts` |
-| Change approvals | `src/agent/approval.ts` |
+| Change instructions/guardrails/memories | `src/agent/profile.ts` |
+| Change approvals | `src/agent/approvals.ts` |
+| Change sub-agents | `src/agent/sub-agents.ts` |
 | Change schedules and timer delivery | `src/agent/schedules.ts` |
 | Change the turn state machine | `src/session/service.ts` |
 | Change one inference/tool step | `src/session/step.ts` |
-| Add a built-in tool | `src/session/tools.ts` |
+| Add a built-in tool | `src/session/tools/*.ts`, registered in `src/session/tools.ts` |
 | Change dynamic discovery | `src/session/dynamic-tools.ts` |
 | Change provider inference | `src/model/provider.ts` |
 | Change model retries/output recovery | `src/model/inference.ts` |

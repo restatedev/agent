@@ -1,11 +1,6 @@
-// HTTP mini-client for the Agent protocol, talking to the Restate ingress.
-//
-// This file is the canonical external consumer of the protocol: one typed
-// method per public handler plus the consumption patterns a client needs —
-// the cursor + notification long-poll loop used to follow transcript updates.
-//
-// It wraps Restate's official ingress client with agent-specific operations
-// and the cursor + notification protocol used to follow a conversation.
+// Client for the Agent protocol over the Restate ingress: one typed method per
+// public handler, plus `follow`, the cursor and notification long-poll loop a
+// consumer needs to follow a conversation.
 //
 // @example
 //   const agent = createAgentClient({
@@ -22,28 +17,23 @@ import type {
   AgentMetadata,
   AgentNotificationSnapshot,
   AgentProfile,
-  AgentTools,
   ApprovalRequest,
   ApprovalResolution,
   AskResult,
   ChildAgent,
-  Guardrail,
   HistoryPage,
+  ProfileUpdate,
   ScheduleCancellationResult,
   ScheduledMessage,
   ScheduleMutationResult,
   ScheduleSpec,
   ToolCatalog,
 } from "@restate-agents/types";
-
-export {HttpCallError as IngressClientError} from "@restatedev/restate-sdk-clients";
-
 import {
   AgentIngressDefinition,
   type AgentIngressHandlers,
   AgentSessionIngressDefinition,
   type AgentSessionIngressHandlers,
-  DEFAULT_ASK,
 } from "@restate-agents/types/targets";
 import {
   connect,
@@ -86,14 +76,14 @@ export type WatchOptions = {
  *
  * Every method maps to one public handler of `Agent` or `AgentSession` for
  * this client's agent ID, except
- * `follow`, which combines `history` and `watchNotifications` into a stream.
+ * `follow`, which combines `history` and `watch` into a stream.
  * Rejected calls throw {@link AgentClientError}.
  */
 export interface AgentClient {
   // ---- conversation ----
 
   /** Starts a turn when the agent is idle, or queues the message for the next turn. */
-  ask(message?: string): Promise<AskResult>;
+  ask(message: string): Promise<AskResult>;
 
   /**
    * Redirects the active turn without cancelling running work.
@@ -123,7 +113,7 @@ export interface AgentClient {
    * Waits up to `timeoutSeconds` for a notification revision newer than
    * `afterRevision`, then returns the current watermarks.
    */
-  watchNotifications(
+  watch(
     afterRevision: number,
     timeoutSeconds: number,
     options?: WatchOptions,
@@ -140,17 +130,11 @@ export interface AgentClient {
   /** Instructions, guardrails, memories and tool grants the next turn will snapshot. */
   profile(): Promise<AgentProfile>;
 
-  /** Replaces the persistent instructions; null clears them. */
-  setInstructions(instructions: string | null): Promise<void>;
-
-  /** Replaces the complete guardrail list; an empty list clears it. */
-  setGuardrails(guardrails: Guardrail[]): Promise<void>;
-
-  /** Controls built-in web search for future turns; enabled by default. */
-  setWebSearchEnabled(enabled: boolean): Promise<void>;
-
-  /** Replaces the agent's tool grants for future turns. */
-  setTools(tools: AgentTools): Promise<void>;
+  /**
+   * Changes the profile for future turns. Each given field is replaced whole;
+   * `instructions: null` and `guardrails: []` clear them.
+   */
+  updateProfile(update: ProfileUpdate): Promise<void>;
 
   /** Deletes one memory. @returns whether it existed. */
   deleteMemory(key: string): Promise<boolean>;
@@ -178,7 +162,7 @@ export interface AgentClient {
   schedules(): Promise<ScheduledMessage[]>;
 
   /** Creates or replaces the schedule named by `spec.scheduleId`. */
-  schedule(spec: ScheduleSpec): Promise<ScheduleMutationResult>;
+  createSchedule(spec: ScheduleSpec): Promise<ScheduleMutationResult>;
 
   /** Cancels one schedule. Idempotent. */
   cancelSchedule(scheduleId: string): Promise<ScheduleCancellationResult>;
@@ -250,7 +234,7 @@ export function createAgentClient({
     return invoke(session.history({fromSequence, limit}));
   }
 
-  async function watchNotifications(
+  async function watch(
     afterRevision: number,
     timeoutSeconds: number,
     options?: WatchOptions,
@@ -260,45 +244,24 @@ export function createAgentClient({
     );
   }
 
+  // Handlers without input still need an explicit empty serde.
+  const noInput = <T>() => rpc.opts<void, T>({input: serde.empty});
+
   return {
-    // ---- conversation ----
-
-    async ask(message?: string): Promise<AskResult> {
-      return invoke(agent.ask({message: message ?? DEFAULT_ASK}));
-    },
-
-    async steer(message: string): Promise<boolean> {
-      return invoke(agent.steer(message));
-    },
-
-    async interrupt(reason: string, message?: string): Promise<boolean> {
-      return invoke(agent.interrupt({reason, ...(message ? {message} : {})}));
-    },
-
-    async deliver(delivery: AgentDelivery): Promise<void> {
-      return invoke(agent.deliver(delivery));
-    },
-
+    ask: (message) => invoke(agent.ask({message})),
+    steer: (message) => invoke(agent.steer({message})),
+    interrupt: (reason, message) =>
+      invoke(agent.interrupt({reason, ...(message ? {message} : {})})),
+    deliver: (delivery) => invoke(agent.deliver(delivery)),
     history,
-    watchNotifications,
-
-    async notifications(): Promise<AgentNotificationSnapshot> {
-      return invoke(
-        agent.notifications(
-          rpc.opts<void, AgentNotificationSnapshot>({input: serde.empty}),
-        ),
-      );
-    },
+    notifications: () => invoke(agent.notifications(noInput())),
+    watch,
 
     // Drains the cursor, then parks in one notification wait window per
     // idempotency key and repeats. A network-failed window retries under the
     // same key, attaching to the still-parked invocation instead of stacking
     // a new one.
-    async *follow({
-      fromSequence = 1,
-      timeoutSeconds = 55,
-      signal,
-    }: FollowOptions = {}): AsyncGenerator<SequencedEntry, void, void> {
+    async *follow({fromSequence = 1, timeoutSeconds = 55, signal} = {}) {
       let cursor = fromSequence;
       let revision = 0;
       let windowKey = crypto.randomUUID();
@@ -310,19 +273,15 @@ export function createAgentClient({
             yield* page.entries;
             continue;
           }
-          const watched = await watchNotifications(revision, timeoutSeconds, {
+          const watched = await watch(revision, timeoutSeconds, {
             idempotencyKey: windowKey,
             signal,
           });
           revision = watched.revision;
           windowKey = crypto.randomUUID();
         } catch (error) {
-          if (signal?.aborted) {
-            return;
-          }
-          if (error instanceof AgentClientError) {
-            throw error;
-          }
+          if (signal?.aborted) return;
+          if (error instanceof AgentClientError) throw error;
           // Transient transport failure: back off and retry. The window key
           // is deliberately kept so the retry attaches rather than re-parks.
           await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -330,66 +289,20 @@ export function createAgentClient({
       }
     },
 
-    // ---- profile ----
+    profile: () => invoke(agent.profile(noInput())),
+    updateProfile: (update) => invoke(agent.updateProfile(update)),
+    deleteMemory: (key) => invoke(agent.deleteMemory({key})),
+    toolCatalog: () => invoke(agent.toolCatalog(noInput())),
 
-    async profile(): Promise<AgentProfile> {
-      return invoke(
-        agent.profile(rpc.opts<void, AgentProfile>({input: serde.empty})),
-      );
-    },
+    metadata: () => invoke(agent.metadata(noInput())),
+    children: () => invoke(agent.children(noInput())),
+    retire: () => invoke(agent.retire({})),
 
-    async setInstructions(instructions: string | null): Promise<void> {
-      return invoke(agent.setInstructions({instructions}));
-    },
+    schedules: () => invoke(agent.schedules(noInput())),
+    createSchedule: (spec) => invoke(agent.createSchedule(spec)),
+    cancelSchedule: (scheduleId) => invoke(agent.cancelSchedule({scheduleId})),
 
-    async setGuardrails(guardrails: Guardrail[]): Promise<void> {
-      return invoke(agent.setGuardrails({guardrails}));
-    },
-
-    async setWebSearchEnabled(enabled: boolean): Promise<void> {
-      return invoke(agent.setWebSearchEnabled({enabled}));
-    },
-
-    async setTools(tools: AgentTools): Promise<void> {
-      return invoke(agent.setTools(tools));
-    },
-    async metadata() {
-      return invoke(agent.metadata(rpc.opts({input: serde.empty})));
-    },
-    async children() {
-      return invoke(agent.children(rpc.opts({input: serde.empty})));
-    },
-    async retire() {
-      return invoke(agent.retire({}));
-    },
-    async deleteMemory(key: string) {
-      return invoke(agent.deleteMemory({key}));
-    },
-    async schedules() {
-      return invoke(agent.schedules(rpc.opts({input: serde.empty})));
-    },
-    async schedule(spec: ScheduleSpec) {
-      return invoke(agent.createSchedule(spec));
-    },
-    async cancelSchedule(scheduleId: string) {
-      return invoke(agent.cancelSchedule({scheduleId}));
-    },
-    async toolCatalog() {
-      return invoke(agent.toolCatalog(rpc.opts({input: serde.empty})));
-    },
-
-    // ---- human approvals ----
-
-    async approvals(): Promise<ApprovalRequest[]> {
-      return invoke(
-        agent.approvals(
-          rpc.opts<void, ApprovalRequest[]>({input: serde.empty}),
-        ),
-      );
-    },
-
-    async resolveApproval(resolution: ApprovalResolution): Promise<boolean> {
-      return invoke(agent.resolveApproval(resolution));
-    },
+    approvals: () => invoke(agent.approvals(noInput())),
+    resolveApproval: (resolution) => invoke(agent.resolveApproval(resolution)),
   };
 }
