@@ -29,15 +29,11 @@ import type {
   ScheduleSpec,
   ToolCatalog,
 } from "@restate-agents/types";
-
-export {HttpCallError as IngressClientError} from "@restatedev/restate-sdk-clients";
-
 import {
   AgentIngressDefinition,
   type AgentIngressHandlers,
   AgentSessionIngressDefinition,
   type AgentSessionIngressHandlers,
-  DEFAULT_ASK,
 } from "@restate-agents/types/targets";
 import {
   connect,
@@ -80,14 +76,14 @@ export type WatchOptions = {
  *
  * Every method maps to one public handler of `Agent` or `AgentSession` for
  * this client's agent ID, except
- * `follow`, which combines `history` and `watchNotifications` into a stream.
+ * `follow`, which combines `history` and `watch` into a stream.
  * Rejected calls throw {@link AgentClientError}.
  */
 export interface AgentClient {
   // ---- conversation ----
 
   /** Starts a turn when the agent is idle, or queues the message for the next turn. */
-  ask(message?: string): Promise<AskResult>;
+  ask(message: string): Promise<AskResult>;
 
   /**
    * Redirects the active turn without cancelling running work.
@@ -117,7 +113,7 @@ export interface AgentClient {
    * Waits up to `timeoutSeconds` for a notification revision newer than
    * `afterRevision`, then returns the current watermarks.
    */
-  watchNotifications(
+  watch(
     afterRevision: number,
     timeoutSeconds: number,
     options?: WatchOptions,
@@ -166,7 +162,7 @@ export interface AgentClient {
   schedules(): Promise<ScheduledMessage[]>;
 
   /** Creates or replaces the schedule named by `spec.scheduleId`. */
-  schedule(spec: ScheduleSpec): Promise<ScheduleMutationResult>;
+  createSchedule(spec: ScheduleSpec): Promise<ScheduleMutationResult>;
 
   /** Cancels one schedule. Idempotent. */
   cancelSchedule(scheduleId: string): Promise<ScheduleCancellationResult>;
@@ -238,7 +234,7 @@ export function createAgentClient({
     return invoke(session.history({fromSequence, limit}));
   }
 
-  async function watchNotifications(
+  async function watch(
     afterRevision: number,
     timeoutSeconds: number,
     options?: WatchOptions,
@@ -252,14 +248,14 @@ export function createAgentClient({
   const noInput = <T>() => rpc.opts<void, T>({input: serde.empty});
 
   return {
-    ask: (message) => invoke(agent.ask({message: message ?? DEFAULT_ASK})),
-    steer: (message) => invoke(agent.steer(message)),
+    ask: (message) => invoke(agent.ask({message})),
+    steer: (message) => invoke(agent.steer({message})),
     interrupt: (reason, message) =>
       invoke(agent.interrupt({reason, ...(message ? {message} : {})})),
     deliver: (delivery) => invoke(agent.deliver(delivery)),
     history,
     notifications: () => invoke(agent.notifications(noInput())),
-    watchNotifications,
+    watch,
 
     // Drains the cursor, then parks in one notification wait window per
     // idempotency key and repeats. A network-failed window retries under the
@@ -277,7 +273,7 @@ export function createAgentClient({
             yield* page.entries;
             continue;
           }
-          const watched = await watchNotifications(revision, timeoutSeconds, {
+          const watched = await watch(revision, timeoutSeconds, {
             idempotencyKey: windowKey,
             signal,
           });
@@ -303,7 +299,7 @@ export function createAgentClient({
     retire: () => invoke(agent.retire({})),
 
     schedules: () => invoke(agent.schedules(noInput())),
-    schedule: (spec) => invoke(agent.createSchedule(spec)),
+    createSchedule: (spec) => invoke(agent.createSchedule(spec)),
     cancelSchedule: (scheduleId) => invoke(agent.cancelSchedule({scheduleId})),
 
     approvals: () => invoke(agent.approvals(noInput())),

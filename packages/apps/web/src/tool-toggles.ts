@@ -18,9 +18,9 @@ export function toggleMcpServer(
   serverId: string,
   enabled: boolean,
 ): AgentTools {
-  const mcp = tools.mcp.filter((item) => item.connectionId !== serverId);
+  const mcp = tools.mcp.filter((item) => item.serverId !== serverId);
   mcp.push({
-    connectionId: serverId,
+    serverId: serverId,
     tools: enabled ? {mode: "all"} : {mode: "selected", names: []},
   });
   return {...tools, mcp};

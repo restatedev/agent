@@ -5,7 +5,7 @@ import type {AgentSnapshot, AgentSnapshotUpdate} from "../agent-client";
 type SnapshotClient = Pick<
   AgentClient,
   | "notifications"
-  | "watchNotifications"
+  | "watch"
   | "profile"
   | "approvals"
   | "schedules"
@@ -53,11 +53,7 @@ export async function syncAgentSnapshot(
   options: {signal: AbortSignal; idempotencyKey?: string},
 ): Promise<AgentSnapshotUpdate> {
   options.signal.throwIfAborted();
-  const notification = await client.watchNotifications(
-    since.revision,
-    25,
-    options,
-  );
+  const notification = await client.watch(since.revision, 25, options);
   options.signal.throwIfAborted();
   return readAgentSnapshotUpdate(
     client,

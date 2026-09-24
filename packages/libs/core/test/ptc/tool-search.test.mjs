@@ -12,7 +12,7 @@ const mcp = ["listNotifications", "listRepositories", "forbiddenSecrets"].map(na
   name: `github_${name}`, description: name === "listNotifications" ? "Read unread notifications" : name,
   inputSchema: schema, target: {server: {id: "github"}, remoteName: name},
 }));
-const permissions = {builtin: {mode: "all"}, dynamic: {mode: "all"}, mcp: [{connectionId: "github", tools: {mode: "selected", names: ["listNotifications", "listRepositories"]}}]};
+const permissions = {builtin: {mode: "all"}, dynamic: {mode: "all"}, mcp: [{serverId: "github", tools: {mode: "selected", names: ["listNotifications", "listRepositories"]}}]};
 const context = () => tools.createAgentToolContext("agent", "turn", false, permissions, "alice");
 const names = catalog => catalog.map(t => t.name);
 const call = {toolName: "searchTools", toolCallId: "search-1", input: {query: "github unread notifications"}};

@@ -13,7 +13,7 @@ export function toolSelected(selection: ToolSelection, name: string): boolean {
  * otherwise the agent's `mcpDefault`.
  */
 export function mcpServerGranted(tools: AgentTools, serverId: string): boolean {
-  const grant = tools.mcp.find((item) => item.connectionId === serverId);
+  const grant = tools.mcp.find((item) => item.serverId === serverId);
   return grant
     ? grant.tools.mode === "all" || grant.tools.names.length > 0
     : tools.mcpDefault !== "disabled";

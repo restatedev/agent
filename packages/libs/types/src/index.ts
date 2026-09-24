@@ -3,17 +3,12 @@
 
 import {z} from "zod";
 
-import {DEFAULT_ASK} from "./targets.js";
-
-export {DEFAULT_ASK} from "./targets.js";
-
 export const MessageSchema = z.string().trim().min(1);
 
 export const AskRequestSchema = z.object({
-  message: MessageSchema.default(DEFAULT_ASK),
+  message: MessageSchema,
 });
 
-/** `steer` as an HTTP body; the Agent handler itself takes the bare string. */
 export const SteerRequestSchema = z.object({message: MessageSchema});
 
 export const InterruptRequestSchema = z
@@ -36,8 +31,7 @@ const McpServerIdSchema = z
   .max(64)
   .describe("A unique identifier for one operator-configured MCP server.");
 
-export const McpProtocolSchema = z.enum(["stateless", "stateful"]);
-export type McpProtocol = z.infer<typeof McpProtocolSchema>;
+const McpProtocolSchema = z.enum(["stateless", "stateful"]);
 
 export const McpServerSchema = z.object({
   id: McpServerIdSchema,
@@ -70,13 +64,11 @@ export const AgentToolsSchema = z.object({
   dynamic: ToolSelectionSchema,
   // Profile entries override the configured servers; selected/[] disables one.
   mcp: z
-    .array(
-      z.object({connectionId: McpServerIdSchema, tools: ToolSelectionSchema}),
-    )
+    .array(z.object({serverId: McpServerIdSchema, tools: ToolSelectionSchema}))
     .max(32)
     .refine(
       (items) =>
-        new Set(items.map((item) => item.connectionId)).size === items.length,
+        new Set(items.map((item) => item.serverId)).size === items.length,
       "Connection IDs must be unique",
     ),
 });

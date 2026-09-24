@@ -38,7 +38,7 @@ test("child rejects foreign parents, direct user messages, and overlapping tasks
     await assert.rejects(f.invoke(Agent.object.startDelegatedTurn, {...input, ...wrong}), /owning parent/);
   await assert.rejects(f.invoke(Agent.object.startDelegatedTurn, input), /busy/);
   await assert.rejects(f.invoke(Agent.object.ask, {message: "Bypass parent"}), /top-level agent/);
-  await assert.rejects(f.invoke(Agent.object.steer, "Bypass parent"), /top-level agent/);
+  await assert.rejects(f.invoke(Agent.object.steer, {message: "Bypass parent"}), /top-level agent/);
   await assert.rejects(f.invoke(Agent.object.interrupt, {reason: "stop", message: "Replacement"}), /read-only/);
   await assert.rejects(f.invoke(Agent.object.deliver, {message: "Bypass", whenBusy: "queue", source: "schedule"}), /top-level agent/);
   assert.equal(await f.invoke(Agent.object.interrupt, {reason: "User injected instruction"}), true);

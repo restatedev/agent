@@ -43,7 +43,7 @@ const modelAgentToolsSchema = AgentToolsSchema.omit({mcpDefault: true})
       .max(32)
       .refine(
         (items) =>
-          new Set(items.map((item) => item.connectionId)).size === items.length,
+          new Set(items.map((item) => item.serverId)).size === items.length,
         "Connection IDs must be unique",
       ),
   })

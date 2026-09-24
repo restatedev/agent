@@ -41,7 +41,7 @@ test("operator defaults, explicit opt-outs, and pinned child grants resolve cons
   const tools = {builtin: {mode: "all"}, dynamic: {mode: "selected", names: []}, mcp: []};
   assert.equal(resolveMcpGrants(tools, [server]).mcp[0].tools.mode, "all");
   assert.deepEqual(resolveMcpGrants({...tools, mcpDefault: "disabled"}, [server]).mcp, []);
-  const disabled = {...tools, mcp: [{connectionId: server.id, tools: {mode: "selected", names: []}}]};
+  const disabled = {...tools, mcp: [{serverId: server.id, tools: {mode: "selected", names: []}}]};
   assert.deepEqual(resolveMcpGrants(disabled, [server]).mcp, disabled.mcp);
   assert.deepEqual(resolveMcpGrants(disabled, []).mcp, []);
 });

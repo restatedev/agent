@@ -22,7 +22,7 @@ The fallback display name is the agent ID. Retired IDs cannot be restarted.
 | Handler on `Agent/{agentId}` | Input | Effect |
 | --- | --- | --- |
 | `ask` | `{message}` | Start while idle; enqueue FIFO while busy |
-| `steer` | JSON string | Add input to the active turn; return false if idle |
+| `steer` | `{message}` | Add input to the active turn; return false if idle |
 | `interrupt` | `{reason, message?}` | Interrupt active turn; optionally queue a replacement |
 | `deliver` | `{source, sourceId?, message, whenBusy, interruptReason?, coalesce?}` | Route an external message with queue/steer/interrupt policy; `coalesce` drops it while the same `source`/`sourceId` is queued or active |
 
@@ -32,7 +32,7 @@ the control. Busy `ask` does not implicitly steer. An interruption reason is
 control input to the old turn; a replacement message is separate user input.
 
 ```sh
-curl localhost:8080/Agent/demo/steer --json '"Also include Paris"'
+curl localhost:8080/Agent/demo/steer --json '{"message":"Also include Paris"}'
 curl localhost:8080/Agent/demo/interrupt \
   --json '{"reason":"Change of plan","message":"Only check Berlin"}'
 ```

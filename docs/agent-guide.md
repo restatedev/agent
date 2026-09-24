@@ -112,7 +112,6 @@ The detailed turn-runtime list lives in
 
 - `ask` does not classify intent. It starts while idle and queues while busy.
   The caller explicitly chooses `steer` or `interrupt`.
-- `steer` accepts a JSON string at ingress, not `{message: ...}`.
 - A void-input ingress handler must receive no body and no `content-type`.
 - Restate signal resolutions with the same name form the durable sequence used
   by steering. The in-memory steering inbox is only a turn-local consumer.

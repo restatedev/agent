@@ -20,7 +20,7 @@ export function toolAllowed(
   const remote = mcp.find((t) => t.name === name);
   if (!remote) return false;
   const grant = permissions.mcp.find(
-    (g) => g.connectionId === remote.target.server.id,
+    (g) => g.serverId === remote.target.server.id,
   );
   return Boolean(grant && selected(grant.tools, remote.target.remoteName));
 }

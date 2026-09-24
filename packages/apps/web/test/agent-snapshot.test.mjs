@@ -16,7 +16,7 @@ function fixture(overrides = {}) {
   const calls = [];
   const implementations = {
     notifications: async () => notification(),
-    watchNotifications: async () => notification(),
+    watch: async () => notification(),
     profile: async () => ({guardrails: [], tools: {}, webSearchEnabled: true}),
     approvals: async () => [],
     schedules: async () => [],
@@ -62,20 +62,20 @@ test("unchanged notification returns no cached data and performs no data reads",
   const {client, calls} = fixture();
   const opts = options();
   assert.deepEqual(await syncAgentSnapshot(client, notification(), 42, opts), {notification: notification()});
-  assert.deepEqual(calls, [{name: "watchNotifications", args: [1, 25, opts]}]);
+  assert.deepEqual(calls, [{name: "watch", args: [1, 25, opts]}]);
 });
 
 test("sync fetches only changed topics, including empty arrays that clear UI state", async () => {
   const next = notification(3, {approvals: 1, schedules: 1});
-  const {client, calls} = fixture({watchNotifications: async () => next});
+  const {client, calls} = fixture({watch: async () => next});
   const result = await syncAgentSnapshot(client, notification(), 42, options());
   assert.deepEqual(result, {notification: next, approvals: [], schedules: []});
-  assert.deepEqual(calls.map(c => c.name), ["watchNotifications", "approvals", "schedules"]);
+  assert.deepEqual(calls.map(c => c.name), ["watch", "approvals", "schedules"]);
 });
 
 test("history sync resumes at the browser cursor instead of reloading history", async () => {
   const {client, calls} = fixture({
-    watchNotifications: async () => notification(2, {history: 1}),
+    watch: async () => notification(2, {history: 1}),
     history: async () => ({entries: [entry(42)], nextSequence: 43}),
   });
   const result = await syncAgentSnapshot(client, notification(), 42, options());
@@ -88,7 +88,7 @@ test("changes during initial reads remain visible to the first watch", async () 
   const {client} = fixture({
     notifications: async () => current,
     profile: async () => { current = notification(2, {profile: 1}); return {guardrails: []}; },
-    watchNotifications: async (revision) => { assert.equal(revision, 1); return current; },
+    watch: async (revision) => { assert.equal(revision, 1); return current; },
   });
   const initial = await loadAgentSnapshot(client, options().signal);
   const update = await syncAgentSnapshot(client, initial.notification, initial.history.nextSequence, options());
@@ -101,7 +101,7 @@ test("changes during initial reads remain visible to the first watch", async () 
 test("failed sync can retry the same cursor and window key without losing changes", async () => {
   let fail = true;
   const {client, calls} = fixture({
-    watchNotifications: async () => notification(2, {profile: 1}),
+    watch: async () => notification(2, {profile: 1}),
     profile: async () => { if (fail) throw new Error("temporary"); return {guardrails: []}; },
   });
   const since = notification();
@@ -109,7 +109,7 @@ test("failed sync can retry the same cursor and window key without losing change
   await assert.rejects(syncAgentSnapshot(client, since, 1, opts), /temporary/);
   fail = false;
   assert.ok((await syncAgentSnapshot(client, since, 1, opts)).profile);
-  assert.deepEqual(calls.filter(c => c.name === "watchNotifications").map(c => c.args), [[1, 25, opts], [1, 25, opts]]);
+  assert.deepEqual(calls.filter(c => c.name === "watch").map(c => c.args), [[1, 25, opts], [1, 25, opts]]);
   assert.equal(since.revision, 1);
 });
 

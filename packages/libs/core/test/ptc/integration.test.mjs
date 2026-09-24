@@ -92,7 +92,7 @@ function stubModel(t, {complete, guardrails = () => ({decision: "allow"})}) {
 function toolContext() {
   return {
     agentId: "test",
-    permissions:{builtin:{mode:"all"},dynamic:{mode:"all"},mcp:[{connectionId:"test",tools:{mode:"all"}}]},
+    permissions:{builtin:{mode:"all"},dynamic:{mode:"all"},mcp:[{serverId:"test",tools:{mode:"all"}}]},
     turnId: "turn",
     webSearchEnabled: true,
     sandbox: {

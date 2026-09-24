@@ -273,12 +273,12 @@ export function subAgentProfile(
   } else {
     const invalidMcp = tools.mcp.find((grant) => {
       const allowed = grants.mcp.find(
-        (item) => item.connectionId === grant.connectionId,
+        (item) => item.serverId === grant.serverId,
       );
       return !allowed || !subset(grant.tools, allowed.tools);
     });
     if (invalidMcp)
-      denied = `MCP connection ${JSON.stringify(invalidMcp.connectionId)} or its tool selection`;
+      denied = `MCP server ${JSON.stringify(invalidMcp.serverId)} or its tool selection`;
   }
   if (denied)
     throw new TerminalError(

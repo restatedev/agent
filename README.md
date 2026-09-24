@@ -56,7 +56,7 @@ port 8080, which you can call directly:
 curl localhost:8080/Agent/demo/ask --json '{"message":"What is the weather in Berlin?"}'
 
 # Redirect the running turn without cancelling its tools
-curl localhost:8080/Agent/demo/steer --json '"Use Fahrenheit"'
+curl localhost:8080/Agent/demo/steer --json '{"message":"Use Fahrenheit"}'
 
 # Stop it, optionally queueing a replacement request
 curl localhost:8080/Agent/demo/interrupt --json '{"reason":"Changed my mind"}'

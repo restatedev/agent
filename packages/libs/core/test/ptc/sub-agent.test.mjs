@@ -8,7 +8,7 @@ import {subAgentProfile} from "../../src/agent/sub-agents.ts";
 import {context} from "./state-fixture.mjs";
 
 const selection = (...names) => ({mode: "selected", names});
-const grants = {builtin: {mode: "all"}, dynamic: selection("Weather/get"), mcp: [{connectionId: "notion", tools: selection("read")}]};
+const grants = {builtin: {mode: "all"}, dynamic: selection("Weather/get"), mcp: [{serverId: "notion", tools: selection("read")}]};
 const profile = {memories: [{key: "style", content: "Be clear"}], instructions: "Be concise", guardrails: [{id: "readonly", rule: "Never write remote data"}], tools: grants, webSearchEnabled: false};
 const config = {name: "Research", instructions: null, guardrails: null, tools: null, webSearchEnabled: null, initialMessage: null};
 const builtins = ["getWeather", "createSubAgent", "messageSubAgent", "listSubAgents", "deleteSubAgent", "executeProgram", "createSchedule", "listSchedules", "cancelSchedule"];
@@ -117,8 +117,8 @@ test("restrictions can narrow tools and add policies, never broaden access or re
   for (const tools of [
     {...narrow, dynamic: {mode: "all"}},
     {...narrow, dynamic: selection("Other/write")},
-    {...narrow, mcp: [{connectionId: "github", tools: {mode: "all"}}]},
-    {...narrow, mcp: [{connectionId: "notion", tools: selection("write")}]},
+    {...narrow, mcp: [{serverId: "github", tools: {mode: "all"}}]},
+    {...narrow, mcp: [{serverId: "notion", tools: selection("write")}]},
   ]) assert.throws(() => subAgentProfile(profile, grants, {...config, tools}, builtins), /cannot exceed/);
   assert.throws(() => subAgentProfile(profile, {...grants, builtin: selection("getWeather")}, {...config, tools: {...narrow, builtin: {mode: "all"}}}, builtins), /cannot exceed/);
   assert.throws(() => subAgentProfile(profile, grants, {...config, webSearchEnabled: true}, builtins), /cannot enable/);

@@ -79,7 +79,7 @@ export const handlers: AgentHandlers<
    *
    * @returns `false` when no turn can receive it; the queue is then untouched.
    */
-  *steer(message) {
+  *steer({message}) {
     yield* requireDirectAccess();
     return yield* activeTurn.steer(message);
   },

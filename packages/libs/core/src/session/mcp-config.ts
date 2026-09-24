@@ -57,12 +57,12 @@ export function resolveMcpGrants(
   return {
     ...tools,
     mcp: servers.flatMap((server) => {
-      const grant = tools.mcp.find((item) => item.connectionId === server.id);
+      const grant = tools.mcp.find((item) => item.serverId === server.id);
       return grant
         ? [grant]
         : tools.mcpDefault === "disabled"
           ? []
-          : [{connectionId: server.id, tools: {mode: "all" as const}}];
+          : [{serverId: server.id, tools: {mode: "all" as const}}];
     }),
   };
 }

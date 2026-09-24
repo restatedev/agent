@@ -85,10 +85,8 @@ curl localhost:8080/Agent/demo/ask \
   --json '{"message":"Sleep for 30 seconds, then tell me that you finished."}'
 
 curl localhost:8080/Agent/demo/steer \
-  --json '"Also include the weather in Paris."'
+  --json '{"message":"Also include the weather in Paris."}'
 ```
-
-`steer` accepts a JSON string, not `{message: ...}`.
 
 ## Validation commands
 
