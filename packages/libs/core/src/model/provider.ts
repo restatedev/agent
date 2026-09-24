@@ -191,6 +191,14 @@ const GUARDRAIL_PROVIDER_OPTIONS = {
   openai: {reasoningEffort: "low", store: false},
 } as const;
 
+// The Responses API counts reasoning tokens against max_output_tokens. The
+// decision object itself is a few hundred tokens, but a 500-token budget left
+// a reasoning model too little room: the response came back incomplete, the
+// structured output failed to parse (NoObjectGeneratedError), and after the
+// run's retries the whole turn failed. This leaves ample room for low-effort
+// reasoning while still bounding a runaway evaluation.
+const GUARDRAIL_MAX_OUTPUT_TOKENS = 4_000;
+
 /** Evaluates a proposed model action against configured natural-language policy. */
 export async function evaluateGuardrails(
   request: GuardrailEvaluationRequest,
@@ -205,7 +213,7 @@ export async function evaluateGuardrails(
         guardrails: request.guardrails,
       }),
       output: Output.object({schema: GuardrailEvaluationSchema}),
-      maxOutputTokens: 500,
+      maxOutputTokens: GUARDRAIL_MAX_OUTPUT_TOKENS,
       ...openaiOptions(signal, 30_000),
       providerOptions: GUARDRAIL_PROVIDER_OPTIONS,
     });
@@ -273,7 +281,7 @@ export async function confirmGuardrailDecision(
         candidateDecision: candidate,
       }),
       output: Output.object({schema: GuardrailReviewSchema}),
-      maxOutputTokens: 500,
+      maxOutputTokens: GUARDRAIL_MAX_OUTPUT_TOKENS,
       ...openaiOptions(signal, 30_000),
       providerOptions: GUARDRAIL_PROVIDER_OPTIONS,
     });
