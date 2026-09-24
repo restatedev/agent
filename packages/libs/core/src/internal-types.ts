@@ -4,20 +4,11 @@
 import type {
   AgentTurnOutcome,
   AgentTurnRequest,
-  ApprovalCancellation,
   ConversationCompactionPlan,
   ConversationEntry,
-  MemoryUpdate,
-  MemoryUpdateResult,
 } from "@restate-agents/types";
 
-export type {
-  AgentTurnOutcome,
-  AgentTurnRequest,
-  ApprovalCancellation,
-  MemoryUpdate,
-  MemoryUpdateResult,
-};
+export type {AgentTurnOutcome, AgentTurnRequest};
 
 export const AGENT_SESSION_SIGNALS = {
   interrupt: "interrupt",

@@ -21,9 +21,7 @@ pnpm install
 ## Start the stack
 
 Follow [the root quickstart](../README.md#quickstart) to start a fresh private
-Restate server, the core endpoint, and the optional localhost UI. There is no
-Google configuration, login bypass, account registration or application secret
-key. Existing standalone-app state is not migrated.
+Restate server, the core endpoint, and the optional localhost UI.
 
 The core listens on 9080; Restate ingress is normally 8080 and its Admin API/UI
 9070. `pnpm dev:service` and `pnpm dev:ui` build their required workspace
@@ -50,8 +48,7 @@ Do not send credentials as handler arguments.
 `docker/Dockerfile` and `docker/Dockerfile.web` are runnable packaging examples.
 The latter builds Next.js standalone output and serves the local UI on port
 3000. Publish container ports only on loopback for local use, for example
-`-p 127.0.0.1:3000:3000`. The web image publishing workflow has been removed.
-The remaining core image workflow is separate from deployment.
+`-p 127.0.0.1:3000:3000`.
 
 ## Smoke test
 
@@ -62,7 +59,7 @@ curl localhost:8080/Agent/demo/ask \
   --json '{"message":"What is the weather in Berlin?"}'
 ```
 
-Read its conversation event log (`history`/`transcript` in the wire contract):
+Read its conversation event log (`AgentSession.history`):
 
 ```sh
 curl localhost:8080/AgentSession/demo/history \

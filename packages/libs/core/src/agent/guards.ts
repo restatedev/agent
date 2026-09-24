@@ -66,7 +66,7 @@ export function* requireDirectAccess(): restate.Operation<void> {
 
 // Tool callbacks can arrive after a turn has ended or begun interruption.
 // Authorize against the controller's live snapshot, never the caller's copy.
-export function* requireActiveTurn(
+function* requireActiveTurn(
   turnId: string,
   action: string,
 ): restate.Operation<AgentTools> {

@@ -108,6 +108,3 @@ metadata and children too. Browser
 merging deduplicates sequences and never moves its history cursor backward.
 Each mounted conversation owns one cancellable poll; switching is navigation.
 
-Use fresh private Restate state for this experimental branch. The standalone
-application's User, browser sessions, encrypted credentials and global workspace
-feed have been removed together; existing app data is not migrated or deleted.

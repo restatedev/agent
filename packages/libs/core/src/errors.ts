@@ -28,19 +28,3 @@ export function isRejection(
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-/**
- * Runs `operation`, turning any failure except cancellation into
- * `onError(error)`.
- */
-export function* recover<T, R>(
-  operation: restate.Operation<T>,
-  onError: (error: unknown) => R,
-): restate.Operation<T | R> {
-  try {
-    return yield* operation;
-  } catch (error) {
-    if (isCancellation(error)) throw error;
-    return onError(error);
-  }
-}

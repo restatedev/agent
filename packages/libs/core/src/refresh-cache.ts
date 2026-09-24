@@ -2,16 +2,17 @@
 // API, MCP servers). It lives outside any invocation; callers read it inside
 // a `restate.run`, which journals the value a turn actually used.
 
-export type Refreshed<V> = {value: V; warnings: string[]};
+type Refreshed<V> = {value: V; warnings: string[]};
 
 type Entry<V> = {value: V; refreshAfter: number; lastAccessedAt: number};
 
 /**
- * Concurrent callers share one refresh per key, and while it runs a caller
- * with a stale value keeps using it rather than waiting on network I/O. A
- * failed refresh falls back to the stale value with a warning and retries
- * after `retryAfterMs`. Past `maxEntries`, the least recently read entry is
- * evicted.
+ * Concurrent callers share one refresh per key. The caller that finds the
+ * value expired starts the refresh and waits for it; while it runs, other
+ * callers with a stale value keep using it rather than waiting on network
+ * I/O. A failed refresh falls back to the stale value with a warning and
+ * retries after `retryAfterMs`. Past `maxEntries`, the least recently read
+ * entry is evicted.
  */
 export function createRefreshingCache<V>(options: {
   retryAfterMs: number;
@@ -22,16 +23,13 @@ export function createRefreshingCache<V>(options: {
 
   function store(key: string, entry: Entry<V>): void {
     entries.set(key, entry);
-    if (entries.size <= (options.maxEntries ?? Infinity)) return;
-    let oldest: string | undefined;
-    for (const [candidate, {lastAccessedAt}] of entries)
-      if (
-        candidate !== key &&
-        (oldest === undefined ||
-          lastAccessedAt < entries.get(oldest)!.lastAccessedAt)
-      )
-        oldest = candidate;
-    if (oldest !== undefined) entries.delete(oldest);
+    if (entries.size <= (options.maxEntries ?? Infinity)) {
+      return;
+    }
+    const evicted = leastRecentlyRead(entries, key);
+    if (evicted !== undefined) {
+      entries.delete(evicted);
+    }
   }
 
   return {
@@ -48,14 +46,19 @@ export function createRefreshingCache<V>(options: {
     ): Promise<Refreshed<V>> {
       const now = Date.now();
       const cached = entries.get(key);
-      if (cached) cached.lastAccessedAt = now;
-      if (cached && now < cached.refreshAfter)
-        return Promise.resolve({value: cached.value, warnings: []});
+      if (cached) {
+        cached.lastAccessedAt = now;
+        if (now < cached.refreshAfter) {
+          return Promise.resolve({value: cached.value, warnings: []});
+        }
+      }
       const inFlight = refreshes.get(key);
-      if (inFlight)
-        return cached
-          ? Promise.resolve({value: cached.value, warnings: []})
-          : abortable(inFlight, signal);
+      if (inFlight && cached) {
+        return Promise.resolve({value: cached.value, warnings: []});
+      }
+      if (inFlight) {
+        return abortable(inFlight, signal);
+      }
 
       // The refresh is shared, so its lifetime is not tied to this caller.
       const refresh = fetch()
@@ -79,9 +82,27 @@ export function createRefreshingCache<V>(options: {
   };
 }
 
+function leastRecentlyRead<V>(
+  entries: Map<string, Entry<V>>,
+  except: string,
+): string | undefined {
+  let oldest: {key: string; lastAccessedAt: number} | undefined;
+  for (const [key, {lastAccessedAt}] of entries) {
+    if (key === except) {
+      continue;
+    }
+    if (!oldest || lastAccessedAt < oldest.lastAccessedAt) {
+      oldest = {key, lastAccessedAt};
+    }
+  }
+  return oldest?.key;
+}
+
 /** Settles with `promise`, or rejects as soon as `signal` aborts. */
 export function abortable<T>(promise: Promise<T>, signal: AbortSignal) {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
+  if (signal.aborted) {
+    return Promise.reject(abortReason(signal));
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(abortReason(signal));
     signal.addEventListener("abort", onAbort, {once: true});

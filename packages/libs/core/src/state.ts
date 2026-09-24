@@ -11,7 +11,7 @@ export function objectKey(): string {
 }
 
 /** An array stored under one key. An empty list clears the key. */
-export type ListState<T> = {
+type ListState<T> = {
   /** Reads the list; works in shared and exclusive handlers. */
   get(): restate.Operation<T[]>;
   /** Replaces the list. Exclusive handlers only. */

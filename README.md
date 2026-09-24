@@ -135,7 +135,7 @@ MCP call completing and its result being recorded can repeat that call.
 | Crash recovery | Kill `pnpm dev:service` mid-turn and restart it | `session/service.ts`, `session/step.ts` |
 | Guardrails and approvals | Add a guardrail in the UI; ask for something it blocks | `session/guardrails.ts`, `agent/approvals.ts` |
 | Memory | Ask the agent to remember a preference; up to 32 per agent | `agent/profile.ts` |
-| Sub-agents | Ask it to delegate research to a helper | `agent/sub-agents.ts`, `createSubAgent` in `session/tools.ts` |
+| Sub-agents | Ask it to delegate research to a helper | `agent/sub-agents.ts`, `session/tools/sub-agents.ts` |
 | Schedules | "Remind me in 2 minutes to check the weather" | `agent/schedules.ts` |
 | Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `ptc/runtime.ts` |
 | Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/tool-search.ts` |
