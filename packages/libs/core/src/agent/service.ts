@@ -24,6 +24,9 @@ import * as subAgents from "./sub-agents.js";
 import * as turns from "./turns.js";
 
 const shared = (retention: object) => ({shared: true, ...retention});
+// Called only by AgentSession, other agents or the Agent itself. Ingress
+// callers would bypass the turn and grant checks these calls rely on.
+const internal = (retention: object) => ({ingressPrivate: true, ...retention});
 
 export const Agent = restate.implement(AgentDefinition, {
   handlers: {
@@ -42,40 +45,40 @@ export const Agent = restate.implement(AgentDefinition, {
       interrupt: interactionRetention,
       steer: interactionRetention,
       deliver: noRetention,
-      onTurnEnd: noRetention,
+      onTurnEnd: internal(noRetention),
 
-      initialize: coordinationRetention,
+      initialize: internal(coordinationRetention),
       retire: coordinationRetention,
       metadata: shared(noRetention),
 
       profile: shared(noRetention),
       updateProfile: noRetention,
       deleteMemory: noRetention,
-      updateMemory: noRetention,
+      updateMemory: internal(noRetention),
       toolCatalog: shared(noRetention),
 
-      requestApproval: coordinationRetention,
-      cancelApproval: coordinationRetention,
+      requestApproval: internal(coordinationRetention),
+      cancelApproval: internal(coordinationRetention),
       resolveApproval: coordinationRetention,
       approvals: shared(noRetention),
 
       createSchedule: coordinationRetention,
       cancelSchedule: coordinationRetention,
-      fire: coordinationRetention,
+      fire: internal(coordinationRetention),
       schedules: shared(noRetention),
 
-      createSubAgent: coordinationRetention,
-      startSubAgentTask: coordinationRetention,
-      finishSubAgentTask: coordinationRetention,
-      deleteSubAgent: coordinationRetention,
-      listSubAgents: noRetention,
+      createSubAgent: internal(coordinationRetention),
+      startSubAgentTask: internal(coordinationRetention),
+      finishSubAgentTask: internal(coordinationRetention),
+      deleteSubAgent: internal(coordinationRetention),
+      listSubAgents: internal(noRetention),
       children: shared(noRetention),
-      startDelegatedTurn: coordinationRetention,
-      interruptDelegatedTurn: coordinationRetention,
+      startDelegatedTurn: internal(coordinationRetention),
+      interruptDelegatedTurn: internal(coordinationRetention),
 
-      publish: coordinationRetention,
-      subscribe: coordinationRetention,
-      unsubscribe: coordinationRetention,
+      publish: internal(coordinationRetention),
+      subscribe: internal(coordinationRetention),
+      unsubscribe: internal(coordinationRetention),
       notifications: shared(coordinationRetention),
       watch: {
         ...shared(coordinationRetention),

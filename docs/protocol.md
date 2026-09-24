@@ -1,8 +1,12 @@
 # Agent protocol
 
 The schemas in `packages/libs/types/src/index.ts` and declarations in
-`services.ts` are authoritative. This guide covers the supported ingress path;
-internal coordination handlers remain visible to trusted Restate operators.
+`services.ts` are authoritative. This guide covers the supported ingress path.
+Internal coordination handlers (`onTurnEnd`, approval registration, sub-agent
+coordination, notifications plumbing, and every `AgentSession` handler except
+`history`) are marked `ingressPrivate`, so ingress rejects them; the Restate
+admin API still shows them to operators. This needs restate-server 1.4 or
+newer.
 
 ## Addressing and creation
 

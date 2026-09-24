@@ -180,11 +180,14 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
   },
   options: {
     handlers: {
+      // Only `history` is public. The rest are driven by the Agent, and a
+      // direct doTurn would bypass its profile, guardrails and turn record.
       history: {shared: true, ...noRetention},
-      compact: {shared: true, ...noRetention},
-      applyCompaction: noRetention,
-      retire: executionRetention,
+      compact: {shared: true, ingressPrivate: true, ...noRetention},
+      applyCompaction: {ingressPrivate: true, ...noRetention},
+      retire: {ingressPrivate: true, ...executionRetention},
       doTurn: {
+        ingressPrivate: true,
         ...executionRetention,
         inactivityTimeout: {hours: 1},
         abortTimeout: {minutes: 15},
