@@ -6,6 +6,7 @@ import {
   createAgentClient,
 } from "./agent-client";
 import {mergeAgentSnapshot} from "./agent-snapshot";
+import {errorMessage} from "./format";
 
 type Connection = {
   /** The client this state was loaded through. */
@@ -59,7 +60,7 @@ export function useAgent(agentId: string) {
             client,
             snapshot: latest.current,
             status: "failed",
-            error: failure instanceof Error ? failure.message : String(failure),
+            error: errorMessage(failure),
           });
           // Keep the window key so reconnecting attaches to the same wait.
           await new Promise<void>((resolve) => {

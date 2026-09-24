@@ -40,6 +40,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "./components/ui/message-scroller";
+import {shortTurn} from "./format";
 import {renderInline, renderMarkdown} from "./markdown";
 
 type TranscriptEntry = SequencedEntry["entry"];
@@ -73,10 +74,6 @@ const detailTypes = new Set<EventEntry["type"]>([
   "steer",
   "approval_cancelled",
 ]);
-
-function shortTurn(turnId: string) {
-  return turnId.length > 14 ? `${turnId.slice(0, 14)}…` : turnId;
-}
 
 function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
   // Read terminal status first so every segment of a finished turn renders

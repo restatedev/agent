@@ -13,6 +13,7 @@ import {
 import {useEffect, useRef, useState} from "react";
 
 import type {AgentClient} from "./agent-client";
+import {errorMessage, type Notify, runAction} from "./format";
 import {toggleMcpServer, toggleTool} from "./tool-toggles";
 
 function ToolSwitch({
@@ -100,7 +101,7 @@ export function AgentToolsPanel({
   client: AgentClient;
   profile?: AgentProfile;
   refresh: () => Promise<AgentProfile>;
-  notify: (message: string, error?: boolean) => void;
+  notify: Notify;
 }) {
   const [catalog, setCatalog] = useState<{
     builtin: ToolDescriptor[];
@@ -117,7 +118,7 @@ export function AgentToolsPanel({
         if (active) setCatalog(result);
       })
       .catch((error) => {
-        if (active) notify(String(error), true);
+        if (active) notify(errorMessage(error), true);
       });
     return () => {
       active = false;
@@ -128,16 +129,13 @@ export function AgentToolsPanel({
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
-    try {
+    await runAction(notify, async () => {
       await client.updateProfile({tools});
       await refresh();
-      notify("Tool access saved for the next turn");
-    } catch (error) {
-      notify(String(error), true);
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
+      return "Tool access saved for the next turn";
+    });
+    savingRef.current = false;
+    setSaving(false);
   }
 
   if (!profile) return <p>Loading tool access…</p>;

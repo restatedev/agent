@@ -31,6 +31,7 @@ import {
 
 import type {AgentClient, SequencedEntry} from "./agent-client";
 import {AgentToolsPanel} from "./agent-tools-panel";
+import {errorMessage, type Notify, runAction, shortTurn} from "./format";
 import {Transcript} from "./transcript";
 import {useAgent} from "./use-agent";
 
@@ -58,14 +59,6 @@ const MODE_COPY: Record<Mode, {label: string; description: string}> = {
     description: "Stops unfinished work and asks the turn for a final summary.",
   },
 };
-
-function shortTurn(turnId: string) {
-  return turnId.length > 14 ? `${turnId.slice(0, 14)}…` : turnId;
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 // Reconstruct the visible turn from the append-only transcript. A newly
 // accepted turn or pending approval can lead the next history poll, so both
@@ -321,7 +314,7 @@ function ApprovalsPanel({
 }: {
   approvals: ApprovalRequest[];
   client: AgentClient;
-  notify: (message: string, error?: boolean) => void;
+  notify: Notify;
 }) {
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [resolving, setResolving] = useState<string>();
@@ -369,24 +362,18 @@ function ApprovalsPanel({
                 key={decision}
                 onClick={async () => {
                   setResolving(approval.approvalId);
-                  try {
+                  await runAction(notify, async () => {
                     const reason = reasons[approval.approvalId]?.trim();
                     const delivered = await client.resolveApproval({
                       approvalId: approval.approvalId,
                       decision,
                       ...(reason ? {reason} : {}),
                     });
-                    notify(
-                      delivered
-                        ? `Decision delivered: ${decision}`
-                        : "That approval is no longer eligible",
-                      !delivered,
-                    );
-                  } catch (error) {
-                    notify(errorMessage(error), true);
-                  } finally {
-                    setResolving(undefined);
-                  }
+                    return delivered
+                      ? `Decision delivered: ${decision}`
+                      : ["That approval is no longer eligible", true];
+                  });
+                  setResolving(undefined);
                 }}
                 type="button"
               >
@@ -467,7 +454,7 @@ function ProfilePanel({
 }: {
   client: AgentClient;
   profile?: AgentProfile;
-  notify: (message: string, error?: boolean) => void;
+  notify: Notify;
   refreshProfile: () => Promise<AgentProfile>;
 }) {
   // Unedited fields follow the live profile; a draft exists only while the
@@ -506,17 +493,12 @@ function ProfilePanel({
               if (!profile || savingWebSearch) return;
               const enabled = !profile.webSearchEnabled;
               setSavingWebSearch(true);
-              try {
+              await runAction(notify, async () => {
                 await client.updateProfile({webSearchEnabled: enabled});
                 await refreshProfile();
-                notify(
-                  `Web search ${enabled ? "enabled" : "disabled"} for future turns`,
-                );
-              } catch (error) {
-                notify(errorMessage(error), true);
-              } finally {
-                setSavingWebSearch(false);
-              }
+                return `Web search ${enabled ? "enabled" : "disabled"} for future turns`;
+              });
+              setSavingWebSearch(false);
             }}
             role="switch"
             type="button"
@@ -555,22 +537,18 @@ function ProfilePanel({
         <div className="inline-actions">
           <button
             className="button primary small"
-            onClick={async () => {
-              try {
+            onClick={() =>
+              runAction(notify, async () => {
                 await client.updateProfile({
                   instructions: instructions.trim() || null,
                 });
                 setInstructionsDraft(undefined);
-                notify(
-                  instructions.trim()
-                    ? "Instructions saved"
-                    : "Instructions cleared",
-                );
                 await refreshProfile();
-              } catch (error) {
-                notify(errorMessage(error), true);
-              }
-            }}
+                return instructions.trim()
+                  ? "Instructions saved"
+                  : "Instructions cleared";
+              })
+            }
             type="button"
           >
             <Save /> Save
@@ -605,18 +583,14 @@ function ProfilePanel({
                 notify("Every guardrail needs both an id and a policy", true);
                 return;
               }
-              try {
+              await runAction(notify, async () => {
                 await client.updateProfile({guardrails: next});
                 setGuardrailsDraft(undefined);
-                notify(
-                  next.length
-                    ? `${next.length} guardrail(s) saved`
-                    : "Guardrails cleared",
-                );
                 await refreshProfile();
-              } catch (error) {
-                notify(errorMessage(error), true);
-              }
+                return next.length
+                  ? `${next.length} guardrail(s) saved`
+                  : "Guardrails cleared";
+              });
             }}
             type="button"
           >
@@ -652,7 +626,7 @@ function Inspector({
   approvals: ApprovalRequest[];
   profile?: AgentProfile;
   client: AgentClient;
-  notify: (message: string, error?: boolean) => void;
+  notify: Notify;
   refreshProfile: () => Promise<AgentProfile>;
 }) {
   const tabs: Array<{id: Tab; label: string; icon: typeof Activity}> = [
@@ -828,20 +802,13 @@ export function App({initialAgentId}: {initialAgentId: string}) {
                 type="button"
                 className="button secondary"
                 disabled={!turn || turn.terminal}
-                onClick={async () => {
-                  try {
-                    const accepted = await agent.client.interrupt(
-                      "Interrupted by the user",
-                    );
-                    notify(
-                      accepted
-                        ? "Interruption requested"
-                        : "Nothing to interrupt",
-                    );
-                  } catch (error) {
-                    notify(errorMessage(error), true);
-                  }
-                }}
+                onClick={() =>
+                  runAction(notify, async () =>
+                    (await agent.client.interrupt("Interrupted by the user"))
+                      ? "Interruption requested"
+                      : "Nothing to interrupt",
+                  )
+                }
               >
                 <Ban /> Interrupt
               </button>
@@ -887,11 +854,11 @@ export function App({initialAgentId}: {initialAgentId: string}) {
             {!readOnly && (
               <button
                 type="button"
-                onClick={() => {
-                  void agent.client
-                    .deleteMemory(entry.key)
-                    .catch((error) => notify(errorMessage(error), true));
-                }}
+                onClick={() =>
+                  runAction(notify, async () => {
+                    await agent.client.deleteMemory(entry.key);
+                  })
+                }
               >
                 Delete
               </button>
@@ -909,11 +876,11 @@ export function App({initialAgentId}: {initialAgentId: string}) {
             {!readOnly && (
               <button
                 type="button"
-                onClick={() => {
-                  void agent.client
-                    .cancelSchedule(schedule.scheduleId)
-                    .catch((error) => notify(errorMessage(error), true));
-                }}
+                onClick={() =>
+                  runAction(notify, async () => {
+                    await agent.client.cancelSchedule(schedule.scheduleId);
+                  })
+                }
               >
                 Cancel
               </button>
