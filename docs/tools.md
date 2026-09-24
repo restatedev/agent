@@ -259,7 +259,7 @@ async tools => {
 `tools["exact-tool-name"]({...})` works for names that are not JavaScript
 identifiers. Successful calls return parsed JSON when their result is JSON,
 otherwise a string. MCP results retain `content` and `structuredContent` and
-the existing size/attachment filtering. Failed tool outcomes reject promises.
+the existing attachment filtering. Failed tool outcomes reject promises.
 Only the returned JSON or deterministic program error becomes an observation
 for the agent model. Child activity and approval events still appear in the
 transcript without raw arguments or results.
@@ -382,6 +382,16 @@ A foreground tool reaches `succeeded` or `failed` before its step finishes.
 All calls proposed in one model response are spawned in parallel, then joined.
 One failure is data returned to the model; it does not discard sibling
 results.
+
+Results and errors of every tool kind are capped once, at 128,000 characters,
+where they become model messages (`toModelMessage` and `toRuntimeMessage` in
+`session/tools.ts`); a longer text is cut and ends with a
+`[truncated by the runtime: …]` marker. Tools do not add their own model-facing
+caps. A source that could journal unbounded data limits it inside its run
+instead: web search responses (1 MB), sandbox file reads and command
+stdout/stderr (1,000,000 characters each). PTC programs see results before the
+central cap and can filter them; the program's own return is limited to 64,000
+characters.
 
 External side effects belong inside `restate.run` or a Restate RPC. Preserve
 `InterruptedError` and `CancelledError` instead of converting them into normal
@@ -708,7 +718,8 @@ signals, browser authorization actions or refresh-state storage. Stateful
 connections are released at turn completion and discarded after failed calls.
 
 Calls pass the snapshotted definition for output validation. Successful results
-are projected into bounded JSON-compatible model observations; remote `isError`
+are projected into JSON-compatible model observations, bounded by the central
+result cap; remote `isError`
 results and failed HTTP effects become tool failures. Unsupported content is
 represented by summaries rather than hidden binary payloads in model context.
 Raw tool data stays outside the public conversation history.

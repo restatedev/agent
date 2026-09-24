@@ -27,6 +27,28 @@ test("a pending completion delivers its result as labelled untrusted data", () =
   assert.deepEqual(untrustedPayload(message), {ok: true, result: injected});
 });
 
+test("every tool result is capped once, where it enters model context", () => {
+  const huge = "x".repeat(200_000);
+  const message = tools.toModelMessage([
+    {call, status: "succeeded", result: huge},
+    {call: {...call, toolCallId: "call-2"}, status: "failed", error: huge},
+    {call: {...call, toolCallId: "call-3"}, status: "succeeded", result: "small"},
+  ]);
+  const [result, error, small] = message.content.map(part => part.output.value);
+
+  assert.equal(result.result.length < 130_000, true);
+  assert.match(result.result, /\[truncated by the runtime: 72000 more characters omitted\]$/);
+  assert.match(error.error, /\[truncated by the runtime: 72000 more characters omitted\]$/);
+  assert.deepEqual(small, {ok: true, result: "small"});
+
+  const runtime = tools.toRuntimeMessage({
+    step: 1,
+    call,
+    outcome: {status: "succeeded", result: huge},
+  });
+  assert.match(untrustedPayload(runtime).result, /72000 more characters omitted\]$/);
+});
+
 test("failed and cancelled completions use the same shape", () => {
   const failed = tools.toRuntimeMessage({
     step: 1,

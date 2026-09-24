@@ -30,7 +30,6 @@ const MAX_MODEL_TOOL_NAME = 64;
 const MAX_TOOLS_PER_SERVER = 128;
 const MAX_DESCRIPTION_CHARS = 4_000;
 const MAX_INPUT_SCHEMA_CHARS = 64_000;
-const MAX_RESULT_CHARS = 128_000;
 const MAX_CACHE_TTL_MS = 5 * 60 * 1_000;
 const MAX_CACHED_CATALOGS = 256;
 const REFRESH_RETRY_INTERVAL_MS = 30 * 1_000;
@@ -645,19 +644,13 @@ function renderToolResult(result: CallToolResult): string {
         return {type: "unsupported"};
     }
   });
-  const rendered = JSON.stringify({
+  // The model-facing size cap is applied centrally in session/tools.ts; a
+  // PTC program sees the whole result and can filter it.
+  return JSON.stringify({
     ...(result.structuredContent !== undefined
       ? {structuredContent: result.structuredContent}
       : {}),
     content,
-  });
-  if (rendered.length <= MAX_RESULT_CHARS) {
-    return rendered;
-  }
-  return JSON.stringify({
-    truncated: true,
-    originalCharacters: rendered.length,
-    preview: rendered.slice(0, MAX_RESULT_CHARS - 100),
   });
 }
 

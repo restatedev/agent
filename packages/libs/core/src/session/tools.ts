@@ -86,6 +86,26 @@ export function createAgentToolContext(
   };
 }
 
+/**
+ * Upper bound on one tool result or error as the model sees it. This is the
+ * single cap for every kind of tool (built-in, sandbox, sub-agent, dynamic,
+ * MCP): results enter model context here and in toRuntimeMessage, and
+ * nowhere else. Sources that could otherwise journal unbounded data (web
+ * search responses, sandbox command output and file reads) keep their own,
+ * larger limits at the source; PTC's 64,000-character program result is a
+ * guest contract and stays in the guest.
+ */
+const MAX_MODEL_RESULT_CHARS = 128_000;
+
+function bounded(text: string): string {
+  if (text.length <= MAX_MODEL_RESULT_CHARS) {
+    return text;
+  }
+  const omitted = text.length - MAX_MODEL_RESULT_CHARS;
+  const kept = text.slice(0, MAX_MODEL_RESULT_CHARS);
+  return `${kept}\n[truncated by the runtime: ${omitted} more characters omitted]`;
+}
+
 /** Converts one foreground tool batch into the model's tool-result message. */
 export function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
   return {
@@ -94,10 +114,10 @@ export function toModelMessage(outcomes: ToolOutcome[]): ToolModelMessage {
       let value: JSONValue;
       switch (outcome.status) {
         case "succeeded":
-          value = {ok: true, result: outcome.result};
+          value = {ok: true, result: bounded(outcome.result)};
           break;
         case "failed":
-          value = {ok: false, error: outcome.error};
+          value = {ok: false, error: bounded(outcome.error)};
           break;
         case "pending":
           value = {ok: true, pending: true, ...outcome.result};
@@ -167,11 +187,11 @@ function runtimeVerb(status: PendingEvent["outcome"]["status"]): string {
 function runtimePayload(outcome: PendingEvent["outcome"]): JSONValue {
   switch (outcome.status) {
     case "succeeded":
-      return {ok: true, result: outcome.result};
+      return {ok: true, result: bounded(outcome.result)};
     case "failed":
-      return {ok: false, error: outcome.error};
+      return {ok: false, error: bounded(outcome.error)};
     case "cancelled":
-      return {ok: false, cancelled: true, reason: outcome.reason};
+      return {ok: false, cancelled: true, reason: bounded(outcome.reason)};
   }
 }
 

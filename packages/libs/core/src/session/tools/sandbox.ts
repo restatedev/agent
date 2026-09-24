@@ -43,7 +43,8 @@ export const readFileTool = defineAgentTool({
     return yield* runSandboxTool(
       `Read ${path}`,
       context,
-      async (client, signal) => client.readFile(path, {signal}),
+      async (client, signal) =>
+        clipped(await client.readFile(path, {signal}), "file"),
       IDEMPOTENT_RETRY,
     );
   },
@@ -108,7 +109,11 @@ export const executeCommandTool = defineAgentTool({
           },
           {signal},
         );
-        return JSON.stringify(result);
+        return JSON.stringify({
+          ...result,
+          stdout: clipped(result.stdout, "stdout"),
+          stderr: clipped(result.stderr, "stderr"),
+        });
       },
       // A shell command is not idempotent, and a transport error can arrive
       // after it already ran remotely. Report the failure to the model, which
@@ -118,6 +123,22 @@ export const executeCommandTool = defineAgentTool({
     );
   },
 });
+
+// A file or command output is clipped inside the run, before it is
+// journaled, so one `cat` of a large log cannot bloat the journal. The model
+// sees at most the central cap in session/tools.ts; a PTC program can still
+// filter the whole clipped text. Matches the local provider's 1 MiB exec
+// buffer.
+const MAX_SOURCE_CHARS = 1_000_000;
+
+function clipped(text: string, what: string): string {
+  if (text.length <= MAX_SOURCE_CHARS) {
+    return text;
+  }
+  const omitted = text.length - MAX_SOURCE_CHARS;
+  const kept = text.slice(0, MAX_SOURCE_CHARS);
+  return `${kept}\n[${what} clipped: ${omitted} more characters omitted]`;
+}
 
 // Reads, listings and whole-file writes are safe to repeat. The bound keeps a
 // dead or unreachable sandbox from retrying for the rest of the turn.
