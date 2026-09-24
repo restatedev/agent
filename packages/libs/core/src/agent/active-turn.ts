@@ -171,15 +171,18 @@ export function* finish(outcome: AgentTurnOutcome): restate.Operation<
       ...queued,
       {role: "user", text: message, delivery: "queued"},
     ]);
+  // A failure keeps its error; any other ending becomes the interruption
+  // the user asked for.
   const interrupted =
-    active.interruptReason !== undefined && outcome.status !== "interrupted";
+    active.interruptReason !== undefined &&
+    (outcome.status === "completed" || outcome.status === "stopped");
   return {
     outcome: interrupted
       ? {
           turnId: outcome.turnId,
           status: "interrupted",
           reason: active.interruptReason!,
-          ...("response" in outcome ? {response: outcome.response} : {}),
+          response: outcome.response,
           consumedSteering: outcome.consumedSteering,
         }
       : outcome,

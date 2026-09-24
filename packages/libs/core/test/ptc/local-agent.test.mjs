@@ -200,3 +200,15 @@ test("a successor that cannot start keeps its queued input and the finished outc
   assert.deepEqual(run.parameter.entries.map(entry => entry.text), ["queued while busy", "fixed"]);
   assert.equal(f.state.has("pending"), false);
 });
+
+test("a late interrupt does not hide a failed turn's error", async t => {
+  const before = process.env.MCP_SERVERS_JSON;
+  process.env.MCP_SERVERS_JSON = "[]";
+  t.after(() => { if (before === undefined) delete process.env.MCP_SERVERS_JSON; else process.env.MCP_SERVERS_JSON = before; });
+  const f = context("demo", {turn: {id: "turn", tools, steeringBatches: [], interruptReason: "stop"}});
+  const failed = {turnId: "turn", status: "failed", error: "model unavailable", consumedSteering: 0};
+  assert.deepEqual(await f.invoke(Agent.object.onTurnEnd, failed), failed);
+  const completed = context("demo", {turn: {id: "turn", tools, steeringBatches: [], interruptReason: "stop"}});
+  const ended = await completed.invoke(Agent.object.onTurnEnd, {turnId: "turn", status: "completed", response: "done", consumedSteering: 0});
+  assert.deepEqual(ended, {turnId: "turn", status: "interrupted", reason: "stop", response: "done", consumedSteering: 0});
+});

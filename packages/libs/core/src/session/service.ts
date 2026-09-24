@@ -32,6 +32,7 @@ import {
 import {executionRetention, noRetention} from "../retention.js";
 import {destroySandbox} from "../sandbox/index.js";
 import {objectKey} from "../state.js";
+import {interruptAndJoin} from "../tasks.js";
 import {
   approvalGrantedMessage,
   buildModelContext,
@@ -128,36 +129,44 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
       const turnId = restate.handlerRequest().id;
       let transcript: TurnHistory | undefined;
       let state: AgentSessionState | undefined;
+      let reconciled: AgentTurnOutcome | null;
       let outcome: AgentTurnOutcome;
+      // Every exit reports to the Agent, which clears its active turn only
+      // then. Cancellation at any point, including cleanup and the report
+      // itself, falls through to the one-way report in `abandonTurn`.
       try {
-        // History is opened once for the whole invocation. The controller
-        // already chose the starting entries and immutable turn profile.
-        transcript = yield* history.openTurn();
-        yield* transcript.append(...req.entries);
-        state = startState(req, turnId, transcript);
-        outcome = yield* executeTurn(state);
-      } catch (error) {
-        if (error instanceof CancelledError) {
-          yield* abandonTurn(turnId, transcript, state, error);
-          throw error;
+        try {
+          // History is opened once for the whole invocation. The controller
+          // already chose the starting entries and immutable turn profile.
+          transcript = yield* history.openTurn();
+          yield* transcript.append(...req.entries);
+          state = startState(req, turnId, transcript);
+          outcome = yield* executeTurn(state);
+        } catch (error) {
+          if (error instanceof CancelledError) throw error;
+          outcome = failedOutcome(turnId, state, error);
+          if (state)
+            yield* appendToolTranscript(
+              state,
+              yield* state.pending.stop(error),
+            );
         }
-        if (state)
-          yield* appendToolTranscript(state, yield* state.pending.stop(error));
-        outcome = {
-          turnId,
-          status: "failed",
-          error: errorMessage(error),
-          consumedSteering: state?.consumedSteering ?? 0,
-        };
+        try {
+          yield* releaseResources(turnId, state);
+        } catch (error) {
+          if (error instanceof CancelledError) throw error;
+          outcome = failedOutcome(turnId, state, error, "Turn cleanup failed");
+        }
+        // The controller reconciles late steering and interruption before
+        // the outcome is recorded in the public transcript.
+        reconciled = yield* restate
+          .client(Agent, objectKey())
+          .onTurnEnd(outcome);
+      } catch (error) {
+        if (error instanceof CancelledError)
+          yield* abandonTurn(turnId, transcript, state, error);
+        throw error;
       }
-
-      if (state && usesStatefulMcp(state)) yield* releaseMcpSessions(turnId);
-      if (state) yield* state.context.sandbox.release();
-      // The controller reconciles late steering and interruption before the
-      // outcome is recorded in the public transcript.
-      const reconciled = yield* restate
-        .client(Agent, objectKey())
-        .onTurnEnd(outcome);
       if (reconciled && transcript) {
         yield* transcript.append(...outcomeEntries(reconciled));
         const compaction = yield* transcript.beginCompaction();
@@ -223,11 +232,36 @@ function startState(
   };
 }
 
+function failedOutcome(
+  turnId: string,
+  state: AgentSessionState | undefined,
+  error: unknown,
+  prefix?: string,
+): AgentTurnOutcome {
+  const message = errorMessage(error);
+  return {
+    turnId,
+    status: "failed",
+    error: prefix ? `${prefix}: ${message}` : message,
+    consumedSteering: state?.consumedSteering ?? 0,
+  };
+}
+
+function* releaseResources(
+  turnId: string,
+  state: AgentSessionState | undefined,
+): restate.Operation<void> {
+  if (!state) return;
+  if (usesStatefulMcp(state)) yield* releaseMcpSessions(turnId);
+  yield* state.context.sandbox.release();
+}
+
 /**
  * Cleanup after invocation cancellation. The coroutine tree is already
  * cancelled, so nothing here waits on child tasks: it records what was
  * running, appends the interruption, suspends the sandbox and tells the Agent
- * one way.
+ * one way. The report comes first and nothing may skip it; the Agent ignores
+ * it if an earlier report already retired the turn.
  */
 function* abandonTurn(
   turnId: string,
@@ -235,14 +269,15 @@ function* abandonTurn(
   state: AgentSessionState | undefined,
   error: CancelledError,
 ): restate.Operation<void> {
-  if (state && usesStatefulMcp(state))
-    releaseMcpSessionsAfterCancellation(turnId);
   const outcome: AgentTurnOutcome = {
     turnId,
     status: "interrupted",
     reason: "Turn cancelled",
     consumedSteering: state?.consumedSteering ?? 0,
   };
+  yield* restate.sendClient(Agent, objectKey()).onTurnEnd(outcome);
+  if (state && usesStatefulMcp(state))
+    releaseMcpSessionsAfterCancellation(turnId);
   const stopped = state?.pending.cancelAll(error) ?? [];
   if (transcript)
     yield* transcript.append(
@@ -250,7 +285,6 @@ function* abandonTurn(
       ...outcomeEntries(outcome),
     );
   if (state) yield* state.context.sandbox.release();
-  yield* restate.sendClient(Agent, objectKey()).onTurnEnd(outcome);
 }
 
 function usesStatefulMcp(state: AgentSessionState): boolean {
@@ -309,7 +343,10 @@ function* executeTurn(
 
     if (step.type === "interrupted") {
       if (step.tools) {
-        const toolStep = step.tools;
+        const toolStep = {
+          ...step.tools,
+          outcomes: yield* stopHandoffs(step.tools, step.reason),
+        };
         // Approvals the interrupted step obtained still cover the guardrail
         // check on the finalization text; no approval message is pushed
         // during shutdown.
@@ -465,6 +502,28 @@ function* executeTurn(
     status: "stopped",
     cause: "step_limit",
     reason: `The agent reached its ${MAX_STEPS}-step limit.`,
+  });
+}
+
+/**
+ * Stops the programs a step handed off in the same moment it was interrupted.
+ * They never reached the pending registry, so nothing else would stop them.
+ * A program that finished anyway reports its real outcome; the rest stay
+ * `pending` and are reported as cancelled with every other pending call.
+ */
+function* stopHandoffs(
+  step: ToolStep,
+  reason: string,
+): restate.Operation<ToolOutcome[]> {
+  if (step.handoffs.size === 0) return step.outcomes;
+  const ids = [...step.handoffs.keys()];
+  const settled = yield* interruptAndJoin(
+    [...step.handoffs.values()],
+    new restate.InterruptedError(reason),
+  );
+  return step.outcomes.map((outcome) => {
+    const result = settled[ids.indexOf(outcome.call.toolCallId)];
+    return result?.status === "fulfilled" ? result.value : outcome;
   });
 }
 
