@@ -259,3 +259,19 @@ test("a busy agent rejects input beyond its queue limit", async () => {
   );
   assert.equal(f.state.get("pending").length, 32);
 });
+
+test("a watch with no change returns the current watermarks at its timeout", async () => {
+  const handlers = [];
+  const f = context("demo", {}, (call) => {
+    handlers.push(call.method);
+    return null;
+  });
+
+  const snapshot = await f.invoke(Agent.object.watch, {
+    afterRevision: 0,
+    timeoutSeconds: 25,
+  });
+
+  assert.equal(snapshot.revision, 0);
+  assert.deepEqual(handlers, ["subscribe", "unsubscribe"]);
+});

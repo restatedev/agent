@@ -22,6 +22,10 @@ export function context(key, initial = {}, call = () => { throw new Error("Unexp
     cancel: id => cancelled.push(id),
     resolveAwakeable: (id, value) => signals.push({id, value}),
     run: (name, action) => real.run(name, action),
+    // Awakeables never complete and timers fire at once, so a wait always
+    // ends at its timeout.
+    awakeable: () => real.awakeable(),
+    sleep: (_duration, name) => real.run(name ?? `sleep-${sequence++}`, () => null),
     date: {now: () => real.run(`date-${sequence++}`, () => 1700000000000)},
   };
   async function invoke(handler, input) {
