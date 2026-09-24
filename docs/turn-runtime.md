@@ -27,8 +27,8 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 - `session/steering.ts` owns the background durable-signal receiver and
   transient FIFO. `session/pending.ts` owns completion tasks that survive
   across steps.
-- `session/tools.ts` owns concrete tool definitions, validation, execution,
-  completion, and model/transcript projections.
+- `session/tools.ts` dispatches calls and owns model/transcript projections;
+  concrete tool definitions live in `session/tools/`.
 - `session/program-tool.ts` adapts PTC child calls to that same dispatcher and
   policy gate. `ptc/runtime.ts` supervises their execution inline in `doTurn`;
   `ptc/guest.ts` owns the bounded QuickJS/WebAssembly guest.

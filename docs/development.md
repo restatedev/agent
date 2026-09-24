@@ -285,7 +285,7 @@ When changing a request or schema:
 | Change schedules and timer delivery | `src/agent/schedules.ts` |
 | Change the turn state machine | `src/session/service.ts` |
 | Change one inference/tool step | `src/session/step.ts` |
-| Add a built-in tool | `src/session/tools.ts` |
+| Add a built-in tool | `src/session/tools/*.ts`, registered in `src/session/tools.ts` |
 | Change dynamic discovery | `src/session/dynamic-tools.ts` |
 | Change provider inference | `src/model/provider.ts` |
 | Change model retries/output recovery | `src/model/inference.ts` |

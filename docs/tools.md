@@ -93,7 +93,9 @@ or new search configuration are required.
 
 ## Built-in tools
 
-Built-ins live in `packages/libs/core/src/session/tools.ts`. A definition owns
+Built-ins live in `packages/libs/core/src/session/tools/`, one module per
+family (`local`, `approval`, `sub-agents`, `agent-state`, `sandbox`), and are
+registered in `session/tools.ts`. A definition owns
 its name, model-facing description, Zod input schema, validation, durable
 behavior, and optional pending completion:
 
@@ -104,12 +106,17 @@ const exampleTool = defineAgentTool({
   inputSchema: z.object({
     value: z.string().describe("What this field means."),
   }),
-  *run({value}, context): restate.Operation<ToolExecution> {
+  *run({value}) {
     // Durable handler code.
-    return {status: "succeeded", result: value};
+    return succeeded(value);
   },
 });
 ```
+
+`tools/define.ts` also has `toolRun(name, action, retry)` for a tool whose
+work is one journaled side effect, `agentCall(codes, op)` for calls into the
+Agent whose rejections the model should see, and `toolFailure(name, error)`.
+All of them rethrow cancellation.
 
 Add the definition to the `definitions` array. The rest follows from that one
 registration:
@@ -456,7 +463,8 @@ interruption of the creating turn does not roll it back.
 
 ## Adding a built-in tool
 
-1. Define it beside the existing tools in `session/tools.ts`.
+1. Define it in the matching `session/tools/*.ts` family with
+   `defineAgentTool`, and register it in `definitions` in `session/tools.ts`.
 2. Give it a unique model-safe name and a precise description.
 3. Define the complete Zod object schema. Make nullable fields explicitly
    nullable rather than optional when strict model schemas require every

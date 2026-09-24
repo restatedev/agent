@@ -127,8 +127,8 @@ The detailed turn-runtime list lives in
   explicit model-selected pending tool.
 - Resolved approval events are model-relevant. Approval-request and
   cancellation events are derived client status and are not model context.
-- Process-local caches (`session/dynamic-tools.ts`, `session/mcp-tools.ts`,
-  provider clients) are
+- Process-local caches (`refresh-cache.ts`, used by dynamic and MCP
+  discovery, and provider clients) are
   optimizations, never durable sources of truth.
 - A sandbox reference carries its provider. Changing `SANDBOX_PROVIDER` does
   not migrate an already-provisioned Agent sandbox.
@@ -170,7 +170,8 @@ The detailed turn-runtime list lives in
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |
 | Pending tool tasks and cancellation races | `session/pending.ts` |
-| Built-in tool schema, execution, result projection | `session/tools.ts` |
+| Built-in tool schema and execution | `session/tools/*.ts` |
+| Tool registry, dispatch, result and transcript projection | `session/tools.ts` |
 | Transcript-to-model projection | `session/context.ts` |
 | Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
 | MCP tool discovery and invocation | `session/mcp-tools.ts` |
@@ -191,9 +192,11 @@ contract.
 ### Built-in tool
 
 Read [tools.md](tools.md). Keep name, description, Zod schema, execution, and
-pending completion together in `session/tools.ts`. Add it to `definitions`,
-preserve cancellation errors, and add a focused test when behavior affects the
-Agent protocol.
+pending completion together in one `session/tools/*.ts` family module, built
+with `defineAgentTool` and the helpers in `tools/define.ts` (`toolRun`,
+`agentCall`, `toolFailure`, which preserve cancellation errors). Register it
+in `definitions` in `session/tools.ts`, and add a focused test when behavior
+affects the Agent protocol.
 
 ### Dynamic Restate tool
 
