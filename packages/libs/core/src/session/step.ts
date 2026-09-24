@@ -30,7 +30,12 @@ import {type GuardrailDecisions, guardAction} from "./guardrails.js";
 import type {TurnHistory} from "./history.js";
 import type {McpAgentTool} from "./mcp-tools.js";
 import type {createPendingOperations} from "./pending.js";
-import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
+import type {
+  AgentToolContext,
+  PendingEvent,
+  ToolExecutionScope,
+  ToolOutcome,
+} from "./tools.js";
 import * as agentTools from "./tools.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
@@ -106,6 +111,27 @@ export function* agentStep({
   // cancellations from those programs are recorded directly, because the turn
   // has already consumed `pendingEvents`.
   let handedOff = false;
+  // Gates a proposal against the guardrails, given approvals and rejections
+  // already made in this turn.
+  const gate = (
+    proposed: ProposedAction,
+    approvalPrefix: string,
+    decided: GuardrailDecisions,
+  ) =>
+    guardAction({
+      context,
+      transcript,
+      instructions,
+      guardrailMessages,
+      guardrails,
+      approvedActions: [...approvedActions, ...decided.approvedActions],
+      rejectedGuardrails: [
+        ...rejectedGuardrails,
+        ...decided.rejectedGuardrails,
+      ],
+      approvalPrefix,
+      proposed,
+    });
 
   try {
     const action = yield* callModel({
@@ -136,16 +162,9 @@ export function* agentStep({
             approvedActions: [],
             rejectedGuardrails: [],
           }
-        : yield* guardAction({
-            context,
-            transcript,
-            instructions,
-            guardrailMessages,
-            guardrails,
-            approvedActions,
-            rejectedGuardrails,
-            approvalPrefix: `guardrail-${stepNumber}`,
-            proposed,
+        : yield* gate(proposed, `guardrail-${stepNumber}`, {
+            approvedActions: [],
+            rejectedGuardrails: [],
           });
     const decisions = {
       approvedActions: guarded.approvedActions,
@@ -185,6 +204,33 @@ export function* agentStep({
         action.calls.map((call) => agentTools.toolActivity(call)),
       ),
     );
+    // PTC's nested calls are gated one by one, and their approvals extend
+    // this step's decisions.
+    const scope: ToolExecutionScope = {
+      transcript,
+      step: stepNumber,
+      *guard(nested) {
+        const guarded = yield* gate(
+          {type: "tool_calls", calls: [nested]},
+          `guardrail-${stepNumber}-${nested.toolCallId}`,
+          decisions,
+        );
+        decisions.approvedActions.push(...guarded.approvedActions);
+        decisions.rejectedGuardrails.push(...guarded.rejectedGuardrails);
+        return guarded.decision === "blocked" ? guarded.reason : undefined;
+      },
+      *cancelPending(outcome) {
+        const applied = yield* pending.apply([outcome], context, stepNumber);
+        if (handedOff)
+          yield* transcript.append(
+            ...applied.events.flatMap((event) =>
+              agentTools.transcriptEntries(event, context),
+            ),
+          );
+        else pendingEvents.push(...applied.events);
+        return applied.outcomes[0];
+      },
+    };
     tasks.push(
       ...action.calls.map((call, index) =>
         spawn(
@@ -194,51 +240,7 @@ export function* agentStep({
               context,
               discoveredTools,
               mcpTools,
-              {
-                transcript,
-                step: stepNumber,
-                *guard(nested) {
-                  const guarded = yield* guardAction({
-                    context,
-                    transcript,
-                    instructions,
-                    guardrailMessages,
-                    guardrails,
-                    approvedActions: [
-                      ...approvedActions,
-                      ...decisions.approvedActions,
-                    ],
-                    rejectedGuardrails: [
-                      ...rejectedGuardrails,
-                      ...decisions.rejectedGuardrails,
-                    ],
-                    approvalPrefix: `guardrail-${stepNumber}-${nested.toolCallId}`,
-                    proposed: {type: "tool_calls", calls: [nested]},
-                  });
-                  decisions.approvedActions.push(...guarded.approvedActions);
-                  decisions.rejectedGuardrails.push(
-                    ...guarded.rejectedGuardrails,
-                  );
-                  return guarded.decision === "blocked"
-                    ? guarded.reason
-                    : undefined;
-                },
-                *cancelPending(outcome) {
-                  const applied = yield* pending.apply(
-                    [outcome],
-                    context,
-                    stepNumber,
-                  );
-                  if (handedOff)
-                    yield* transcript.append(
-                      ...applied.events.flatMap((event) =>
-                        agentTools.transcriptEntries(event, context),
-                      ),
-                    );
-                  else pendingEvents.push(...applied.events);
-                  return applied.outcomes[0];
-                },
-              },
+              scope,
             );
             // Recorded as each tool settles, so a steering handoff knows
             // which results are already final.
