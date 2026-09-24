@@ -18,9 +18,9 @@ import {
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import type {McpServer} from "@restate-agents/types";
-import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
+import {isCancellation} from "../errors.js";
 import {McpConfigurationError, resolveMcpToken} from "./mcp-config.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
@@ -207,7 +207,7 @@ export function* executeMcpTool(
     }
     return {
       status: "failed",
-      error: `${tool.name} failed: ${errorMessage(error)}`,
+      error: `${tool.name} failed: ${sanitizedMessage(error)}`,
     };
   }
 }
@@ -257,7 +257,7 @@ function* callMcpTool(
         if (isCancellation(error)) throw error;
         // Provider errors can contain Authorization headers. Sanitize before
         // the failed HTTP effect is recorded in the journal.
-        return {status: "failed" as const, error: errorMessage(error)};
+        return {status: "failed" as const, error: sanitizedMessage(error)};
       }
     },
     {
@@ -300,7 +300,7 @@ function* discoverMcpServer(
             });
             continue;
           }
-          return {warnings: [`${config.id}: ${errorMessage(error)}`]};
+          return {warnings: [`${config.id}: ${sanitizedMessage(error)}`]};
         }
       }
     },
@@ -357,7 +357,7 @@ async function discoverCached(
       return {
         catalog: cached.catalog,
         warnings: [
-          `${config.id}: refresh failed; using the last known catalog: ${errorMessage(error)}`,
+          `${config.id}: refresh failed; using the last known catalog: ${sanitizedMessage(error)}`,
         ],
       };
     })
@@ -749,12 +749,6 @@ function waitForRefresh(
   });
 }
 
-function isCancellation(error: unknown): boolean {
-  return (
-    error instanceof restate.InterruptedError || error instanceof CancelledError
-  );
-}
-
 /** Configuration and authorization failures do not heal by retrying. */
 function isTransient(error: unknown): boolean {
   return !(
@@ -764,7 +758,8 @@ function isTransient(error: unknown): boolean {
   );
 }
 
-function errorMessage(error: unknown): string {
+// Provider errors can carry credentials, so only fixed messages are journaled.
+function sanitizedMessage(error: unknown): string {
   if (error instanceof McpConfigurationError) return error.message;
   if (
     UnauthorizedError.isInstance(error) ||

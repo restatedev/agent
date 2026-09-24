@@ -76,6 +76,7 @@
 
 import * as restate from "@restatedev/restate-sdk-gen";
 
+import {errorMessage} from "../errors.js";
 import type {ToolCall} from "../model/index.js";
 import {raceBranches} from "../race.js";
 import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
@@ -321,8 +322,7 @@ export function createPendingOperations() {
               call: stopped[index].call,
               outcome: {
                 status: "cancelled",
-                reason:
-                  reason instanceof Error ? reason.message : String(reason),
+                reason: errorMessage(reason),
               },
             },
       );
@@ -346,7 +346,7 @@ export function createPendingOperations() {
         call,
         outcome: {
           status: "cancelled",
-          reason: reason instanceof Error ? reason.message : String(reason),
+          reason: errorMessage(reason),
         },
       }));
     },

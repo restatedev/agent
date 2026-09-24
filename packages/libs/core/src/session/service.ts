@@ -17,6 +17,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 
 import {Agent} from "../agent/index.js";
+import {errorMessage, isCancellation} from "../errors.js";
 import {
   AGENT_SESSION_SIGNALS,
   type AgentTurnOutcome,
@@ -511,10 +512,6 @@ function mcpAvailabilityMessage(
   };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 type ProgressPhase = Extract<
   ConversationEntry,
   {role: "event"; type: "progress"}
@@ -683,12 +680,7 @@ function* finalizeEarlyExit(
       response = `The turn stopped (${exit.reason}), but its final response could not be generated: ${detail}.`;
     }
   } catch (error) {
-    if (
-      error instanceof restate.InterruptedError ||
-      error instanceof CancelledError
-    ) {
-      throw error;
-    }
+    if (isCancellation(error)) throw error;
     response = `The turn stopped (${exit.reason}), but its final response could not be generated: ${errorMessage(error)}.`;
   }
   return {

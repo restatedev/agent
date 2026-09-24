@@ -4,9 +4,10 @@
 // invocation, so deployment changes cannot split those two decisions. Admin
 // reads are coalesced in a short-lived cache local to each endpoint process.
 
-import {CancelledError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
+
+import {errorMessage, isCancellation} from "../errors.js";
 
 const AGENT_TOOL_ANNOTATION = "restate.dev/agent";
 
@@ -258,12 +259,7 @@ export function* discoverAgentTools(
     }
     return result.tools;
   } catch (error) {
-    if (
-      error instanceof restate.InterruptedError ||
-      error instanceof CancelledError
-    ) {
-      throw error;
-    }
+    if (isCancellation(error)) throw error;
     restate
       .logger()
       .warn(
@@ -271,10 +267,6 @@ export function* discoverAgentTools(
       );
     return [];
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function waitForRefresh(
