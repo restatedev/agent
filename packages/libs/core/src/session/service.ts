@@ -29,7 +29,7 @@ import {
   compactConversation,
   type GuardrailApproval,
 } from "../model/index.js";
-import {executionRetention} from "../retention.js";
+import {executionRetention, noRetention} from "../retention.js";
 import {destroySandbox} from "../sandbox/index.js";
 import {objectKey} from "../state.js";
 import {
@@ -119,93 +119,30 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
     },
 
     /**
-     * Executes one complete durable conversation Turn.
-     *
-     * The invocation owns transient model context, the step bound,
-     * steering consumption, interruption, pending operations, and the
-     * agent's sandbox while it runs. It suspends the sandbox if a tool used
-     * it and reports exactly one terminal outcome to the owning Agent on
-     * every handled exit.
-     *
-     * External cancellation is caught at the handler boundary, where pending
-     * tools are stopped, an interrupted outcome is reported, and cancellation
-     * is rethrown to preserve Restate semantics.
+     * Executes one complete durable conversation turn and reports exactly one
+     * outcome to the Agent on every exit. The invocation owns the model
+     * context, step bound, steering, interruption, pending operations and,
+     * while it runs, the agent's sandbox.
      */
     *doTurn(req: AgentTurnRequest): restate.Operation<AgentTurnOutcome> {
-      const agentId = objectKey();
       const turnId = restate.handlerRequest().id;
-      let state: AgentSessionState | undefined;
       let transcript: TurnHistory | undefined;
+      let state: AgentSessionState | undefined;
       let outcome: AgentTurnOutcome;
       try {
         // History is opened once for the whole invocation. The controller
         // already chose the starting entries and immutable turn profile.
         transcript = yield* history.openTurn();
         yield* transcript.append(...req.entries);
-        const conversation = transcript.context();
-        const modelContext = buildModelContext(
-          conversation.entries,
-          conversation.summary,
-          req.memories,
-          req.agentName,
-        );
-        state = {
-          context: agentTools.createAgentToolContext(
-            agentId,
-            turnId,
-            req.webSearchEnabled,
-            req.tools,
-          ),
-          transcript,
-          instructions: req.instructions,
-          guardrails: req.guardrails,
-          approvedActions: [],
-          rejectedGuardrails: new Set(),
-          blockedGuardrails: new Set(),
-          messages: modelContext.messages,
-          guardrailInput: modelContext.guardrailInput,
-          guardrailEvidenceFrom: modelContext.guardrailEvidenceFrom,
-          interrupt: restate.signal<string>(AGENT_SESSION_SIGNALS.interrupt),
-          steeringInbox: createSteeringInbox(),
-          consumedSteering: 0,
-          steps: 0,
-          pending: createPendingOperations(),
-          discoveredTools: [],
-          mcpTools: [],
-          mcpServers: req.mcpServers,
-        };
+        state = startState(req, turnId, transcript);
         outcome = yield* executeTurn(state);
       } catch (error) {
         if (error instanceof CancelledError) {
-          if (state?.mcpServers.some(({protocol}) => protocol === "stateful")) {
-            releaseMcpSessionsAfterCancellation(turnId);
-          }
-          outcome = {
-            turnId,
-            status: "interrupted",
-            reason: "Turn cancelled",
-            consumedSteering: state?.consumedSteering ?? 0,
-          };
-
-          // Record local state without waiting for already-cancelled child
-          // tasks, append the cancellation boundary, suspend the sandbox, and
-          // emit durable one-way cleanup for the controller.
-          const stopped = state?.pending.cancelAll(error) ?? [];
-          if (transcript) {
-            yield* transcript.append(
-              ...(state ? toolTranscriptEntries(state, stopped) : []),
-              ...outcomeEntries(outcome),
-            );
-          }
-          if (state) yield* state.context.sandbox.release();
-          yield* restate.sendClient(Agent, agentId).onTurnEnd(outcome);
+          yield* abandonTurn(turnId, transcript, state, error);
           throw error;
         }
-
-        if (state) {
-          const stopped = yield* state.pending.stop(error);
-          yield* appendToolTranscript(state, stopped);
-        }
+        if (state)
+          yield* appendToolTranscript(state, yield* state.pending.stop(error));
         outcome = {
           turnId,
           status: "failed",
@@ -214,51 +151,111 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
         };
       }
 
-      if (state?.mcpServers.some(({protocol}) => protocol === "stateful")) {
-        yield* releaseMcpSessions(turnId);
-      }
-      // The controller reconciles late steering/interruption before the
-      // session records the terminal outcome in the public transcript.
+      if (state && usesStatefulMcp(state)) yield* releaseMcpSessions(turnId);
       if (state) yield* state.context.sandbox.release();
+      // The controller reconciles late steering and interruption before the
+      // outcome is recorded in the public transcript.
       const reconciled = yield* restate
-        .client(Agent, agentId)
+        .client(Agent, objectKey())
         .onTurnEnd(outcome);
       if (reconciled && transcript) {
         yield* transcript.append(...outcomeEntries(reconciled));
         const compaction = yield* transcript.beginCompaction();
-        if (compaction) {
-          yield* restate.sendClient(AgentSession, agentId).compact(compaction);
-        }
+        if (compaction)
+          yield* restate
+            .sendClient(AgentSession, objectKey())
+            .compact(compaction);
       }
       return reconciled ?? outcome;
     },
   },
   options: {
     handlers: {
-      history: {
-        shared: true,
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      compact: {
-        shared: true,
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
-      applyCompaction: {
-        idempotencyRetention: 0,
-        journalRetention: 0,
-      },
+      history: {shared: true, ...noRetention},
+      compact: {shared: true, ...noRetention},
+      applyCompaction: noRetention,
       retire: executionRetention,
       doTurn: {
-        journalRetention: {hours: 1},
-        idempotencyRetention: {hours: 1},
+        ...executionRetention,
         inactivityTimeout: {hours: 1},
         abortTimeout: {minutes: 15},
       },
     },
   },
 });
+
+function startState(
+  req: AgentTurnRequest,
+  turnId: string,
+  transcript: TurnHistory,
+): AgentSessionState {
+  const conversation = transcript.context();
+  const modelContext = buildModelContext(
+    conversation.entries,
+    conversation.summary,
+    req.memories,
+    req.agentName,
+  );
+  return {
+    context: agentTools.createAgentToolContext(
+      objectKey(),
+      turnId,
+      req.webSearchEnabled,
+      req.tools,
+    ),
+    transcript,
+    instructions: req.instructions,
+    guardrails: req.guardrails,
+    approvedActions: [],
+    rejectedGuardrails: new Set(),
+    blockedGuardrails: new Set(),
+    messages: modelContext.messages,
+    guardrailInput: modelContext.guardrailInput,
+    guardrailEvidenceFrom: modelContext.guardrailEvidenceFrom,
+    interrupt: restate.signal<string>(AGENT_SESSION_SIGNALS.interrupt),
+    steeringInbox: createSteeringInbox(),
+    consumedSteering: 0,
+    steps: 0,
+    pending: createPendingOperations(),
+    discoveredTools: [],
+    mcpTools: [],
+    mcpServers: req.mcpServers,
+  };
+}
+
+/**
+ * Cleanup after invocation cancellation. The coroutine tree is already
+ * cancelled, so nothing here waits on child tasks: it records what was
+ * running, appends the interruption, suspends the sandbox and tells the Agent
+ * one way.
+ */
+function* abandonTurn(
+  turnId: string,
+  transcript: TurnHistory | undefined,
+  state: AgentSessionState | undefined,
+  error: CancelledError,
+): restate.Operation<void> {
+  if (state && usesStatefulMcp(state))
+    releaseMcpSessionsAfterCancellation(turnId);
+  const outcome: AgentTurnOutcome = {
+    turnId,
+    status: "interrupted",
+    reason: "Turn cancelled",
+    consumedSteering: state?.consumedSteering ?? 0,
+  };
+  const stopped = state?.pending.cancelAll(error) ?? [];
+  if (transcript)
+    yield* transcript.append(
+      ...(state ? toolTranscriptEntries(state, stopped) : []),
+      ...outcomeEntries(outcome),
+    );
+  if (state) yield* state.context.sandbox.release();
+  yield* restate.sendClient(Agent, objectKey()).onTurnEnd(outcome);
+}
+
+function usesStatefulMcp(state: AgentSessionState): boolean {
+  return state.mcpServers.some(({protocol}) => protocol === "stateful");
+}
 
 /**
  * Runs the iterative model/tool state machine for one Turn.
