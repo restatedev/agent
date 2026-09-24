@@ -34,9 +34,11 @@ import {AgentToolsPanel} from "./agent-tools-panel";
 import {errorMessage, type Notify, runAction, shortTurn} from "./format";
 import {Switch} from "./switch";
 import {Transcript} from "./transcript";
+import {describeToolBatch, entryTurnId} from "./transcript-entries";
 import {type SaveProfile, useAgent} from "./use-agent";
 
-type Mode = "ask" | "steer" | "interrupt";
+const MODES = ["ask", "steer", "interrupt"] as const;
+type Mode = (typeof MODES)[number];
 type Tab = "approvals" | "profile";
 type Guardrail = AgentProfile["guardrails"][number];
 type Toast = {
@@ -86,10 +88,10 @@ function activeTurn(
       turns.set(turnId, turn);
       continue;
     }
-    if (entry.role !== "event" || !("turnId" in entry) || !entry.turnId) {
+    const turnId = entryTurnId(entry);
+    if (entry.role !== "event" || !turnId) {
       continue;
     }
-    const turnId = entry.turnId;
     const turn = turns.get(turnId) ?? {terminal: false};
     if (entry.type === "progress") {
       turn.phase = entry.phase;
@@ -99,9 +101,7 @@ function activeTurn(
       turn.message = entry.message;
     } else if (entry.type === "tools") {
       turn.phase = entry.phase === "started" ? "tools" : "thinking";
-      turn.message = `${entry.phase === "started" ? "Running" : "Finished"} ${entry.calls
-        .map((call) => call.summary ?? call.name)
-        .join(", ")}`;
+      turn.message = describeToolBatch(entry);
     } else if (entry.type === "interrupt") {
       turn.phase = "finalizing";
       turn.message = "Finalizing the interrupted turn";
@@ -253,7 +253,7 @@ function Composer({
     <div className="composer-shell">
       <div className="mode-row">
         <fieldset className="mode-switcher" aria-label="Message delivery mode">
-          {(Object.keys(MODE_COPY) as Mode[]).map((candidate) => (
+          {MODES.map((candidate) => (
             <button
               data-active={mode === candidate}
               key={candidate}

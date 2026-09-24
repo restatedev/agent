@@ -42,14 +42,13 @@ import {
 } from "./components/ui/message-scroller";
 import {shortTurn} from "./format";
 import {renderInline, renderMarkdown} from "./markdown";
-
-type TranscriptEntry = SequencedEntry["entry"];
-type EventEntry = Extract<TranscriptEntry, {role: "event"}>;
-type DetailEntry = Extract<
-  EventEntry,
-  {type: "progress" | "activity" | "tools" | "steer" | "approval_cancelled"}
->;
-type AssistantEntry = Extract<TranscriptEntry, {role: "assistant"}>;
+import {
+  type AssistantEntry,
+  type DetailEntry,
+  describeToolBatch,
+  isDetailEntry,
+  type ToolsEntry,
+} from "./transcript-entries";
 
 type EntryRow = {
   kind: "entry";
@@ -67,14 +66,6 @@ type TurnRow = {
 
 type TranscriptRow = EntryRow | TurnRow;
 
-const detailTypes = new Set<EventEntry["type"]>([
-  "progress",
-  "activity",
-  "tools",
-  "steer",
-  "approval_cancelled",
-]);
-
 function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
   // Read terminal status first so every segment of a finished turn renders
   // consistently, even when a user message splits its details into two rows.
@@ -90,17 +81,8 @@ function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
   let currentTurn: TurnRow | undefined;
   for (const item of entries) {
     const {entry} = item;
-    if (
-      entry.role === "event" &&
-      detailTypes.has(entry.type) &&
-      "turnId" in entry
-    ) {
+    if (isDetailEntry(entry)) {
       const turnId = entry.turnId;
-      if (!turnId) {
-        rows.push({kind: "entry", item});
-        currentTurn = undefined;
-        continue;
-      }
       if (!currentTurn || currentTurn.turnId !== turnId) {
         currentTurn = {
           kind: "turn",
@@ -113,7 +95,7 @@ function transcriptRows(entries: SequencedEntry[]): TranscriptRow[] {
         seenTurns.add(turnId);
         rows.push(currentTurn);
       }
-      currentTurn.entries.push(entry as DetailEntry);
+      currentTurn.entries.push(entry);
       continue;
     }
     rows.push({kind: "entry", item});
@@ -138,7 +120,7 @@ function phaseIcon(phase: string) {
   }
 }
 
-function ToolLines({entry}: {entry: Extract<DetailEntry, {type: "tools"}>}) {
+function ToolLines({entry}: {entry: ToolsEntry}) {
   return (
     <div className="tool-lines">
       {entry.calls.map((call) => {
@@ -248,9 +230,7 @@ function TurnCard({row}: {row: TurnRow}) {
     if (entry.type === "activity" || entry.type === "progress") {
       live = entry.message;
     } else if (entry.type === "tools") {
-      live = `${entry.phase === "started" ? "Running" : "Finished"} ${entry.calls
-        .map((call) => call.summary ?? call.name)
-        .join(", ")}`;
+      live = describeToolBatch(entry);
     }
   }
 
