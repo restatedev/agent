@@ -13,7 +13,7 @@ import {
   type ConversationCompactionInput,
   isDerivedConversationEvent,
 } from "../internal-types.js";
-import {withOpenAI} from "./provider.js";
+import {openaiOptions, withOpenAI} from "./provider.js";
 
 const COMPACTOR_MODEL = "gpt-4o-mini";
 
@@ -44,9 +44,7 @@ export function* compactConversation(
               conversation: request.entries.flatMap(compactionView),
             }),
             maxOutputTokens: 1_000,
-            maxRetries: 0,
-            abortSignal: signal,
-            timeout: 30_000,
+            ...openaiOptions(signal, 30_000),
             providerOptions: {openai: {store: false}},
           });
           const text = response.text.trim();
