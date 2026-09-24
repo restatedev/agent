@@ -40,8 +40,6 @@ import * as agentTools from "./tools.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
 
-export type {GuardrailDecisions} from "./guardrails.js";
-
 /** A model tool-call action paired with its foreground execution outcomes. */
 export type ToolStep = GuardrailDecisions & {
   type: "tools";
@@ -307,6 +305,27 @@ export function* agentStep({
     const {action, tasks, decisions} = activeTools;
     const settled = yield* interruptAndJoin(tasks, error);
     if (!(error instanceof AgentStepInterrupt)) {
+      // The turn fails or is cancelled without these outcomes, so close the
+      // batch here: every call that was started gets a finished status.
+      yield* transcript.append(
+        agentTools.toolsEvent(
+          context.turnId,
+          stepNumber,
+          "finished",
+          action.calls.map((call, index) => {
+            const result = settled[index];
+            return agentTools.toolActivity(
+              call,
+              result?.status !== "fulfilled" ||
+                result.value.status === "pending"
+                ? "cancelled"
+                : result.value.status === "cancel_requested"
+                  ? "failed"
+                  : result.value.status,
+            );
+          }),
+        ),
+      );
       throw error;
     }
     return {
