@@ -4,6 +4,7 @@
 // suspends it when it ends. Suspension keeps the persistent files (a Modal
 // Volume, a local directory) and releases only compute.
 
+import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
 import {
@@ -25,29 +26,61 @@ export type TurnSandbox = {
 /**
  * Creates the turn's sandbox handle. Must be used from AgentSession.doTurn.
  *
- * Acquisition runs as its own task, so parallel tools share one provisioning
- * and interrupting the tool that started it does not abandon it half way.
+ * Acquisition runs inline in the first tool that needs the sandbox; parallel
+ * tools wait for it rather than starting their own. It is deliberately NOT a
+ * task spawned by that first tool: sdk-gen cascades `interrupt` down the
+ * spawn subtree, so a spawned acquisition would die with its tool (a PTC
+ * `Promise.race` loser, a cancelled handed-off program) and its rejection
+ * would then be shared by every other sandbox tool of the turn. Instead, an
+ * interrupted owner simply gives up, and the next waiter becomes the owner
+ * and acquires again. A plain failure is not cached either: the waiters and
+ * later tools each try again and report their own failure.
+ *
+ * Replay is deterministic because which fiber owns an attempt follows from
+ * fiber scheduling, which the journal drives; each attempt is a state read
+ * plus one named run, in the same order as the original execution.
  */
 export function openTurnSandbox(agentId: string): TurnSandbox {
-  let acquired: restate.Task<SandboxRef> | undefined;
+  let ref: SandboxRef | undefined;
+  // Settled (never rejected) when the current attempt ends, however it ends.
+  let attempt: restate.Channel<void> | undefined;
   let released = false;
   return {
     *client() {
-      acquired ??= restate.spawn(acquire(agentId));
-      return sandboxProvider.connect(yield* acquired);
+      while (true) {
+        // A tool still running after the turn released the sandbox (an
+        // abandoned fiber) must not provision compute nobody will suspend.
+        if (released)
+          throw new TerminalError("the turn's sandbox was already released");
+        if (ref) return sandboxProvider.connect(ref);
+        if (attempt) {
+          yield* attempt.receive;
+          continue;
+        }
+        const done = restate.channel<void>();
+        attempt = done;
+        try {
+          ref = yield* acquire(agentId);
+        } finally {
+          attempt = undefined;
+          yield* done.send();
+        }
+      }
     },
 
     *release() {
-      if (!acquired || released) return;
+      if (released) return;
       released = true;
-      const [settled] = yield* restate.allSettled([acquired]);
-      // A failed acquisition left the stored reference unchanged.
-      if (settled.status !== "fulfilled") return;
-      const ref = yield* restate.run(
-        ({signal}) => sandboxProvider.suspend(settled.value, {signal}),
+      // An attempt still in flight (its tool was cancelled with the turn)
+      // ends promptly; wait so a sandbox it did acquire is suspended.
+      while (attempt) yield* attempt.receive;
+      if (!ref) return;
+      const acquired = ref;
+      const suspended = yield* restate.run(
+        ({signal}) => sandboxProvider.suspend(acquired, {signal}),
         {name: "suspendSandbox"},
       );
-      restate.state().set(STATE, ref);
+      restate.state().set(STATE, suspended);
     },
   };
 }

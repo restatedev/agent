@@ -15,11 +15,19 @@ provider's `SandboxRef` under its `sandbox` state key. `doTurn` is exclusive
 per agent, so at most one turn uses the sandbox at a time and no lease or
 borrower check is needed.
 
-The turn does not provision eagerly. The first sandbox tool of a turn spawns
-one acquisition task: it resumes the stored ref, or provisions one if none
-exists, and stores the result. Parallel tools share that task, and later steps
-reuse its ref. Because acquisition is its own task, interrupting the tool that
-started it does not abandon a half-finished provision.
+The turn does not provision eagerly. The first sandbox tool of a turn acquires
+the sandbox inline: it resumes the stored ref, or provisions one if none
+exists, and stores the result. Parallel tools wait for that attempt instead of
+starting their own, and later steps reuse its ref.
+
+Acquisition is deliberately not a task spawned by the first tool. sdk-gen
+cascades `interrupt` down a task's spawn subtree, so such a task would die with
+its tool (a PTC `Promise.race` loser, a cancelled handed-off program) and every
+other sandbox tool of the turn would inherit its rejection. Instead, when the
+owning tool is interrupted, the next waiting tool takes over and acquires again;
+provider operations are retry-safe (see below), so a half-finished provision is
+recovered rather than duplicated. A failed attempt is not cached either: later
+tools try again and report their own failure to the model.
 
 When `doTurn` exits, including on failure and cancellation, it suspends the
 sandbox if the turn acquired one and stores the provider's updated ref. A turn

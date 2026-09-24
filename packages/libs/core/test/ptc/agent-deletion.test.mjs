@@ -121,3 +121,43 @@ test("a turn that never uses the sandbox does not touch it", async () => {
     assert.equal(m.resume.mock.callCount() + m.suspend.mock.callCount(), 0);
   } finally { m.restore(); }
 });
+
+// Regression: the acquisition used to be a task spawned by the first tool, so
+// interrupting that tool (a PTC race loser) cascaded into it and every other
+// sandbox tool of the turn inherited the rejection.
+let provisionStarted;
+const InterruptProbe = durable.object({
+  name: "InterruptProbe",
+  handlers: {
+    *run() {
+      const sandbox = openTurnSandbox("a");
+      const first = durable.spawn(sandbox.client());
+      const second = durable.spawn(sandbox.client());
+      yield* durable.run(() => provisionStarted, {name: "wait-provision"});
+      first.interrupt();
+      const [interrupted] = yield* durable.allSettled([first]);
+      const [waiter] = yield* durable.allSettled([second]);
+      const [later] = yield* durable.allSettled([durable.spawn(sandbox.client())]);
+      yield* sandbox.release();
+      return {interrupted: interrupted.status, waiter: waiter.status, later: later.status};
+    },
+  },
+});
+
+test("interrupting the tool that started acquisition does not fail the turn's other sandbox tools", async () => {
+  let started;
+  provisionStarted = new Promise(resolve => { started = resolve; });
+  const m = mockLifecycle();
+  m.provision.mock.mockImplementation(({signal}) => {
+    if (m.provision.mock.callCount() > 0) return Promise.resolve({provider: "local", root: "/provisioned"});
+    started();
+    return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+  });
+  try {
+    const f = context("a");
+    const result = await f.invoke(InterruptProbe.object.run);
+    assert.deepEqual(result, {interrupted: "rejected", waiter: "fulfilled", later: "fulfilled"});
+    assert.equal(m.suspend.mock.callCount(), 1);
+    assert.deepEqual(f.state.get("sandbox"), {provider: "local", root: "/provisioned", suspended: true});
+  } finally { m.restore(); }
+});
