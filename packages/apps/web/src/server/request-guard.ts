@@ -22,6 +22,14 @@ function parseHost(host: string, protocol: string) {
   }
 }
 
+/** Extra Host values a rewriting proxy may send, from APP_ALLOWED_HOSTS. */
+function allowedProxyHosts() {
+  return (process.env.APP_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 /**
  * The origin this UI is served from: APP_PUBLIC_URL when set, otherwise the
  * loopback address the browser used.
@@ -42,12 +50,9 @@ export function trustedOrigin(request: Request): string {
       request.headers.get("host") ?? "",
       expected.protocol,
     ).host;
-    const allowed = (process.env.APP_ALLOWED_HOSTS ?? "")
-      .split(",")
-      .map((entry) => entry.trim().toLowerCase())
-      .filter(Boolean);
-    if (host !== expected.host && !allowed.includes(host))
+    if (host !== expected.host && !allowedProxyHosts().includes(host)) {
       throw new UiRequestError(403, "Untrusted UI host");
+    }
     return expected.origin;
   }
   // Next.js can reconstruct request.url with localhost even when the browser
@@ -57,13 +62,15 @@ export function trustedOrigin(request: Request): string {
     request.headers.get("host") ?? fallback.host,
     fallback.protocol,
   );
-  if (!LOOPBACK_HOSTNAMES.includes(actual.hostname))
+  if (!LOOPBACK_HOSTNAMES.includes(actual.hostname)) {
     throw new UiRequestError(403, "Untrusted local UI host");
+  }
   return actual.origin;
 }
 
 /** The UI is a local operator tool. Reject cross-origin browser writes. */
 export function requireSameOrigin(request: Request) {
-  if (request.headers.get("origin") !== trustedOrigin(request))
+  if (request.headers.get("origin") !== trustedOrigin(request)) {
     throw new UiRequestError(403, "Cross-origin action rejected");
+  }
 }

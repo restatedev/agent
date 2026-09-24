@@ -85,10 +85,14 @@ export function AgentToolsPanel({
     client
       .toolCatalog()
       .then((result) => {
-        if (active) setCatalog(result);
+        if (active) {
+          setCatalog(result);
+        }
       })
       .catch((error) => {
-        if (active) notify(errorMessage(error), true);
+        if (active) {
+          notify(errorMessage(error), true);
+        }
       });
     return () => {
       active = false;
@@ -96,7 +100,9 @@ export function AgentToolsPanel({
   }, [client, notify]);
 
   async function save(tools: AgentTools) {
-    if (savingRef.current) return;
+    if (savingRef.current) {
+      return;
+    }
     savingRef.current = true;
     setSaving(true);
     await saveProfile({tools}, "Tool access saved for the next turn");
@@ -104,7 +110,9 @@ export function AgentToolsPanel({
     setSaving(false);
   }
 
-  if (!profile) return <p>Loading tool access…</p>;
+  if (!profile) {
+    return <p>Loading tool access…</p>;
+  }
   const permissions = profile.tools;
   return (
     <section className="settings-section">

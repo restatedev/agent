@@ -7,8 +7,11 @@ export function toggleTool(
   enabled: boolean,
 ): ToolSelection {
   const names = new Set(selection.mode === "all" ? catalog : selection.names);
-  if (enabled) names.add(name);
-  else names.delete(name);
+  if (enabled) {
+    names.add(name);
+  } else {
+    names.delete(name);
+  }
   return {mode: "selected", names: [...names]};
 }
 

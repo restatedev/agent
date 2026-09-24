@@ -20,8 +20,11 @@ export async function runAction(
 ): Promise<void> {
   try {
     const result = await action();
-    if (typeof result === "string") notify(result);
-    else if (result) notify(...result);
+    if (typeof result === "string") {
+      notify(result);
+    } else if (result) {
+      notify(...result);
+    }
   } catch (error) {
     notify(errorMessage(error), true);
   }

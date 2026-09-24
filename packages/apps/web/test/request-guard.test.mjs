@@ -1,59 +1,134 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+
 import {requireSameOrigin, trustedOrigin} from "../src/server/request-guard.ts";
 
-const request = (method, headers) => new Request("http://localhost:3000/api/agent/demo/snapshot", {method, headers});
-const rejects = (fn, pattern) => assert.throws(fn, error => error.status === 403 && pattern.test(error.message));
+const PUBLIC_URL = "https://agents.example.com";
 
-test("reads and writes reject a rebound non-loopback Host", t => {
-  const before = process.env.APP_PUBLIC_URL;
-  delete process.env.APP_PUBLIC_URL;
-  t.after(() => { if (before !== undefined) process.env.APP_PUBLIC_URL = before; });
-  rejects(() => trustedOrigin(request("GET", {host: "attacker.example:3000"})), /Untrusted local UI host/);
-  rejects(() => requireSameOrigin(request("POST", {host: "attacker.example:3000", origin: "http://attacker.example:3000"})), /Untrusted local UI host/);
-  for (const host of ["localhost:3000", "127.0.0.1:3000", "[::1]:3000"])
-    assert.equal(trustedOrigin(request("GET", {host})), `http://${host}`);
-});
+/** A proxy request as Next.js hands it to the route: request.url says localhost. */
+function request(method, headers) {
+  return new Request("http://localhost:3000/api/agent/demo/snapshot", {
+    method,
+    headers,
+  });
+}
 
-test("writes require an Origin matching the loopback Host", t => {
-  const before = process.env.APP_PUBLIC_URL;
-  delete process.env.APP_PUBLIC_URL;
-  t.after(() => { if (before !== undefined) process.env.APP_PUBLIC_URL = before; });
-  requireSameOrigin(request("POST", {host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000"}));
-  rejects(() => requireSameOrigin(request("POST", {host: "127.0.0.1:3000"})), /Cross-origin/);
-  rejects(() => requireSameOrigin(request("POST", {host: "127.0.0.1:3000", origin: "http://localhost:3000"})), /Cross-origin/);
-  rejects(() => requireSameOrigin(request("POST", {host: "127.0.0.1:3000", origin: "http://evil.example"})), /Cross-origin/);
-});
+function read(host) {
+  return request("GET", {host});
+}
 
-const withEnv = (t, env) => {
-  const before = {APP_PUBLIC_URL: process.env.APP_PUBLIC_URL, APP_ALLOWED_HOSTS: process.env.APP_ALLOWED_HOSTS};
-  for (const [key, value] of Object.entries(env)) process.env[key] = value;
+function write(host, origin) {
+  const headers = {origin};
+  if (host) {
+    headers.host = host;
+  }
+  return request("POST", headers);
+}
+
+/** Asserts a 403 whose message matches `pattern`. */
+function assertForbidden(check, pattern) {
+  assert.throws(check, (error) => {
+    return error.status === 403 && pattern.test(error.message);
+  });
+}
+
+/** Sets the guard's environment for one test and restores it afterwards. */
+function useEnv(t, env) {
+  const saved = {};
+  for (const key of ["APP_PUBLIC_URL", "APP_ALLOWED_HOSTS"]) {
+    saved[key] = process.env[key];
+    if (env[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = env[key];
+    }
+  }
   t.after(() => {
-    for (const [key, value] of Object.entries(before)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   });
-};
+}
 
-test("APP_PUBLIC_URL defines the trusted origin for proxied deployments", t => {
-  withEnv(t, {APP_PUBLIC_URL: "https://agents.example.com", APP_ALLOWED_HOSTS: ""});
-  assert.equal(trustedOrigin(request("GET", {host: "agents.example.com"})), "https://agents.example.com");
-  assert.equal(trustedOrigin(request("GET", {host: "Agents.Example.com:443"})), "https://agents.example.com");
-  requireSameOrigin(request("POST", {host: "agents.example.com", origin: "https://agents.example.com"}));
-  rejects(() => requireSameOrigin(request("POST", {host: "agents.example.com", origin: "http://localhost:3000"})), /Cross-origin/);
+test("locally, reads and writes reject a rebound non-loopback Host", (t) => {
+  useEnv(t, {});
+
+  assertForbidden(
+    () => trustedOrigin(read("attacker.example:3000")),
+    /Untrusted local UI host/,
+  );
+  assertForbidden(
+    () =>
+      requireSameOrigin(
+        write("attacker.example:3000", "http://attacker.example:3000"),
+      ),
+    /Untrusted local UI host/,
+  );
 });
 
-test("APP_PUBLIC_URL still rejects reads through a rebound Host", t => {
-  withEnv(t, {APP_PUBLIC_URL: "https://agents.example.com", APP_ALLOWED_HOSTS: ""});
-  rejects(() => trustedOrigin(request("GET", {host: "attacker.example"})), /Untrusted UI host/);
-  rejects(() => trustedOrigin(request("GET", {host: "internal:3000"})), /Untrusted UI host/);
-  rejects(() => trustedOrigin(request("GET", {host: "localhost:3000"})), /Untrusted UI host/);
+test("locally, every loopback Host is its own trusted origin", (t) => {
+  useEnv(t, {});
+
+  for (const host of ["localhost:3000", "127.0.0.1:3000", "[::1]:3000"]) {
+    assert.equal(trustedOrigin(read(host)), `http://${host}`);
+  }
 });
 
-test("APP_ALLOWED_HOSTS admits a proxy's rewritten Host", t => {
-  withEnv(t, {APP_PUBLIC_URL: "https://agents.example.com", APP_ALLOWED_HOSTS: "internal:3000, web.svc:3000"});
-  assert.equal(trustedOrigin(request("GET", {host: "internal:3000"})), "https://agents.example.com");
-  assert.equal(trustedOrigin(request("GET", {host: "web.svc:3000"})), "https://agents.example.com");
-  requireSameOrigin(request("POST", {host: "internal:3000", origin: "https://agents.example.com"}));
-  rejects(() => trustedOrigin(request("GET", {host: "attacker.example"})), /Untrusted UI host/);
+test("locally, writes require an Origin matching the loopback Host", (t) => {
+  useEnv(t, {});
+  const host = "127.0.0.1:3000";
+
+  requireSameOrigin(write(host, "http://127.0.0.1:3000"));
+
+  assertForbidden(() => requireSameOrigin(write(host)), /Cross-origin/);
+  assertForbidden(
+    () => requireSameOrigin(write(host, "http://localhost:3000")),
+    /Cross-origin/,
+  );
+  assertForbidden(
+    () => requireSameOrigin(write(host, "http://evil.example")),
+    /Cross-origin/,
+  );
+});
+
+test("behind a proxy, APP_PUBLIC_URL is the trusted origin", (t) => {
+  useEnv(t, {APP_PUBLIC_URL: PUBLIC_URL});
+
+  assert.equal(trustedOrigin(read("agents.example.com")), PUBLIC_URL);
+  // Host is case-insensitive and may spell out the default port.
+  assert.equal(trustedOrigin(read("Agents.Example.com:443")), PUBLIC_URL);
+
+  requireSameOrigin(write("agents.example.com", PUBLIC_URL));
+  assertForbidden(
+    () => requireSameOrigin(write("agents.example.com", "http://localhost:3000")),
+    /Cross-origin/,
+  );
+});
+
+test("behind a proxy, reads through a rebound Host are rejected", (t) => {
+  useEnv(t, {APP_PUBLIC_URL: PUBLIC_URL});
+
+  for (const host of ["attacker.example", "internal:3000", "localhost:3000"]) {
+    assertForbidden(() => trustedOrigin(read(host)), /Untrusted UI host/);
+  }
+});
+
+test("APP_ALLOWED_HOSTS admits the Host a rewriting proxy sends", (t) => {
+  useEnv(t, {
+    APP_PUBLIC_URL: PUBLIC_URL,
+    APP_ALLOWED_HOSTS: "internal:3000, web.svc:3000",
+  });
+
+  assert.equal(trustedOrigin(read("internal:3000")), PUBLIC_URL);
+  assert.equal(trustedOrigin(read("web.svc:3000")), PUBLIC_URL);
+  requireSameOrigin(write("internal:3000", PUBLIC_URL));
+
+  assertForbidden(
+    () => trustedOrigin(read("attacker.example")),
+    /Untrusted UI host/,
+  );
 });

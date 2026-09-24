@@ -15,13 +15,17 @@ function ingressUrl() {
 function ingressHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   const token = process.env.RESTATE_AUTH_TOKEN?.trim();
-  if (token) headers.Authorization = `Bearer ${token}`;
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   return headers;
 }
 
 function requireAgentId(agentId: string) {
   const normalized = agentId.trim();
-  if (!normalized) throw new UiRequestError(400, "Agent ID must not be empty");
+  if (!normalized) {
+    throw new UiRequestError(400, "Agent ID must not be empty");
+  }
   if (normalized.length > 256) {
     throw new UiRequestError(400, "Agent ID must not exceed 256 characters");
   }

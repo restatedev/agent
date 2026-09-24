@@ -132,6 +132,8 @@ async function readHistory(
       throw new Error("History cursor did not advance");
     }
     nextSequence = page.nextSequence;
-    if (page.entries.length < 100) return {entries, nextSequence};
+    if (page.entries.length < 100) {
+      return {entries, nextSequence};
+    }
   }
 }
