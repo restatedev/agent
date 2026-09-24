@@ -1,10 +1,14 @@
 // The model operation used by AgentSession.compact. State access and
 // checkpoint application remain on the AgentSession virtual object.
 
-import type {ConversationCompactionResult} from "@restate-agents/types";
+import type {
+  ConversationCompactionResult,
+  ConversationEntry,
+} from "@restate-agents/types";
 import {type Operation, run} from "@restatedev/restate-sdk-gen";
 import {generateText} from "ai";
 
+import {errorMessage, isCancellation} from "../errors.js";
 import {
   type ConversationCompactionInput,
   isDerivedConversationEvent,
@@ -27,6 +31,7 @@ const COMPACTOR_SYSTEM = [
 export function* compactConversation(
   request: ConversationCompactionInput,
 ): Operation<ConversationCompactionResult> {
+  const range = {baseThrough: request.baseThrough, through: request.through};
   try {
     const summary = yield* run(
       ({signal}) =>
@@ -36,85 +41,7 @@ export function* compactConversation(
             system: COMPACTOR_SYSTEM,
             prompt: JSON.stringify({
               previousSummary: request.previousSummary ?? null,
-              conversation: request.entries.flatMap(
-                (entry): Record<string, unknown>[] => {
-                  if (entry.role === "user") {
-                    return [
-                      {
-                        role: entry.role,
-                        text: entry.text,
-                        delivery: entry.delivery,
-                      },
-                    ];
-                  }
-                  if (entry.role === "assistant") {
-                    return [
-                      {
-                        role: entry.role,
-                        text: entry.text,
-                        turnId: entry.turnId,
-                        status: entry.status,
-                      },
-                    ];
-                  }
-                  if (isDerivedConversationEvent(entry)) {
-                    return [];
-                  }
-                  switch (entry.type) {
-                    case "steer":
-                      return [
-                        {
-                          role: entry.role,
-                          type: entry.type,
-                          turnId: entry.turnId,
-                          queuedMessages: entry.queuedMessages,
-                        },
-                      ];
-                    case "interrupt":
-                      return [
-                        {
-                          role: entry.role,
-                          type: entry.type,
-                          turnId: entry.turnId,
-                          reason: entry.reason,
-                        },
-                      ];
-                    case "stop":
-                      return [
-                        {
-                          role: entry.role,
-                          type: entry.type,
-                          turnId: entry.turnId,
-                          cause: entry.cause,
-                          reason: entry.reason,
-                        },
-                      ];
-                    case "approval":
-                      return [
-                        {
-                          role: entry.role,
-                          type: entry.type,
-                          approvalId: entry.approvalId,
-                          turnId: entry.turnId,
-                          question: entry.question,
-                          guardrailId: entry.guardrailId,
-                          decision: entry.decision,
-                          reason: entry.reason,
-                        },
-                      ];
-                    case "dispatch":
-                      return [
-                        {
-                          role: entry.role,
-                          type: entry.type,
-                          queuedMessages: entry.queuedMessages,
-                        },
-                      ];
-                  }
-                  const unreachable: never = entry;
-                  return unreachable;
-                },
-              ),
+              conversation: request.entries.flatMap(compactionView),
             }),
             maxOutputTokens: 1_000,
             maxRetries: 0,
@@ -122,10 +49,10 @@ export function* compactConversation(
             timeout: 30_000,
             providerOptions: {openai: {store: false}},
           });
-          if (!response.text.trim()) {
+          const text = response.text.trim();
+          if (!text)
             throw new Error("conversation compactor returned an empty summary");
-          }
-          return response.text.trim();
+          return text;
         }),
       {
         name: "compact-conversation",
@@ -137,18 +64,31 @@ export function* compactConversation(
         },
       },
     );
-    return {
-      status: "completed",
-      baseThrough: request.baseThrough,
-      through: request.through,
-      summary,
-    };
+    return {status: "completed", ...range, summary};
   } catch (error) {
-    return {
-      status: "failed",
-      baseThrough: request.baseThrough,
-      through: request.through,
-      error: error instanceof Error ? error.message : String(error),
-    };
+    // A failed summary is recorded so the range can be retried later; a
+    // cancelled compaction must still propagate.
+    if (isCancellation(error)) throw error;
+    return {status: "failed", ...range, error: errorMessage(error)};
+  }
+}
+
+// What the compactor sees of an entry: messages without delivery metadata,
+// and lifecycle boundaries, but none of the derived status events.
+function compactionView(entry: ConversationEntry): Record<string, unknown>[] {
+  switch (entry.role) {
+    case "user":
+      return [{role: "user", text: entry.text, delivery: entry.delivery}];
+    case "assistant":
+      return [
+        {
+          role: "assistant",
+          text: entry.text,
+          turnId: entry.turnId,
+          status: entry.status,
+        },
+      ];
+    case "event":
+      return isDerivedConversationEvent(entry) ? [] : [entry];
   }
 }
