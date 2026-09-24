@@ -91,17 +91,17 @@ export function* openTurn(): restate.Operation<TurnHistory> {
   const summary = yield* readSummary();
   const uncompacted = yield* readEntries(meta, (summary?.through ?? 0) + 1);
   // The tail chunk receives this turn's appends. A full chunk is closed, so
-  // appending starts a new one; otherwise reuse the tail the walk above just
-  // loaded, and read it only when the summary already covers all of it.
+  // appending starts a new one.
   let index = Math.floor((meta.nextSequence - 1) / CHUNK_SIZE);
   let chunk: StoredEntry[] = [];
   if ((meta.nextSequence - 1) % CHUNK_SIZE !== 0) {
     const first = index * CHUNK_SIZE + 1;
-    chunk =
-      (summary?.through ?? 0) < first
-        ? uncompacted.filter(({sequence}) => sequence >= first)
-        : ((yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ??
-          []);
+    if ((summary?.through ?? 0) < first) {
+      // The walk above already loaded every entry of the tail chunk.
+      chunk = uncompacted.filter(({sequence}) => sequence >= first);
+    } else {
+      chunk = yield* readEntries(meta, first);
+    }
   }
   const agentId = objectKey();
 
@@ -140,21 +140,21 @@ export function* openTurn(): restate.Operation<TurnHistory> {
     *beginCompaction(): restate.Operation<
       ConversationCompactionPlan | undefined
     > {
-      const messages = (after: number) =>
-        uncompacted.filter(
-          ({sequence, entry}) => sequence > after && entry.role !== "event",
-        ).length;
-      if (messages(0) < COMPACT_AFTER_MESSAGES) return undefined;
+      if (messagesAfter(uncompacted, 0) < COMPACT_AFTER_MESSAGES) {
+        return undefined;
+      }
       // A reservation normally finishes during the next turn. One that has
       // fallen a whole threshold behind lost its applyCompaction (the
       // one-way compact call was cancelled or failed), so replace it rather
       // than blocking compaction forever; a late result for it no longer
       // matches the plan and is ignored.
+      const reserved = meta.compaction;
       if (
-        meta.compaction &&
-        messages(meta.compaction.through) < COMPACT_AFTER_MESSAGES
-      )
+        reserved &&
+        messagesAfter(uncompacted, reserved.through) < COMPACT_AFTER_MESSAGES
+      ) {
         return undefined;
+      }
 
       meta.compaction = {
         baseThrough: summary?.through ?? 0,
@@ -213,6 +213,13 @@ export function* finishCompaction(
   return true;
 }
 
+/** Counts conversation messages (not events) after `sequence`. */
+function messagesAfter(entries: StoredEntry[], sequence: number): number {
+  return entries.filter(
+    (stored) => stored.sequence > sequence && stored.entry.role !== "event",
+  ).length;
+}
+
 function chunkKey(index: number): string {
   return `history/chunk/${index}`;
 }
@@ -251,17 +258,21 @@ function* readEntries(
 ): restate.Operation<StoredEntry[]> {
   const through = Math.min(throughSequence, meta.nextSequence - 1);
   const result: StoredEntry[] = [];
-  let sequence = Math.max(1, fromSequence);
-  while (sequence <= through && result.length < limit) {
+  let chunkIndex = -1;
+  let chunk: StoredEntry[] = [];
+  for (
+    let sequence = Math.max(1, fromSequence);
+    sequence <= through && result.length < limit;
+    sequence += 1
+  ) {
     const index = Math.floor((sequence - 1) / CHUNK_SIZE);
-    const chunk =
-      (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ?? [];
-    const last = Math.min(through, (index + 1) * CHUNK_SIZE);
-    for (; sequence <= last && result.length < limit; sequence += 1) {
-      const entry = chunk[(sequence - 1) % CHUNK_SIZE];
-      if (!entry) return result;
-      result.push(entry);
+    if (index !== chunkIndex) {
+      chunk =
+        (yield* restate.sharedState().get<StoredEntry[]>(chunkKey(index))) ??
+        [];
+      chunkIndex = index;
     }
+    result.push(chunk[(sequence - 1) % CHUNK_SIZE]);
   }
   return result;
 }

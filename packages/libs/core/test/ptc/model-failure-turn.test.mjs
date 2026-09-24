@@ -122,20 +122,29 @@ test("a recovered final summary still passes through guardrails", async () => {
 });
 
 test("empty answers count toward the unusable-response limit", async () => {
-  const empty={type:"text",content:"  "};
-  globalThis.__turnFailureFixture.steps=[empty,error,empty];
-  const {output}=await run();
-  assert.match(output.error,/three times in a row/);
-  assert.equal(output.steps,3);
+  const empty = {type: "text", content: "  "};
+  globalThis.__turnFailureFixture.steps = [empty, error, empty];
+
+  const {output} = await run();
+
+  assert.match(output.error, /three times in a row/);
+  assert.equal(output.steps, 3);
 });
 
 test("steering clears guardrail approvals granted for the earlier request", async () => {
-  globalThis.__turnFailureFixture.steps=[{type:"text",content:"Done"}];
-  const {output}=await run({
-    approvedActions:[{guardrailId:"g",approvalId:"a",action:{type:"text",content:"old"}}],
-    steering:[{queued:[],message:"Do something else"}],
+  globalThis.__turnFailureFixture.steps = [{type: "text", content: "Done"}];
+  const earlierApproval = {
+    guardrailId: "g",
+    approvalId: "a",
+    action: {type: "text", content: "old request"},
+  };
+
+  const {output} = await run({
+    approvedActions: [earlierApproval],
+    steering: [{queued: [], message: "Do something else"}],
   });
-  assert.equal(output.outcome.status,"completed");
-  assert.equal(output.outcome.consumedSteering,1);
-  assert.equal(output.approvals,0);
+
+  assert.equal(output.outcome.status, "completed");
+  assert.equal(output.outcome.consumedSteering, 1);
+  assert.equal(output.approvals, 0);
 });

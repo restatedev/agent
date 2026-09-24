@@ -55,7 +55,12 @@ import {
 } from "./mcp-tools.js";
 import {createPendingOperations} from "./pending.js";
 import {createSteeringInbox} from "./steering.js";
-import {agentStep, settleStep, type ToolStep} from "./step.js";
+import {
+  type AgentStepResult,
+  agentStep,
+  settleStep,
+  type ToolStep,
+} from "./step.js";
 import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
 
@@ -143,18 +148,21 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           state = startState(req, turnId, transcript);
           outcome = yield* executeTurn(state);
         } catch (error) {
-          if (error instanceof CancelledError) throw error;
+          if (error instanceof CancelledError) {
+            throw error;
+          }
           outcome = failedOutcome(turnId, state, error);
-          if (state)
-            yield* appendToolTranscript(
-              state,
-              yield* state.pending.stop(error),
-            );
+          if (state) {
+            const stopped = yield* state.pending.stop(error);
+            yield* appendToolTranscript(state, stopped);
+          }
         }
         try {
           yield* releaseResources(turnId, state);
         } catch (error) {
-          if (error instanceof CancelledError) throw error;
+          if (error instanceof CancelledError) {
+            throw error;
+          }
           outcome = failedOutcome(turnId, state, error, "Turn cleanup failed");
         }
         // The controller reconciles late steering and interruption before
@@ -163,8 +171,9 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           .client(Agent, objectKey())
           .onTurnEnd(outcome);
       } catch (error) {
-        if (error instanceof CancelledError)
+        if (error instanceof CancelledError) {
           yield* abandonTurn(turnId, transcript, state, error);
+        }
         throw error;
       }
       if (reconciled && transcript) {
@@ -254,8 +263,12 @@ function* releaseResources(
   turnId: string,
   state: AgentSessionState | undefined,
 ): restate.Operation<void> {
-  if (!state) return;
-  if (usesStatefulMcp(state)) yield* releaseMcpSessions(turnId);
+  if (!state) {
+    return;
+  }
+  if (usesStatefulMcp(state)) {
+    yield* releaseMcpSessions(turnId);
+  }
   yield* state.context.sandbox.release();
 }
 
@@ -401,17 +414,17 @@ function* executeTurn(
 
     // An error or an empty answer makes no progress; three in a row end
     // the turn instead of spending the remaining steps.
-    const unusable =
-      step.type === "error"
-        ? step.message
-        : step.type === "text" && !step.content.trim()
-          ? "empty response"
-          : undefined;
-    if (unusable === undefined) consecutiveModelErrors = 0;
-    else if (++consecutiveModelErrors >= 3)
-      throw new TerminalError(
-        `The model returned unusable responses three times in a row. Last error: ${unusable}`,
-      );
+    const unusable = unusableReason(step);
+    if (unusable === undefined) {
+      consecutiveModelErrors = 0;
+    } else {
+      consecutiveModelErrors += 1;
+      if (consecutiveModelErrors >= 3) {
+        throw new TerminalError(
+          `The model returned unusable responses three times in a row. Last error: ${unusable}`,
+        );
+      }
+    }
     switch (step.type) {
       case "error":
         // Output recovery already ran inside callModel. Never restart it
@@ -450,9 +463,11 @@ function* executeTurn(
           yield* consumeSteering(state);
           continue;
         }
-        // A handed-off program cancelled the last operation; its own result
-        // reports that, so the model simply takes another step.
-        if (next.type === "idle") continue;
+        if (next.type === "idle") {
+          // A handed-off program cancelled the last operation; its own
+          // result reports that, so the model simply takes another step.
+          continue;
+        }
         if (next.type === "completion") {
           yield* appendToolTranscript(state, [next.event]);
           state.messages.push(agentTools.toRuntimeMessage(next.event));
@@ -516,6 +531,19 @@ function* executeTurn(
   });
 }
 
+/** Why a step made no progress, or `undefined` when it did. */
+function unusableReason(
+  step: Exclude<AgentStepResult, {type: "interrupted"}>,
+): string | undefined {
+  if (step.type === "error") {
+    return step.message;
+  }
+  if (step.type === "text" && !step.content.trim()) {
+    return "empty response";
+  }
+  return undefined;
+}
+
 /**
  * Stops the programs a step handed off in the same moment it was interrupted.
  * They never reached the pending registry, so nothing else would stop them.
@@ -526,7 +554,9 @@ function* stopHandoffs(
   step: ToolStep,
   reason: string,
 ): restate.Operation<ToolOutcome[]> {
-  if (step.handoffs.size === 0) return step.outcomes;
+  if (step.handoffs.size === 0) {
+    return step.outcomes;
+  }
   const ids = [...step.handoffs.keys()];
   const settled = yield* interruptAndJoin(
     [...step.handoffs.values()],

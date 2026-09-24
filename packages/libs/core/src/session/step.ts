@@ -8,6 +8,7 @@ import type {Guardrail} from "@restate-agents/types";
 import {
   all,
   type Future,
+  type FutureSettledResult,
   gen,
   InterruptedError,
   type Operation,
@@ -51,7 +52,7 @@ export type ToolStep = GuardrailDecisions & {
   handoffs: Map<string, Task<ToolOutcome>>;
 };
 
-type AgentStepResult =
+export type AgentStepResult =
   | (GuardrailDecisions & Extract<ModelResult, {type: "text" | "error"}>)
   | ToolStep
   | (GuardrailDecisions & {
@@ -312,18 +313,9 @@ export function* agentStep({
           context.turnId,
           stepNumber,
           "finished",
-          action.calls.map((call, index) => {
-            const result = settled[index];
-            return agentTools.toolActivity(
-              call,
-              result?.status !== "fulfilled" ||
-                result.value.status === "pending"
-                ? "cancelled"
-                : result.value.status === "cancel_requested"
-                  ? "failed"
-                  : result.value.status,
-            );
-          }),
+          action.calls.map((call, index) =>
+            agentTools.toolActivity(call, abandonedStatus(settled[index])),
+          ),
         ),
       );
       throw error;
@@ -388,3 +380,24 @@ export function* settleStep(
 }
 
 class AgentStepInterrupt extends InterruptedError {}
+
+type ToolActivityStatus = Parameters<typeof agentTools.toolActivity>[1];
+
+// The finished status of a call whose step failed or was cancelled. A call
+// that never settled, or settled as pending, is cancelled: its completion
+// phase will never run.
+function abandonedStatus(
+  result: FutureSettledResult<ToolOutcome> | undefined,
+): ToolActivityStatus {
+  if (result?.status !== "fulfilled") {
+    return "cancelled";
+  }
+  switch (result.value.status) {
+    case "pending":
+      return "cancelled";
+    case "cancel_requested":
+      return "failed";
+    default:
+      return result.value.status;
+  }
+}

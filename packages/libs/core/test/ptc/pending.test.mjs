@@ -4,41 +4,87 @@ import * as durable from "@restatedev/restate-sdk-gen";
 import {createPendingOperations} from "../../src/session/pending.ts";
 import {runHandler} from "./harness.mjs";
 
-const call = (toolCallId) => ({toolCallId, toolName: "executeProgram", input: {}});
-const pendingOutcome = (id) => ({call: call(id), status: "pending", result: {operationId: id, status: "running"}});
+function programCall(toolCallId) {
+  return {toolCallId, toolName: "executeProgram", input: {}};
+}
 
-test("a handed-off program cancelling another operation does not fail the parked turn", {timeout: 8000}, async () => {
+// The immediate result of a program handed off while still running.
+function runningOutcome(toolCallId) {
+  return {
+    call: programCall(toolCallId),
+    status: "pending",
+    result: {operationId: toolCallId, status: "running"},
+  };
+}
+
+function cancelRequest(operationId) {
+  return {
+    call: programCall("cancel"),
+    status: "cancel_requested",
+    operationId,
+    reason: "not needed",
+  };
+}
+
+test("a handed-off program cancelling another operation does not fail the parked turn", {
+  timeout: 8000,
+}, async () => {
   const result = await runHandler((ctx) =>
     durable.execute(
       ctx,
       durable.gen(function* () {
         const pending = createPendingOperations();
         const never = durable.channel();
-        const go = durable.channel();
-        // `a` runs until interrupted; `b` cancels it once both are registered.
-        const a = durable.spawn(durable.gen(function* () {
-          yield* never.receive;
-        }));
-        const b = durable.spawn(durable.gen(function* () {
-          yield* go.receive;
-          const applied = yield* pending.apply(
-            [{call: call("cancel"), status: "cancel_requested", operationId: "a", reason: "not needed"}],
-            {},
-            2,
-          );
-          return {call: call("b"), status: "succeeded", result: applied.outcomes[0].result};
-        }));
-        yield* pending.apply([pendingOutcome("a"), pendingOutcome("b")], {}, 1, new Map([["a", a], ["b", b]]));
-        durable.spawn(durable.gen(function* () {
-          yield* go.send();
-        }));
+        const bothRegistered = durable.channel();
+
+        // Program `a` runs until something interrupts it.
+        const a = durable.spawn(
+          durable.gen(function* () {
+            yield* never.receive;
+          }),
+        );
+        // Program `b` cancels `a` once both are registered, then finishes.
+        const b = durable.spawn(
+          durable.gen(function* () {
+            yield* bothRegistered.receive;
+            const applied = yield* pending.apply([cancelRequest("a")], {}, 2);
+            return {
+              call: programCall("b"),
+              status: "succeeded",
+              result: applied.outcomes[0].result,
+            };
+          }),
+        );
+
+        const handoffs = new Map([
+          ["a", a],
+          ["b", b],
+        ]);
+        yield* pending.apply(
+          [runningOutcome("a"), runningOutcome("b")],
+          {},
+          1,
+          handoffs,
+        );
+        durable.spawn(
+          durable.gen(function* () {
+            yield* bothRegistered.send();
+          }),
+        );
+
+        // The turn parks here while `b` cancels `a`.
         const next = yield* pending.next(never.receive, never.receive);
-        return {next, left: pending.size};
+        return {next, remaining: pending.size};
       }),
     ),
   );
-  assert.equal(result.output.next.type, "completion");
-  assert.equal(result.output.next.event.call.toolCallId, "b");
-  assert.match(result.output.next.event.outcome.result, /Cancelled pending executeProgram operation a/);
-  assert.equal(result.output.left, 0);
+
+  const {next, remaining} = result.output;
+  assert.equal(next.type, "completion");
+  assert.equal(next.event.call.toolCallId, "b");
+  assert.match(
+    next.event.outcome.result,
+    /Cancelled pending executeProgram operation a/,
+  );
+  assert.equal(remaining, 0);
 });

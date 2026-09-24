@@ -201,14 +201,46 @@ test("a successor that cannot start keeps its queued input and the finished outc
   assert.equal(f.state.has("pending"), false);
 });
 
-test("a late interrupt does not hide a failed turn's error", async t => {
+test("a late interrupt does not hide a failed turn's error", async (t) => {
   const before = process.env.MCP_SERVERS_JSON;
   process.env.MCP_SERVERS_JSON = "[]";
-  t.after(() => { if (before === undefined) delete process.env.MCP_SERVERS_JSON; else process.env.MCP_SERVERS_JSON = before; });
-  const f = context("demo", {turn: {id: "turn", tools, steeringBatches: [], interruptReason: "stop"}});
-  const failed = {turnId: "turn", status: "failed", error: "model unavailable", consumedSteering: 0};
-  assert.deepEqual(await f.invoke(Agent.object.onTurnEnd, failed), failed);
-  const completed = context("demo", {turn: {id: "turn", tools, steeringBatches: [], interruptReason: "stop"}});
-  const ended = await completed.invoke(Agent.object.onTurnEnd, {turnId: "turn", status: "completed", response: "done", consumedSteering: 0});
-  assert.deepEqual(ended, {turnId: "turn", status: "interrupted", reason: "stop", response: "done", consumedSteering: 0});
+  t.after(() => {
+    if (before === undefined) delete process.env.MCP_SERVERS_JSON;
+    else process.env.MCP_SERVERS_JSON = before;
+  });
+  const interruptedTurn = () => ({
+    turn: {id: "turn", tools, steeringBatches: [], interruptReason: "stop"},
+  });
+
+  // A failure keeps its status and error.
+  const failed = {
+    turnId: "turn",
+    status: "failed",
+    error: "model unavailable",
+    consumedSteering: 0,
+  };
+  const afterFailure = context("demo", interruptedTurn());
+  assert.deepEqual(
+    await afterFailure.invoke(Agent.object.onTurnEnd, failed),
+    failed,
+  );
+
+  // A completion becomes the interruption the user asked for.
+  const completed = {
+    turnId: "turn",
+    status: "completed",
+    response: "done",
+    consumedSteering: 0,
+  };
+  const afterCompletion = context("demo", interruptedTurn());
+  assert.deepEqual(
+    await afterCompletion.invoke(Agent.object.onTurnEnd, completed),
+    {
+      turnId: "turn",
+      status: "interrupted",
+      reason: "stop",
+      response: "done",
+      consumedSteering: 0,
+    },
+  );
 });

@@ -169,35 +169,30 @@ export function createPendingOperations() {
       interrupt: restate.Future<string>,
     ): restate.Operation<PendingStep> {
       while (active.size > 0) {
-        const watched = [...active.values()];
-        const watchers = watched.map((operation) =>
-          restate.spawn(settledOf(operation)),
-        );
-        let selected;
-        try {
-          selected = yield* raceBranches({
-            interrupt,
-            steering: steeringReady,
-            completion: restate.race(watchers),
-          });
-        } finally {
-          yield* interruptAndJoin(
-            watchers,
-            new restate.InterruptedError("Pending wait settled"),
-          );
-        }
+        const selected = yield* raceBranches({
+          interrupt,
+          steering: steeringReady,
+          completion: restate.spawn(firstSettled([...active.values()])),
+        });
         if (selected.tag === "interrupt") {
           return {type: "interrupted", reason: selected.value};
         }
         if (selected.tag === "steering") {
           return {type: "steering"};
         }
+
         const {operation, settled} = selected.value;
-        if (active.get(operation.call.toolCallId) !== operation) continue;
-        // Still registered, so nothing in this turn cancelled it: only
-        // invocation cancellation rejects a completion task.
-        if (settled.status === "rejected") throw settled.reason;
-        active.delete(operation.call.toolCallId);
+        const id = operation.call.toolCallId;
+        if (active.get(id) !== operation) {
+          // Already cancelled and reported by `apply`.
+          continue;
+        }
+        if (settled.status === "rejected") {
+          // Still registered, so nothing in this turn cancelled it: only
+          // invocation cancellation rejects a completion task.
+          throw settled.reason;
+        }
+        active.delete(id);
         return {type: "completion", event: settled.value};
       }
       return {type: "idle"};
@@ -236,9 +231,34 @@ export function createPendingOperations() {
   };
 }
 
-// Waits for one operation without rethrowing its rejection, so `next` can
-// tell an operation cancelled by `apply` from a real failure.
-function* settledOf(operation: PendingOperation) {
+type SettledOperation = {
+  operation: PendingOperation;
+  settled: restate.FutureSettledResult<PendingEvent>;
+};
+
+// Waits for the first of `operations` to settle without rethrowing its
+// rejection, so `next` can tell an operation cancelled by `apply` from a
+// real failure. The per-operation waiters are stopped once one wins; that
+// never interrupts the operations themselves.
+function* firstSettled(
+  operations: PendingOperation[],
+): restate.Operation<SettledOperation> {
+  const waiters = operations.map((operation) =>
+    restate.spawn(settledOf(operation)),
+  );
+  try {
+    return yield* restate.race(waiters);
+  } finally {
+    yield* interruptAndJoin(
+      waiters,
+      new restate.InterruptedError("Pending wait settled"),
+    );
+  }
+}
+
+function* settledOf(
+  operation: PendingOperation,
+): restate.Operation<SettledOperation> {
   const [settled] = yield* restate.allSettled([operation.task]);
   return {operation, settled};
 }
