@@ -27,6 +27,12 @@ import {
   transcriptEntries,
 } from "./tools.js";
 import {withdrawApproval} from "./tools/approval.js";
+import {
+  failed,
+  isInputObject,
+  succeeded,
+  validationMessage,
+} from "./tools/define.js";
 
 export function* executeProgramTool(
   call: ToolCall,
@@ -35,13 +41,14 @@ export function* executeProgramTool(
   mcpTools: McpAgentTool[],
   scope: ToolExecutionScope,
 ): Operation<ToolOutcome> {
+  // Same validation and feedback as every built-in (defineAgentTool).
   const parsed = ProgramInputSchema.safeParse(call.input);
-  if (!parsed.success)
+  if (!parsed.success) {
     return {
       call,
-      status: "failed",
-      error: `Invalid program input: ${parsed.error.message}`,
+      ...failed(`invalid input: ${validationMessage(parsed.error)}`),
     };
+  }
   const names = manifests(discovered, mcpTools, context)
     .map((tool) => tool.name)
     .filter((name) => name !== PROGRAM_TOOL_NAME);
@@ -59,12 +66,12 @@ export function* executeProgramTool(
         );
       },
     });
-    return {call, status: "succeeded", result: JSON.stringify(value)};
+    return {call, ...succeeded(JSON.stringify(value))};
   } catch (error) {
     // Never turn attempt failure, SDK cancellation, or turn interruption into a
     // successful model round. Only known guest failures are repairable here.
     if (!(error instanceof ProgramError)) throw error;
-    return {call, status: "failed", error: `Program failed: ${error.message}`};
+    return {call, ...failed(`Program failed: ${error.message}`)};
   }
 }
 
@@ -81,12 +88,7 @@ function* executeNestedTool(
     toolName: request.name,
     input: request.args[0],
   };
-  if (
-    request.args.length !== 1 ||
-    typeof call.input !== "object" ||
-    call.input === null ||
-    Array.isArray(call.input)
-  ) {
+  if (request.args.length !== 1 || !isInputObject(call.input)) {
     return failure(
       "Call a tool with exactly one input object matching its schema (use {} for no arguments)",
     );

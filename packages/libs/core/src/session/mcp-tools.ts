@@ -24,6 +24,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import {isCancellation} from "../errors.js";
 import {abortable, createRefreshingCache} from "../refresh-cache.js";
 import {McpConfigurationError, resolveMcpToken} from "./mcp-config.js";
+import {failed, succeeded, type ToolResult} from "./tools/define.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
 const MCP_CLIENT = {name: "restate-agent-reference", version: "0.0.1"};
@@ -79,10 +80,6 @@ export type McpAgentTool = {
     prior: PriorDiscovery;
   };
 };
-
-type McpToolExecution =
-  | {status: "succeeded"; result: string}
-  | {status: "failed"; error: string};
 
 export type McpServerAvailability = {
   serverId: string;
@@ -189,29 +186,29 @@ export function* executeMcpTool(
   input: Record<string, unknown>,
   context: {turnId: string; toolCallId: string},
   tool: McpAgentTool,
-): restate.Operation<McpToolExecution> {
+): restate.Operation<ToolResult> {
   try {
     const attempt = yield* callMcpTool(input, context, tool);
-    if (attempt.status === "failed") return attempt;
-    const result = attempt.value;
-    const rendered = renderToolResult(result);
-    return result.isError
-      ? {status: "failed", error: rendered}
-      : {status: "succeeded", result: rendered};
+    if (attempt.status === "failed") {
+      return attempt;
+    }
+    const rendered = renderToolResult(attempt.value);
+    if (attempt.value.isError) {
+      return failed(rendered);
+    }
+    return succeeded(rendered);
   } catch (error) {
+    // Not toolFailure: the raw error could carry credentials.
     if (isCancellation(error)) {
       throw error;
     }
-    return {
-      status: "failed",
-      error: `${tool.name} failed: ${sanitizedMessage(error)}`,
-    };
+    return failed(`${tool.name} failed: ${sanitizedMessage(error)}`);
   }
 }
 
 type McpCallAttempt =
   | {status: "succeeded"; value: CallToolResult}
-  | {status: "failed"; error: string};
+  | Extract<ToolResult, {status: "failed"}>;
 
 function* callMcpTool(
   input: Record<string, unknown>,
@@ -228,7 +225,7 @@ function* callMcpTool(
       try {
         token = resolveMcpToken(server);
       } catch (error) {
-        return {status: "failed", error: sanitizedMessage(error)};
+        return failed(sanitizedMessage(error));
       }
       try {
         const value = await callRemoteTool(input, context, tool, token, signal);
@@ -241,7 +238,7 @@ function* callMcpTool(
         if (isCancellation(error)) throw error;
         // Provider errors can contain Authorization headers. Sanitize before
         // the failed HTTP effect is recorded in the journal.
-        return {status: "failed", error: callFailureMessage(error, token)};
+        return failed(callFailureMessage(error, token));
       }
     },
     {

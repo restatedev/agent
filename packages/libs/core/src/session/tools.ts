@@ -27,6 +27,7 @@ import {
   type AgentTool,
   type AgentToolContext,
   failed,
+  isInputObject,
   type PendingEvent,
   type ToolExecutionScope,
   type ToolOutcome,
@@ -231,33 +232,51 @@ export function manifests(
   mcpTools: McpAgentTool[],
   context: Pick<AgentToolContext, "webSearchEnabled" | "permissions">,
 ): ToolManifest[] {
+  const builtins = definitions.map((tool): ToolManifest => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
+    strict: true,
+  }));
   return [
     ...programManifests,
-    ...definitions
-      .filter((tool) => tool.name !== "webSearch" || context.webSearchEnabled)
-      .map((tool): ToolManifest => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
-        strict: true,
-      })),
-    ...discovered.map((tool): ToolManifest => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      // Third-party JSON Schema is not guaranteed to satisfy OpenAI's
-      // requirement that every object property appear in `required`.
-      strict: false,
-    })),
-    ...mcpTools.map((tool): ToolManifest => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      strict: false,
-    })),
-  ].filter((tool) =>
-    toolAllowed(tool.name, context.permissions, discovered, mcpTools, names),
-  );
+    ...builtins,
+    ...discovered.map(externalManifest),
+    ...mcpTools.map(externalManifest),
+  ].filter((tool) => !unavailable(tool.name, context, discovered, mcpTools));
+}
+
+function externalManifest(
+  tool: DiscoveredAgentTool | McpAgentTool,
+): ToolManifest {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+    // Third-party JSON Schema is not guaranteed to satisfy OpenAI's
+    // requirement that every object property appear in `required`.
+    strict: false,
+  };
+}
+
+/**
+ * Why a tool cannot be used in this turn, or undefined when it can. The one
+ * rule for both the catalog (manifests) and the dispatcher (execute), so a
+ * tool the model cannot see is also one it cannot call.
+ */
+function unavailable(
+  name: string,
+  context: Pick<AgentToolContext, "webSearchEnabled" | "permissions">,
+  discovered: DiscoveredAgentTool[],
+  mcpTools: McpAgentTool[],
+): string | undefined {
+  if (!toolAllowed(name, context.permissions, discovered, mcpTools, names)) {
+    return "This tool is not enabled for this agent.";
+  }
+  if (name === "webSearch" && !context.webSearchEnabled) {
+    return "Web search is disabled for this turn.";
+  }
+  return undefined;
 }
 
 type ToolsEvent = Extract<ConversationEntry, {role: "event"; type: "tools"}>;
@@ -348,18 +367,10 @@ export function* execute(
   mcpTools: McpAgentTool[],
   scope?: ToolExecutionScope,
 ): restate.Operation<ToolOutcome> {
-  if (
-    !toolAllowed(
-      call.toolName,
-      context.permissions,
-      discovered,
-      mcpTools,
-      names,
-    )
-  )
-    return {call, ...failed("This tool is not enabled for this agent.")};
-  if (call.toolName === "webSearch" && !context.webSearchEnabled)
-    return {call, ...failed("Web search is disabled for this turn.")};
+  const reason = unavailable(call.toolName, context, discovered, mcpTools);
+  if (reason) {
+    return {call, ...failed(reason)};
+  }
   if (call.toolName === PROGRAM_TOOL_NAME) {
     if (!scope) throw new Error("PTC requires an active tool execution scope");
     return yield* executeProgramTool(
@@ -387,23 +398,14 @@ export function* execute(
   const mcp = mcpTools.find(({name}) => name === call.toolName);
   if (!dynamic && !mcp)
     return {call, ...failed(`unknown tool: ${call.toolName}`)};
-  if (
-    typeof call.input !== "object" ||
-    call.input === null ||
-    Array.isArray(call.input)
-  )
+  if (!isInputObject(call.input)) {
     return {call, ...failed("external tool input must be an object")};
-  const fields = call.input as Record<string, unknown>;
-  return {
-    call,
-    ...(mcp
-      ? yield* executeMcpTool(
-          fields,
-          {turnId: context.turnId, toolCallId: call.toolCallId},
-          mcp,
-        )
-      : yield* executeDynamicTool(fields, dynamic!)),
-  };
+  }
+  if (mcp) {
+    const target = {turnId: context.turnId, toolCallId: call.toolCallId};
+    return {call, ...(yield* executeMcpTool(call.input, target, mcp))};
+  }
+  return {call, ...(yield* executeDynamicTool(call.input, dynamic!))};
 }
 
 /** Waits for a concrete pending tool to complete after its originating step. */

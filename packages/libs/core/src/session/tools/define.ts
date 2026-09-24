@@ -11,20 +11,21 @@ import type {TurnHistory} from "../history.js";
 import type {TurnToolSearch} from "../tool-search.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
+type Succeeded = {status: "succeeded"; result: string};
 type Failed = {status: "failed"; error: string};
 
+/** A finished call: what dynamic and MCP tools, and foreground runs, return. */
+export type ToolResult = Succeeded | Failed;
+
 export type ToolExecution = (
-  | {status: "succeeded"; result: string}
+  | Succeeded
   | Failed
   | {status: "pending"; result: Record<string, unknown>}
   | {status: "cancel_requested"; operationId: string; reason: string}
 ) &
   ToolTranscript;
 
-export type ToolCompletion = (
-  | Extract<ToolExecution, {status: "succeeded" | "failed"}>
-  | {status: "cancelled"; reason: string}
-) &
+type ToolCompletion = (ToolResult | {status: "cancelled"; reason: string}) &
   ToolTranscript;
 
 /** Initial result of invoking one model-selected tool. */
@@ -72,8 +73,10 @@ export type AgentTool = {
   ): restate.Operation<ToolCompletion>;
 };
 
-export const succeeded = (result: string) =>
-  ({status: "succeeded", result}) as const;
+export const succeeded = (result: string): Succeeded => ({
+  status: "succeeded",
+  result,
+});
 export const failed = (error: string): Failed => ({status: "failed", error});
 
 /**
@@ -167,7 +170,19 @@ export function defineAgentTool<Schema extends z.ZodType>(definition: {
   };
 }
 
-function validationMessage(error: z.ZodError): string {
+/**
+ * External tools (dynamic, MCP) and PTC's nested calls take one JSON object;
+ * their schemas are third-party JSON Schema, so this is the only shape check
+ * the runtime can make before dispatching.
+ */
+export function isInputObject(
+  input: unknown,
+): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+/** The first few Zod issues, as `path: message` feedback for the model. */
+export function validationMessage(error: z.ZodError): string {
   return error.issues
     .slice(0, 4)
     .map((issue) => {
