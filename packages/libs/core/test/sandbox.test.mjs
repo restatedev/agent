@@ -53,3 +53,32 @@ test("local commands do not inherit service credentials from the process environ
   );
   assert.equal(piped.stdout, "OK\n");
 });
+
+test("local file tools stay inside the sandbox root", async (t) => {
+  const ref = await localSandboxProvider.provision({
+    agentId: "path-probe",
+    ...options(),
+  });
+  t.after(() => localSandboxProvider.destroy(ref, options()));
+  const client = localSandboxProvider.connect(ref);
+
+  await client.writeFile("notes/today.txt", "hello", options());
+  assert.equal(await client.readFile("notes/today.txt", options()), "hello");
+  assert.deepEqual(await client.listFiles("notes", options()), ["today.txt"]);
+
+  const escapes = ["../outside.txt", "notes/../../outside.txt", "/etc/passwd"];
+  for (const path of escapes) {
+    await assert.rejects(
+      client.readFile(path, options()),
+      `reading ${path} must be rejected`,
+    );
+    await assert.rejects(
+      client.writeFile(path, "x", options()),
+      `writing ${path} must be rejected`,
+    );
+  }
+  await assert.rejects(
+    client.executeCommand({command: "pwd", cwd: "../.."}, options()),
+    "a command cannot start outside the root",
+  );
+});
