@@ -108,4 +108,3 @@ then long-polls changes and re-reads only changed topics. `profile` invalidates
 metadata and children too. Browser
 merging deduplicates sequences and never moves its history cursor backward.
 Each mounted conversation owns one cancellable poll; switching is navigation.
-
