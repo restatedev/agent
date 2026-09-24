@@ -97,8 +97,9 @@ entry UI. [MCP configuration](mcp-configuration.md) explains this boundary.
 ## Local UI and invalidation
 
 The Next.js UI is an optional local operator interface. It chooses a conversation
-by `?agent=`, proxies supported operations, rejects a non-loopback Host on
-every request (DNS rebinding) and checks the Origin of writes.
+by `?agent=`, proxies supported operations, checks the Host of every request
+against loopback or `APP_PUBLIC_URL` (DNS rebinding) and checks the Origin of
+writes.
 It has no authentication or tenant isolation. Its scripts bind to `127.0.0.1`.
 
 The server captures an Agent notification watermark before loading history,

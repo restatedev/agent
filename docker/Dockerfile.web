@@ -11,6 +11,8 @@
 #   RESTATE_AUTH_TOKEN  optional bearer token for Restate Cloud or another
 #                       authenticated ingress; omit it for local Restate
 #   APP_PUBLIC_URL      optional expected browser origin for same-origin checks
+#   APP_ALLOWED_HOSTS   optional comma-separated extra Host values, for proxies
+#                       that rewrite Host
 #   PORT                HTTP listen port (default 3000)
 #   HOSTNAME            listen address (default 0.0.0.0)
 #

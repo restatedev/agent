@@ -48,13 +48,17 @@ service. Child metadata names its parent; the parent stores its child list.
 ## UI path
 
 `app/page.tsx` selects `?agent=` (default `demo`). `src/use-agent.ts` loads one
-snapshot and follows per-agent notifications. `src/app.tsx` renders conversation,
-control, approvals, context, memories and schedules. Agent switching is ordinary
-navigation; there is no workspace cache or global account directory.
+snapshot and follows per-agent notifications. `src/app.tsx` wires the panels,
+each in its own module: `composer.tsx`, `transcript.tsx`, `approvals-panel.tsx`,
+`inspector.tsx` (profile and tools), `memories-schedules.tsx`, `status.tsx` and
+`agent-navigation.tsx`. Agent switching is ordinary navigation; there is no
+workspace cache or global account directory.
 
-`app/api/agent/[agentId]/[operation]/route.ts` maps browser requests to the typed
-client. `src/server/agent-snapshot.ts` captures notification watermarks before
-reading data and fetches only changed topics on subsequent polls.
+`app/api/agent/[agentId]/[operation]/route.ts` serves the `READS` and
+`MUTATIONS` tables in `src/server/operations.ts`; the browser client in
+`src/agent-client.ts` derives its types from them. `src/server/agent-snapshot.ts`
+captures notification watermarks before reading data and fetches only changed
+topics on subsequent polls.
 
 ## Validation and reference
 
