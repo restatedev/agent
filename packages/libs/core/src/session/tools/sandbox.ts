@@ -20,10 +20,10 @@ export const listFilesTool = defineAgentTool({
   inputSchema: z.object({
     path: z.string().min(1).describe("Directory path to list."),
   }),
-  summarize: ({path}) => `Listed files in ${path}`,
+  summary: "Listed files",
   *run({path}, context) {
     return yield* runSandboxTool(
-      `Listed files in ${path}`,
+      "listFiles",
       context,
       async (client, signal) =>
         JSON.stringify(await client.listFiles(path, {signal})),
@@ -38,10 +38,10 @@ export const readFileTool = defineAgentTool({
   inputSchema: z.object({
     path: z.string().min(1).describe("Path of the text file to read."),
   }),
-  summarize: ({path}) => `Read ${path}`,
+  summary: "Read a file",
   *run({path}, context) {
     return yield* runSandboxTool(
-      `Read ${path}`,
+      "readFile",
       context,
       async (client, signal) =>
         clipped(await client.readFile(path, {signal}), "file"),
@@ -58,10 +58,10 @@ export const writeFileTool = defineAgentTool({
     path: z.string().min(1).describe("Path of the text file to write."),
     content: z.string().describe("Complete new contents of the file."),
   }),
-  summarize: ({path}) => `Wrote ${path}`,
+  summary: "Wrote a file",
   *run({path, content}, context) {
     return yield* runSandboxTool(
-      `Wrote ${path}`,
+      "writeFile",
       context,
       async (client, signal) => {
         await client.writeFile(path, content, {signal});
@@ -94,10 +94,10 @@ export const executeCommandTool = defineAgentTool({
         "Command timeout in seconds, or null for the provider default.",
       ),
   }),
-  summarize: () => "Ran command",
+  summary: "Ran command",
   *run({command, cwd, timeoutSeconds}, context) {
     return yield* runSandboxTool(
-      "Ran command",
+      "executeCommand",
       context,
       async (client, signal) => {
         const result = await client.executeCommand(

@@ -61,7 +61,7 @@ export type AgentTool = {
   name: string;
   description: string;
   inputSchema: z.ZodType;
-  summarize(input: unknown): string | undefined;
+  summary?: string;
   execute(
     input: unknown,
     context: ToolCallContext,
@@ -126,7 +126,13 @@ export function defineAgentTool<Schema extends z.ZodType>(definition: {
   name: string;
   description: string;
   inputSchema: Schema;
-  summarize?(input: z.output<Schema>): string;
+  /**
+   * Fixed activity label for the public transcript, e.g. "Read a file".
+   * Deliberately not a function of the input: raw tool arguments (paths,
+   * queries, commands, names) never enter the canonical history. They remain
+   * in the Restate journal.
+   */
+  summary?: string;
   run(
     input: z.output<Schema>,
     context: ToolCallContext,
@@ -136,15 +142,12 @@ export function defineAgentTool<Schema extends z.ZodType>(definition: {
     context: ToolCallContext,
   ): restate.Operation<ToolCompletion>;
 }): AgentTool {
-  const {name, description, inputSchema} = definition;
+  const {name, description, inputSchema, summary} = definition;
   return {
     name,
     description,
     inputSchema,
-    summarize(input) {
-      const parsed = inputSchema.safeParse(input);
-      return parsed.success ? definition.summarize?.(parsed.data) : undefined;
-    },
+    summary,
     *execute(input, context) {
       const parsed = inputSchema.safeParse(input);
       if (!parsed.success)

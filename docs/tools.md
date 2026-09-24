@@ -767,7 +767,10 @@ proposal.
 
 The canonical history records structured tool lifecycle summaries—tool names,
 counts, and final statuses—so clients can show useful progress. It deliberately
-does not persist raw arguments or results.
+does not persist raw arguments or results. A built-in's activity label is a
+fixed `summary` string on its definition (`"Read a file"`, `"Searched tools"`),
+not a function of its input, so paths, queries, commands and names cannot
+leak into the transcript through a label.
 
 Use the Restate invocation tree and journal for:
 

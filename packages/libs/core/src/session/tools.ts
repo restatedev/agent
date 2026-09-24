@@ -267,7 +267,7 @@ export function toolActivity(
   call: ToolCall,
   status?: ToolsEvent["calls"][number]["status"],
 ): ToolsEvent["calls"][number] {
-  const summary = summarize(call);
+  const summary = activityLabel(call);
   return {
     id: call.toolCallId,
     name: call.toolName,
@@ -293,11 +293,12 @@ export function approvalCancelled(
   return {role: "event", type: "approval_cancelled", approvalId, turnId};
 }
 
-/** Returns the concise user-facing activity label for a tool call. */
-export function summarize(call: ToolCall): string | undefined {
-  if (call.toolName === PROGRAM_TOOL_NAME)
+/** The concise user-facing activity label for a tool call; never its input. */
+function activityLabel(call: ToolCall): string | undefined {
+  if (call.toolName === PROGRAM_TOOL_NAME) {
     return "Coordinated tools with JavaScript";
-  return findTool(call.toolName)?.summarize(call.input);
+  }
+  return findTool(call.toolName)?.summary;
 }
 
 function turnToolSearch(
