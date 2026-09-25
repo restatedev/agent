@@ -34,10 +34,9 @@ Configure optional MCP servers on the core process using
 with `AGENT_PTC_ENABLED=false`. Web search is enabled by default and uses
 Tavily's keyless endpoint; Context → Web search saves an agent-local preference.
 
-`AGENT_MODEL_MAX_OUTPUT_TOKENS` controls the model output budget: default
-`32000`, valid integers `1024` through `64000`. Truncation gets one recovery
-attempt at double its recorded budget, capped at `64000`; see
-[model recovery](turn-runtime.md#model-output-budgets-and-recovery).
+The agent model's output budget is fixed at 32,000 tokens per call in
+`session/service.ts`; a response cut off by it fails the turn. See
+[model calls](turn-runtime.md#model-calls-and-output-limits).
 
 For optional Modal sandboxes, export `SANDBOX_PROVIDER=modal`, `MODAL_TOKEN_ID`
 and `MODAL_TOKEN_SECRET` into the core process. See [sandboxes](sandboxes.md).
@@ -103,7 +102,8 @@ also builds both container images.
   tests and config files; `format` applies oxlint fixes and oxfmt. Type-checking is
   TypeScript 7 (the native `tsc`), run by `build`.
 - `build` compiles the workspace and creates a production Next.js build.
-- `test` runs the core and web suites.
+- `test` runs every workspace suite: the runtime's (`node --import tsx --test
+  test/*.test.mjs` in `packages/libs/core`), the client's and the web app's.
 - `bundle` creates the deployable ESM bundle, zipped as `dist/index.zip` (this
   needs the `zip` command), and catches packaging/import problems that
   type-checking alone may miss.
@@ -146,7 +146,7 @@ runtime trace.
 
 - `agentId` is the shared Agent and AgentSession Virtual Object key.
 - `turnId` is the `AgentSession/doTurn` invocation ID.
-- `toolCallId` is the stable pending-operation ID.
+- the tool-call ID is the stable background-operation ID.
 - `approvalId` is the tool call or guardrail approval signal identity.
 - history `sequence` is the inclusive cursor position.
 - a schedule's stored delayed invocation ID rejects stale firings.
@@ -161,14 +161,15 @@ JSON content type.
 ### Model rejects a function schema
 
 OpenAI strict function schemas require every declared object property in the
-`required` array. Built-ins get strict schemas from Zod. Prefer required
-nullable fields when the model may omit a value semantically:
+`required` array. The SDK's provider adapter sends a tool schema in strict mode
+only when it converts to that subset (`strict-schema.ts` in the SDK), and
+non-strict otherwise, which is typical for dynamic third-party schemas. Prefer
+required nullable fields when the model may omit a value semantically, so the
+schema stays strict:
 
 ```ts
 reason: z.string().nullable()
 ```
-
-Dynamic third-party schemas use `strict: false`.
 
 ### `System messages are not allowed`
 
@@ -186,17 +187,19 @@ Check:
 4. this endpoint can reach `RESTATE_ADMIN_URL`;
 5. no built-in has the same name;
 6. logs contain no discovery warning;
-7. you started a new turn after the catalog refreshed.
+7. you started a new turn after deploying it.
 
-The cache refresh interval is five minutes. Existing turns keep their
+Discovery runs once per turn, with no process cache. Existing turns keep their
 journaled snapshot.
 
 ### MCP tool does not appear
 
 Check the core process's `MCP_SERVERS_JSON`, selected protocol, connectivity
 and Agent tool grants. A changed connector requires a new turn. A `tokenEnv`
-reference must end in `_MCP_TOKEN` and resolve in the core environment. Missing/invalid credentials
-produce sanitized discovery warnings or tool failures, without an OAuth wait.
+reference must end in `_MCP_TOKEN` and resolve in the core environment. A server
+that fails discovery, including for a missing or invalid credential, is
+reported unavailable to the model with the reason; a failed call is a tool
+failure. Neither waits for OAuth.
 
 Read [MCP configuration](mcp-configuration.md) and inspect the Restate discovery
 run. Never add logging that prints tokens or full provider request headers.
@@ -237,13 +240,14 @@ When changing `ask`, `steer`, `interrupt`, or turn completion:
 
 ### Turn loop
 
-When changing `session/service.ts` or `session/step.ts`:
+When changing `session/service.ts`, `session/progress.ts` or
+`session/guardrails.ts`:
 
-1. keep one step bounded;
+1. report every exit to `Agent.onTurnEnd`, one way first on cancellation;
 2. settle and join every spawned task;
-3. drain steering only at defined step boundaries;
-4. never execute a guardrail-denied batch;
-5. keep pending tasks across steps;
+3. count each accepted steering signal once, as it lands;
+4. never execute a guardrail-denied call;
+5. keep background tasks across steps;
 6. preserve completed results during finalization;
 7. retain the 50-step turn bound.
 
@@ -282,12 +286,13 @@ When changing a request or schema:
 | Change approvals | `src/agent/approvals.ts` |
 | Change sub-agents | `src/agent/sub-agents.ts` |
 | Change schedules and timer delivery | `src/agent/schedules.ts` |
-| Change the turn state machine | `src/session/service.ts` |
-| Change one inference/tool step | `src/session/step.ts` |
+| Change the turn run and its outcome | `src/session/service.ts` |
+| Change transcript progress or steering | `src/session/progress.ts` |
+| Change guardrails | `src/session/guardrails.ts` |
 | Add a built-in tool | `src/session/tools/*.ts`, registered in `src/session/tools.ts` |
-| Change dynamic discovery | `src/session/dynamic-tools.ts` |
-| Change provider inference | `src/model/provider.ts` |
-| Change model retries/output recovery | `src/model/inference.ts` |
+| Change the per-turn catalog or MCP wiring | `src/session/turn-tools.ts` |
+| Change dynamic discovery | `src/session/restate-tools.ts` |
+| Change models or model retries | `src/model/models.ts` |
 | Change sandbox lifecycle | `src/sandbox/turn.ts` |
 | Add a sandbox provider | `src/sandbox/provider.ts` and an adapter module |
 | Change public wire/domain schemas | `packages/libs/types/src/index.ts` |

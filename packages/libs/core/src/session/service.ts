@@ -1,91 +1,77 @@
-// AgentSession is a Virtual Object keyed by agent id. One doTurn invocation is
-// the durable agent-turn state machine and owns transient model context,
-// control-signal consumption, step bounds, and pending tools. Each iteration
-// spawns one bounded agent step and applies its returned data.
+// AgentSession is a Virtual Object keyed by agent id. It owns the canonical
+// transcript. One doTurn invocation is one agent run: the agent SDK owns the
+// model/tool loop, steering, interruption, background tools and
+// finalization; this handler owns the transcript, the sandbox and
+// reconciliation with the Agent controller.
 
+import {agent, type RunResult} from "@restate-agents/core";
 import type {
   ConversationCompactionPlan,
   ConversationCompactionResult,
   ConversationEntry,
-  Guardrail,
   HistoryPage,
-  McpServer,
 } from "@restate-agents/types";
 import {AgentSessionDefinition} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import type {ModelMessage} from "ai";
 
 import {Agent} from "../agent/index.js";
-import {errorMessage, isCancellation} from "../errors.js";
+import {errorMessage} from "../errors.js";
 import {
   AGENT_SESSION_SIGNALS,
   type AgentTurnOutcome,
   type AgentTurnRequest,
 } from "../internal-types.js";
-import {
-  callGuardrailModel,
-  callModel,
-  compactConversation,
-  type GuardrailApproval,
-} from "../model/index.js";
+import {AGENT_SYSTEM, agentModel, compactConversation} from "../model/index.js";
 import {executionRetention, noRetention} from "../retention.js";
-import {destroySandbox} from "../sandbox/index.js";
-import {objectKey} from "../state.js";
-import {interruptAndJoin} from "../tasks.js";
 import {
-  approvalGrantedMessage,
-  buildModelContext,
-  emptyResponseMessage,
-  finalizationInstruction,
-  guardrailBlockedMessage,
-  mcpAvailabilityMessage,
-  rejectionsResetMessage,
-  steeringMessage,
-  unusableResponseMessage,
-} from "./context.js";
-import {type DiscoveredAgentTool, discoverAgentTools} from "./dynamic-tools.js";
+  destroySandbox,
+  openTurnSandbox,
+  type TurnSandbox,
+} from "../sandbox/index.js";
+import {objectKey} from "../state.js";
+import {buildModelContext} from "./context.js";
+import {guardOutput, guardToolCall, recordEvidence} from "./guardrails.js";
 import type {TurnHistory} from "./history.js";
 import * as history from "./history.js";
-import {
-  discoverMcpTools,
-  type McpAgentTool,
-  releaseMcpSessions,
-  releaseMcpSessionsAfterCancellation,
-} from "./mcp-tools.js";
-import {createPendingOperations} from "./pending.js";
-import {createSteeringInbox} from "./steering.js";
-import {
-  type AgentStepResult,
-  agentStep,
-  settleStep,
-  type ToolStep,
-} from "./step.js";
-import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
-import * as agentTools from "./tools.js";
-
-type AgentSessionState = {
-  context: AgentToolContext;
-  transcript: TurnHistory;
-  instructions?: string;
-  guardrails: Guardrail[];
-  approvedActions: GuardrailApproval[];
-  rejectedGuardrails: Set<string>;
-  blockedGuardrails: Set<string>;
-  messages: ModelMessage[];
-  guardrailInput?: ModelMessage;
-  guardrailEvidenceFrom: number;
-  interrupt: restate.Future<string>;
-  steeringInbox: ReturnType<typeof createSteeringInbox>;
-  consumedSteering: number;
-  steps: number;
-  pending: ReturnType<typeof createPendingOperations>;
-  discoveredTools: DiscoveredAgentTool[];
-  mcpTools: McpAgentTool[];
-  mcpServers: McpServer[];
-};
+import {turnProgress} from "./progress.js";
+import {askHuman} from "./tools/approval.js";
+import type {TurnContext} from "./turn-context.js";
+import {turnTools} from "./turn-tools.js";
 
 const MAX_STEPS = 50;
+// The turn is bounded by its steps and each program by its own 128 calls,
+// not by a turn-wide call budget; this bound only trips once both run out.
+const MAX_TOOL_CALLS = MAX_STEPS * 128;
+
+/** The operational agent. Profile, tools and grants are per-turn inputs. */
+const turnAgent = agent<TurnContext>({
+  model: agentModel,
+  maxSteps: MAX_STEPS,
+  maxToolCalls: MAX_TOOL_CALLS,
+  maxOutputTokens: 32_000,
+  *instructions({context}) {
+    return [AGENT_SYSTEM, context.instructions].filter(Boolean).join("\n\n");
+  },
+  beforeStep: recordEvidence,
+  beforeTool: guardToolCall,
+  afterRun: (candidate, {context}) => guardOutput(candidate, context),
+  // The humanApproval tool: the Agent registers the request, the UI decides.
+  *onHumanApproval(request, {context}) {
+    const decision = yield* askHuman(context, {
+      approvalId: request.call.id,
+      question: request.question ?? `Allow ${request.call.name}?`,
+    });
+    return decision?.decision === "approved";
+  },
+});
+
+/** What a turn holds: resources released on every exit, and its progress. */
+type TurnResources = {
+  sandbox: TurnSandbox;
+  closeTools?: () => restate.Operation<void>;
+  progress?: ReturnType<typeof turnProgress>;
+};
 
 /**
  * Durable per-Agent conversation transcript and active Turn execution boundary.
@@ -126,14 +112,13 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
 
     /**
      * Executes one complete durable conversation turn and reports exactly one
-     * outcome to the Agent on every exit. The invocation owns the model
-     * context, step bound, steering, interruption, pending operations and,
-     * while it runs, the agent's sandbox.
+     * outcome to the Agent on every exit. The invocation owns the agent run
+     * and, while it runs, the agent's sandbox.
      */
     *doTurn(req: AgentTurnRequest): restate.Operation<AgentTurnOutcome> {
       const turnId = restate.handlerRequest().id;
+      const resources: TurnResources = {sandbox: openTurnSandbox(objectKey())};
       let transcript: TurnHistory | undefined;
-      let state: AgentSessionState | undefined;
       let reconciled: AgentTurnOutcome | null;
       let outcome: AgentTurnOutcome;
       // Every exit reports to the Agent, which clears its active turn only
@@ -145,25 +130,21 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           // already chose the starting entries and immutable turn profile.
           transcript = yield* history.openTurn();
           yield* transcript.append(...req.entries);
-          state = startState(req, turnId, transcript);
-          outcome = yield* executeTurn(state);
+          outcome = yield* runTurn(req, turnId, transcript, resources);
         } catch (error) {
-          if (error instanceof CancelledError) {
-            throw error;
-          }
-          outcome = failedOutcome(turnId, state, error);
-          if (state) {
-            const stopped = yield* state.pending.stop(error);
-            yield* appendToolTranscript(state, stopped);
-          }
+          if (error instanceof CancelledError) throw error;
+          outcome = failedOutcome(turnId, resources, error);
         }
         try {
-          yield* releaseResources(turnId, state);
+          yield* releaseResources(resources);
         } catch (error) {
-          if (error instanceof CancelledError) {
-            throw error;
-          }
-          outcome = failedOutcome(turnId, state, error, "Turn cleanup failed");
+          if (error instanceof CancelledError) throw error;
+          outcome = failedOutcome(
+            turnId,
+            resources,
+            error,
+            "Turn cleanup failed",
+          );
         }
         // The controller reconciles late steering and interruption before
         // the outcome is recorded in the public transcript.
@@ -171,9 +152,8 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
           .client(Agent, objectKey())
           .onTurnEnd(outcome);
       } catch (error) {
-        if (error instanceof CancelledError) {
-          yield* abandonTurn(turnId, transcript, state, error);
-        }
+        if (error instanceof CancelledError)
+          yield* abandonTurn(turnId, transcript, resources);
         throw error;
       }
       if (reconciled && transcript) {
@@ -205,48 +185,99 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
   },
 });
 
-function startState(
+/** One agent run over the turn's model context and permitted tools. */
+function* runTurn(
   req: AgentTurnRequest,
   turnId: string,
   transcript: TurnHistory,
-): AgentSessionState {
+  resources: TurnResources,
+): restate.Operation<AgentTurnOutcome> {
   const conversation = transcript.context();
-  const modelContext = buildModelContext(
+  const messages = buildModelContext(
     conversation.entries,
     conversation.summary,
     req.memories,
     req.agentName,
   );
-  return {
-    context: agentTools.createAgentToolContext(
-      objectKey(),
-      turnId,
-      req.webSearchEnabled,
-      req.tools,
-    ),
-    transcript,
+  const input = messages.pop();
+  if (input?.role !== "user")
+    throw new TerminalError("A turn must start with user input");
+  const catalog = yield* turnTools(req);
+  resources.closeTools = catalog.close;
+  const prior = [...messages, ...catalog.notes];
+  const context: TurnContext = {
+    agentId: objectKey(),
+    turnId,
     instructions: req.instructions,
-    guardrails: req.guardrails,
-    approvedActions: [],
-    rejectedGuardrails: new Set(),
-    blockedGuardrails: new Set(),
-    messages: modelContext.messages,
-    guardrailInput: modelContext.guardrailInput,
-    guardrailEvidenceFrom: modelContext.guardrailEvidenceFrom,
-    interrupt: restate.signal<string>(AGENT_SESSION_SIGNALS.interrupt),
-    steeringInbox: createSteeringInbox(),
-    consumedSteering: 0,
-    steps: 0,
-    pending: createPendingOperations(),
-    discoveredTools: [],
-    mcpTools: [],
-    mcpServers: req.mcpServers,
+    sandbox: resources.sandbox,
+    transcript,
+    policy: {
+      guardrails: req.guardrails,
+      evidenceFrom: prior.length,
+      evidence: [],
+      approved: [],
+      rejected: new Set(),
+    },
   };
+  const progress = turnProgress(context);
+  resources.progress = progress;
+  const result = yield* turnAgent.run(input.content, {
+    name: "turn",
+    context,
+    messages: prior,
+    tools: catalog.tools,
+    controls: {
+      steering: progress.steering,
+      interrupt: restate.signal<string>(AGENT_SESSION_SIGNALS.interrupt),
+    },
+    onProgress: (event) => progress.record(event),
+  });
+  return turnOutcome(turnId, result, progress.consumedSteering);
+}
+
+function turnOutcome(
+  turnId: string,
+  result: RunResult,
+  consumedSteering: number,
+): AgentTurnOutcome {
+  switch (result.status) {
+    case "completed":
+      return {
+        turnId,
+        status: "completed",
+        response: result.output,
+        consumedSteering,
+      };
+    case "interrupted":
+      return {
+        turnId,
+        status: "interrupted",
+        reason: result.reason,
+        ...(result.output ? {response: result.output} : {}),
+        consumedSteering,
+      };
+    case "stopped": {
+      const reason =
+        result.reason === "max_steps"
+          ? `The agent reached its ${MAX_STEPS}-step limit.`
+          : "The agent reached its tool-call limit.";
+      return {
+        turnId,
+        status: "stopped",
+        cause: "step_limit",
+        reason,
+        response:
+          result.output ??
+          `The turn stopped (${reason}), but its final response could not be generated.`,
+        consumedSteering,
+      };
+    }
+  }
 }
 
 function failedOutcome(
   turnId: string,
-  state: AgentSessionState | undefined,
+  resources: TurnResources,
   error: unknown,
   prefix?: string,
 ): AgentTurnOutcome {
@@ -255,526 +286,34 @@ function failedOutcome(
     turnId,
     status: "failed",
     error: prefix ? `${prefix}: ${message}` : message,
-    consumedSteering: state?.consumedSteering ?? 0,
+    consumedSteering: resources.progress?.consumedSteering ?? 0,
   };
 }
 
-function* releaseResources(
-  turnId: string,
-  state: AgentSessionState | undefined,
-): restate.Operation<void> {
-  if (!state) {
-    return;
-  }
-  if (usesStatefulMcp(state)) {
-    yield* releaseMcpSessions(turnId);
-  }
-  yield* state.context.sandbox.release();
+function* releaseResources(resources: TurnResources): restate.Operation<void> {
+  if (resources.closeTools) yield* resources.closeTools();
+  yield* resources.sandbox.release();
 }
 
 /**
- * Cleanup after invocation cancellation. The coroutine tree is already
- * cancelled, so nothing here waits on child tasks: it records what was
- * running, appends the interruption, suspends the sandbox and tells the Agent
- * one way. The report comes first and nothing may skip it; the Agent ignores
- * it if an earlier report already retired the turn.
+ * Cleanup after invocation cancellation. The report comes first and nothing
+ * may skip it; the Agent ignores it if an earlier report already retired the
+ * turn. Then the interruption is appended and resources are released.
  */
 function* abandonTurn(
   turnId: string,
   transcript: TurnHistory | undefined,
-  state: AgentSessionState | undefined,
-  error: CancelledError,
+  resources: TurnResources,
 ): restate.Operation<void> {
   const outcome: AgentTurnOutcome = {
     turnId,
     status: "interrupted",
     reason: "Turn cancelled",
-    consumedSteering: state?.consumedSteering ?? 0,
+    consumedSteering: resources.progress?.consumedSteering ?? 0,
   };
   yield* restate.sendClient(Agent, objectKey()).onTurnEnd(outcome);
-  if (state && usesStatefulMcp(state))
-    releaseMcpSessionsAfterCancellation(turnId);
-  const stopped = state?.pending.cancelAll(error) ?? [];
-  if (transcript)
-    yield* transcript.append(
-      ...(state ? toolTranscriptEntries(state, stopped) : []),
-      ...outcomeEntries(outcome),
-    );
-  if (state) yield* state.context.sandbox.release();
-}
-
-function usesStatefulMcp(state: AgentSessionState): boolean {
-  return state.mcpServers.some(({protocol}) => protocol === "stateful");
-}
-
-/**
- * Runs the iterative model/tool state machine for one Turn.
- *
- * The caller retains the mutable state reference so partially completed work
- * remains available for failure and cancellation cleanup.
- */
-function* executeTurn(
-  state: AgentSessionState,
-): restate.Operation<AgentTurnOutcome> {
-  state.discoveredTools = yield* discoverAgentTools(agentTools.names);
-  const mcpDiscovery = yield* discoverMcpTools(
-    state.mcpServers,
-    {
-      agentId: state.context.agentId,
-      turnId: state.context.turnId,
-    },
-    [...agentTools.names, ...state.discoveredTools.map(({name}) => name)],
-  );
-  state.mcpTools = mcpDiscovery.tools;
-  if (mcpDiscovery.servers.length > 0) {
-    state.messages.push(mcpAvailabilityMessage(mcpDiscovery.servers));
-  }
-
-  let consecutiveModelErrors = 0;
-  while (state.steps < MAX_STEPS) {
-    // Steering received after the previous step's drain belongs before this
-    // model round. This is the stable hand-off boundary between rounds.
-    yield* consumeSteering(state);
-
-    yield* reportProgress(state, "thinking", "Thinking...");
-
-    const task = restate.spawn(
-      agentStep({
-        context: state.context,
-        instructions: state.instructions,
-        messages: [...state.messages],
-        guardrailMessages: currentGuardrailContext(state),
-        guardrails: state.guardrails,
-        approvedActions: [...state.approvedActions],
-        rejectedGuardrails: [...state.rejectedGuardrails],
-        transcript: state.transcript,
-        stepNumber: state.steps + 1,
-        discoveredTools: state.discoveredTools,
-        mcpTools: state.mcpTools,
-        pending: state.pending,
-        steering: state.steeringInbox.ready,
-      }),
-    );
-    const step = yield* settleStep(task, state.interrupt);
-
-    if (step.type === "interrupted") {
-      if (step.tools) {
-        const toolStep = {
-          ...step.tools,
-          outcomes: yield* stopHandoffs(step.tools, step.reason),
-        };
-        // Approvals the interrupted step obtained still cover the guardrail
-        // check on the finalization text; no approval message is pushed
-        // during shutdown.
-        state.approvedActions.push(...toolStep.approvedActions);
-        yield* appendToolTranscript(state, toolStep.pendingEvents);
-        yield* appendToolTranscript(state, toolStep.outcomes, step.reason);
-        state.messages.push(
-          toolStep.action.message,
-          agentTools.toModelMessage(toolStep.outcomes),
-          ...toolStep.pendingEvents.map(agentTools.toRuntimeMessage),
-          ...toolStep.outcomes.flatMap((outcome): ModelMessage[] =>
-            outcome.status === "pending"
-              ? [
-                  agentTools.toRuntimeMessage({
-                    step: toolStep.step,
-                    call: outcome.call,
-                    outcome: {status: "cancelled", reason: step.reason},
-                  }),
-                ]
-              : [],
-          ),
-        );
-        yield* reportToolsFinished(state, toolStep, toolStep.outcomes, true);
-      }
-      return yield* finalizeEarlyExit(state, {
-        status: "interrupted",
-        reason: step.reason,
-      });
-    }
-
-    const steering = state.steeringInbox.drain();
-    state.steps += 1;
-    if (steering.length === 0 || step.type === "tools") {
-      state.approvedActions.push(...step.approvedActions);
-      state.messages.push(...step.approvedActions.map(approvalGrantedMessage));
-      for (const guardrailId of step.rejectedGuardrails) {
-        state.rejectedGuardrails.add(guardrailId);
-      }
-    }
-
-    // Only a tool step has side effects worth retaining when steering arrived
-    // during the step. Every other proposal is stale and is replaced by a new
-    // model round over the steering update.
-    if (steering.length > 0 && step.type !== "tools") {
-      consecutiveModelErrors = 0;
-      yield* consumeSteering(state, steering);
-      continue;
-    }
-
-    // An error or an empty answer makes no progress; three in a row end
-    // the turn instead of spending the remaining steps.
-    const unusable = unusableReason(step);
-    if (unusable === undefined) {
-      consecutiveModelErrors = 0;
-    } else {
-      consecutiveModelErrors += 1;
-      if (consecutiveModelErrors >= 3) {
-        throw new TerminalError(
-          `The model returned unusable responses three times in a row. Last error: ${unusable}`,
-        );
-      }
-    }
-    switch (step.type) {
-      case "error":
-        // Output recovery already ran inside callModel. Never restart it
-        // from this loop or spend the remaining 50 steps making no progress.
-        if (step.code === "output_limit")
-          throw new TerminalError(
-            `${step.message} The turn stopped after bounded output recovery; completed tool results remain in the conversation.`,
-          );
-        state.messages.push(unusableResponseMessage(step.message));
-        continue;
-
-      case "text": {
-        if (!step.content.trim()) {
-          state.messages.push(emptyResponseMessage);
-          continue;
-        }
-        if (state.pending.size === 0) {
-          return {
-            turnId: state.context.turnId,
-            status: "completed",
-            response: step.content,
-            consumedSteering: state.consumedSteering,
-          };
-        }
-
-        yield* reportProgress(
-          state,
-          "waiting",
-          `Waiting for ${state.pending.size} pending operation(s): ${state.pending.describe()}`,
-        );
-        const next = yield* state.pending.next(
-          state.steeringInbox.ready,
-          state.interrupt,
-        );
-        if (next.type === "steering") {
-          yield* consumeSteering(state);
-          continue;
-        }
-        if (next.type === "idle") {
-          // A handed-off program cancelled the last operation; its own
-          // result reports that, so the model simply takes another step.
-          continue;
-        }
-        if (next.type === "completion") {
-          yield* appendToolTranscript(state, [next.event]);
-          state.messages.push(agentTools.toRuntimeMessage(next.event));
-          continue;
-        }
-
-        state.messages.push({
-          role: "assistant",
-          content: step.content,
-        });
-        return yield* finalizeEarlyExit(state, {
-          status: "interrupted",
-          reason: next.reason,
-        });
-      }
-
-      case "guardrail_blocked":
-        if (state.blockedGuardrails.has(step.guardrailId)) {
-          return {
-            turnId: state.context.turnId,
-            status: "completed",
-            response:
-              "I can’t complete that request because it conflicts with a configured policy.",
-            consumedSteering: state.consumedSteering,
-          };
-        }
-        state.blockedGuardrails.add(step.guardrailId);
-        state.messages.push(
-          guardrailBlockedMessage(step.guardrailId, step.reason),
-        );
-        continue;
-
-      case "tools":
-        yield* appendToolTranscript(state, step.pendingEvents);
-        yield* appendToolTranscript(state, step.outcomes);
-        {
-          const applied = yield* state.pending.apply(
-            step.outcomes,
-            state.context,
-            step.step,
-            step.handoffs,
-          );
-          yield* appendToolTranscript(state, applied.events);
-          state.messages.push(
-            step.action.message,
-            agentTools.toModelMessage(applied.outcomes),
-            ...step.pendingEvents.map(agentTools.toRuntimeMessage),
-            ...applied.events.map(agentTools.toRuntimeMessage),
-          );
-          yield* consumeSteering(state, steering);
-          yield* reportToolsFinished(state, step, applied.outcomes);
-        }
-        continue;
-    }
-  }
-
-  return yield* finalizeEarlyExit(state, {
-    status: "stopped",
-    cause: "step_limit",
-    reason: `The agent reached its ${MAX_STEPS}-step limit.`,
-  });
-}
-
-/** Why a step made no progress, or `undefined` when it did. */
-function unusableReason(
-  step: Exclude<AgentStepResult, {type: "interrupted"}>,
-): string | undefined {
-  if (step.type === "error") {
-    return step.message;
-  }
-  if (step.type === "text" && !step.content.trim()) {
-    return "empty response";
-  }
-  return undefined;
-}
-
-/**
- * Stops the programs a step handed off in the same moment it was interrupted.
- * They never reached the pending registry, so nothing else would stop them.
- * A program that finished anyway reports its real outcome; the rest stay
- * `pending` and are reported as cancelled with every other pending call.
- */
-function* stopHandoffs(
-  step: ToolStep,
-  reason: string,
-): restate.Operation<ToolOutcome[]> {
-  if (step.handoffs.size === 0) {
-    return step.outcomes;
-  }
-  const ids = [...step.handoffs.keys()];
-  const settled = yield* interruptAndJoin(
-    [...step.handoffs.values()],
-    new restate.InterruptedError(reason),
-  );
-  return step.outcomes.map((outcome) => {
-    const result = settled[ids.indexOf(outcome.call.toolCallId)];
-    return result?.status === "fulfilled" ? result.value : outcome;
-  });
-}
-
-type ProgressPhase = Extract<
-  ConversationEntry,
-  {role: "event"; type: "progress"}
->["phase"];
-
-function* reportProgress(
-  state: AgentSessionState,
-  phase: ProgressPhase,
-  message: string,
-): restate.Operation<void> {
-  yield* state.transcript.append({
-    role: "event",
-    type: "progress",
-    turnId: state.context.turnId,
-    phase,
-    message,
-  });
-}
-
-function* reportToolsFinished(
-  state: AgentSessionState,
-  step: ToolStep,
-  outcomes: ToolOutcome[],
-  interrupted = false,
-): restate.Operation<void> {
-  yield* state.transcript.append(
-    agentTools.toolsEvent(
-      state.context.turnId,
-      step.step,
-      "finished",
-      outcomes.map((outcome) =>
-        agentTools.toolActivity(
-          outcome.call,
-          interrupted &&
-            (outcome.status === "pending" ||
-              (outcome.status === "failed" &&
-                outcome.error.startsWith("interrupted before completion:")))
-            ? "cancelled"
-            : outcome.status === "cancel_requested"
-              ? "failed"
-              : outcome.status,
-        ),
-      ),
-    ),
-  );
-}
-
-function toolTranscriptEntries(
-  state: AgentSessionState,
-  events: Array<ToolOutcome | PendingEvent>,
-  interruptedPendingReason?: string,
-): ConversationEntry[] {
-  return events.flatMap((event): ConversationEntry[] => {
-    const entries = agentTools.transcriptEntries(
-      event,
-      state.context,
-      interruptedPendingReason,
-    );
-    if (!("outcome" in event)) return entries;
-    return [
-      ...entries,
-      agentTools.toolsEvent(state.context.turnId, event.step, "finished", [
-        agentTools.toolActivity(event.call, event.outcome.status),
-      ]),
-    ];
-  });
-}
-
-function* appendToolTranscript(
-  state: AgentSessionState,
-  events: Array<ToolOutcome | PendingEvent>,
-  interruptedPendingReason?: string,
-): restate.Operation<void> {
-  yield* state.transcript.append(
-    ...toolTranscriptEntries(state, events, interruptedPendingReason),
-  );
-}
-
-function currentGuardrailContext(state: AgentSessionState): ModelMessage[] {
-  if (!state.guardrailInput) {
-    return [];
-  }
-  return [
-    state.guardrailInput,
-    ...state.messages.slice(state.guardrailEvidenceFrom),
-  ];
-}
-
-type EarlyExit =
-  | {status: "interrupted"; reason: string}
-  | {
-      status: "stopped";
-      cause: "step_limit";
-      reason: string;
-    };
-
-function* finalizeEarlyExit(
-  state: AgentSessionState,
-  exit: EarlyExit,
-): restate.Operation<AgentTurnOutcome> {
-  yield* reportProgress(
-    state,
-    "finalizing",
-    "Stopping unfinished work before finalization",
-  );
-  const stopped = yield* state.pending.stop(
-    new restate.InterruptedError(exit.reason),
-  );
-  yield* appendToolTranscript(state, stopped);
-  state.messages.push(...stopped.map(agentTools.toRuntimeMessage));
-  state.messages.push(finalizationInstruction(exit.reason));
-  yield* reportProgress(
-    state,
-    "finalizing",
-    "Preparing a final response from completed results",
-  );
-
-  let response: string;
-  try {
-    const final = yield* callModel({
-      instructions: state.instructions,
-      messages: state.messages,
-      tools: [],
-    });
-    if (final.type === "text" && final.content.trim()) {
-      if (state.guardrails.length === 0) {
-        response = final.content;
-      } else {
-        const decision = yield* callGuardrailModel({
-          instructions: state.instructions,
-          guardrails: state.guardrails,
-          approvedActions: state.approvedActions,
-          rejectedGuardrailIds: [...state.rejectedGuardrails],
-          messages: currentGuardrailContext(state),
-          action: {type: "text", content: final.content},
-        });
-        response =
-          decision.decision === "allow"
-            ? final.content
-            : "The turn stopped, but its final summary was withheld by a guardrail.";
-      }
-    } else {
-      const detail =
-        final.type === "error"
-          ? final.message
-          : "the finalizer unexpectedly requested a tool";
-      response = `The turn stopped (${exit.reason}), but its final response could not be generated: ${detail}.`;
-    }
-  } catch (error) {
-    if (isCancellation(error)) throw error;
-    response = `The turn stopped (${exit.reason}), but its final response could not be generated: ${errorMessage(error)}.`;
-  }
-  return {
-    turnId: state.context.turnId,
-    ...exit,
-    response,
-    consumedSteering: state.consumedSteering,
-  };
-}
-
-function* consumeSteering(
-  state: AgentSessionState,
-  steering = state.steeringInbox.drain(),
-): restate.Operation<void> {
-  if (steering.length === 0) {
-    return;
-  }
-
-  // Steering changes the request, so earlier guardrail decisions no longer
-  // apply to it.
-  state.approvedActions.length = 0;
-  state.blockedGuardrails.clear();
-  if (state.rejectedGuardrails.size > 0) {
-    state.rejectedGuardrails.clear();
-    state.messages.push(rejectionsResetMessage);
-  }
-
-  for (const signal of steering) {
-    const queuedMessages = signal.queued.filter(
-      ({role}) => role === "user",
-    ).length;
-    yield* state.transcript.append(
-      ...signal.queued,
-      {
-        role: "user",
-        text: signal.message,
-        delivery: "steer",
-      },
-      {
-        role: "event",
-        type: "steer",
-        turnId: state.context.turnId,
-        queuedMessages,
-      },
-    );
-    // Counted as each batch lands, so a failure part-way through does not
-    // make the Agent re-queue a batch the transcript already holds.
-    state.consumedSteering += 1;
-  }
-
-  const messages = steering.map(steeringMessage);
-  state.messages.push(...messages);
-  const latest = messages.at(-1);
-  if (latest) {
-    state.guardrailInput = latest;
-    state.guardrailEvidenceFrom = state.messages.length;
-  }
+  if (transcript) yield* transcript.append(...outcomeEntries(outcome));
+  yield* releaseResources(resources);
 }
 
 function outcomeEntries(outcome: AgentTurnOutcome): ConversationEntry[] {

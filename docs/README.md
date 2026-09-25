@@ -8,7 +8,7 @@ request path begins with an agent ID, without an account or login prerequisite.
 1. [Run a conversation](../README.md).
 2. [Architecture](architecture.md): controller, turn, state owners, notifications.
 3. [Protocol](protocol.md): ask, steer, interrupt, history, approvals and clients.
-4. [Turn runtime](turn-runtime.md): steps, policy, pending work and recovery.
+4. [Turn runtime](turn-runtime.md): steps, policy, background work and recovery.
 5. [Tools](tools.md): built-ins, PTC, dynamic Restate handlers and MCP.
 6. [MCP configuration](mcp-configuration.md): operator endpoints and environment credentials.
 7. [Schedules](schedules.md) and [sandboxes](sandboxes.md): durable timer and resource lifecycles.

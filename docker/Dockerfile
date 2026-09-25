@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Production image for the Restate agent endpoint (@restate-agents/core).
+# Production image for the Restate agent endpoint (@restate-agents/runtime).
 #
 # Build from the repository root (the build context must be the repo root so
 # the workspace manifests and lockfile are visible):
@@ -39,21 +39,23 @@ FROM base AS build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/libs/core/package.json packages/libs/core/
 COPY packages/libs/types/package.json packages/libs/types/
+# The agent SDK is vendored until it is published to npm.
+COPY vendor vendor
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --filter @restate-agents/core... --frozen-lockfile
+    pnpm install --filter @restate-agents/runtime... --frozen-lockfile
 
 COPY tsconfig.base.json ./
 COPY packages/libs/core/tsconfig.json packages/libs/core/
 COPY packages/libs/types/tsconfig.json packages/libs/types/
 COPY packages/libs/core/src packages/libs/core/src
 COPY packages/libs/types/src packages/libs/types/src
-RUN pnpm --filter @restate-agents/core... build
+RUN pnpm --filter @restate-agents/runtime... build
 
 # Assemble a self-contained production tree (dist + prod-only node_modules,
 # no workspace symlinks). --legacy is required because this workspace does not
 # use injected dependencies (pnpm v10+ default for `deploy`).
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm --filter @restate-agents/core deploy --prod --legacy /out
+    pnpm --filter @restate-agents/runtime deploy --prod --legacy /out
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # tini reaps orphaned children: the local sandbox provider spawns shell

@@ -1,18 +1,19 @@
 // Pure projection between the Agent's canonical transcript and the model
 // context used by one Turn invocation.
 
+import type {Message} from "@restate-agents/core";
 import type {ConversationEntry, MemoryEntry} from "@restate-agents/types";
-import type {ModelMessage} from "ai";
 
 import {
   type AgentSessionSteering,
   isDerivedConversationEvent,
 } from "../internal-types.js";
-import type {GuardrailApproval} from "../model/index.js";
-import type {McpServerAvailability} from "./mcp-tools.js";
+import type {McpServerAvailability} from "./turn-tools.js";
+
+type UserMessage = Extract<Message, {role: "user"}>;
 
 /** A runtime note to the model: a bracketed title and its lines. */
-export function note(...lines: string[]): ModelMessage {
+export function note(...lines: string[]): UserMessage {
   return {role: "user", content: lines.join("\n")};
 }
 
@@ -22,14 +23,8 @@ export function buildModelContext(
   summary?: string,
   memories: MemoryEntry[] = [],
   agentName?: string,
-): {
-  messages: ModelMessage[];
-  guardrailInput?: ModelMessage;
-  guardrailEvidenceFrom: number;
-} {
-  const messages: ModelMessage[] = [];
-  let guardrailInput: ModelMessage | undefined;
-  let guardrailEvidenceFrom = 0;
+): Message[] {
+  const messages: Message[] = [];
   if (agentName !== undefined) {
     messages.push(
       note(
@@ -67,7 +62,7 @@ export function buildModelContext(
   // tool lifecycle, progress, profile changes, pending approval lifecycle,
   // memory, and external-delivery events are derived status, never model context.
   for (const entry of history) {
-    let message: ModelMessage | undefined;
+    let message: Message | undefined;
     if (entry.role === "user") {
       const content =
         entry.delivery === "queued"
@@ -152,26 +147,16 @@ export function buildModelContext(
           break;
       }
     }
-    if (message) {
-      messages.push(message);
-      if (entry.role === "user") {
-        guardrailInput = message;
-        guardrailEvidenceFrom = messages.length;
-      }
-    }
+    if (message) messages.push(message);
   }
-  return {
-    messages,
-    ...(guardrailInput ? {guardrailInput} : {}),
-    guardrailEvidenceFrom,
-  };
+  return messages;
 }
 
 /** Formats one steering signal, including promoted queued input, for the model. */
 export function steeringMessage({
   queued,
   message,
-}: AgentSessionSteering): ModelMessage {
+}: AgentSessionSteering): UserMessage {
   const queuedMessages = queued.flatMap((entry): string[] =>
     entry.role === "user" ? [entry.text] : [],
   );
@@ -191,22 +176,10 @@ export function steeringMessage({
   );
 }
 
-/** Constrains the final model call after interruption or a runtime limit. */
-export function finalizationInstruction(reason: string): ModelMessage {
-  return note(
-    "[Turn finalization]",
-    `Reason: ${JSON.stringify(reason)}`,
-    "The original execution must stop now. Do not request any more tools.",
-    "The reason explains why the original Turn stopped; do not treat it as a new user request.",
-    "Using only completed results and runtime events already present above, summarize what was achieved relative to the original request.",
-    "Distinguish completed work from cancelled or incomplete work, honor any relevant closing guidance in the reason, and never invent missing results.",
-  );
-}
-
 /** Tells the model which configured MCP servers it can use this turn. */
 export function mcpAvailabilityMessage(
   servers: McpServerAvailability[],
-): ModelMessage {
+): UserMessage {
   return note(
     "[Configured MCP server availability for this turn]",
     ...servers.map((server) => {
@@ -221,43 +194,5 @@ export function mcpAvailabilityMessage(
     "This is runtime status, not a user request.",
     "A configured-but-unavailable server is still configured. Do not claim it is absent or unconfigured.",
     "When the user's request needs an unavailable server, explain its exact availability problem and ask them to check the operator's endpoint or credential configuration.",
-  );
-}
-
-export function approvalGrantedMessage({
-  guardrailId,
-  question,
-}: GuardrailApproval): ModelMessage {
-  return note(
-    "[Runtime guardrail]",
-    `Human approval was granted for this proposal under guardrail ${JSON.stringify(guardrailId)}.`,
-    `Approved scope: ${JSON.stringify(question)}`,
-    "The runtime will evaluate later actions and reuse this approval only when they remain materially within that scope.",
-  );
-}
-
-export function guardrailBlockedMessage(
-  guardrailId: string,
-  reason: string,
-): ModelMessage {
-  return note(
-    "[Runtime guardrail]",
-    `The proposed action was blocked by guardrail ${JSON.stringify(guardrailId)}.`,
-    `Reason: ${reason}`,
-    "Do not repeat the blocked action. Choose a clearly compliant alternative, or return a concise tool-free refusal.",
-  );
-}
-
-export const rejectionsResetMessage = note(
-  "[Runtime guardrail] Prior human rejections do not automatically apply to the new steering update; policies will evaluate the updated action again.",
-);
-
-export const emptyResponseMessage = note(
-  "Your last response was empty. Call a tool or give a final answer.",
-);
-
-export function unusableResponseMessage(message: string): ModelMessage {
-  return note(
-    `Your last response could not be used (${message}). Try again with the available tools or give a final answer.`,
   );
 }

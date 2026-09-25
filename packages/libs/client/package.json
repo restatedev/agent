@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@restate-agents/types": "workspace:*",
-    "@restatedev/restate-sdk-clients": "1.17.0"
+    "@restatedev/restate-sdk-clients": "1.17.2"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

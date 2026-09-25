@@ -1,5 +1,5 @@
 {
-  "name": "@restate-agents/core",
+  "name": "@restate-agents/runtime",
   "version": "0.0.1",
   "description": "Durable Restate services for the reference agent runtime.",
   "private": true,
@@ -13,8 +13,7 @@
     }
   },
   "scripts": {
-    "test": "tsc -p test/tsconfig.json && node --import tsx --test test/*.test.ts test/*.test.mjs",
-    "test:restart": "node --import tsx test/restart.mjs",
+    "test": "node --import tsx --test test/*.test.mjs",
     "build": "tsc --noEmitOnError",
     "start": "NODE_ENV=production node ./dist/app.js",
     "dev": "tsx watch ./src/app.ts",
@@ -23,17 +22,13 @@
     "postbundle": "cd dist && zip -r index.zip app.js*"
   },
   "dependencies": {
-    "@jitl/quickjs-singlefile-cjs-release-sync": "0.31.0",
     "@ai-sdk/openai": "^4.0.10",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@restate-agents/core": "file:../../../vendor/restate-agents-core-346e8fe.tgz",
     "@restate-agents/types": "workspace:*",
-    "@restatedev/restate-sdk": "1.17.0",
-    "@restatedev/restate-sdk-gen": "1.17.0",
-    "ai": "^7.0.26",
-    "minisearch": "7.2.0",
+    "@restatedev/restate-sdk": "1.17.2",
+    "@restatedev/restate-sdk-gen": "1.17.2",
     "modal": "^0.9.0",
-    "quickjs-emscripten-core": "0.31.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22",

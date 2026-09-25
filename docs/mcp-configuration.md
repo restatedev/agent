@@ -43,34 +43,39 @@ inherited grants and do not automatically acquire future connectors.
 
 ## HTTP boundary
 
-Inside discovery and tool HTTP effects, `resolveMcpToken`:
+The SDK's MCP client (`mcp.ts` in `@restate-agents/core`) asks for the token
+through a callback right before each discovery, call or session-close effect.
+That callback, `resolveMcpToken`:
 
 1. Checks that the current operator configuration still contains the same
    server ID, URL, protocol and credential reference as the turn snapshot.
 2. Resolves the referenced environment variable, if present.
-3. Supplies the value to the MCP transport only.
+3. Returns the value, which the SDK hands to that effect's MCP transport only.
 
 A missing credential fails before sending an anonymous request. A changed or
-removed connector fails with a safe configuration error; start a new turn to
-use the changed metadata. Rotating the value under the same environment name
-is permitted. Process caches are partitioned by a token fingerprint so rotated
-tokens do not share authenticated catalog/session entries.
+removed connector fails with a terminal configuration error
+(`McpConfigurationError`); start a new turn to use the changed metadata.
+Rotating the value under the same environment name is permitted. There is no
+process-local catalog or session cache: each effect opens a short-lived client
+and closes it.
 
 Successful recorded HTTP results replay without another HTTP request. If an
 unfinished effect has to execute again, it uses the environment at execution
-time. Authentication failures become tool observations; they do not suspend
-for login or retry indefinitely. Discovery, which is a read, retries other
-failures up to three times with a short backoff inside its effect, then marks
-the server unavailable for that turn with a sanitized warning. Stateful connections are released at turn end
-and discarded after failed calls.
+time. Authentication failures do not suspend for login or retry indefinitely.
+Discovery, which is a read, makes up to three attempts inside its effect. A
+server whose discovery fails, for a bad or missing credential too, is reported
+to the model as unavailable for that turn, with the reason, instead of failing
+the turn. A failed call becomes a tool failure. A stateful session is
+terminated when the turn releases its resources.
 
 ## What may be recorded
 
 Credentials must not enter handler arguments, state, signals, model context,
-run names or returned credential values. Provider exceptions are sanitized
-inside the HTTP effect **before** its result is journaled, including exceptions
-that echo request headers. Tests inspect the serialized journal for synthetic
-token leakage and verify no new HTTP request on replay.
+run names or returned credential values. Inside the HTTP effect, the SDK
+replaces the credential with `[redacted]` wherever a result or exception echoes
+it, **before** the result is journaled. Tests inspect the serialized journal
+and the model-facing error for synthetic token leakage and verify no new HTTP
+request on replay.
 
 Actual MCP catalog and tool response payloads are recorded and may reach model
 context. This is not a general-purpose payload redactor: a remote server that
@@ -85,11 +90,12 @@ trust boundary.
 ## Tool execution
 
 Discovery snapshots the tool schema and remote name used for invocation.
-Model names are namespaced by server; name normalization has deterministic
-collision handling. Tool search loads permitted schemas on demand. PTC uses
-the same permitted dispatcher and guardrail evaluation as direct calls.
+Model names are namespaced by server; name normalization is deterministic, and
+a name already taken is skipped with a logged warning. Tool search loads
+permitted schemas on demand. PTC uses the same permitted tools and guardrail
+evaluation as direct calls.
 
-Calls carry an `Idempotency-Key` based on `turnId:toolCallId`. MCP does not
-standardize deduplication; a crash between remote completion and recording the
-result can repeat a side effect. The HTTP effect disables eager automatic
-retries. See [tools](tools.md#mcp-tools) for result projection.
+Calls carry an `Idempotency-Key` based on the turn ID, run name and tool-call
+ID. MCP does not standardize deduplication; a crash between remote completion
+and recording the result can repeat a side effect. Each call makes one attempt.
+See [tools](tools.md#mcp-tools) for result projection.

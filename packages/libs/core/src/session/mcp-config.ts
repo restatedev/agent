@@ -12,7 +12,9 @@ import {z} from "zod";
 
 const Config = z.array(McpServerSchema.strict()).max(32);
 
-export class McpConfigurationError extends Error {}
+/** Terminal: a server with bad configuration is unavailable for the turn, and
+ * a call made under a stale snapshot fails without retrying. */
+export class McpConfigurationError extends TerminalError {}
 
 export function readMcpConfiguration(env = process.env): McpServer[] {
   try {
@@ -75,7 +77,11 @@ export function grantedMcpServers(
   return servers.filter((server) => mcpServerGranted(tools, server.id));
 }
 
-/** Call only inside the HTTP effect; do not return the value from a run. */
+/**
+ * The operator's token for a server. Called in handler code through the SDK's
+ * `token` callback, right before each HTTP call; the value is used only inside
+ * that call's effect and is never returned from a journaled run.
+ */
 export function resolveMcpToken(
   server: McpServer,
   env = process.env,

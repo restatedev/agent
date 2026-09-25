@@ -6,8 +6,9 @@ import * as durable from "@restatedev/restate-sdk-gen";
 
 import {Agent} from "../src/agent/service.ts";
 import {subAgentProfile} from "../src/agent/sub-agents.ts";
-import * as agentTools from "../src/session/tools.ts";
+import {builtins as agentTools} from "../src/session/tools.ts";
 import {context} from "./state-fixture.mjs";
+import {runToolCall, turnContext} from "./tool-harness.mjs";
 
 const selection = (...names) => ({mode: "selected", names});
 const grants = {
@@ -51,47 +52,39 @@ const agentState = {
 };
 const child = {agentId: "child", name: "Research", parentAgentId: "parent"};
 
-for (const toolName of ["createSubAgent"]) {
-  test(`${toolName} advertises strict-compatible nested tool selections`, () => {
-    const manifest = agentTools
-      .manifests([], [], {webSearchEnabled: false, permissions: grants})
-      .find((m) => m.name === toolName);
-    assert.equal(manifest.strict, true);
-    const tools = manifest.inputSchema.properties.tools.anyOf.find(
-      (s) => s.type === "object",
+test("createSubAgent advertises strict-compatible nested tool selections", () => {
+  // The SDK closes objects for strict mode; the schema must require every property.
+  const schema = agentTools.createSubAgent.inputSchema;
+  const tools = schema.properties.tools.anyOf.find((s) => s.type === "object");
+  assert.equal(Object.hasOwn(tools.properties, "mcpDefault"), false);
+  assert.match(tools.properties.builtin.description, /webSearch/);
+  assert.match(tools.properties.dynamic.description, /service\/handler/);
+  for (const selection of [
+    tools.properties.builtin,
+    tools.properties.dynamic,
+    tools.properties.mcp.items.properties.tools,
+  ]) {
+    assert.equal(selection.anyOf.length, 2);
+    assert.deepEqual(
+      selection.anyOf.map((s) => s.properties.mode.const),
+      ["all", "selected"],
     );
-    assert.equal(Object.hasOwn(tools.properties, "mcpDefault"), false);
-    assert.match(tools.properties.builtin.description, /webSearch/);
-    assert.match(tools.properties.dynamic.description, /service\/handler/);
-    for (const selection of [
-      tools.properties.builtin,
-      tools.properties.dynamic,
-      tools.properties.mcp.items.properties.tools,
-    ]) {
-      assert.equal(selection.anyOf.length, 2);
+  }
+  function check(schema) {
+    if (!schema || typeof schema !== "object") return;
+    assert.equal(Object.hasOwn(schema, "oneOf"), false);
+    if (schema.type === "object")
       assert.deepEqual(
-        selection.anyOf.map((s) => s.properties.mode.const),
-        ["all", "selected"],
+        [...(schema.required ?? [])].sort(),
+        Object.keys(schema.properties ?? {}).sort(),
       );
+    for (const value of Object.values(schema)) {
+      if (Array.isArray(value)) value.forEach(check);
+      else check(value);
     }
-    function check(schema) {
-      if (!schema || typeof schema !== "object") return;
-      assert.equal(Object.hasOwn(schema, "oneOf"), false);
-      if (schema.type === "object") {
-        assert.equal(schema.additionalProperties, false);
-        assert.deepEqual(
-          [...(schema.required ?? [])].sort(),
-          Object.keys(schema.properties ?? {}).sort(),
-        );
-      }
-      for (const value of Object.values(schema)) {
-        if (Array.isArray(value)) value.forEach(check);
-        else check(value);
-      }
-    }
-    check(manifest.inputSchema);
-  });
-}
+  }
+  check(schema);
+});
 
 test("misclassified webSearch is recoverable directly and inside PTC without granting extra access", async () => {
   const current = {...grants, dynamic: selection(), mcp: []};
@@ -105,21 +98,7 @@ test("misclassified webSearch is recoverable directly and inside PTC without gra
     },
   };
   const corrected = {...wrong, tools: {...wrong.tools, dynamic: selection()}};
-  const toolContext = agentTools.createAgentToolContext(
-    "parent",
-    "turn",
-    true,
-    current,
-  );
   const f = context("parent", {}, () => child);
-  const scope = {
-    transcript: {*append() {}},
-    step: 1,
-    *guard() {},
-    *cancelPending() {
-      throw new Error("unused");
-    },
-  };
   const execute = (call) =>
     f.invoke((ctx) =>
       durable.execute(
@@ -137,34 +116,26 @@ test("misclassified webSearch is recoverable directly and inside PTC without gra
             return ctx.genericCall(opts);
           },
         },
-        agentTools.execute(call, toolContext, [], [], scope),
+        runToolCall(call),
       ),
     );
   const failed = await execute({
-    toolName: "createSubAgent",
-    toolCallId: "invalid",
+    id: "invalid",
+    name: "createSubAgent",
     input: wrong,
   });
-  assert.equal(failed.status, "failed");
-  assert.match(failed.error, /dynamic selection is not permitted/);
-  assert.match(failed.error, /webSearch belong in builtin/);
+  assert.equal(failed.status, "error");
+  assert.match(failed.message, /dynamic selection is not permitted/);
+  assert.match(failed.message, /webSearch belong in builtin/);
   assert.equal(f.calls.length, 0);
-  const message = agentTools.toModelMessage([failed]);
-  assert.equal(message.content[0].output.value.ok, false);
-  assert.equal(message.content[0].output.value.error, failed.error);
   assert.equal(
-    (
-      await execute({
-        toolName: "createSubAgent",
-        toolCallId: "corrected",
-        input: corrected,
-      })
-    ).status,
-    "succeeded",
+    (await execute({id: "corrected", name: "createSubAgent", input: corrected}))
+      .status,
+    "success",
   );
   const program = await execute({
-    toolName: "executeProgram",
-    toolCallId: "program",
+    id: "program",
+    name: "executeProgram",
     input: {
       source: `async tools => {
     try { await tools.createSubAgent(${JSON.stringify(wrong)}); }
@@ -173,18 +144,12 @@ test("misclassified webSearch is recoverable directly and inside PTC without gra
   }`,
     },
   });
-  assert.equal(program.status, "succeeded");
-  assert.equal(JSON.parse(program.result).agentId, "child");
+  assert.equal(program.status, "success");
+  assert.equal(program.output.agentId, "child");
   assert.equal(f.calls.length, 2);
 });
 
 test("sub-agent tool does not swallow cancellation, stale-turn or infrastructure failures", async () => {
-  const toolContext = agentTools.createAgentToolContext(
-    "parent",
-    "turn",
-    false,
-    grants,
-  );
   for (const error of [
     new CancelledError(),
     new TerminalError("stale turn", {errorCode: 409}),
@@ -200,12 +165,7 @@ test("sub-agent tool does not swallow cancellation, stale-turn or infrastructure
               throw error;
             },
           },
-          agentTools.execute(
-            {toolName: "createSubAgent", toolCallId: "call", input: config},
-            toolContext,
-            [],
-            [],
-          ),
+          runToolCall({id: "call", name: "createSubAgent", input: config}),
         ),
       ),
       {message: error.message},
@@ -512,13 +472,9 @@ test("child dispatch uses its own session and memory with no account calls", asy
   assert.equal(f.calls.length, 0);
 });
 
-test("direct and PTC catalogs expose sub-agent tools and use the trusted Agent context", async () => {
-  const toolContext = () =>
-    agentTools.createAgentToolContext("parent", "turn", false, grants);
+test("direct and PTC calls expose sub-agent tools and use the trusted Agent context", async () => {
   for (const name of ["createSubAgent", "deleteSubAgent", "listSubAgents"])
-    assert.ok(
-      agentTools.manifests([], [], toolContext()).some((m) => m.name === name),
-    );
+    assert.ok(Object.hasOwn(agentTools, name));
   const f = context("parent", {}, (call) => {
     assert.equal(call.service, "Agent");
     assert.equal(call.key, "parent");
@@ -529,63 +485,55 @@ test("direct and PTC catalogs expose sub-agent tools and use the trusted Agent c
     assert.equal(call.parameter.agentId, "child");
     return true;
   });
-  const scope = (guard) => ({
-    transcript: {*append() {}},
-    step: 1,
-    guard,
-    *cancelPending() {
-      throw new Error("unused");
-    },
-  });
   const guarded = [];
-  const execute = (call, gate = function* () {}) =>
+  const execute = (call, beforeTool) =>
     f.invoke((ctx) =>
       durable.execute(
         ctx,
-        agentTools.execute(call, toolContext(), [], [], scope(gate)),
+        runToolCall(call, {context: turnContext(), beforeTool}),
       ),
     );
   const direct = await execute({
-    toolName: "createSubAgent",
-    toolCallId: "direct",
+    id: "direct",
+    name: "createSubAgent",
     input: config,
   });
-  assert.equal(direct.status, "succeeded");
-  assert.equal(JSON.parse(direct.result).url, "/?agent=child");
+  assert.equal(direct.status, "success");
+  assert.equal(direct.output.url, "/?agent=child");
   assert.equal(f.calls[0].parameter.toolCallId, "direct");
   const program = await execute(
     {
-      toolName: "executeProgram",
-      toolCallId: "program",
+      id: "program",
+      name: "executeProgram",
       input: {
         source: `async tools => { const child = await tools.createSubAgent(${JSON.stringify(config)}); const children = await tools.listSubAgents({}); return {children, deletion: await tools.deleteSubAgent({agentId: child.agentId})}; }`,
       },
     },
     function* (call) {
-      guarded.push(call.toolName);
+      if (call.name !== "executeProgram") guarded.push(call.name);
     },
   );
-  assert.equal(program.status, "succeeded");
+  assert.equal(program.status, "success");
   assert.deepEqual(guarded, [
     "createSubAgent",
     "listSubAgents",
     "deleteSubAgent",
   ]);
-  assert.equal(JSON.parse(program.result).deletion.deleted, true);
+  assert.equal(program.output.deletion.deleted, true);
   const count = f.calls.length;
   const denied = await execute(
     {
-      toolName: "executeProgram",
-      toolCallId: "denied",
+      id: "denied",
+      name: "executeProgram",
       input: {
         source:
           "async tools => { try { return await tools.deleteSubAgent({agentId:'child'}); } catch(e) { return e.message; } }",
       },
     },
-    function* () {
-      return "Do not delete";
+    function* (call) {
+      if (call.name !== "executeProgram") return "Do not delete";
     },
   );
-  assert.match(denied.result, /Tool blocked/);
+  assert.match(denied.output, /Do not delete/);
   assert.equal(f.calls.length, count);
 });

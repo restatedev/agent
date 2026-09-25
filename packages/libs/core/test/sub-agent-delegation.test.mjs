@@ -5,9 +5,9 @@ import {TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 
 import {Agent} from "../src/agent/service.ts";
-import * as tools from "../src/session/tools.ts";
 import {runHandler} from "./harness.mjs";
 import {context} from "./state-fixture.mjs";
+import {runToolCall, turnContext} from "./tool-harness.mjs";
 
 const grants = {
   builtin: {mode: "all"},
@@ -239,13 +239,6 @@ async function runDelegation({
           },
         },
         durable.gen(function* () {
-          const toolContext = tools.createAgentToolContext(
-            "parent",
-            "parent-turn",
-            true,
-            grants,
-            "alice",
-          );
           const toolName = create ? "createSubAgent" : "messageSubAgent";
           const input = create
             ? {
@@ -259,21 +252,17 @@ async function runDelegation({
             : {agentId: "child", message: "Follow up"};
           const call = ptc
             ? {
-                toolName: "executeProgram",
-                toolCallId: "ptc",
+                id: "ptc",
+                name: "executeProgram",
                 input: {
                   source: `async tools => await tools.${toolName}(${JSON.stringify(input)})`,
                 },
               }
-            : {toolName, toolCallId: "call-1", input};
-          const scope = {
-            transcript: {*append() {}},
-            step: 1,
-            *guard() {},
-            *cancelPending() {},
-          };
+            : {id: "call-1", name: toolName, input};
           try {
-            return yield* tools.execute(call, toolContext, [], [], scope);
+            return yield* runToolCall(call, {
+              context: turnContext({turnId: "parent-turn"}),
+            });
           } catch (error) {
             return {interrupted: error instanceof durable.InterruptedError};
           }
@@ -294,11 +283,8 @@ test("creation and follow-ups return child answers, including PTC, and replay wi
     for (const ptc of [false, true]) {
       const calls = [];
       const live = await runDelegation({outcome, create, ptc, calls});
-      assert.equal(live.output.status, "succeeded");
-      assert.equal(
-        JSON.parse(live.output.result).response,
-        "Research findings",
-      );
+      assert.equal(live.output.status, "success");
+      assert.equal(live.output.output.response, "Research findings");
       assert.ok(calls.find((call) => call.method === "child-result"));
       assert.ok(calls.find((call) => call.method === "finishSubAgentTask"));
       const replayCalls = [];
@@ -330,8 +316,8 @@ test("child failure/interruption becomes a recoverable tool result; parent inter
     },
   ]) {
     const {output} = await runDelegation({outcome});
-    assert.equal(output.status, "failed");
-    assert.match(output.error, /Research failed|User stopped child/);
+    assert.equal(output.status, "error");
+    assert.match(output.message, /Research failed|User stopped child/);
   }
   const calls = [];
   const {output} = await runDelegation({interrupted: true, calls});
@@ -344,11 +330,12 @@ test("a child cancelled from outside is a failed tool result, not the parent's c
     const cancelled = new TerminalError("Cancelled", {errorCode: 409});
     const {output} = await runDelegation({childFailure: cancelled, ptc});
 
-    assert.equal(output.status, "failed");
+    assert.equal(output.status, "error");
     if (ptc) {
-      assert.match(output.error, /Program failed/);
+      // A tool rejection inside a program surfaces as the program's error.
+      assert.match(output.message, /cancelled/);
     } else {
-      assert.deepEqual(JSON.parse(output.error), {
+      assert.deepEqual(JSON.parse(output.message), {
         agentId: "child",
         status: "cancelled",
         error: "Cancelled",

@@ -13,9 +13,8 @@ import {
 } from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 
-import {discoverAgentTools} from "../session/dynamic-tools.js";
 import {configuredMcpServers} from "../session/mcp-config.js";
-import {dynamicToolId} from "../session/tool-permissions.js";
+import {discoverRestateTools} from "../session/restate-tools.js";
 import * as agentTools from "../session/tools.js";
 import {listState} from "../state.js";
 import * as activeTurn from "./active-turn.js";
@@ -61,12 +60,12 @@ export const handlers: AgentHandlers<
 
   /** Every tool an operator can grant, for the tool-permission UI. */
   *toolCatalog() {
-    const dynamic = yield* discoverAgentTools(agentTools.names);
+    const dynamic = yield* discoverRestateTools(() => true);
     return {
-      builtin: agentTools.builtinCatalog,
+      builtin: agentTools.builtinCatalog(),
       mcp: yield* configuredMcpServers(),
-      dynamic: dynamic.map((tool) => ({
-        name: dynamicToolId(tool),
+      dynamic: Object.values(dynamic).map(({id, tool}) => ({
+        name: id,
         description: tool.description,
       })),
     };

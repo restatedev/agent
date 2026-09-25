@@ -29,9 +29,9 @@ Use executable contracts before prose:
 
 1. Public Zod schemas in `packages/libs/types/src/index.ts`, shared Restate
    descriptors in `packages/libs/types/src/services.ts`, schemas adjacent to
-   internal handlers, and `src/model/provider.ts`;
+   internal handlers, and the agent SDK's types (`@restate-agents/core`);
 2. handler code in `src/agent/*.ts` (grouped by concern) and
-   `src/session/service.ts`;
+   `src/session/service.ts`, and the SDK's run loop for loop mechanics;
 3. focused ownership modules;
 4. docs.
 
@@ -57,19 +57,21 @@ Preserve these unless the requested change explicitly replaces them:
    guardrails, and tool grants changed during that turn affect the next turn.
    The session loads its conversation context once at the beginning of
    `doTurn`.
-5. Steering does not cancel the current model/tool step or existing pending
-   operations. It is consumed after the current step settles.
+5. Steering does not cancel running tool calls or existing background
+   operations. It enters context when it arrives; only an in-flight model
+   request or final-answer review is discarded and planned again.
 6. Interruption ends the turn gracefully: stop and join unfinished work,
    retain completed results, and perform one tool-free finalization call.
-7. External invocation cancellation suspends the sandbox and reconciles Agent,
-   then rethrows `CancelledError`; it does not pretend to be a graceful model
-   finalization.
+7. External invocation cancellation reconciles Agent one way first, then
+   records the interruption, suspends the sandbox and rethrows
+   `CancelledError`; it does not pretend to be a graceful model finalization.
 8. Foreground tools in one model response are spawned together and joined.
-9. Pending tools are owned by `doTurn` across steps, keyed by stable tool-call ID,
-   and selectively cancellable without stopping unrelated operations.
-10. A guardrail gates the exact proposed text or whole tool batch before it is
-    published or started. The main agent model does not receive the policy
-    list.
+9. Background tools are owned by the turn's run across steps, keyed by stable
+   tool-call ID, and selectively cancellable without stopping unrelated
+   operations.
+10. A guardrail gates the exact final text or each concrete tool call before
+    it is published or started. The main agent model does not receive the
+    policy list.
 11. Tool-call assistant messages and matching tool-result messages remain
     protocol-complete in active-turn model context.
 12. Raw reasoning, tool arguments, and tool results do not enter the canonical
@@ -88,15 +90,17 @@ Preserve these unless the requested change explicitly replaces them:
     explicitly selected stateless `2026-07-28` or stateful 2025-era protocol.
     The exact server, protocol verdict, remote name, and tool definition used
     for inference are retained in the turn snapshot used for invocation.
-    MCP credentials resolve from operator environment references inside HTTP
-    effects only. Tokens must not cross durable inputs, state, signals, or
-    returned credential values. Sanitize provider exceptions before recording
-    results. See [MCP configuration](mcp-configuration.md).
+    MCP credentials resolve from operator environment references right before
+    each HTTP effect and are used only inside it. Tokens must not cross durable
+    inputs, state, signals, or returned credential values. A credential echoed
+    in a result or error is redacted before it is recorded. See
+    [MCP configuration](mcp-configuration.md).
 
 18. Keep the layers distinct in prose and code comments: `Agent` is the
     deterministic controller, `AgentSession` owns session history and turn
-    execution, one `doTurn` invocation is an agent run, `agentStep` is one loop
-    iteration, and the model plus harness/runtime is the operational agent.
+    execution, one `doTurn` invocation is an agent run, a step is one planning
+    model call of that run, and the model plus harness/runtime is the
+    operational agent.
 19. Notifications carry invalidation only. AgentSession stays authoritative for
     history and Agent for profile, approvals, children and schedules.
 20. A schedule's delayed `Agent.fire` routes to the same agent with an explicit
@@ -114,20 +118,20 @@ The detailed turn-runtime list lives in
   The caller explicitly chooses `steer` or `interrupt`.
 - A void-input ingress handler must receive no body and no `content-type`.
 - Restate signal resolutions with the same name form the durable sequence used
-  by steering. The in-memory steering inbox is only a turn-local consumer.
+  by steering. The run awaits one resolution at a time.
 - Busy `ask` messages live in Agent pending state until a steer consumes them
   or a successor `doTurn` starts. Only then does AgentSession append them to
   history, preserving FIFO order.
 - An interruption reason is control input for the old turn. An optional
   replacement `message` is a separate queued user request for a new turn.
-- A candidate text response is not terminal while pending operations exist.
+- A candidate text response is not terminal while background operations exist.
 - Guardrail approval and the `humanApproval` tool are related but distinct:
   the former gates an exact runtime proposal before it runs; the latter is an
-  explicit model-selected pending tool.
+  explicit model-selected background tool.
 - Resolved approval events are model-relevant. Approval-request and
   cancellation events are derived client status and are not model context.
-- Process-local caches (`refresh-cache.ts`, used by dynamic and MCP
-  discovery, and provider clients) are
+- Dynamic and MCP discovery are journaled once per turn; there is no
+  process-local catalog cache. Process-local provider clients are
   optimizations, never durable sources of truth.
 - A sandbox reference carries its provider. Changing `SANDBOX_PROVIDER` does
   not migrate an already-provisioned Agent sandbox.
@@ -137,16 +141,18 @@ The detailed turn-runtime list lives in
   documentation enters the model prompt and the handler can be invoked with
   the agent service's authority.
 - MCP endpoint configuration is also a trusted capability boundary. Tool
-  descriptions and schemas enter the model prompt, credentials resolve inside HTTP effects from operator environment references, and HTTP calls may be repeated
-  unless the remote server honors the stable idempotency key.
+  descriptions and schemas enter the model prompt, credentials resolve from
+  operator environment references right before the HTTP effect that uses them,
+  and HTTP calls may be repeated unless the remote server honors the stable
+  idempotency key.
 - AgentSession history is the public conversation event log, not the complete
   agent trajectory or Restate execution trace.
 - History is not the invalidation mechanism for every current-state area.
   Drain `AgentSession.history`, then use Agent's notification versions to decide
   whether to re-read history, profile, approvals,
   or schedules.
-- `activity` and `progress` are status communication, not chain-of-thought or
-  model reasoning.
+- `progress` (and the schema's `activity`) are status communication, not
+  chain-of-thought or model reasoning.
 - The per-Agent `memories` collection is persistent semantic memory for one conversation.
   Active-turn messages are working context, and conversation history is a separate
   canonical log.
@@ -165,17 +171,18 @@ The detailed turn-runtime list lives in
 | Pending approval state and decision signal | `agent/approvals.ts` |
 | Children, delegated tasks, inherited profile | `agent/sub-agents.ts` |
 | Durable scheduled-message state and timers | `agent/schedules.ts` |
-| Cross-step loop, transcript append, step bound, and finalization | `session/service.ts` |
-| One model/guardrail/foreground-tool transition | `session/step.ts` |
-| Steering signal receiver and transient FIFO | `session/steering.ts` |
-| Pending tool tasks and cancellation races | `session/pending.ts` |
+| Run configuration, outcome mapping, exit reporting and cleanup | `session/service.ts` |
+| Steering source and progress-to-transcript events | `session/progress.ts` |
+| Guardrail evaluation of tool calls and final text | `session/guardrails.ts` |
+| Per-turn tool context and policy state | `session/turn-context.ts` |
 | Built-in tool schema and execution | `session/tools/*.ts` |
-| Tool registry, dispatch, result and transcript projection | `session/tools.ts` |
+| Built-in registry and program opt-out | `session/tools.ts` |
+| Per-turn catalog, grants and name collisions | `session/turn-tools.ts` |
 | Transcript-to-model projection | `session/context.ts` |
-| Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
-| MCP tool discovery and invocation | `session/mcp-tools.ts` |
-| AI SDK provider behavior and model contracts | `model/provider.ts` |
-| Journaled model calls, retries, output recovery | `model/inference.ts` |
+| Dynamic Restate tool discovery | `session/restate-tools.ts` |
+| MCP configuration and credential references | `session/mcp-config.ts` |
+| Agent, guardrail and compactor models and retries | `model/models.ts` |
+| Model loop, steering, background tools, MCP transport, PTC | the agent SDK (`@restate-agents/core`) |
 | Turn-owned sandbox lifecycle | `sandbox/turn.ts` |
 | Provider contract and provider selection | `sandbox/provider.ts` |
 | Local filesystem demo adapter | `sandbox/local-provider.ts` |
@@ -190,12 +197,13 @@ contract.
 
 ### Built-in tool
 
-Read [tools.md](tools.md). Keep name, description, Zod schema, execution, and
-pending completion together in one `session/tools/*.ts` family module, built
-with `defineAgentTool` and the helpers in `tools/define.ts` (`toolRun`,
-`agentCall`, `toolFailure`, which preserve cancellation errors). Register it
-in `definitions` in `session/tools.ts`, and add a focused test when behavior
-affects the Agent protocol.
+Read [tools.md](tools.md). Keep description, Zod schema, label and execution
+together in one `session/tools/*.ts` family module, written with the SDK's
+`tool` (or `asyncTool` for one journaled Promise) and typed `TurnTool`. Throw
+`ToolError` for failures the model should see, and call the Agent through
+`agentRequest` (`src/errors.ts`), which leaves cancellation alone. Register it
+under its model-facing name in `builtins` in `session/tools.ts`, and add a
+focused test when behavior affects the Agent protocol.
 
 ### Dynamic Restate tool
 
@@ -242,7 +250,7 @@ Run checks proportional to the change, normally:
 ```sh
 pnpm lint
 pnpm build
-pnpm --filter @restate-agents/core test
+pnpm --filter @restate-agents/runtime test
 pnpm --filter @restate-agents/web test
 pnpm bundle
 git diff --check

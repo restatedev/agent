@@ -1,21 +1,19 @@
 // The model operation used by AgentSession.compact. State access and
 // checkpoint application remain on the AgentSession virtual object.
 
+import {agent} from "@restate-agents/core";
 import type {
   ConversationCompactionResult,
   ConversationEntry,
 } from "@restate-agents/types";
-import {type Operation, run} from "@restatedev/restate-sdk-gen";
-import {generateText} from "ai";
+import type {Operation} from "@restatedev/restate-sdk-gen";
 
 import {errorMessage, isCancellation} from "../errors.js";
 import {
   type ConversationCompactionInput,
   isDerivedConversationEvent,
 } from "../internal-types.js";
-import {openaiOptions, withOpenAI} from "./provider.js";
-
-const COMPACTOR_MODEL = "gpt-4o-mini";
+import {compactorModel} from "./models.js";
 
 const COMPACTOR_SYSTEM = [
   "Update a concise summary of an earlier agent conversation.",
@@ -27,41 +25,34 @@ const COMPACTOR_SYSTEM = [
   "Return only the updated summary.",
 ].join(" ");
 
+const compactor = agent({
+  model: compactorModel,
+  instructions: COMPACTOR_SYSTEM,
+  maxSteps: 1,
+  maxOutputTokens: 1_000,
+  finalize: false,
+});
+
 /** Summarizes a reserved, immutable transcript prefix for later model context. */
 export function* compactConversation(
   request: ConversationCompactionInput,
 ): Operation<ConversationCompactionResult> {
   const range = {baseThrough: request.baseThrough, through: request.through};
   try {
-    const summary = yield* run(
-      ({signal}) =>
-        withOpenAI(async (openai) => {
-          const response = await generateText({
-            model: openai.chat(COMPACTOR_MODEL),
-            system: COMPACTOR_SYSTEM,
-            prompt: JSON.stringify({
-              previousSummary: request.previousSummary ?? null,
-              conversation: request.entries.flatMap(compactionView),
-            }),
-            maxOutputTokens: 1_000,
-            ...openaiOptions(signal, 30_000),
-            providerOptions: {openai: {store: false}},
-          });
-          const text = response.text.trim();
-          if (!text)
-            throw new Error("conversation compactor returned an empty summary");
-          return text;
-        }),
-      {
-        name: "compact-conversation",
-        retry: {
-          maxAttempts: 3,
-          initialInterval: 500,
-          maxInterval: 5_000,
-          exponentiationFactor: 2,
-        },
-      },
+    const result = yield* compactor.run(
+      JSON.stringify({
+        previousSummary: request.previousSummary ?? null,
+        conversation: request.entries.flatMap(compactionView),
+      }),
+      {name: "compact-conversation"},
     );
+    const summary = result.status === "completed" ? result.output.trim() : "";
+    if (!summary)
+      return {
+        status: "failed",
+        ...range,
+        error: "The compactor returned no summary",
+      };
     return {status: "completed", ...range, summary};
   } catch (error) {
     // A failed summary is recorded so the range can be retried later; a

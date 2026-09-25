@@ -1,11 +1,9 @@
-/** Durable model calls and the inference contract consumed by sessions. */
+/** Journaled models and system prompts used by sessions. */
 
 export {compactConversation} from "./compactor.js";
-export type {
-  GuardrailApproval,
-  ModelResult,
-  ProposedAction,
-  ToolCall,
-  ToolManifest,
-} from "./provider.js";
-export {callGuardrailModel, callModel} from "./inference.js";
+export {agentModel, compactorModel, guardrailModel} from "./models.js";
+export {
+  AGENT_SYSTEM,
+  GUARDRAIL_REVIEW_SYSTEM,
+  GUARDRAIL_SYSTEM,
+} from "./prompts.js";

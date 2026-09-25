@@ -78,7 +78,7 @@ Each agent is two Restate Virtual Objects with the same key:
   it always responds, even while a turn runs for minutes.
 - **`AgentSession`** runs the turn. One `doTurn` invocation is one turn, and
   its invocation ID is the `turnId`. It owns the append-only conversation log
-  and the model/tool loop.
+  and runs the model/tool loop with the agent SDK, `@restate-agents/core`.
 
 ```mermaid
 flowchart LR
@@ -99,9 +99,11 @@ flowchart LR
    way. The controller records the invocation ID and returns immediately.
 3. `doTurn` appends the new messages to the log and builds model context from
    the latest summary plus the rest of the conversation (`session/service.ts`).
-4. Each step asks the model for a proposal, checks it against the guardrails,
-   then runs the allowed tool calls in parallel or publishes the reply
-   (`session/step.ts`). Every model response and tool result is journaled.
+4. Each step asks the model for a reply or a batch of tool calls. The tool
+   calls run in parallel, each checked against the guardrails before it
+   starts; a final reply is checked before it is published
+   (`session/guardrails.ts`). Every model response and tool result is
+   journaled.
 5. The turn reports its outcome to `Agent.onTurnEnd`, which retires it and
    starts the next turn if messages were queued meanwhile.
 
@@ -132,13 +134,13 @@ MCP call completing and its result being recorded can repeat that call.
 | Feature | Try it | Start reading |
 | --- | --- | --- |
 | Queue, steer, interrupt | Send messages while a long turn runs ("sleep for 4 minutes") | `agent/active-turn.ts` |
-| Crash recovery | Kill `pnpm dev:service` mid-turn and restart it | `session/service.ts`, `session/step.ts` |
+| Crash recovery | Kill `pnpm dev:service` mid-turn and restart it | `session/service.ts` |
 | Guardrails and approvals | Add a guardrail in the UI; ask for something it blocks | `session/guardrails.ts`, `agent/approvals.ts` |
 | Memory | Ask the agent to remember a preference; up to 32 per agent | `agent/profile.ts` |
 | Sub-agents | Ask it to delegate research to a helper | `agent/sub-agents.ts`, `session/tools/sub-agents.ts` |
 | Schedules | "Remind me in 2 minutes to check the weather" | `agent/schedules.ts` |
-| Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `ptc/runtime.ts` |
-| Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/tool-search.ts` |
+| Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `session/tools.ts` (the SDK's `programTool`) |
+| Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/turn-tools.ts` |
 | Sandbox | Ask it to write and run a script | `sandbox/turn.ts` |
 | Compaction | Long conversations are summarized without rewriting the log | `session/history.ts`, `model/compactor.ts` |
 
@@ -148,7 +150,7 @@ The built-in tools are weather (a demo stub), web search, sleep, human
 approval, cancelling a pending operation, memory, sub-agents, schedules,
 sandbox files and commands, tool search, and `executeProgram`. Any Restate
 handler published with the `restate.dev/agent: <tool-name>` metadata becomes
-a tool too (`session/dynamic-tools.ts`).
+a tool too (`session/restate-tools.ts`).
 
 ## Configuration
 
@@ -161,7 +163,6 @@ The agent service (`packages/libs/core`):
 | `SANDBOX_PROVIDER` | `local` (default) or `modal`, which also needs `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` |
 | `MODAL_APP_NAME`, `MODAL_SANDBOX_NAMESPACE`, `MODAL_SANDBOX_IMAGE`, `MODAL_SANDBOX_TIMEOUT_MS` | Optional Modal settings; see [sandboxes](docs/sandboxes.md) |
 | `AGENT_PTC_ENABLED` | Set to `false` to hide `executeProgram` |
-| `AGENT_MODEL_MAX_OUTPUT_TOKENS` | Output budget per model call, 1024–64000 (default 32000) |
 | `RESTATE_ADMIN_URL`, `RESTATE_ADMIN_TOKEN` | Admin API used to discover dynamic tools |
 
 The UI (`packages/apps/web`, see [`env.example`](packages/apps/web/env.example)):
@@ -241,7 +242,7 @@ debugging. `docker/` holds runnable Dockerfiles for the service and the UI.
 
 1. [Architecture](docs/architecture.md): state owners, one request, notifications
 2. [Protocol](docs/protocol.md): every handler, ordering rules, clients
-3. [Turn runtime](docs/turn-runtime.md): steps, guardrails, pending work, recovery
+3. [Turn runtime](docs/turn-runtime.md): steps, guardrails, background work, recovery
 4. [Tools](docs/tools.md): built-ins, programmatic tool calls, dynamic tools, MCP
 5. [Schedules](docs/schedules.md) and [sandboxes](docs/sandboxes.md)
 6. [Agent guide](docs/agent-guide.md): read before changing runtime semantics

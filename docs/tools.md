@@ -6,8 +6,8 @@ This project has three ways to make a capability available to the model:
 2. an annotated Restate handler discovered at runtime; or
 3. a tool from a configured MCP server.
 
-All three become serializable `ToolManifest` values for model inference. Their
-execution boundaries are intentionally different.
+All three become agent SDK (`@restate-agents/core`) `Tool` values in one
+per-turn catalog. Their execution boundaries are intentionally different.
 
 The built-in [programmatic tool calling (PTC)](#programmatic-tool-calling-ptc)
 tool can compose capabilities from all three sources in one JavaScript program.
@@ -17,42 +17,25 @@ In standard agent terminology this is the **tool-use** or **function-calling**
 layer. A model proposes tool actions; validated tool results become
 observations in a later agent-loop iteration.
 
-## The shared model contract
+## The turn catalog
 
-The model receives only a tool manifest describing its available action space:
+`session/turn-tools.ts` builds the catalog for one turn from the profile
+snapshot: the granted built-ins, the permitted Restate handlers and the
+permitted tools of each configured MCP server. When two sources claim one
+name, the earlier source wins (built-ins, then Restate handlers, then MCP) and
+a warning is logged. Discovery is journaled, so inference and execution use
+the same snapshot on replay.
 
-```ts
-type ToolManifest = {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  strict?: boolean; // defaults to true
-};
-```
+The SDK owns the loop mechanics:
 
-A model response refers back to a tool by name:
-
-```ts
-type ToolCall = {
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-};
-```
-
-`model/provider.ts` reconstructs AI SDK tool declarations from the manifests.
-It does not receive tool executors. `session/tools.ts` owns execution, and
-`session/step.ts` owns batch policy and concurrency.
-
-That separation keeps these decisions explicit:
-
-- the model chooses a tool from a serializable catalog;
-- the guardrail model evaluates concrete tool calls before execution (PTC emits
-  its concrete calls while its program runs);
-- the active `agentStep` starts every allowed foreground call in the batch together;
+- the model chooses a tool from the catalog's names, descriptions and JSON
+  schemas; a schema with an exact strict form is sent in strict mode;
+- every call's input is validated against its schema before it runs;
+- the guardrail hook (`beforeTool`) evaluates each concrete call before it
+  starts, including calls a program emits;
+- all calls proposed in one model response start together;
 - Restate journals every operation and its result;
-- results are projected back into model messages as observations by
-  `session/tools.ts`.
+- results become observations for the next model step.
 
 ## Turn-local tool search
 
@@ -61,71 +44,65 @@ search over the current turn's permitted tool catalog. Built-ins remain visible
 upfront; MCP and dynamic Restate schemas are deferred until a search selects
 them. Each search returns at most five names and short descriptions, and adds
 their complete schemas to the next model request. Loaded schemas remain visible
-for the rest of that turn, without duplicating schemas in the search result.
+for the rest of that turn.
 
-The MiniSearch index is built lazily in memory from the journaled discovery
-snapshot. It searches names, provider names, descriptions, and parameter names,
+The SDK builds the MiniSearch index lazily in memory from the journaled
+catalog. It searches names, provider names, descriptions, and parameter names,
 splits camelCase/snake_case identifiers, boosts name/provider matches, and pins
-exact tool-name matches first. Initial matching uses prefixes, not fuzzy or
-semantic search. A miss should prompt different keywords or a provider name,
-not a claim that the user has no connection.
+exact tool-name matches first. Matching uses prefixes, not fuzzy or semantic
+search. A miss should prompt different keywords or a provider name, not a claim
+that the user has no connection.
 
-Search selections are journaled in `search-tools-<toolCallId>`. On replay the
-runtime restores those selections without reranking. The index and loaded set
-are private to the turn, not stored in a new VO or shared across users. A new
-turn starts with a fresh loaded set. Only permitted tools are indexed; execution
-still enforces the same grants, guardrails and permission checks. Tool
-descriptions remain untrusted metadata. Search uses the normal built-in policy
-path and does not execute matched tools.
+Search selections are journaled; on replay they are restored without
+reranking. The index and loaded set are private to the turn. Only permitted
+tools are indexed; execution still enforces the same grants and guardrails.
+Tool descriptions remain untrusted metadata. Search does not execute matched
+tools.
 
-PTC keeps the full permitted runtime catalog, even for tools whose schemas are
-not yet visible. Search before writing code for unfamiliar tools: a search
-inside a program loads schemas for the next model round, not the running
-program. `manifests()` remains the complete runtime catalog;
-`modelManifests()` provides the smaller inference catalog. If the agent's
-built-in selection disables `searchTools`, inference falls back to the full
-permitted catalog so external tools remain usable.
+PTC can call every permitted tool, even one whose schema is not yet visible.
+Search before writing code for unfamiliar tools: a search inside a program
+loads schemas for the next model round, not the running program.
 
 This reduces tool-schema context, not initial discovery/authentication work.
-It adds a model round when a deferred tool is first needed; repeated searches
-can still accumulate schemas during a long turn. No embeddings, hosted search,
-or new search configuration are required.
+It adds a model round when a deferred tool is first needed.
 
 ## Built-in tools
 
 Built-ins live in `packages/libs/core/src/session/tools/`, one module per
 family (`local`, `approval`, `sub-agents`, `agent-state`, `sandbox`), and are
-registered in `session/tools.ts`. A definition owns
-its name, model-facing description, Zod input schema, validation, durable
-behavior, and optional pending completion:
+registered by model-facing name in `builtins` (`session/tools.ts`). The loop
+tools (`searchTools`, `sleep`, `humanApproval`, `cancelOperation`,
+`executeProgram`) and `webSearch` come from the SDK. A definition owns its
+model-facing description, Zod input schema, fixed transcript label and durable
+behavior:
 
 ```ts
-const exampleTool = defineAgentTool({
-  name: "example",
+const example: TurnTool = tool({
   description: "Explain exactly when the model should call this tool.",
-  inputSchema: z.object({
+  input: z.object({
     value: z.string().describe("What this field means."),
   }),
-  *run({value}) {
-    // Durable handler code.
-    return succeeded(value);
+  describe: {name: "Did the example"},
+  *execute({value}, {context}) {
+    // Durable handler code; `context` is the TurnContext.
+    return value;
   },
 });
 ```
 
-`tools/define.ts` also has `toolRun(name, action, retry)` for a tool whose
-work is one journaled side effect, `agentCall(codes, op)` for calls into the
-Agent whose rejections the model should see, and `toolFailure(name, error)`.
-All of them rethrow cancellation.
+`asyncTool` wraps a tool whose work is one journaled side effect;
+`sandboxTool` (`tools/sandbox.ts`) does the same with the turn's sandbox
+client. `agentRequest(() => op, codes)` (`errors.ts`) calls into the Agent: a
+rejection with one of `codes` becomes a `ToolError` the model sees, and any
+other terminal error fails the turn. Throw `ToolError` for a failure the model
+should see and act on.
 
-Add the definition to the `definitions` array. The rest follows from that one
-registration:
+Registering the definition in `builtins` is the only step:
 
-- `agentTools.names` reserves the name from dynamic discovery;
-- `agentTools.manifests()` converts the Zod schema to JSON Schema;
-- `agentTools.execute()` validates input and dispatches the call;
-- the tool becomes available to agent runs, subject to capability settings in
-  the turn's profile snapshot.
+- `names` reserves the name from dynamic discovery;
+- `builtinCatalog()` lists it in the tool-permission UI;
+- the tool becomes available to agent runs, subject to the grants in the
+  turn's profile snapshot.
 
 Use `.describe()` on fields whose meaning is not obvious. Descriptions are part
 of the model contract, not cosmetic documentation.
@@ -137,9 +114,9 @@ of the model contract, not cosmetic documentation.
 | `searchTools` | Find permitted tools and load their schemas for this turn | Foreground journaled local search |
 | `getWeather` | Synthetic weather lookup used to demonstrate parallel calls | Foreground |
 | `webSearch` | Tavily keyless web search with bounded source evidence | Foreground journaled HTTP request |
-| `sleep` | Durable timer | Pending |
-| `humanApproval` | Signal-backed human decision | Pending |
-| `cancelOperation` | Cancel one pending operation by ID | Foreground control |
+| `sleep` | Durable timer | Background |
+| `humanApproval` | Signal-backed human decision | Background |
+| `cancelOperation` | Cancel one background operation by ID | Foreground control |
 | `manageMemory` | Atomically set or delete agent-local memories | Foreground Agent RPC |
 | `createSubAgent` | Create a persistent child and await its optional first task | Durable child-turn wait |
 | `messageSubAgent` | Ask a direct child a follow-up and return its answer | Durable child-turn wait |
@@ -227,18 +204,17 @@ Normal tool guardrails and interruption apply, including calls emitted by PTC.
 PTC reduces intermediate model context: instead of returning every tool response
 to the model for the next decision, the model writes a program that calls tools,
 branches on their results, and computes a compact answer. It is another tool in
-the existing agent loop, not a separate agent or a replacement tool backend.
+the existing agent loop, the SDK's `programTool`, not a separate agent or a
+replacement tool backend.
 
 PTC is enabled by default. Set `AGENT_PTC_ENABLED=false` on the core service to
 disable it, for example `AGENT_PTC_ENABLED=false pnpm dev:service`.
 Only the exact value `false` disables PTC; leaving the variable unset or setting
-it to `true` enables it. The flag is read once when the service starts
-(`PTC_ENABLED` in `ptc/definition.ts`). When disabled, `executeProgram` is left
-out of every catalog: the model's tools (`manifests()`), the tool-search index,
-the tool-permission UI (`builtinCatalog`) and the `searchTools` description.
-Its name stays reserved, and already-recorded program calls retain their
-normal execution and replay behavior, so restarting with the flag flipped does
-not break an in-flight turn.
+it to `true` enables it. Each turn journals the setting when it builds its
+catalog (`programsEnabled` in `session/tools.ts`), so an in-flight turn replays
+with the setting it started with. When disabled, `executeProgram` is left out
+of the turn's catalog and the tool-permission UI (`builtinCatalog`). Its name
+stays reserved.
 
 The model can use `executeProgram({source})` to coordinate the same static,
 Restate-discovered, and MCP tools that it can call directly. The source evaluates
@@ -296,220 +272,144 @@ names and input schemas, with no separate PTC configuration.
 
 ### Durable execution
 
-`ptc/guest.ts` runs QuickJS inside an embedded WebAssembly module. Each execution
-attempt creates a fresh runtime. The model response already journals the source,
-and discovery journals the turn's catalog. `ptc/runtime.ts` runs inline within
-`AgentSession.doTurn` using its existing generator scheduler:
+The SDK runs the program in QuickJS inside an embedded WebAssembly module. Each
+execution attempt creates a fresh runtime. The model response already journals
+the source, and discovery journals the turn's catalog. Every tool call the
+program emits is an ordinary SDK tool call: validated, checked by the guardrail
+hook, journaled and reported in the transcript like a direct call. Replay
+reconstructs the guest's heap and promises from the recorded completion order,
+so native `Promise.race`, `any`, `all`, and `allSettled` work.
 
-1. Drain guest microtasks synchronously.
-2. Spawn emitted tool operations in order, with IDs `<outer-call-id>:call-N`.
-3. Inspect the serialized root result.
-4. Select one tool completion through Restate, deliver it to the corresponding
-   guest promise, and repeat.
+### Policy, background tools, and interruption
 
-Tool operations reuse the existing dispatcher and own their existing durable
-RPCs, runs, timers, and signals. Neither the whole program nor a compound tool
-operation is wrapped in another `run`. Native `Promise.race`, `any`, `all`, and
-`allSettled` work because result delivery is controlled at the host boundary.
-Replay reconstructs the heap and promises using the recorded completion order.
-The ordering contract depends on the pinned Restate SDK 1.17.0 and QuickJS
-0.31.0; changes to the engine, bridge, budgets, or tool semantics require replay
-compatibility review for in-flight turns.
+The PTC wrapper and its JavaScript source are not submitted for policy approval
+(`guardToolCall` skips `executeProgram`). Each emitted concrete call goes
+through the normal guardrail gate with its actual tool name and input. MCP
+authentication and sandbox access use the same turn context as direct calls.
 
-### Policy, pending tools, and interruption
-
-The PTC wrapper and its JavaScript source are not submitted for policy approval.
-Each emitted concrete call goes through the normal guardrail gate with its
-actual tool name and input. MCP authentication and sandbox access use the same
-turn context as direct calls.
-
-Inside a program, `sleep` and `humanApproval` promises resolve when their pending
-completion arrives. Human approval returns its normal text decision; the program
-must inspect it before taking dependent actions. `cancelOperation` can target an
-existing turn-owned operation using an ID obtained from an earlier direct call.
+Inside a program, `sleep` and `humanApproval` promises resolve when their
+result arrives. Human approval returns its normal decision; the program must
+inspect it before taking dependent actions.
 
 If steering arrives while a program is running, the step stops waiting for it.
-The program continues in the background as a turn-owned pending operation: the
-model receives `{pending: true, operationId, status: "running"}` for the
-`executeProgram` call, reads the steering, and later receives the program's
-return value as a runtime completion. `cancelOperation` with that operation ID
-stops the program. Approvals the program obtains after the handoff are not
-reused by later steps' guardrail checks.
+The program continues as background work: the model receives
+`{status: "pending", operationId}` for the `executeProgram` call, reads the
+steering, and later receives the program's return value as a runtime message.
+`cancelOperation` with that operation ID stops the program.
 
-Racing does not cancel losing branches while the program runs. When its root
-returns or throws, outstanding child calls are interrupted and joined; await
+Returning ends the program and cancels its calls still running; await
 `Promise.allSettled` on those branches before returning if they must finish.
-Turn interruption also disposes the guest and stops its active child tasks.
-Cancellation cannot undo effects that already occurred.
+Turn interruption also stops the program and its active calls. Cancellation
+cannot undo effects that already occurred.
 
-Known program failures (syntax, uncaught rejection, invalid output, or exhausted
-computation budget) become repairable tool failures. Escaped host/SDK failures
-and turn interruption propagate through the scheduler rather than becoming
-guest rejections or model feedback.
+Known program failures (syntax, uncaught rejection, invalid output, or an
+exhausted budget) become repairable tool failures. Escaped host/SDK failures
+and turn interruption propagate rather than becoming guest rejections or model
+feedback.
 
 Programs have no direct I/O, timers, module loader, `Date`, or `Math.random`.
-Inputs and results cross as JSON copies. Limits are 128 tool calls, 64,000 source
-characters, 64,000 output characters, 32 MiB memory, 512 KiB stack, 10,000
-interrupt checks per attempt, and 10,000 microtasks per drain. The private bridge
-is held by the host rather than exposed through guest globals.
+Inputs and results cross as JSON copies. The SDK's defaults bound a program to
+128 tool calls, 64,000 source characters, 10,000 interrupt checks per attempt
+and 10,000 microtasks per drain.
 
-### Verification
-
-`pnpm --filter @restate-agents/core test` checks guest replay, full and partial
-real-SDK protocol replay, failures and limits, mixed tool dispatch, MCP auth
-retry, subtool policy enforcement, and child interruption. Protocol peers and
-outbound tool fixtures are local to the tests; no real provider credentials or
-model calls are needed.
-
-The optional `test:restart` command expects a disposable Restate server with
-admin on port 19070 and ingress on 18080. It starts a test endpoint on 19880,
-registers it as `http://host.docker.internal:19880`, kills that endpoint after a
-race and its branches have completed, and restarts it. It asserts the recovered
-winner, completion order, and results, and verifies recorded tool bodies are
-not repeated. It changes only the disposable server and its own test processes.
-
-## Foreground and pending execution
-
-A built-in `run` method returns one of four outcomes:
-
-```ts
-type ToolExecution =
-  | {status: "succeeded"; result: string}
-  | {status: "failed"; error: string}
-  | {status: "pending"; result: Record<string, unknown>}
-  | {status: "cancel_requested"; operationId: string; reason: string};
-```
+## Foreground and background execution
 
 ### Foreground tools
 
-A foreground tool reaches `succeeded` or `failed` before its step finishes.
-All calls proposed in one model response are spawned in parallel, then joined.
-One failure is data returned to the model; it does not discard sibling
-results.
+A foreground tool finishes before its step does. All calls proposed in one
+model response start in parallel, then join. A `ToolError` is data returned to
+the model; it does not discard sibling results. A `RunFailedError`, or any
+other terminal error, fails the turn instead.
 
-Results and errors of every tool kind are capped once, at 128,000 characters,
-where they become model messages (`toModelMessage` and `toRuntimeMessage` in
-`session/tools.ts`); a longer text is cut and ends with a
-`[truncated by the runtime: …]` marker. Tools do not add their own model-facing
-caps. A source that could journal unbounded data limits it inside its run
-instead: web search responses (1 MB), sandbox file reads and command
-stdout/stderr (1,000,000 characters each). PTC programs see results before the
-central cap and can filter them; the program's own return is limited to 64,000
-characters.
+There is no central cap on result size. A source that could journal unbounded
+data limits it inside its run: web search responses (1 MB), sandbox file reads
+and command stdout/stderr (1,000,000 characters each). An MCP result over
+128,000 characters fails the call. PTC programs see full results and can
+filter them.
 
-External side effects belong inside `restate.run` or a Restate RPC. Preserve
-`InterruptedError` and `CancelledError` instead of converting them into normal
-tool failures, so invocation cancellation can propagate through `doTurn`.
+External side effects belong inside `restate.run` or a Restate RPC. Let
+`CancelledError` propagate instead of converting it into a tool failure, so
+invocation cancellation reaches `doTurn`.
 
-Give every tool `run` an explicit retry policy. A `restate.run` without one
-retries until it succeeds, which is wrong for a model-facing call: a bounded
-failure is feedback the model can act on. Operations that are safe to repeat
-(`listFiles`, `readFile`, `writeFile`, `getWeather`, `webSearch`) use a small
-bounded retry. Operations that are not (`executeCommand`, MCP calls) use
-`{maxAttempts: 1}`: a transport error can arrive after the command already
-ran, and the model can inspect the result rather than have it silently run
-again. Crash recovery can still repeat an effect whose result was not yet
-journaled.
+Give every side effect an explicit retry policy. A bounded failure is feedback
+the model can act on. Operations that are safe to repeat (`listFiles`,
+`readFile`, `writeFile`, `getWeather`, `webSearch`) use a small bounded retry.
+Operations that are not (`executeCommand`, MCP calls) use `{maxAttempts: 1}`:
+a transport error can arrive after the command already ran, and the model can
+inspect the result rather than have it silently run again. Crash recovery can
+still repeat an effect whose result was not yet journaled.
 
 Built-in tools are deliberately local handler code. Do not turn one into a
 Restate service merely to fit a generic abstraction.
 
-### Pending tools
+### Background tools
 
-A pending tool acknowledges immediately from `run`, then implements `complete`.
-The turn runtime starts completion as a task that may survive across loop iterations:
+A tool marked `background` (the SDK's `sleep` and `humanApproval`) answers its
+call at once with `{status: "pending", operationId}` and keeps running while
+the model works on. The call ID is the operation ID. Its result later reaches
+the model as a user-role runtime message,
+`{"source":"agent-runtime","type":"background-tool-result",...}`, and the
+system prompt tells the model to treat it as data. A turn cannot finish while
+background work is outstanding unless the model cancels it, the user
+interrupts, or the invocation is externally cancelled.
 
-```ts
-const waitTool = defineAgentTool({
-  // ...
-  *run(_input, context) {
-    return {
-      status: "pending",
-      result: {
-        operationId: context.toolCallId,
-        status: "running",
-      },
-    };
-  },
-  *complete(input, context) {
-    // Durable timer or signal wait.
-    return {status: "succeeded", result: "done"};
-  },
-});
-```
-
-The stable `toolCallId` is also the operation ID. Pending completion becomes a
-runtime message in a later model round. Because the original call was already
-answered with `{pending: true}`, that message is a user-role message, so its
-outcome (for a handed-off program or sub-agent, arbitrary web, MCP or tool
-output) is never pasted in as text. `toRuntimeMessage` puts it in an
-`<untrusted-tool-output>` block as JSON, with `<`, `>` and `&` escaped so the
-payload cannot close the block, and the system prompt tells the model to treat
-that block as data. A turn cannot finish while pending work
-exists unless the model cancels it, the user interrupts, or the invocation is
-externally cancelled.
-
-Pending is appropriate only when later model work can proceed independently
+Background is appropriate only when later model work can proceed independently
 while an operation waits. It is not a generic wrapper for a slow call.
 
 ### Selective cancellation
 
-`cancelOperation` returns `cancel_requested`; the `doTurn` pending registry,
-owns the task and applies that request to a matching pending operation.
-Cancellation is represented as a runtime event for the next step. It does not
-cancel foreground work or the agent run itself.
-
-Completion and cancellation may race. The settled state is authoritative:
-completed work stays completed.
+`cancelOperation` cancels one background operation by ID. It does not cancel
+foreground work or the turn itself. Completion and cancellation may race; the
+settled state is authoritative, and completed work stays completed.
 
 ## Tool context
 
-Every built-in receives:
+Every tool receives the turn's `TurnContext` (`session/turn-context.ts`):
 
 ```ts
-type AgentToolContext = {
+type TurnContext = {
   agentId: string;
   turnId: string;
-  webSearchEnabled: boolean;
-  permissions: AgentTools;
-  toolSearch?: TurnToolSearch;
+  instructions?: string;
   sandbox: TurnSandbox; // client() and release()
+  transcript: Transcript;
+  policy: TurnPolicy; // guardrails and the decisions made this turn
 };
 ```
 
-The internal call context also contains `toolCallId`. Use:
+The SDK's tool context adds the call ID and step. Use:
 
 - `agentId` for Agent-owned state or resources;
 - `turnId` for Agent-owned state that must be correlated with the current
   active turn, such as memory, approvals and schedules;
-- `toolCallId` for stable operation identity;
+- the call ID for stable operation identity;
 - `sandbox.client()` for the agent's sandbox, acquired lazily once per turn.
 
-The context exposes capabilities used by concrete tools, without general
-orchestration hooks. Schedule mutations go through the Agent with the current
-`turnId`, which authorizes them against the live turn. Once saved, the
-schedule is an independent durable side effect; a later
-interruption of the creating turn does not roll it back.
+Schedule mutations go through the Agent with the current `turnId`, which
+authorizes them against the live turn. Once saved, the schedule is an
+independent durable side effect; a later interruption of the creating turn does
+not roll it back.
 
 ## Adding a built-in tool
 
-1. Define it in the matching `session/tools/*.ts` family with
-   `defineAgentTool`, and register it in `definitions` in `session/tools.ts`.
-2. Give it a unique model-safe name and a precise description.
-3. Define the complete Zod object schema. Make nullable fields explicitly
-   nullable rather than optional when strict model schemas require every
-   property.
-4. Return structured tool status rather than throwing ordinary domain errors.
-5. Re-throw Restate interruption and SDK cancellation errors.
+1. Define it in the matching `session/tools/*.ts` family and register it in
+   `builtins` in `session/tools.ts`.
+2. Give it a unique model-safe name, a precise description and a fixed
+   `describe` label.
+3. Define the complete Zod object schema. Make fields nullable rather than
+   optional, so the schema qualifies for strict mode.
+4. Throw `ToolError` for failures the model should see, rather than returning
+   ad hoc error strings.
+5. Let Restate cancellation errors propagate.
 6. Put non-deterministic external work in `restate.run` with an explicit
    retry policy (see [Foreground tools](#foreground-tools)), or call another
    Restate handler.
 7. Add or update a test if it changes conversation semantics.
 8. Run `pnpm lint`, `pnpm build`, and `pnpm bundle`.
 
-Before making a tool pending, verify that the model can do useful work before
-completion and that the runtime has a meaningful way to report, cancel, and later
-incorporate its result.
+Before making a tool background, verify that the model can do useful work
+before completion and that the runtime has a meaningful way to report, cancel,
+and later incorporate its result.
 
 ## Dynamically discovered Restate tools
 
@@ -556,38 +456,14 @@ handler documentation, service type, and Admin API JSON input schema.
 
 ### Discovery lifecycle
 
-```mermaid
-sequenceDiagram
-  participant T as AgentSession.doTurn
-  participant D as dynamic-tools
-  participant C as process-local cache
-  participant A as Restate Admin API
-
-  T->>D: discoverAgentTools(builtInNames)
-  D->>C: read or refresh catalog
-  alt cold or expired
-    C->>A: GET /services
-    A-->>C: services, handlers, metadata, JSON schemas
-  end
-  C-->>D: discovered tools
-  D-->>T: journaled catalog snapshot
-  Note over T: same snapshot is used for inference and execution
-```
-
-The Admin API is cluster-global knowledge, so it is not stored behind one hot
-Virtual Object key. Each service process maintains a read-through cache:
-
-- successful entries refresh after five minutes;
-- a failed refresh with a prior snapshot keeps the last-known-good catalog and
-  retries after 30 seconds;
-- Admin requests time out after five seconds;
-- concurrent cold refreshes are coalesced;
-- discovery failure without a prior snapshot degrades to built-ins only.
-
-The selected catalog is returned through `restate.run`. Restate therefore
-journals one stable snapshot for the turn. A deployment change cannot make the
-model infer against one schema and execute against a different target during
-replay.
+At the start of each turn with dynamic grants, `session/restate-tools.ts`
+reads `GET /services` from the Admin API through the SDK's `restateTools`,
+inside `restate.run`. Restate therefore journals one stable snapshot for the
+turn: a deployment change cannot make the model infer against one schema and
+execute against a different target during replay. Transient failures are
+retried; a discovery that still fails degrades to no dynamic tools, with a
+logged warning. There is no process-local cache, so a newly annotated handler
+is visible from the next turn.
 
 Configure discovery with:
 
@@ -624,12 +500,12 @@ references are rewritten when the schema is nested. Handler documentation
 becomes the model-facing description; otherwise a generated description names
 the Restate target.
 
-Discovered schemas use `strict: false`, because an arbitrary third-party JSON
-Schema may not meet the model provider's stricter function-schema rules.
+A discovered schema is sent in strict mode only when it has an exact strict
+form; an arbitrary third-party JSON Schema usually does not.
 
 ### Selection and conflicts
 
-- Built-in names always win.
+- Built-in names always win, and are reserved from discovery.
 - Targets are sorted by `service/handler` before selection.
 - When two annotated handlers claim one name, the first sorted target wins and
   a warning is logged.
@@ -658,7 +534,7 @@ Consequences:
 - input and output must use JSON;
 - the complete call belongs to the current foreground batch;
 - interruption or external cancellation propagates to the child;
-- dynamic handlers cannot currently become turn-owned pending operations.
+- dynamic handlers cannot currently become background operations.
 
 The called handler owns its own idempotency and side-effect semantics in the
 normal Restate way.
@@ -685,90 +561,82 @@ or separate authorization broker for cluster capabilities.
 3. Add concise handler documentation written for the model.
 4. Publish an accurate JSON input schema and JSON output.
 5. For a keyed service, ensure the model can know the appropriate key.
-6. Wait for cache refresh, restart this endpoint, or temporarily lower the
-   refresh interval while developing.
-7. Start a new turn. Existing turns retain their journaled catalog.
-8. Inspect logs for discovery warnings and the Restate invocation tree for the
+6. Start a new turn. Existing turns retain their journaled catalog.
+7. Inspect logs for discovery warnings and the Restate invocation tree for the
    generic child call.
 
-Choose a built-in when execution needs access to turn-owned pending tasks,
+Choose a built-in when execution needs access to turn-owned background work,
 Agent profile mutations, or the shared sandbox context. Choose discovery when
 the capability is already a well-defined Restate handler and should be
 deployable independently.
 
 ## MCP tools
 
-MCP servers contribute foreground tools to the same dispatcher as built-ins
-and discovered Restate handlers. Configure endpoints with `MCP_SERVERS_JSON`
-on the core process; see [MCP configuration](mcp-configuration.md) for examples,
-protocol selection and the environment credential boundary.
+MCP servers contribute foreground tools to the same catalog as built-ins
+and discovered Restate handlers, through the SDK's `mcpTools`. Configure
+endpoints with `MCP_SERVERS_JSON` on the core process; see
+[MCP configuration](mcp-configuration.md) for examples, protocol selection and
+the environment credential boundary.
 
-Discovery records a turn-local snapshot of permitted remote definitions.
-`stateless` uses handshake-free 2026-07-28 discovery; `stateful` uses a supported
-2025-era initialize handshake. The selected protocol is explicit. In-memory
-catalog caches and stateful connections are optimizations. Cache identity
-includes the endpoint and credential fingerprint; a changed token does not
-reuse a catalog/session authenticated under the old token.
+Discovery journals a turn-local snapshot of the permitted remote definitions
+and, for `stateful`, the session, so a replay reconnects rather than
+rediscovering. `stateless` uses handshake-free 2026-07-28 discovery; `stateful`
+uses a supported 2025-era initialize handshake. The selected protocol is
+explicit.
 
-Model names use `mcp__<serverId>__<remoteName>` with deterministic normalization
-and collision handling. The original remote name and schema remain on the
-runtime target. `searchTools` loads permitted external schemas on demand;
-PTC dispatches through the same permissions and policy gate.
+Model names are `<namespace>_<remoteName>`, where the namespace is the server
+ID, or a sanitized prefix and a stable hash when the ID is not a short
+identifier; names that are not valid tool names are normalized the same way.
+`searchTools` loads permitted external schemas on demand; PTC dispatches
+through the same permissions and policy gate.
 
-Each HTTP effect resolves the referenced token immediately before transport
-use. Missing credentials or changed configuration fail with a safe error.
-Provider exceptions are sanitized before being journaled: transport, HTTP and
-auth failures become fixed messages. A JSON-RPC error answering a tool call
-(invalid params, unknown tool, or the client's output-schema check) keeps its
-code and message, bounded to 1,000 characters with the resolved token
-redacted, so the model can correct its input. There are no OAuth
-signals, browser authorization actions or refresh-state storage. Stateful
-connections are released at turn completion and discarded after failed calls.
+Each HTTP effect resolves the referenced token immediately before use. A
+server that cannot be reached or authorized is reported to the model as
+unavailable for the turn, and the rest of the catalog still works. Wherever a
+server echoes the token back in a result or error, the SDK redacts it before
+the value is journaled. A failed tool call reaches the model with its
+(redacted) error message, so the model can correct its input. There are no OAuth signals,
+browser authorization actions or refresh-state storage. Stateful connections
+are released at turn completion.
 
-Calls pass the snapshotted definition for output validation. Successful results
-are projected into JSON-compatible model observations, bounded by the central
-result cap; remote `isError`
-results and failed HTTP effects become tool failures. Unsupported content is
-represented by summaries rather than hidden binary payloads in model context.
-Raw tool data stays outside the public conversation history.
+Remote `isError` results and failed HTTP effects become tool failures.
 
-MCP calls include a stable `Idempotency-Key` derived from turn and tool-call IDs,
-but servers must implement deduplication themselves. The HTTP run permits one
-attempt to avoid eager retries. A crash after remote completion but before
-recording the result can repeat a side effect. Recorded successful results
-replay without another HTTP request.
+MCP calls include a stable `Idempotency-Key` derived from the invocation and
+tool-call IDs, but servers must implement deduplication themselves. The port
+allows one attempt per call to avoid eager retries. A crash after remote
+completion but before recording the result can repeat a side effect. Recorded
+successful results replay without another HTTP request.
 
 Catalogs and tool results may contain sensitive data supplied by the remote
-server. Credential isolation is not a general-purpose response redactor.
+server. Token redaction is not a general-purpose response redactor.
 Endpoints, remote schemas and descriptions remain a trusted operator choice
 and untrusted model input.
 
 ## Guardrails and tools
 
-The agent model proposes a complete batch. The guardrail model evaluates direct
-calls against the configured policy set before any member starts. PTC wrappers
-are excluded from that check; their concrete child calls are evaluated as they
-are emitted, before the child tool executes. The gate
-returns one aggregate decision, referencing one policy when blocked:
+The guardrail model evaluates each concrete call against the configured policy
+set before it starts (`guardToolCall` in `session/guardrails.ts`). PTC wrappers
+are excluded; their concrete child calls are evaluated as they are emitted. The
+gate returns one decision, referencing one policy when not allowing:
 
 - `allow`;
 - `deny`; or
 - `require_approval`.
 
 Every non-allow candidate is checked by a second policy review call. An
-unconfirmed denial or approval requirement becomes `allow`.
+unconfirmed denial or approval requirement becomes `allow`. A denial reaches
+the model as the call's failure; it can choose a compliant alternative.
 
-An approval applies to the exact proposed batch at that point in the turn.
-After steering or a changed proposal, the runtime evaluates again. Guardrails
-do not invoke tools themselves; they allow, deny, or pause the agent model's
-proposal.
+An approval applies to the exact approved action in that turn. After steering,
+earlier approvals and rejections are cleared and actions are evaluated again.
+Guardrails do not invoke tools themselves; they allow, deny, or pause a call.
 
 ## Transcript and observability
 
-The canonical history records structured tool lifecycle summaries—tool names,
-counts, and final statuses—so clients can show useful progress. It deliberately
+The canonical history records structured tool lifecycle summaries (tool names,
+counts, and final statuses) so clients can show useful progress. It deliberately
 does not persist raw arguments or results. A built-in's activity label is a
-fixed `summary` string on its definition (`"Read a file"`, `"Searched tools"`),
+fixed `describe` label on its definition (`"Read a file"`, `"Searched tools"`),
 not a function of its input, so paths, queries, commands and names cannot
 leak into the transcript through a label.
 

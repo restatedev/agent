@@ -12,12 +12,12 @@
     "test": "pnpm -r test",
     "lint": "oxlint packages && oxfmt --check 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx' 'packages/**/test/**/*.ts' 'packages/**/test/**/*.mjs' 'packages/*/*/*.config.ts'",
     "format": "oxlint --fix packages && oxfmt 'packages/**/src/**/*.ts' 'packages/**/src/**/*.tsx' 'packages/**/app/**/*.ts' 'packages/**/app/**/*.tsx' 'packages/**/test/**/*.ts' 'packages/**/test/**/*.mjs' 'packages/*/*/*.config.ts'",
-    "bundle": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core bundle",
-    "start": "pnpm build && pnpm --parallel --filter @restate-agents/core --filter @restate-agents/web start",
-    "start:service": "pnpm --filter @restate-agents/core... build && pnpm --filter @restate-agents/core start",
+    "bundle": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/runtime bundle",
+    "start": "pnpm build && pnpm --parallel --filter @restate-agents/runtime --filter @restate-agents/web start",
+    "start:service": "pnpm --filter @restate-agents/runtime... build && pnpm --filter @restate-agents/runtime start",
     "start:ui": "pnpm --filter @restate-agents/web... build && pnpm --filter @restate-agents/web start",
-    "dev": "pnpm --filter @restate-agents/client... build && pnpm --parallel --filter @restate-agents/core --filter @restate-agents/web dev",
-    "dev:service": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/core dev",
+    "dev": "pnpm --filter @restate-agents/client... build && pnpm --parallel --filter @restate-agents/runtime --filter @restate-agents/web dev",
+    "dev:service": "pnpm --filter @restate-agents/types build && pnpm --filter @restate-agents/runtime dev",
     "dev:ui": "pnpm --filter @restate-agents/client... build && pnpm --filter @restate-agents/web dev"
   },
   "devDependencies": {

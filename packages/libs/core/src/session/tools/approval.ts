@@ -1,95 +1,71 @@
-// Human approval shared by the humanApproval tool and guardrail gates. The
-// Agent registers the request; the turn waits for the decision signal.
+// Human approval for the humanApproval tool and for guardrails. The Agent
+// registers the request so the UI lists it; the turn waits for the decision
+// the Agent delivers as a signal.
 
 import type {ApprovalDecision} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
-import {z} from "zod";
 
 import {Agent} from "../../agent/index.js";
 import {approvalSignalName} from "../../internal-types.js";
-import {type AgentToolContext, defineAgentTool, failed} from "./define.js";
+import type {TurnContext} from "../turn-context.js";
+
+type ApprovalRequest = {
+  approvalId: string;
+  question: string;
+  guardrailId?: string;
+};
 
 /**
- * Waits for the decision on a registered approval. If the wait is
- * interrupted, the request is withdrawn so it no longer shows as pending.
+ * Asks a human and waits for the decision, recording each lifecycle event in
+ * the transcript. Returns undefined when the turn is no longer active. If the
+ * wait is interrupted, the request is withdrawn so it no longer shows.
  */
-export function* awaitApproval(
-  context: Pick<AgentToolContext, "agentId" | "turnId">,
-  approvalId: string,
-): restate.Operation<ApprovalDecision> {
+export function* askHuman(
+  {
+    agentId,
+    turnId,
+    transcript,
+  }: Pick<TurnContext, "agentId" | "turnId" | "transcript">,
+  request: ApprovalRequest,
+): restate.Operation<ApprovalDecision | undefined> {
+  const approval = {...request, turnId};
+  if (!(yield* restate.client(Agent, agentId).requestApproval(approval)))
+    return undefined;
+  yield* transcript.append({
+    role: "event",
+    type: "approval_request",
+    ...approval,
+  });
+  if (request.guardrailId)
+    yield* transcript.append({
+      role: "event",
+      type: "progress",
+      turnId,
+      phase: "waiting",
+      message: `Guardrail ${request.guardrailId} requires human approval`,
+    });
+  let decision: ApprovalDecision;
   try {
-    return yield* restate.signal<ApprovalDecision>(
-      approvalSignalName(approvalId),
+    decision = yield* restate.signal<ApprovalDecision>(
+      approvalSignalName(request.approvalId),
     );
   } catch (error) {
-    yield* withdrawApproval(context, approvalId);
+    yield* restate
+      .sendClient(Agent, agentId)
+      .cancelApproval({approvalId: request.approvalId, turnId});
+    yield* transcript.append({
+      role: "event",
+      type: "approval_cancelled",
+      approvalId: request.approvalId,
+      turnId,
+    });
     throw error;
   }
+  yield* transcript.append({
+    role: "event",
+    type: "approval",
+    ...approval,
+    ...decision,
+  });
+  return decision;
 }
-
-/** Removes a request nobody is waiting for any more. One-way and idempotent. */
-export function* withdrawApproval(
-  context: Pick<AgentToolContext, "agentId" | "turnId">,
-  approvalId: string,
-): restate.Operation<void> {
-  yield* restate
-    .sendClient(Agent, context.agentId)
-    .cancelApproval({approvalId, turnId: context.turnId});
-}
-
-export const humanApprovalTool = defineAgentTool({
-  name: "humanApproval",
-  description:
-    "Request human approval for a proposed action. The request remains pending across later agent steps. Call it by itself and do not perform dependent actions until a runtime update reports approval.",
-  inputSchema: z.object({
-    question: z
-      .string()
-      .min(1)
-      .describe("The specific action or decision the human should approve."),
-  }),
-  *run({question}, context) {
-    const request = {
-      approvalId: context.toolCallId,
-      turnId: context.turnId,
-      question,
-    };
-    const registered = yield* restate
-      .client(Agent, context.agentId)
-      .requestApproval(request);
-    if (!registered)
-      return failed(
-        "human approval could not be registered because the turn is no longer active",
-      );
-    return {
-      status: "pending",
-      result: {
-        operationId: context.toolCallId,
-        approvalId: context.toolCallId,
-        status: "pending",
-        question,
-      },
-      transcript: [{role: "event", type: "approval_request", ...request}],
-    };
-  },
-  *complete({question}, context) {
-    const decision = yield* awaitApproval(context, context.toolCallId);
-    const reason = decision.reason ? ` Reason: ${decision.reason}` : "";
-    return {
-      status: "succeeded",
-      result:
-        decision.decision === "approved"
-          ? `Human approved the request.${reason}`
-          : `Human rejected the request.${reason}`,
-      transcript: [
-        {
-          role: "event",
-          type: "approval",
-          approvalId: context.toolCallId,
-          turnId: context.turnId,
-          question,
-          ...decision,
-        },
-      ],
-    };
-  },
-});

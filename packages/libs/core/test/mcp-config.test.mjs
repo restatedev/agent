@@ -9,8 +9,9 @@ import {
   resolveMcpGrants,
   resolveMcpToken,
 } from "../src/session/mcp-config.ts";
-import {discoverMcpTools, executeMcpTool} from "../src/session/mcp-tools.ts";
+import {turnTools} from "../src/session/turn-tools.ts";
 import {runHandler} from "./harness.mjs";
+import {runToolCall} from "./tool-harness.mjs";
 
 const server = {
   id: "fixture",
@@ -35,24 +36,6 @@ function environment(t, servers = [server]) {
 }
 const text = (journal) =>
   journal.map((frame) => frame.toString("utf8")).join("");
-const tool = {
-  name: "mcp__fixture__lookup",
-  description: "Fixture",
-  inputSchema: {type: "object"},
-  target: {
-    server: {...server, turnId: "turn", timeoutMs: 1000},
-    remoteName: "lookup",
-    definition: {name: "lookup", inputSchema: {type: "object"}},
-    prior: {
-      kind: "modern",
-      discover: {
-        supportedVersions: ["2026-07-28"],
-        serverInfo: {name: "fixture", version: "1"},
-        capabilities: {tools: {}},
-      },
-    },
-  },
-};
 
 test("configuration snapshots only credential references and replays without reading changed environment", async (t) => {
   environment(t);
@@ -119,79 +102,103 @@ test("operator defaults, explicit opt-outs, and pinned child grants resolve cons
   assert.deepEqual(resolveMcpGrants(disabled, []).mcp, []);
 });
 
+// A stateless MCP server: discovery, one `lookup` tool, then `onCall`.
+function mcpServer(t, onCall) {
+  return t.mock.method(globalThis, "fetch", async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.id === undefined) return new Response(null, {status: 202});
+    const reply = (result) =>
+      Response.json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          ...result,
+          resultType: "complete",
+          ttlMs: 60000,
+          cacheScope: "private",
+        },
+      });
+    if (body.method === "server/discover")
+      return reply({
+        supportedVersions: ["2026-07-28"],
+        capabilities: {tools: {}},
+      });
+    if (body.method === "tools/list")
+      return reply({
+        tools: [
+          {
+            name: "lookup",
+            description: "Find",
+            inputSchema: {type: "object", properties: {}},
+          },
+        ],
+      });
+    return onCall(body, init, reply);
+  });
+}
+
+const grants = {
+  builtin: {mode: "selected", names: []},
+  dynamic: {mode: "selected", names: []},
+  mcp: [{serverId: "fixture", tools: {mode: "all"}}],
+};
+const request = {tools: grants, webSearchEnabled: false, mcpServers: [server]};
+
+/** Discovers the turn's catalog and calls the fixture's lookup tool once. */
+function* lookup() {
+  const catalog = yield* turnTools(request);
+  return yield* runToolCall(
+    {id: "call", name: "fixture_lookup", input: {}},
+    {tools: catalog.tools},
+  );
+}
+
 test("MCP success keeps credentials out of journals and replay performs no HTTP", async (t) => {
   environment(t);
-  const fetch = t.mock.method(globalThis, "fetch", async (_url, init) => {
+  const fetch = mcpServer(t, (_body, init, reply) => {
     assert.equal(
       new Headers(init.headers).get("Authorization"),
       `Bearer ${secret}`,
     );
-    const body = JSON.parse(init.body);
-    return Response.json({
-      jsonrpc: "2.0",
-      id: body.id,
-      result: {
-        resultType: "complete",
-        content: [{type: "text", text: "found"}],
-      },
-    });
+    return reply({content: [{type: "text", text: "found"}]});
   });
-  const execute = (ctx) =>
-    durable.execute(
-      ctx,
-      executeMcpTool({}, {turnId: "turn", toolCallId: "call"}, tool),
-    );
+  const execute = (ctx) => durable.execute(ctx, lookup());
   const live = await runHandler(execute);
-  assert.equal(live.output.status, "succeeded");
+  assert.equal(live.output.status, "success");
   assert.ok(!text(live.journal).includes(secret));
-  assert.equal(fetch.mock.callCount(), 1);
+  const requests = fetch.mock.callCount();
   const replay = await runHandler(execute, {replay: live.journal});
   assert.deepEqual(replay.output, live.output);
-  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(fetch.mock.callCount(), requests);
 });
 
-test("provider failures are sanitized before journaling, without interactive auth or retry loops", async (t) => {
+test("provider failures are sanitized before journaling", async (t) => {
   environment(t);
-  const fetch = t.mock.method(globalThis, "fetch", async () => {
+  mcpServer(t, () => {
     throw Error(`Provider echoed ${secret}`);
   });
-  const live = await runHandler((ctx) =>
-    durable.execute(
-      ctx,
-      executeMcpTool({}, {turnId: "turn", toolCallId: "call"}, tool),
-    ),
-  );
-  assert.equal(live.output.status, "failed");
+  const live = await runHandler((ctx) => durable.execute(ctx, lookup()));
+  assert.equal(live.output.status, "error");
   assert.ok(!text(live.journal).includes(secret));
-  assert.ok(!live.output.error.includes(secret));
-  assert.equal(fetch.mock.callCount(), 1);
+  assert.ok(!live.output.message.includes(secret));
 });
 
 test("a JSON-RPC tool error reaches the model with its code and message, never the token", async (t) => {
   environment(t);
-  t.mock.method(globalThis, "fetch", async (_url, init) => {
-    const body = JSON.parse(init.body);
-    const error = {
-      code: -32602,
-      message: `Invalid arguments: city is required (auth ${secret})`,
-    };
-    return Response.json({jsonrpc: "2.0", id: body.id, error});
-  });
-
-  const live = await runHandler((ctx) =>
-    durable.execute(
-      ctx,
-      executeMcpTool({}, {turnId: "turn", toolCallId: "call"}, tool),
-    ),
+  mcpServer(t, (body) =>
+    Response.json({
+      jsonrpc: "2.0",
+      id: body.id,
+      error: {
+        code: -32602,
+        message: `Invalid arguments: city is required (auth ${secret})`,
+      },
+    }),
   );
-
-  assert.equal(live.output.status, "failed");
-  assert.match(
-    live.output.error,
-    /MCP error -32602: Invalid arguments: city is required/,
-  );
-  assert.match(live.output.error, /\[redacted\]/);
-  assert.ok(!live.output.error.includes(secret));
+  const live = await runHandler((ctx) => durable.execute(ctx, lookup()));
+  assert.equal(live.output.status, "error");
+  assert.match(live.output.message, /Invalid arguments: city is required/);
+  assert.ok(!live.output.message.includes(secret));
   assert.ok(!text(live.journal).includes(secret));
 });
 
@@ -204,40 +211,16 @@ test("discovery fails safely with a missing credential and does not send an anon
   const live = await runHandler((ctx) =>
     durable.execute(
       ctx,
-      discoverMcpTools([server], {agentId: "demo", turnId: "turn"}, []),
+      (function* () {
+        const {tools, notes} = yield* turnTools(request);
+        return {tools: Object.keys(tools), notes};
+      })(),
     ),
   );
   assert.deepEqual(live.output.tools, []);
-  assert.equal(live.output.servers[0].status, "unavailable");
-  assert.match(live.output.servers[0].warnings[0], /missing/);
+  assert.match(
+    live.output.notes[0].content,
+    /configured but unavailable \(MCP credential environment variable is missing\)/,
+  );
   assert.equal(fetch.mock.callCount(), 0);
-});
-
-test("discovery retries transient failures inside one effect and journals only sanitized warnings", async (t) => {
-  environment(t);
-  let calls = 0;
-  const fetch = t.mock.method(globalThis, "fetch", async () => {
-    calls++;
-    throw Error(`Provider echoed ${secret}`);
-  });
-  const live = await runHandler((ctx) =>
-    durable.execute(
-      ctx,
-      discoverMcpTools([server], {agentId: "demo", turnId: "turn"}, []),
-    ),
-  );
-  assert.equal(calls, 3, "a transient failure is retried before giving up");
-  assert.equal(live.output.servers[0].status, "unavailable");
-  assert.ok(!text(live.journal).includes(secret));
-  assert.ok(!JSON.stringify(live.output).includes(secret));
-  const replay = await runHandler(
-    (ctx) =>
-      durable.execute(
-        ctx,
-        discoverMcpTools([server], {agentId: "demo", turnId: "turn"}, []),
-      ),
-    {replay: live.journal},
-  );
-  assert.deepEqual(replay.output, live.output);
-  assert.equal(fetch.mock.callCount(), 3, "replay performs no HTTP");
 });
