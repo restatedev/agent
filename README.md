@@ -108,7 +108,7 @@ model's context is built from the log, not stored in place of it.
 recent stay verbatim; the log keeps growing and the model sees the summary
 plus recent messages](docs/images/compaction.svg)
 
-Compaction never blocks a turn. The ending turn reserves the older messages
+This compaction never blocks a turn. The ending turn reserves the older messages
 and sends `compact()` one way. That is a shared handler, so the summary is
 written next to the next turn rather than before it. The result is applied
 between turns, and only if the reserved range still matches.
@@ -159,6 +159,7 @@ Read `agent/schedules.ts` and `tools/schedules.ts`.
 
 | Feature | What it does | Read |
 | --- | --- | --- |
+| **Turn compaction** | A single long turn can outgrow the model's window, since tool results never enter the transcript. Past 60% of the window, the turn pauses before its next model call and the compactor replaces its older messages with a handoff note; recent steps stay verbatim, and steering and interrupts are handled right after. | `session/turn-compaction.ts` |
 | **Tool search** | Built-ins are always visible. MCP and discovered tools load on demand through `searchTools`, so large catalogs do not fill the context. | `session/tool-search.ts` |
 | **Memory** | An index of short descriptions the model searches, reads from and writes to, so context does not grow with the number of memories. A simple illustration, not a full memory system. | `agent/memories.ts` |
 | **Sandbox** | A local directory or [Modal](https://modal.com) sandbox for files and shell commands, suspended between turns. | `sandbox/turn.ts` |
@@ -304,8 +305,8 @@ Objects, on top of Restate](docs/images/layers.svg)
 
 ## Configuration
 
-What the agent is — its models, base instructions and built-in tools — is
-set in code, in `packages/libs/core/src/agent-config.ts`. Each tool is one
+What the agent is — its models and context window, base instructions and
+built-in tools — is set in code, in `packages/libs/core/src/agent-config.ts`. Each tool is one
 module in `src/tools/`, written with `defineAgentTool` from `src/tools-api.ts`;
 adding one is a new module and a line in that config. A tool carries its own
 prompt guidance (`instructions`), which reaches the model only in turns where

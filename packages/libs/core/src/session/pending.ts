@@ -33,6 +33,9 @@ type PendingOperation = {
   task: restate.Task<PendingEvent>;
 };
 
+/** A running operation, as the model addresses it with cancelOperation. */
+export type RunningOperation = {operationId: string; toolName: string};
+
 /** The next reason for a turn parked on pending work to resume. */
 type PendingStep =
   | {type: "steering"}
@@ -56,6 +59,14 @@ export function createPendingOperations() {
 
     describe(): string {
       return [...active.values()].map(({call}) => call.toolName).join(", ");
+    },
+
+    /** The running operations, oldest first, by operation ID and tool. */
+    operations(): RunningOperation[] {
+      return [...active.values()].map(({call}) => ({
+        operationId: call.toolCallId,
+        toolName: call.toolName,
+      }));
     },
 
     /**

@@ -40,7 +40,7 @@ const bundled = await build({
         globalThis.__budgetFixture.calls.push(options);
         const result = globalThis.__budgetFixture.results.shift();
         if (!result) throw new Error("Unexpected provider call");
-        return result;
+        return {usage: {}, ...result};
       }
     `,
         }));

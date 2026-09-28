@@ -24,6 +24,8 @@ export function buildModelContext(
   agentName?: string,
 ): {
   messages: ModelMessage[];
+  /** The runtime notes a turn keeps verbatim when it compacts its context. */
+  pinned: ModelMessage[];
   guardrailInput?: ModelMessage;
   guardrailEvidenceFrom: number;
 } {
@@ -58,6 +60,10 @@ export function buildModelContext(
       ),
     );
   }
+  // Identity and the memory note describe the agent. The conversation
+  // summary is already a summary, and bounded; compacting the turn would
+  // only summarize it again.
+  const pinned = [...messages];
 
   // Projects each transcript entry into zero or one model messages. Activity,
   // tool lifecycle, progress, profile changes, pending approval lifecycle,
@@ -158,6 +164,7 @@ export function buildModelContext(
   }
   return {
     messages,
+    pinned,
     ...(guardrailInput ? {guardrailInput} : {}),
     guardrailEvidenceFrom,
   };

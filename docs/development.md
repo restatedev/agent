@@ -286,7 +286,8 @@ When changing a request or schema:
 | Change schedules and timer delivery | `src/agent/schedules.ts` |
 | Change the turn state machine | `src/session/service.ts` |
 | Change one inference/tool step | `src/session/step.ts` |
-| Change models, base instructions or the tool list | `src/agent-config.ts` |
+| Change in-turn context compaction | `src/session/turn-compaction.ts` |
+| Change models, context window, base instructions or the tool list | `src/agent-config.ts` |
 | Add a built-in tool | `src/tools/*.ts`, listed in `src/agent-config.ts` |
 | Change how tools are defined | `src/tools-api.ts` |
 | Change tool dispatch and result projection | `src/session/tools.ts` |

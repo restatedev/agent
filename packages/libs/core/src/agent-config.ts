@@ -48,6 +48,17 @@ export const agentConfig = {
   },
 
   /**
+   * The agent model's context window, in input tokens, and the share of it at
+   * which a turn compacts its working context. Before a model call whose
+   * input would pass `compactAt` of the window, the turn summarizes its older
+   * messages and keeps the recent ones verbatim; see session/turn-compaction.ts.
+   *
+   * A turn's compaction decisions replay from its journal, so changing these
+   * affects new turns; drain in-flight turns before deploying a change.
+   */
+  context: {windowTokens: 400_000, compactAt: 0.6},
+
+  /**
    * The start of every turn's system prompt. The instructions of the tools
    * offered in the turn follow it, then the user's persistent instructions.
    */

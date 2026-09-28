@@ -20,6 +20,7 @@ import {
   COMPACTOR_SYSTEM,
   GUARDRAIL_REVIEW_SYSTEM,
   GUARDRAIL_SYSTEM,
+  TURN_COMPACTOR_SYSTEM,
 } from "./prompts.js";
 
 /** Provider-neutral model description of one executable agent tool. */
@@ -42,8 +43,11 @@ export type AgentModelRequest = {
 /** One validated tool call emitted by the model. */
 export type ToolCall = {toolCallId: string; toolName: string; input: unknown};
 
-/** Normalized agent-model result consumed by the session state machine. */
-export type ModelResult =
+/**
+ * Normalized agent-model result consumed by the session state machine.
+ * `inputTokens` is the provider's count of the request's input, when reported.
+ */
+export type ModelResult = (
   | {type: "text"; content: string}
   | {
       type: "tool_calls";
@@ -56,7 +60,8 @@ export type ModelResult =
       message: string;
       code?: "output_limit";
       maxOutputTokens?: number;
-    };
+    }
+) & {inputTokens?: number};
 
 /** Text or tool action evaluated by runtime guardrails before commitment. */
 export type ProposedAction =
@@ -353,63 +358,74 @@ export async function completeAgent(
       },
     });
 
-    // Reject the WHOLE truncated generation before inspecting tool calls. Even
-    // a valid-looking call may belong to an incomplete batch/program.
-    if (result.finishReason === "length") {
+    return {
+      ...modelResult(result, maxOutputTokens),
+      inputTokens: result.usage.inputTokens,
+    };
+  });
+}
+
+/** What the turn needs from one generation: its text, tool calls or error. */
+function modelResult(
+  result: Awaited<ReturnType<typeof generateText>>,
+  maxOutputTokens: number,
+): ModelResult {
+  // Reject the WHOLE truncated generation before inspecting tool calls. Even
+  // a valid-looking call may belong to an incomplete batch/program.
+  if (result.finishReason === "length") {
+    return {
+      type: "error",
+      code: "output_limit",
+      maxOutputTokens,
+      message: `Model generation exceeded its ${maxOutputTokens}-token output budget. No partial response or tool calls were used.`,
+    };
+  }
+  if (result.finishReason === "content-filter") {
+    return {type: "error", message: "model response was filtered"};
+  }
+
+  if (result.toolCalls.length > 0) {
+    const invalidCalls = result.toolCalls.filter(
+      (call) => call.dynamic || call.invalid,
+    );
+    if (invalidCalls.length > 0) {
       return {
         type: "error",
-        code: "output_limit",
-        maxOutputTokens,
-        message: `Model generation exceeded its ${maxOutputTokens}-token output budget. No partial response or tool calls were used.`,
+        message: invalidCalls
+          .map(
+            (call) =>
+              `${call.toolName}: ${call.error ? errorMessage(call.error) : "invalid tool call"}`,
+          )
+          .join("; "),
       };
     }
-    if (result.finishReason === "content-filter") {
-      return {type: "error", message: "model response was filtered"};
-    }
 
-    if (result.toolCalls.length > 0) {
-      const invalidCalls = result.toolCalls.filter(
-        (call) => call.dynamic || call.invalid,
-      );
-      if (invalidCalls.length > 0) {
-        return {
-          type: "error",
-          message: invalidCalls
-            .map(
-              (call) =>
-                `${call.toolName}: ${call.error ? errorMessage(call.error) : "invalid tool call"}`,
-            )
-            .join("; "),
-        };
-      }
-
-      const message = result.responseMessages.findLast(
-        (candidate): candidate is AssistantModelMessage =>
-          candidate.role === "assistant",
-      );
-      if (!message) {
-        return {
-          type: "error",
-          message: "model emitted tool calls without an assistant message",
-        };
-      }
-
+    const message = result.responseMessages.findLast(
+      (candidate): candidate is AssistantModelMessage =>
+        candidate.role === "assistant",
+    );
+    if (!message) {
       return {
-        type: "tool_calls",
-        message,
-        calls: result.toolCalls.map(({toolCallId, toolName, input}) => ({
-          toolCallId,
-          toolName,
-          input,
-        })),
-        ...(result.text.trim() ? {activity: result.text.trim()} : {}),
+        type: "error",
+        message: "model emitted tool calls without an assistant message",
       };
     }
 
-    return result.text.trim()
-      ? {type: "text", content: result.text}
-      : {type: "error", message: "model returned neither text nor tool calls"};
-  });
+    return {
+      type: "tool_calls",
+      message,
+      calls: result.toolCalls.map(({toolCallId, toolName, input}) => ({
+        toolCallId,
+        toolName,
+        input,
+      })),
+      ...(result.text.trim() ? {activity: result.text.trim()} : {}),
+    };
+  }
+
+  return result.text.trim()
+    ? {type: "text", content: result.text}
+    : {type: "error", message: "model returned neither text nor tool calls"};
 }
 
 // Reasoning tokens count against max_output_tokens here too (see
@@ -442,10 +458,41 @@ export async function summarizeConversation(
   });
 }
 
+// The note replaces a large part of a working context, so it may be longer
+// than a conversation summary; reasoning shares the budget.
+const TURN_COMPACTOR_MAX_OUTPUT_TOKENS = 12_000;
+
+/**
+ * Writes the handoff note that replaces the older part of a turn's working
+ * context. The input is already the compactor's view of those messages; see
+ * model/compactor.ts.
+ */
+export async function summarizeTurn(
+  input: {request: string | null; messages: unknown[]},
+  signal: AbortSignal,
+): Promise<string> {
+  return withOpenAI(async (openai) => {
+    const result = await generateText({
+      model: openai.responses(agentConfig.models.compactor),
+      system: TURN_COMPACTOR_SYSTEM,
+      prompt: JSON.stringify(input),
+      maxOutputTokens: TURN_COMPACTOR_MAX_OUTPUT_TOKENS,
+      ...openaiOptions(signal, 120_000),
+      providerOptions: {openai: {reasoningEffort: "low", store: false}},
+    });
+    const note = result.text.trim();
+    if (!note) {
+      throw new Error("turn compactor returned an empty note");
+    }
+    return note;
+  });
+}
+
 /** The provider calls made by the turn, grouped so tests can replace them. */
 export const modelProvider = {
   completeAgent,
   evaluateGuardrails,
   confirmGuardrailDecision,
   summarizeConversation,
+  summarizeTurn,
 };
