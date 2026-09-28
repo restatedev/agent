@@ -140,7 +140,8 @@ of the model contract, not cosmetic documentation.
 | `sleep` | Durable timer | Pending |
 | `humanApproval` | Signal-backed human decision | Pending |
 | `cancelOperation` | Cancel one pending operation by ID | Foreground control |
-| `manageMemory` | Atomically set or delete agent-local memories | Foreground Agent RPC |
+| `readMemories` | Read memory content by ID from the index | Foreground Agent RPC |
+| `manageMemory` | Atomically create, update or delete agent-local memories | Foreground Agent RPC |
 | `createSubAgent` | Create a persistent child and await its optional first task | Durable child-turn wait |
 | `messageSubAgent` | Ask a direct child a follow-up and return its answer | Durable child-turn wait |
 | `listSubAgents` | Find existing direct children by name, ID and link | Foreground Agent RPC |
@@ -157,8 +158,9 @@ of the model contract, not cosmetic documentation.
 ## Sub-agents
 
 `createSubAgent` accepts a name, nullable configuration overrides and optional
-initial message. It copies parent instructions, memories, guardrails and
-current tool grants, then applies narrower access or additional policy. Children
+initial message. It copies parent instructions, guardrails and current tool
+grants, then applies narrower access or additional policy. The child starts
+with an empty memory. Children
 keep separate conversations and sandbox files. Later parent changes do not
 rewrite a child's snapshot. Children cannot create children or schedules.
 

@@ -74,9 +74,10 @@ The browser's `snapshot` and `sync` endpoints implement this sequence in
 
 | Handler on Agent | Input / result |
 | --- | --- |
-| `profile` | No input; instructions, guardrails, memories, tools, webSearchEnabled |
+| `profile` | No input; instructions, guardrails, memory index, tools, webSearchEnabled |
 | `updateProfile` | Any of `{instructions: string \| null, guardrails: [{id, rule}], tools: AgentTools, webSearchEnabled: boolean}`; each given field is replaced whole |
-| `deleteMemory` | `{key}`; returns whether an entry existed |
+| `readMemories` | `{ids}`; full memories for known IDs, unknown IDs left out |
+| `deleteMemory` | `{id}`; returns whether the memory existed |
 | `metadata` | No input; `{name, parentAgentId?}` |
 | `children` | No input; direct children with IDs and metadata |
 | `toolCatalog` | No input; built-in/dynamic descriptors and configured MCP references |
@@ -85,7 +86,9 @@ The browser's `snapshot` and `sync` endpoints implement this sequence in
 
 Profile edits apply to future turns; active turns retain their input snapshot.
 `manageMemory` uses the internal `updateMemory` handler, which requires the
-active, non-interrupting turn ID and atomically updates agent-local entries.
+active, non-interrupting turn ID and applies a batch of creates, updates and
+deletes atomically. A batch naming an unknown ID changes nothing. Created
+memories get fresh IDs, which are never reused.
 Approval IDs and turn IDs correlate decisions to the exact waiting proposal.
 Guardrail approval is distinct from the explicit `humanApproval` tool.
 
@@ -129,7 +132,7 @@ for await (const {entry} of agent.follow()) {
 ```
 
 The client also exposes profile setters, approvals, metadata, children, memory
-deletion, schedules and retirement. It maps empty-body handlers explicitly.
+reads and deletion, schedules and retirement. It maps empty-body handlers explicitly.
 
 The Next.js server exposes a limited `/api/agent/{agentId}/{operation}`
 adapter whose operation names match the Agent handlers. `GET` serves

@@ -22,6 +22,7 @@ import type {
   AskResult,
   ChildAgent,
   HistoryPage,
+  Memory,
   ProfileUpdate,
   ScheduleCancellationResult,
   ScheduledMessage,
@@ -127,7 +128,7 @@ export interface AgentClient {
 
   // ---- profile ----
 
-  /** Instructions, guardrails, memories and tool grants the next turn will snapshot. */
+  /** Instructions, guardrails, tool grants and the memory index the next turn will snapshot. */
   profile(): Promise<AgentProfile>;
 
   /**
@@ -136,8 +137,11 @@ export interface AgentClient {
    */
   updateProfile(update: ProfileUpdate): Promise<void>;
 
+  /** Full memories for index IDs; unknown IDs are left out. */
+  readMemories(ids: string[]): Promise<Memory[]>;
+
   /** Deletes one memory. @returns whether it existed. */
-  deleteMemory(key: string): Promise<boolean>;
+  deleteMemory(id: string): Promise<boolean>;
 
   /** Every tool this agent could be granted. */
   toolCatalog(): Promise<ToolCatalog>;
@@ -291,7 +295,8 @@ export function createAgentClient({
 
     profile: () => invoke(agent.profile(noInput())),
     updateProfile: (update) => invoke(agent.updateProfile(update)),
-    deleteMemory: (key) => invoke(agent.deleteMemory({key})),
+    readMemories: (ids) => invoke(agent.readMemories({ids})),
+    deleteMemory: (id) => invoke(agent.deleteMemory({id})),
     toolCatalog: () => invoke(agent.toolCatalog(noInput())),
 
     metadata: () => invoke(agent.metadata(noInput())),

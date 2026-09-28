@@ -10,7 +10,7 @@ import {
   ApprovalResolutionSchema,
   AskRequestSchema,
   InterruptRequestSchema,
-  MemoryKeyRequestSchema,
+  MemoryIdRequestSchema,
   ProfileUpdateSchema,
   ScheduleIdRequestSchema,
   SteerRequestSchema,
@@ -61,8 +61,8 @@ export const MUTATIONS = {
   updateProfile: mutation(ProfileUpdateSchema, (client, update) =>
     client.updateProfile(update),
   ),
-  deleteMemory: mutation(MemoryKeyRequestSchema, (client, {key}) =>
-    client.deleteMemory(key),
+  deleteMemory: mutation(MemoryIdRequestSchema, (client, {id}) =>
+    client.deleteMemory(id),
   ),
   cancelSchedule: mutation(ScheduleIdRequestSchema, (client, {scheduleId}) =>
     client.cancelSchedule(scheduleId),

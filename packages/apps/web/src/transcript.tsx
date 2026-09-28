@@ -466,7 +466,7 @@ function LifecycleEvent({item}: {item: SequencedEntry}) {
           <MarkerContent>
             Memory updated ·{" "}
             {entry.changes
-              .map((change) => `${change.operation} ${change.key}`)
+              .map((change) => `${change.operation} ${change.id}`)
               .join(", ")}
           </MarkerContent>
         </Marker>
