@@ -11,6 +11,12 @@
 //   [pinned notes] [older messages ...................] [recent messages]
 //   [pinned notes] [handoff note] [grants] [pending ops] [recent messages]
 //
+// The pinned notes are the agent identity, the memory count, the earlier
+// conversation summary and MCP availability. The two compactions are
+// independent: the conversation summary is persistent and built from the
+// transcript between turns, while this one lasts only for the invocation and
+// never writes history.
+//
 // Compaction blocks the turn and is not interruptible. Steering and an
 // interrupt that arrive meanwhile wait in their durable signals, and pending
 // operations keep running; the turn reacts to all of them once the smaller

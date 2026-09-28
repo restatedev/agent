@@ -103,8 +103,8 @@ checks its size:
   results, exact identifiers, decisions, dead ends, approvals, pending work
   and what remains.
 - The cut never falls between an assistant tool call and its results.
-- The new context is: the pinned notes (agent identity, memory count, MCP
-  availability), the handoff note, the guardrail approvals still in force,
+- The new context is: the pinned notes (agent identity, memory count, the
+  earlier conversation summary, MCP availability), the handoff note, the guardrail approvals still in force,
   the operation IDs of pending operations still running, then the verbatim
   recent messages. When the current request or steering message was among
   the older messages, the handoff note restates it verbatim.
@@ -122,6 +122,23 @@ checks its size:
 - Every decision is a function of journaled data and the compactor's
   journaled note, so replay rebuilds the same context. Changing the window or
   threshold affects new turns; drain in-flight turns before deploying one.
+
+The two compactions are independent:
+
+| | Conversation summary | Working-context compaction |
+| --- | --- | --- |
+| Shrinks | The transcript: user messages, answers, lifecycle events; never tool results | One turn's working context, mostly tool calls and results |
+| When | After a turn, once 32 or more messages are uncompacted | Before a model call, past 60% of the window |
+| How | In the background: shared `compact`, then `applyCompaction` between turns | Blocking, inside `doTurn` |
+| Lifetime | A persistent checkpoint later turns build on | The invocation; discarded when the turn ends |
+| Model sees | `[Earlier conversation summary]` | `[Turn context compacted]` |
+| Code | `session/history.ts`, `model/compactor.ts` | `session/turn-compaction.ts`, `model/compactor.ts` |
+
+They share no state: working-context compaction never writes history, and a
+background summary is applied only between turns. The conversation summary
+note is pinned, so a turn that compacts does not summarize it a second time.
+Working-context compaction also covers a turn that starts oversized, for
+example when the conversation summary has fallen behind.
 
 ## Guardrails
 

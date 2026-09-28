@@ -51,8 +51,6 @@ export function buildModelContext(
       ),
     );
   }
-  // Identity and the memory note describe the agent, not the conversation.
-  const pinned = [...messages];
   if (summary) {
     messages.push(
       note(
@@ -62,6 +60,10 @@ export function buildModelContext(
       ),
     );
   }
+  // Identity and the memory note describe the agent. The conversation
+  // summary is already a summary, and bounded; compacting the turn would
+  // only summarize it again.
+  const pinned = [...messages];
 
   // Projects each transcript entry into zero or one model messages. Activity,
   // tool lifecycle, progress, profile changes, pending approval lifecycle,

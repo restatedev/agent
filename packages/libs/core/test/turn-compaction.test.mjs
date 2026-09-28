@@ -5,6 +5,7 @@ import {TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 
 import {modelProvider} from "../src/model/provider.ts";
+import {buildModelContext} from "../src/session/context.ts";
 import {
   compactIfNeeded,
   contextTokens,
@@ -250,4 +251,18 @@ test("the handoff note cannot close its untrusted block", async () => {
   const handoff = result.messages[1].content;
   assert.equal(handoff.match(/<\/untrusted-tool-output>/g).length, 1);
   assert.ok(handoff.endsWith("</untrusted-tool-output>"));
+});
+
+test("the conversation summary is pinned, so a turn never summarizes it again", () => {
+  const history = [{role: "user", text: "Continue the migration"}];
+  const {messages, pinned} = buildModelContext(
+    history,
+    "Services a and b were migrated last week.",
+    2,
+    "demo",
+  );
+  assert.equal(pinned.length, 3);
+  assert.deepEqual(pinned, messages.slice(0, 3));
+  assert.match(pinned[2].content, /\[Earlier conversation summary\]/);
+  assert.ok(!pinned.includes(messages.at(-1)));
 });
