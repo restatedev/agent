@@ -30,9 +30,10 @@ packages before starting. `pnpm dev` starts both processes. UI scripts bind to
 if you need different ingress connectivity.
 
 Configure optional MCP servers on the core process using
-[MCP configuration](mcp-configuration.md). PTC is enabled by default; disable it
-with `programTool` in `src/agent-config.ts`. Web search is enabled by default and uses
-Tavily's keyless endpoint; Context → Web search saves an agent-local preference.
+[MCP configuration](mcp-configuration.md). PTC is enabled by default; disable
+it with `programTool` in `src/agent-config.ts`. Web search is enabled by
+default and uses Tavily's keyless endpoint; Context → Web search saves an
+agent-local preference.
 
 `AGENT_MODEL_MAX_OUTPUT_TOKENS` controls the model output budget: default
 `32000`, valid integers `1024` through `64000`. Truncation gets one recovery
@@ -287,6 +288,9 @@ When changing a request or schema:
 | Change one inference/tool step | `src/session/step.ts` |
 | Change models, base instructions or the tool list | `src/agent-config.ts` |
 | Add a built-in tool | `src/tools/*.ts`, listed in `src/agent-config.ts` |
+| Change how tools are defined | `src/tools-api.ts` |
+| Change tool dispatch and result projection | `src/session/tools.ts` |
+| Change programmatic tool calling | `src/session/program-tool.ts`, `src/ptc/` |
 | Change dynamic discovery | `src/session/dynamic-tools.ts` |
 | Change provider inference | `src/model/provider.ts` |
 | Change model retries/output recovery | `src/model/inference.ts` |

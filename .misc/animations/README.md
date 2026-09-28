@@ -16,7 +16,7 @@ fully before touching an animation.
 | `steer-interrupt.svg` | `timeline.py` → `steer-interrupt` | Steer or interrupt a running turn | Controller answers at once; interrupt ends with a summary (`agent/active-turn.ts`) |
 | `steering.svg` | `timeline.py` → `steering` | same section, second image | Quick tools finish, programs are handed off, a steer replaces a stale non-tool proposal (`session/step.ts` `select({tools, steering})`, `session/service.ts` `consumeSteering`) |
 | `durable-wait.svg` | `timeline.py` → `durable-wait` | Wait for a person, for days | Guardrail approval, suspended turn (`session/guardrails.ts`, `agent/approvals.ts`) |
-| `sub-agents.svg` | `timeline.py` → `sub-agents` | Delegate to sub-agents | `createSubAgent` waits durably, parallel children, parent keeps answering (`session/tools/sub-agents.ts`) |
+| `sub-agents.svg` | `timeline.py` → `sub-agents` | Delegate to sub-agents | `createSubAgent` waits durably, parallel children, parent keeps answering (`tools/sub-agents.ts`) |
 | `programmatic-tool-calls.svg` | `timeline.py` → `programmatic-tool-calls` | Programmatic tool calls | QuickJS program, guardrails per call, compact result (`ptc/runtime.ts`) |
 | `compaction.svg` | `timeline.py` → `compaction` | Compaction | `COMPACT_AFTER_MESSAGES = 32`, `KEEP_RECENT_MESSAGES = 8` (`session/history.ts`) |
 | `async-compaction.svg` | `timeline.py` → `async-compaction` | Compaction, second image | `compact` is a **shared** handler, `applyCompaction` exclusive and checks the plan (`session/service.ts` options, `history.ts` `finishCompaction`) |

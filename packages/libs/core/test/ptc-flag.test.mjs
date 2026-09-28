@@ -30,7 +30,7 @@ async function catalogWith(programTool) {
   return JSON.parse(stdout.trim().split("\n").at(-1));
 }
 
-test("programTool: false hides PTC from every catalog but keeps the name reserved", async () => {
+test("programTool switches PTC in and out of every catalog; the name stays reserved", async () => {
   assert.deepEqual(await catalogWith(false), {
     reserved: true,
     permissionCatalog: false,

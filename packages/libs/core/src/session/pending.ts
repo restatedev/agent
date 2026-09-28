@@ -7,7 +7,7 @@
 // as a task of the turn. When it settles, the turn adds a runtime message
 // before the next model step rather than a second result for the same call.
 //
-//   model calls sleep -> execute() -> {status: "pending", operationId}
+//   model calls sleep -> run() -------> {status: "pending", operationId}
 //   apply() spawns complete() --------> durable timer / signal
 //   next() observes the completion ---> runtime message -> next model step
 //

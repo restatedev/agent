@@ -17,13 +17,11 @@ const hit = {
   content: "Evidence",
 };
 const context = (enabled) =>
-  agentTools.createAgentToolContext(
-    "test",
-    "turn",
-    enabled,
-    {builtin: {mode: "all"}, dynamic: {mode: "selected", names: []}, mcp: []},
-    "test-user",
-  );
+  agentTools.createAgentToolContext("test", "turn", enabled, {
+    builtin: {mode: "all"},
+    dynamic: {mode: "selected", names: []},
+    mcp: [],
+  });
 const call = {toolCallId: "search", toolName: "webSearch", input};
 const scope = (guard) => ({
   transcript: {*append() {}},

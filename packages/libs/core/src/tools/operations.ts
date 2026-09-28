@@ -41,6 +41,8 @@ export const cancelOperationTool = defineAgentTool({
   name: "cancelOperation",
   description:
     "Cancel one pending operation, such as a running sleep or human approval request, using the operationId from its pending result. This does not cancel completed or foreground tools.",
+  instructions:
+    "When the user asks to stop pending work, call cancelOperation with its operationId and wait for the cancellation result before claiming it stopped.",
   inputSchema: z.object({
     operationId: z
       .string()
@@ -54,8 +56,6 @@ export const cancelOperationTool = defineAgentTool({
         "Why the pending operation should be cancelled, or null when no reason was given.",
       ),
   }),
-  instructions:
-    "When the user asks to stop pending work, call cancelOperation with its operationId and wait for the cancellation result before claiming it stopped.",
   *run({operationId, reason}) {
     return {
       status: "cancel_requested",

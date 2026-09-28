@@ -8,8 +8,8 @@ import type {SandboxClient} from "../sandbox/index.js";
 import {
   defineAgentTool,
   type ToolCallContext,
-  type ToolExecution,
   toolFailure,
+  type ToolResult,
   toolRun,
 } from "../tools-api.js";
 
@@ -154,7 +154,7 @@ function* runSandboxTool(
   context: ToolCallContext,
   operation: (client: SandboxClient, signal: AbortSignal) => Promise<string>,
   retry: restate.RetryOptions,
-): restate.Operation<ToolExecution> {
+): restate.Operation<ToolResult> {
   let client: SandboxClient;
   try {
     client = yield* context.sandbox.client();

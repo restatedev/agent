@@ -27,8 +27,15 @@ type ToolManifest = {
   description: string;
   inputSchema: Record<string, unknown>;
   strict?: boolean; // defaults to true
+  instructions?: string; // built-ins only
 };
 ```
+
+`instructions` is not part of the tool declaration the provider sees. While a
+built-in is offered, `agentSystemPrompt` in `model/provider.ts` adds its
+instructions to the system prompt, after the base instructions from
+`agent-config.ts` and before the user's persistent instructions. Dynamic and
+MCP tools never set it, so third-party text never reaches the system prompt.
 
 A model response refers back to a tool by name:
 
@@ -139,7 +146,8 @@ one registration:
 
 - `agentTools.names` reserves the name from dynamic discovery;
 - `agentTools.manifests()` converts the Zod schema to JSON Schema;
-- `agentTools.execute()` validates input and dispatches the call;
+- `agentTools.execute()` dispatches the call to the tool's `run`, which
+  validates the input against the schema first;
 - the tool becomes available to agent runs, subject to capability settings in
   the turn's profile snapshot.
 
@@ -228,7 +236,7 @@ async tools => {
 }
 ```
 
-Queries are sent to Tavily, so the tool instructions prohibit sending secrets
+Queries are sent to Tavily, so the tool description prohibits sending secrets
 or private conversation data. Results are untrusted evidence, not instructions;
 the model is told to cite relevant source URLs. Keyless access is free but
 rate-limited, not unlimited. Quota and invalid-response failures are reported
@@ -418,7 +426,7 @@ External side effects belong inside `restate.run` or a Restate RPC. Preserve
 `InterruptedError` and `CancelledError` instead of converting them into normal
 tool failures, so invocation cancellation can propagate through `doTurn`.
 
-Give every tool `run` an explicit retry policy. A `restate.run` without one
+Give every `restate.run` in a tool an explicit retry policy. One without it
 retries until it succeeds, which is wrong for a model-facing call: a bounded
 failure is feedback the model can act on. Operations that are safe to repeat
 (`listFiles`, `readFile`, `writeFile`, `getWeather`, `webSearch`) use a small
@@ -471,7 +479,7 @@ while an operation waits. It is not a generic wrapper for a slow call.
 
 ### Selective cancellation
 
-`cancelOperation` returns `cancel_requested`; the `doTurn` pending registry,
+`cancelOperation` returns `cancel_requested`; the `doTurn` pending registry
 owns the task and applies that request to a matching pending operation.
 Cancellation is represented as a runtime event for the next step. It does not
 cancel foreground work or the agent run itself.

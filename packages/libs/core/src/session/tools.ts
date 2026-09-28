@@ -373,7 +373,7 @@ export function* execute(
       turnToolSearch(context, discovered, mcpTools);
     return {
       call,
-      ...(yield* tool.execute(call.input, {
+      ...(yield* tool.run(call.input, {
         ...context,
         toolCallId: call.toolCallId,
       })),

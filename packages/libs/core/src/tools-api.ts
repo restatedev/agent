@@ -141,7 +141,7 @@ export type AgentTool = {
   summary?: string;
   instructions?: string;
   unavailable?(context: ToolAvailabilityContext): string | undefined;
-  execute(
+  run(
     input: unknown,
     context: ToolCallContext,
   ): restate.Operation<ToolExecution>;
@@ -171,7 +171,7 @@ export function* toolRun(
   name: string,
   action: (context: {signal: AbortSignal}) => Promise<string>,
   retry?: restate.RetryOptions,
-): restate.Operation<ToolExecution> {
+): restate.Operation<ToolResult> {
   try {
     return succeeded(yield* restate.run(action, {name, retry}));
   } catch (error) {
@@ -254,7 +254,7 @@ export function defineAgentTool<Schema extends z.ZodType>(definition: {
     summary,
     instructions,
     unavailable: definition.unavailable,
-    *execute(input, context) {
+    *run(input, context) {
       const parsed = inputSchema.safeParse(input);
       if (!parsed.success)
         return failed(`invalid input: ${validationMessage(parsed.error)}`);
