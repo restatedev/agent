@@ -34,6 +34,9 @@ Every tool call in a model response runs at once. Restate retries transient
 failures; a call that still fails goes back to the model as an error, and the
 other results are kept.
 
+**With Restate:** every call is a journaled step. After a crash, finished
+calls are replayed from the journal, never run twice.
+
 ![Animation: one model step proposes three tool calls; the guardrails allow
 the batch in one check; the calls run concurrently, one fails and is reported
 as an error while the others finish; the next model step sees both results
@@ -45,6 +48,9 @@ Read `session/step.ts`.
 
 Timers, approval requests and long programs keep running while the model
 keeps working. The model can wait for them, carry on, or cancel one.
+
+**With Restate:** a `sleep` is a durable timer and an approval is a durable
+signal, so a turn waiting on them suspends and holds no process.
 
 ![Animation: the model starts a human approval request and a durable timer;
 both return pending at once and run in the background; steered to stop, the
@@ -58,6 +64,10 @@ Read `session/pending.ts` and `tools/operations.ts`.
 Hand tasks to sub-agents, each with its own history, sandbox and memory.
 They work in parallel, and the agent keeps answering while it waits.
 
+**With Restate:** each sub-agent is its own Virtual Object. The parent turn
+attaches to the child's turn by invocation ID, so neither the task nor the
+answer is lost in a crash on either side.
+
 ![Animation: a parent turn creates two sub-agents that work in parallel; a new
 message is queued meanwhile; the answers return as tool results and the
 queued message starts the next turn](docs/images/sub-agents.svg)
@@ -69,6 +79,9 @@ Read `agent/sub-agents.ts` and `tools/sub-agents.ts`.
 Send the agent a message later, once or on a recurrence. No cron and no
 scheduler to run, and a firing that comes due while the service is down
 still arrives.
+
+**With Restate:** a schedule is a delayed call to the agent, stored in
+Restate, which delivers it when the service can take it.
 
 ![Animation: a daily schedule fires and starts a turn; one firing comes due
 while the service is down and is delivered once it is
@@ -83,12 +96,19 @@ interrupt it. The controller routes it and answers at once. A steer reaches
 the next model step without cancelling tools in flight. An interrupt stops
 the turn and ends it with a summary.
 
+**With Restate:** the controller and the turn are two Virtual Objects. A
+steer or interrupt is a durable signal to the running turn's invocation, so
+it is never lost and never lands in the wrong turn.
+
 Read `agent/active-turn.ts`, `session/steering.ts` and `session/step.ts`.
 
 ### Compaction in the background
 
 Long conversations are summarized between turns, without holding up the next
 one. Recent exchanges stay verbatim, and the log is never rewritten.
+
+**With Restate:** compaction is a one-way call to a shared handler, so it
+runs next to the next turn instead of blocking it.
 
 ![Animation: after a turn the older messages are summarized while the 8 most
 recent stay verbatim; the log keeps growing and the model sees the summary
@@ -110,6 +130,10 @@ A guardrail, or the model itself, can ask a person to approve. The turn
 waits, for days if needed, without holding a process, and resumes where it
 stopped.
 
+**With Restate:** the turn suspends on a durable signal. It uses no compute
+while it waits, and Restate resumes it when the decision arrives, even after
+new versions have shipped.
+
 ![Animation: a guardrail requires approval; the turn suspends for about a day
 while a new service version ships; when a person approves, the turn resumes
 and finishes](docs/images/durable-wait.svg)
@@ -121,6 +145,9 @@ Read `session/approvals.ts`, `agent/approvals.ts` and `tools/approval.ts`.
 Instead of calling tools one at a time, the model writes a small JavaScript
 program. It runs in a sandboxed QuickJS guest, every call passes the
 guardrails, and only the result enters the context.
+
+**With Restate:** every call the program makes is journaled. After a crash
+the program replays against the recorded results, so no tool runs twice.
 
 ![Animation: the model writes a program that calls getWeather for four cities
 in parallel inside a QuickJS guest; only the compact result returns to the
