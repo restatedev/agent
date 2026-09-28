@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 340" width="1000" height="340" role="img" aria-label="Animation: a turn records a user message, a model call and three tool results in its journal; the process crashes; after restart Restate replays the journal, reuses the recorded results, and the turn finishes with a final answer.">
+<style>
+:root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de;
+  --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9;
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d;
+    --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214;
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; }
+}
+svg { background: var(--bg); }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
+.label { font-size: 13px; font-weight: 600; fill: var(--muted); }
+.proc { fill: var(--ok-bg); stroke: var(--ok); stroke-width: 1.5; }
+.state { font-size: 15px; font-weight: 600; }
+.state.ok .dot { fill: var(--ok); }
+.state.bad, .state.bad .dot { fill: var(--bad); }
+.st0, .st1 { opacity: 0; }
+.slot { fill: none; stroke: var(--stroke); stroke-dasharray: 5 4; }
+.cell { stroke: var(--stroke); }
+.cell.user { fill: var(--user); }
+.cell.model { fill: var(--model); }
+.cell.tool { fill: var(--tool); }
+.cell.reply { fill: var(--reply); }
+.idx { font-size: 11.5px; font-weight: 600; fill: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.line { font-size: 13px; }
+.muted { fill: var(--muted); }
+.cursor { fill: none; stroke: var(--accent); stroke-width: 2.5; opacity: 0; }
+.badge { fill: var(--ok-bg); stroke: var(--ok); }
+.badge-t { font-size: 11px; font-weight: 600; fill: var(--ok); text-anchor: middle; }
+.caption { font-size: 15px; }
+.cap0, .cap1, .cap2 { opacity: 0; }
+@keyframes proc { 0%, 30.9% { fill: var(--ok-bg); stroke: var(--ok) } 31.5%, 46.9% { fill: var(--bad-bg); stroke: var(--bad) } 47.5%, 100% { fill: var(--ok-bg); stroke: var(--ok) } }
+@keyframes st0 { 0% { opacity: 1 } 30.20% { opacity: 1 } 31.00%, 100% { opacity: 0 } }
+@keyframes st1 { 0%, 30.99% { opacity: 0 } 31.80% { opacity: 1 } 46.20% { opacity: 1 } 47.00%, 100% { opacity: 0 } }
+@keyframes st2 { 0%, 46.99% { opacity: 0 } 47.80% { opacity: 1 } 100% { opacity: 1 } }
+@keyframes c0 { 0%, 2.99% { opacity: 0 } 4.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes c1 { 0%, 8.99% { opacity: 0 } 10.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes c2 { 0%, 14.99% { opacity: 0 } 16.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes c3 { 0%, 18.99% { opacity: 0 } 20.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes c4 { 0%, 22.99% { opacity: 0 } 24.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes c5 { 0%, 69.99% { opacity: 0 } 71.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes c6 { 0%, 76.99% { opacity: 0 } 78.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes cursor { 0%, 51.0% { opacity: 0; transform: translateX(0px) } 52.0% { opacity: 1; transform: translateX(0px) } 64.0% { opacity: 1; transform: translateX(544px) } 67.0%, 100% { opacity: 0; transform: translateX(544px) } }
+@keyframes b0 { 0%, 52.49% { opacity: 0 } 54.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes b1 { 0%, 55.49% { opacity: 0 } 57.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes b2 { 0%, 58.49% { opacity: 0 } 60.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes b3 { 0%, 61.49% { opacity: 0 } 63.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes b4 { 0%, 64.49% { opacity: 0 } 66.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes cap0 { 0% { opacity: 1 } 30.20% { opacity: 1 } 31.00%, 100% { opacity: 0 } }
+@keyframes cap1 { 0%, 30.99% { opacity: 0 } 31.80% { opacity: 1 } 50.20% { opacity: 1 } 51.00%, 100% { opacity: 0 } }
+@keyframes cap2 { 0%, 50.99% { opacity: 0 } 51.80% { opacity: 1 } 67.20% { opacity: 1 } 68.00%, 100% { opacity: 0 } }
+@keyframes cap3 { 0%, 67.99% { opacity: 0 } 68.80% { opacity: 1 } 100% { opacity: 1 } }
+.proc { animation: proc 16s linear infinite; }
+.cursor { animation: cursor 16s linear infinite; }
+.st0 { animation: st0 16s linear infinite; }
+.st1 { animation: st1 16s linear infinite; }
+.st2 { animation: st2 16s linear infinite; }
+.c0 { animation: c0 16s linear infinite; }
+.c1 { animation: c1 16s linear infinite; }
+.c2 { animation: c2 16s linear infinite; }
+.c3 { animation: c3 16s linear infinite; }
+.c4 { animation: c4 16s linear infinite; }
+.c5 { animation: c5 16s linear infinite; }
+.c6 { animation: c6 16s linear infinite; }
+.b0 { animation: b0 16s linear infinite; }
+.b1 { animation: b1 16s linear infinite; }
+.b2 { animation: b2 16s linear infinite; }
+.b3 { animation: b3 16s linear infinite; }
+.b4 { animation: b4 16s linear infinite; }
+.cap0 { animation: cap0 16s linear infinite; }
+.cap1 { animation: cap1 16s linear infinite; }
+.cap2 { animation: cap2 16s linear infinite; }
+.cap3 { animation: cap3 16s linear infinite; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<text class="label" x="28" y="44">Agent service process</text>
+<rect class="proc" x="28" y="56" width="300" height="46" rx="10"/>
+<text class="state ok st0" x="48" y="85"><tspan class="dot">●</tspan>  running</text>
+<text class="state bad st1" x="48" y="85"><tspan class="dot">✕</tspan>  crashed</text>
+<text class="state ok st2" x="48" y="85"><tspan class="dot">●</tspan>  restarted</text>
+<text class="label" x="28" y="138">Turn journal, stored by Restate</text>
+<rect class="slot" x="28" y="150" width="128" height="110" rx="10"/>
+<g class="c0">
+<rect class="cell user" x="28" y="150" width="128" height="110" rx="10"/>
+<text class="idx" x="40" y="174">1 · user</text>
+<text class="line" x="40" y="200">Weather in</text>
+<text class="line muted" x="40" y="220">Berlin?</text>
+</g>
+<rect class="slot" x="164" y="150" width="128" height="110" rx="10"/>
+<g class="c1">
+<rect class="cell model" x="164" y="150" width="128" height="110" rx="10"/>
+<text class="idx" x="176" y="174">2 · model</text>
+<text class="line" x="176" y="200">call 3 tools</text>
+<text class="line muted" x="176" y="220">in parallel</text>
+</g>
+<rect class="slot" x="300" y="150" width="128" height="110" rx="10"/>
+<g class="c2">
+<rect class="cell tool" x="300" y="150" width="128" height="110" rx="10"/>
+<text class="idx" x="312" y="174">3 · tool</text>
+<text class="line" x="312" y="200">getWeather</text>
+<text class="line muted" x="312" y="220">12°C, light rain</text>
+</g>
+<rect class="slot" x="436" y="150" width="128" height="110" rx="10"/>
+<g class="c3">
+<rect class="cell tool" x="436" y="150" width="128" height="110" rx="10"/>
+<text class="idx" x="448" y="174">4 · tool</text>
+<text class="line" x="448" y="200">webSearch</text>
+<text class="line muted" x="448" y="220">5 results</text>
+</g>
+<rect class="slot" x="572" y="150" width="128" height="110" rx="10"/>
+<g class="c4">
+<rect class="cell tool" x="572" y="150" width="128" height="110" rx="10"/>
+<text class="idx" x="584" y="174">5 · tool</text>
+<text class="line" x="584" y="200">runCommand</text>
+<text class="line muted" x="584" y="220">exit 0</text>
+</g>
+<rect class="slot" x="708" y="150" width="128" height="110" rx="10"/>
+<g class="c5">
+<rect class="cell model" x="708" y="150" width="128" height="110" rx="10"/>
+<text class="idx" x="720" y="174">6 · model</text>
+<text class="line" x="720" y="200">final answer</text>
+</g>
+<rect class="slot" x="844" y="150" width="128" height="110" rx="10"/>
+<g class="c6">
+<rect class="cell reply" x="844" y="150" width="128" height="110" rx="10"/>
+<text class="idx" x="856" y="174">7 · reply</text>
+<text class="line" x="856" y="200">published</text>
+<text class="line muted" x="856" y="220">to the log</text>
+</g>
+<rect class="cursor" x="24" y="146" width="136" height="118" rx="12"/>
+<g class="b0"><rect class="badge" x="40" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="73" y="244">✓ reused</text></g>
+<g class="b1"><rect class="badge" x="176" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="209" y="244">✓ reused</text></g>
+<g class="b2"><rect class="badge" x="312" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="345" y="244">✓ reused</text></g>
+<g class="b3"><rect class="badge" x="448" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="481" y="244">✓ reused</text></g>
+<g class="b4"><rect class="badge" x="584" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="617" y="244">✓ reused</text></g>
+<text class="caption cap0" x="28" y="304">Each model response and tool result is recorded in the turn&#8217;s journal.</text>
+<text class="caption cap1" x="28" y="304">The process crashes in the middle of the turn. The journal is safe in Restate.</text>
+<text class="caption cap2" x="28" y="304">After restart, Restate replays the journal: recorded results are reused, nothing runs twice.</text>
+<text class="caption cap3" x="28" y="304">The turn continues from where it stopped and publishes its answer.</text>
+</svg>
