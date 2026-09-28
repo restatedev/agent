@@ -28,7 +28,7 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
   transient FIFO. `session/pending.ts` owns completion tasks that survive
   across steps.
 - `session/tools.ts` dispatches calls and owns model/transcript projections;
-  concrete tool definitions live in `session/tools/`.
+  the built-in tools come from `agent-config.ts` and live in `tools/`.
 - `session/program-tool.ts` adapts PTC child calls to that same dispatcher and
   policy gate. `ptc/runtime.ts` supervises their execution inline in `doTurn`;
   `ptc/guest.ts` owns the bounded QuickJS/WebAssembly guest.
@@ -234,7 +234,7 @@ cancel losing branches, but program return, failure, or turn interruption stops
 and joins outstanding children. Completed side effects are not undone.
 
 See [the PTC guide](tools.md#programmatic-tool-calling-ptc) for examples, limits,
-failure handling, and the replay-safe `AGENT_PTC_ENABLED=false` opt-out.
+failure handling, and the replay-safe `programTool` opt-out in `agent-config.ts`.
 
 ## Interruption and stopping
 

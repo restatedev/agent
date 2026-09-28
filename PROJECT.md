@@ -20,16 +20,17 @@ Paths below are relative to `packages/libs/core/src`.
 
 1. `app.ts` registers the runtime services.
 2. `agent/service.ts` assembles the Agent object from one handler group per
-   concern. `agent/turns.ts` routes input, snapshots profile/configuration,
-   starts a turn, and reconciles its completion; `active-turn.ts` owns
+   concern. `agent/turns.ts` routes input and reconciles a turn's completion;
+   `agent/start-turn.ts` snapshots profile/configuration and starts a turn; `active-turn.ts` owns
    active-work bookkeeping and FIFO steering reconciliation. `agent/guards.ts`
    holds the shared authorization checks.
 3. `session/service.ts` implements `doTurn`: open history once, build context,
    run bounded steps, handle pending work and control, then finalize.
 4. `session/step.ts` performs one model/policy/tool transition.
-5. `session/tools.ts` is the tool registry and dispatcher; built-in
-   definitions live in `session/tools/`, grouped by what they touch, with
-   shared helpers in `tools/define.ts`. `dynamic-tools.ts` and `mcp-tools.ts`
+5. `agent-config.ts` says what the agent is: models, base instructions and
+   the built-in tools, which live in `tools/` and are written with
+   `tools-api.ts`. `session/tools.ts` is the tool registry and dispatcher;
+   `dynamic-tools.ts` and `mcp-tools.ts`
    implement external catalogs and calls over one `refresh-cache.ts`. `mcp-config.ts` resolves operator
    configuration and credential references.
 6. `session/history.ts` owns append-only storage and compaction checkpoints.

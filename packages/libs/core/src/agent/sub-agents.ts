@@ -31,7 +31,7 @@ import {
 } from "./guards.js";
 import * as notifications from "./notifications.js";
 import * as profile from "./profile.js";
-import {startTurn} from "./turns.js";
+import {startTurn} from "./start-turn.js";
 
 /** A delegated child turn a parent tool call is waiting on. */
 type SubAgentTask = {

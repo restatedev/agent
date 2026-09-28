@@ -6,18 +6,18 @@
 // rest until all allow, one denies, or a human rejects.
 
 import type {Guardrail} from "@restate-agents/types";
+import {AgentDefinition} from "@restate-agents/types/services";
 import {client, type Operation} from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 
-import {Agent} from "../agent/index.js";
 import {
   callGuardrailModel,
   type GuardrailApproval,
   type ProposedAction,
 } from "../model/index.js";
+import type {AgentToolContext} from "../tools-api.js";
+import {approvalCancelled, awaitApproval} from "./approvals.js";
 import type {TurnHistory} from "./history.js";
-import {type AgentToolContext, approvalCancelled} from "./tools.js";
-import {awaitApproval} from "./tools/approval.js";
 
 export type GuardrailDecisions = {
   approvedActions: GuardrailApproval[];
@@ -89,7 +89,11 @@ export function* guardAction({
       question: decision.question,
       guardrailId: decision.guardrailId,
     };
-    if (!(yield* client(Agent, context.agentId).requestApproval(request)))
+    if (
+      !(yield* client(AgentDefinition, context.agentId).requestApproval(
+        request,
+      ))
+    )
       return block(
         decision.guardrailId,
         "human approval could not be registered",

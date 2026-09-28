@@ -5,8 +5,9 @@ import {AgentProfileSchema, ProfileUpdateSchema} from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 
+import {executeCall} from "../src/session/step.ts";
 import * as agentTools from "../src/session/tools.ts";
-import {searchWeb} from "../src/session/web-search.ts";
+import {searchWeb} from "../src/tools/web-search.ts";
 import {runHandler} from "./harness.mjs";
 
 const input = {query: "durable execution", maxResults: 2};
@@ -178,7 +179,7 @@ test("disabled web search is absent from both catalogs and rejected by the dispa
       ctx,
       durable.gen(function* () {
         const direct = yield* agentTools.execute(call, context(false), [], []);
-        const program = yield* agentTools.execute(
+        const program = yield* executeCall(
           {
             toolCallId: "program",
             toolName: "executeProgram",
@@ -221,7 +222,7 @@ test("direct and PTC web search reuse journaled results without searching on rep
               [],
               [],
             );
-            const program = yield* agentTools.execute(
+            const program = yield* executeCall(
               {
                 toolCallId: "program",
                 toolName: "executeProgram",
@@ -260,7 +261,7 @@ test("a PTC guardrail denial prevents web search", async (t) => {
   const result = await runHandler((ctx) =>
     durable.execute(
       ctx,
-      agentTools.execute(
+      executeCall(
         {
           toolCallId: "program",
           toolName: "executeProgram",

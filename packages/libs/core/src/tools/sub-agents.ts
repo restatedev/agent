@@ -8,12 +8,12 @@ import {
   SubAgentConfigSchema,
   ToolSelectionSchema,
 } from "@restate-agents/types";
+import {AgentDefinition} from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
-import {Agent} from "../../agent/index.js";
-import {isCancellation} from "../../errors.js";
+import {isCancellation} from "../errors.js";
 import {
   agentCall,
   agentUrl,
@@ -22,7 +22,7 @@ import {
   succeeded,
   type ToolCallContext,
   type ToolExecution,
-} from "./define.js";
+} from "../tools-api.js";
 
 // Profile schemas are not necessarily valid strict model schemas. A regular
 // union emits anyOf (supported by OpenAI); the distinct mode literals still
@@ -67,7 +67,7 @@ export const createSubAgentTool = defineAgentTool({
   *run(config, context) {
     // Invalid configuration or access is feedback for the model to correct.
     const agent = yield* agentCall([400, 403], () =>
-      restate.client(Agent, context.agentId).createSubAgent({
+      restate.client(AgentDefinition, context.agentId).createSubAgent({
         ...config,
         turnId: context.turnId,
         toolCallId: context.toolCallId,
@@ -117,7 +117,7 @@ function* runSubAgentTask(
     const child = yield* agentCall(
       [400, 403, 410],
       () =>
-        restate.client(Agent, context.agentId).startSubAgentTask({
+        restate.client(AgentDefinition, context.agentId).startSubAgentTask({
           agentId,
           message,
           source,
@@ -133,10 +133,12 @@ function* runSubAgentTask(
   } finally {
     // Durable one-way cleanup also runs for a losing PTC branch. Parent
     // interrupt/onTurnEnd provides a second, idempotent cleanup path.
-    yield* restate.sendClient(Agent, context.agentId).finishSubAgentTask({
-      turnId: context.turnId,
-      toolCallId: context.toolCallId,
-    });
+    yield* restate
+      .sendClient(AgentDefinition, context.agentId)
+      .finishSubAgentTask({
+        turnId: context.turnId,
+        toolCallId: context.toolCallId,
+      });
   }
 }
 
@@ -181,7 +183,7 @@ export const deleteSubAgentTool = defineAgentTool({
   summary: "Deleted sub-agent subtree",
   *run({agentId}, context) {
     const deleted = yield* restate
-      .client(Agent, context.agentId)
+      .client(AgentDefinition, context.agentId)
       .deleteSubAgent({turnId: context.turnId, agentId});
     return succeeded(JSON.stringify({agentId, deleted}));
   },
@@ -195,7 +197,7 @@ export const listSubAgentsTool = defineAgentTool({
   summary: "Listed sub-agents",
   *run(_input, context) {
     const agents = yield* restate
-      .client(Agent, context.agentId)
+      .client(AgentDefinition, context.agentId)
       .listSubAgents({turnId: context.turnId});
     return succeeded(
       JSON.stringify(

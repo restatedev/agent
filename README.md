@@ -192,7 +192,7 @@ its controller, so the agent keeps answering meanwhile.
 message is queued meanwhile; the answers return as tool results and the
 queued message starts the next turn](docs/images/sub-agents.svg)
 
-Read `agent/sub-agents.ts` and `session/tools/sub-agents.ts`.
+Read `agent/sub-agents.ts` and `tools/sub-agents.ts`.
 
 ### Programmatic tool calls
 
@@ -259,7 +259,14 @@ call.
 
 ## Configuration
 
-The agent service (`packages/libs/core`):
+What the agent is — its models, base instructions and built-in tools — is
+set in code, in `packages/libs/core/src/agent-config.ts`. Each tool is one
+module in `src/tools/`, written with `defineAgentTool` from `src/tools-api.ts`;
+adding one is a new module and a line in that config. A tool carries its own
+prompt guidance (`instructions`), which reaches the model only in turns where
+the tool is offered. See [tools](docs/tools.md#built-in-tools).
+
+The agent service reads these environment variables:
 
 | Variable | Purpose |
 | --- | --- |
@@ -267,7 +274,6 @@ The agent service (`packages/libs/core`):
 | `MCP_SERVERS_JSON` | MCP servers the agents may use; see below |
 | `SANDBOX_PROVIDER` | `local` (default) or `modal`, which also needs `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` |
 | `MODAL_APP_NAME`, `MODAL_SANDBOX_NAMESPACE`, `MODAL_SANDBOX_IMAGE`, `MODAL_SANDBOX_TIMEOUT_MS` | Optional Modal settings; see [sandboxes](docs/sandboxes.md) |
-| `AGENT_PTC_ENABLED` | Set to `false` to hide `executeProgram` |
 | `AGENT_MODEL_MAX_OUTPUT_TOKENS` | Output budget per model call, 1024–64000 (default 32000) |
 | `RESTATE_ADMIN_URL`, `RESTATE_ADMIN_TOKEN` | Admin API used to discover dynamic tools |
 

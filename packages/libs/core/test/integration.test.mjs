@@ -5,7 +5,7 @@ import * as durable from "@restatedev/restate-sdk-gen";
 
 import {modelProvider} from "../src/model/provider.ts";
 import {createPendingOperations} from "../src/session/pending.ts";
-import {agentStep, settleStep} from "../src/session/step.ts";
+import {agentStep, executeCall, settleStep} from "../src/session/step.ts";
 import * as agentTools from "../src/session/tools.ts";
 import {runHandler} from "./harness.mjs";
 
@@ -156,7 +156,7 @@ test("Agent grants constrain both direct execution and the PTC guest catalog", a
           [dynamic],
           [mcp],
         );
-        const program = yield* agentTools.execute(
+        const program = yield* executeCall(
           {
             toolCallId: "outer",
             toolName: "executeProgram",
@@ -263,7 +263,7 @@ test(
           }),
           durable.gen(function* () {
             const context = toolContext();
-            return yield* agentTools.execute(
+            return yield* executeCall(
               {
                 toolCallId: "outer",
                 toolName: "executeProgram",
@@ -441,7 +441,7 @@ test("program failures are model repair results and do not invoke subtools", asy
     durable.execute(
       ctx,
       durable.gen(function* () {
-        return yield* agentTools.execute(
+        return yield* executeCall(
           {
             toolCallId: "bad",
             toolName: "executeProgram",
@@ -478,7 +478,7 @@ test("PTC routes cancelOperation to the existing turn operation supervisor", asy
           toolName: "sleep",
           input: {durationSeconds: 300},
         };
-        return yield* agentTools.execute(
+        return yield* executeCall(
           {
             toolCallId: "cancel",
             toolName: "executeProgram",

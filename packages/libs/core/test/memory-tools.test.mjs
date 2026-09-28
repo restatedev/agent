@@ -13,15 +13,6 @@ const permissions = {
   mcp: [],
 };
 
-const scope = {
-  transcript: {*append() {}},
-  step: 1,
-  *guard() {},
-  *cancelPending() {
-    throw new Error("unused");
-  },
-};
-
 // Runs one memory tool call in a turn whose Agent answers with `reply`.
 async function runTool(toolName, input, reply) {
   const f = context("agent", {}, reply);
@@ -39,7 +30,6 @@ async function runTool(toolName, input, reply) {
         toolContext,
         [],
         [],
-        scope,
       ),
     ),
   );
