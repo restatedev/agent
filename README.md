@@ -128,6 +128,16 @@ never waits for it. `steer`, `interrupt` and approval decisions reach the turn
 as durable signals addressed to its invocation ID, so they cannot land in the
 wrong turn. Every agent feature is ordinary code on top of these two objects.
 
+`doTurn` runs the model calls and tools itself, as in-process function calls,
+not by hopping between services or queues. Each result is appended to the
+turn's journal over one open, low-latency stream to Restate. That append is
+the only persistence a step needs.
+
+![Animation: inside the agent service process, doTurn runs a model call and
+three tools as in-process function calls; each result is appended over one
+open stream to the turn journal in Restate, in completion
+order](docs/images/in-process.svg)
+
 ![Layers: agent features built on a durable agent runtime of two Virtual
 Objects, on top of Restate](docs/images/layers.svg)
 
