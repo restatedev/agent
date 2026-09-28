@@ -24,6 +24,8 @@ export function buildModelContext(
   agentName?: string,
 ): {
   messages: ModelMessage[];
+  /** The runtime notes a turn keeps verbatim when it compacts its context. */
+  pinned: ModelMessage[];
   guardrailInput?: ModelMessage;
   guardrailEvidenceFrom: number;
 } {
@@ -49,6 +51,8 @@ export function buildModelContext(
       ),
     );
   }
+  // Identity and the memory note describe the agent, not the conversation.
+  const pinned = [...messages];
   if (summary) {
     messages.push(
       note(
@@ -158,6 +162,7 @@ export function buildModelContext(
   }
   return {
     messages,
+    pinned,
     ...(guardrailInput ? {guardrailInput} : {}),
     guardrailEvidenceFrom,
   };

@@ -29,7 +29,6 @@ import {
   callGuardrailModel,
   callModel,
   compactConversation,
-  type GuardrailApproval,
 } from "../model/index.js";
 import {executionRetention, noRetention} from "../retention.js";
 import {destroySandbox} from "../sandbox/index.js";
@@ -65,18 +64,19 @@ import {
 } from "./step.js";
 import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
+import {
+  compactIfNeeded,
+  recordUsage,
+  type WorkingContext,
+} from "./turn-compaction.js";
 
-type AgentSessionState = {
+type AgentSessionState = WorkingContext & {
   context: AgentToolContext;
   transcript: TurnHistory;
   instructions?: string;
   guardrails: Guardrail[];
-  approvedActions: GuardrailApproval[];
   rejectedGuardrails: Set<string>;
   blockedGuardrails: Set<string>;
-  messages: ModelMessage[];
-  guardrailInput?: ModelMessage;
-  guardrailEvidenceFrom: number;
   interrupt: restate.Future<string>;
   steeringInbox: ReturnType<typeof createSteeringInbox>;
   consumedSteering: number;
@@ -233,8 +233,10 @@ function startState(
     rejectedGuardrails: new Set(),
     blockedGuardrails: new Set(),
     messages: modelContext.messages,
+    pinned: new Set(modelContext.pinned),
     guardrailInput: modelContext.guardrailInput,
     guardrailEvidenceFrom: modelContext.guardrailEvidenceFrom,
+    compactionFailed: false,
     interrupt: restate.signal<string>(AGENT_SESSION_SIGNALS.interrupt),
     steeringInbox: createSteeringInbox(),
     consumedSteering: 0,
@@ -329,7 +331,9 @@ function* executeTurn(
   );
   state.mcpTools = mcpDiscovery.tools;
   if (mcpDiscovery.servers.length > 0) {
-    state.messages.push(mcpAvailabilityMessage(mcpDiscovery.servers));
+    const availability = mcpAvailabilityMessage(mcpDiscovery.servers);
+    state.messages.push(availability);
+    state.pinned.add(availability);
   }
 
   let consecutiveModelErrors = 0;
@@ -337,9 +341,11 @@ function* executeTurn(
     // Steering received after the previous step's drain belongs before this
     // model round. This is the stable hand-off boundary between rounds.
     yield* consumeSteering(state);
+    yield* compactContext(state);
 
     yield* reportProgress(state, "thinking", "Thinking...");
 
+    const sent = state.messages.length;
     const task = restate.spawn(
       agentStep({
         context: state.context,
@@ -395,6 +401,7 @@ function* executeTurn(
       });
     }
 
+    recordUsage(state, step.type === "tools" ? step.action : step, sent);
     const steering = state.steeringInbox.drain();
     state.steps += 1;
     if (steering.length === 0 || step.type === "tools") {
@@ -575,6 +582,19 @@ type ProgressPhase = Extract<
   {role: "event"; type: "progress"}
 >["phase"];
 
+/**
+ * Compacts the working context before a model call when it has grown past
+ * the threshold; see turn-compaction.ts. Deliberately not raced against the
+ * interrupt signal: the turn reacts to it once the context fits again.
+ */
+function* compactContext(state: AgentSessionState): restate.Operation<void> {
+  yield* compactIfNeeded(
+    state,
+    () => state.pending.operations(),
+    (message) => reportProgress(state, "thinking", message),
+  );
+}
+
 function* reportProgress(
   state: AgentSessionState,
   phase: ProgressPhase,
@@ -681,6 +701,7 @@ function* finalizeEarlyExit(
   yield* appendToolTranscript(state, stopped);
   state.messages.push(...stopped.map(agentTools.toRuntimeMessage));
   state.messages.push(finalizationInstruction(exit.reason));
+  yield* compactContext(state);
   yield* reportProgress(
     state,
     "finalizing",

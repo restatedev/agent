@@ -1,14 +1,10 @@
-# Durable agents on Restate
-
-**An LLM agent that survives crashes, deploys and days-long waits, without a
-database, queue or scheduler of its own.**
+# Durable Agents on Restate
 
 This is a reference implementation of a modern agent harness on
 [Restate](https://restate.dev): context compaction, parallel and programmatic
 tool calls, steering, guardrails, human approval, memory, sub-agents and
-schedules. Every model call, tool call, wait and message is journaled, so a
-turn that is interrupted halfway resumes where it stopped. The code is written
-to be read.
+schedules. Model calls, tool calls, waits and messages are journaled, so that
+interruption halfway resumes where it stopped.
 
 [Quickstart](#quickstart) · [How a turn works](#how-a-turn-works) ·
 [Features](#features) · [Documentation](docs/README.md)
@@ -80,8 +76,7 @@ Each agent is two Restate Virtual Objects with the same key:
   message and owns the profile: instructions, guardrails, memories, tool
   grants, approvals, schedules and child agents. Its handlers are short, so
   it always answers.
-- **`AgentSession`**, the turn. One `doTurn` invocation is one turn, and its
-  invocation ID is the `turnId`. It owns the append-only conversation log and
+- **`AgentSession`**, One `doTurn` invocation is one turn. It owns the append-only conversation log and
   runs the model/tool loop.
 
 ```mermaid
@@ -218,7 +213,7 @@ never rewritten.
 recent stay verbatim; the log keeps growing and the model sees the summary
 plus recent messages](docs/images/compaction.svg)
 
-Compaction never blocks a turn. The ending turn reserves the older messages
+This compaction never blocks a turn. The ending turn reserves the older messages
 and sends `compact()` one way. That is a shared handler, so the summary is
 written next to the next turn rather than before it. The result is applied
 between turns, and only if the reserved range still matches.
@@ -227,7 +222,14 @@ between turns, and only if the reserved range still matches.
 while a shared compact handler summarizes them; the summary is applied between
 turns and turn 3 uses it](docs/images/async-compaction.svg)
 
-Read `session/history.ts`, `session/service.ts` and `model/compactor.ts`.
+A single long turn can also outgrow the model's window, since its tool
+results never enter the transcript. Before a model call whose input would pass
+60% of the window, the turn itself stops and has the compactor write a handoff
+note for its older messages, keeping recent steps verbatim. That pause blocks
+the turn; steering and interrupts wait for it and are handled right after.
+
+Read `session/history.ts`, `session/turn-compaction.ts`, `session/service.ts`
+and `model/compactor.ts`.
 
 ### Schedules
 
@@ -259,8 +261,8 @@ call.
 
 ## Configuration
 
-What the agent is — its models, base instructions and built-in tools — is
-set in code, in `packages/libs/core/src/agent-config.ts`. Each tool is one
+What the agent is — its models and context window, base instructions and
+built-in tools — is set in code, in `packages/libs/core/src/agent-config.ts`. Each tool is one
 module in `src/tools/`, written with `defineAgentTool` from `src/tools-api.ts`;
 adding one is a new module and a line in that config. A tool carries its own
 prompt guidance (`instructions`), which reaches the model only in turns where

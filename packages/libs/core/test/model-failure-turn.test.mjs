@@ -11,8 +11,8 @@ import {runHandler} from "./harness.mjs";
 // Export the private functions only in this test bundle, not the production API.
 const stubs = {
   step: `import * as r from ${JSON.stringify(import.meta.resolve("@restatedev/restate-sdk-gen"))};
-    export function* agentStep() {return yield* r.run(() => {
-      const f=globalThis.__turnFailureFixture; f.stepCalls++;
+    export function* agentStep({messages}) {return yield* r.run(() => {
+      const f=globalThis.__turnFailureFixture; f.stepCalls++; f.stepMessages.push(messages);
       const result=f.steps.shift(); if(!result)throw Error("Unexpected model step");
       return {...result,approvedActions:[],rejectedGuardrails:[]};
     },{name:"fixture-step"});}
@@ -26,7 +26,11 @@ const stubs = {
       if(!f.final)throw Error("Unexpected finalizer"); return f.final;
     },{name:"fixture-final"});}
     export function* callGuardrailModel(){return globalThis.__turnFailureFixture.guardrail;}
-    export function* compactConversation(){throw Error("Unexpected compaction");}`,
+    export function* compactConversation(){throw Error("Unexpected compaction");}
+    export function* summarizeTurnContext(messages){return yield* r.run(()=>{
+      const f=globalThis.__turnFailureFixture; f.turnCompactions.push(messages);
+      if(!f.handoff)throw Error("Unexpected turn compaction"); return f.handoff;
+    },{name:"fixture-turn-compaction"});}`,
 };
 const compiled = await build({
   stdin: {
@@ -85,6 +89,9 @@ beforeEach(() => {
   globalThis.__turnFailureFixture = {
     steps: [],
     stepCalls: 0,
+    stepMessages: [],
+    turnCompactions: [],
+    handoff: null,
     finalRequests: [],
     final: null,
     guardrail: {decision: "allow"},
@@ -96,6 +103,9 @@ async function run({
   replay,
   approvedActions = [],
   steering = [],
+  measured,
+  messages = [{role: "user", content: "Research request"}],
+  guardrailInput,
 } = {}) {
   return runHandler(
     (ctx) =>
@@ -106,7 +116,12 @@ async function run({
           let stops = 0;
           const state = {
             context: {agentId: "test", turnId: "turn"},
-            messages: [{role: "user", content: "Research request"}],
+            messages: [...messages],
+            pinned: new Set(),
+            guardrailInput,
+            guardrailEvidenceFrom: 1,
+            measured,
+            compactionFailed: false,
             guardrails,
             approvedActions,
             rejectedGuardrails: new Set(),
@@ -122,6 +137,7 @@ async function run({
             steps: 0,
             pending: {
               size: 0,
+              operations: () => [],
               *stop() {
                 stops++;
                 return [];
@@ -272,4 +288,69 @@ test("steering clears guardrail approvals granted for the earlier request", asyn
   assert.equal(output.outcome.status, "completed");
   assert.equal(output.outcome.consumedSteering, 1);
   assert.equal(output.approvals, 0);
+});
+
+// A request, one large tool-heavy exchange and a short recent message.
+const longResearch = [
+  {role: "user", content: "Research request"},
+  {role: "assistant", content: "x".repeat(400_000)},
+  {role: "user", content: "[Runtime event] One more source arrived."},
+];
+
+test("a turn that outgrows its window compacts before its next model call", async () => {
+  const f = globalThis.__turnFailureFixture;
+  f.handoff = "Found three sources; the third is still unread.";
+  f.steps = [
+    {...error, inputTokens: 300_000},
+    {type: "text", content: "Done"},
+  ];
+  const first = await run({
+    messages: longResearch,
+    guardrailInput: longResearch[0],
+  });
+  assert.equal(first.output.outcome.response, "Done");
+  // The first step is under the threshold; its reported input is not.
+  assert.equal(f.turnCompactions.length, 1);
+  const [before, after] = f.stepMessages;
+  assert.equal(before.length, 3);
+  assert.match(after[0].content, /\[Turn context compacted\]/);
+  // The request was compacted with the rest, so the note restates it.
+  assert.match(after[0].content, /working on, verbatim:\nResearch request/);
+  assert.deepEqual(f.turnCompactions[0], longResearch.slice(0, 2));
+  // The newest message stays verbatim after the note.
+  assert.deepEqual(after.slice(1, 2), longResearch.slice(2));
+  assert.match(after[0].content, /the third is still unread/);
+  const compacting = first.output.events.filter(
+    (e) => e.type === "progress" && /Compacting/.test(e.message),
+  );
+  assert.equal(compacting.length, 1);
+
+  f.stepCalls = 0;
+  f.turnCompactions = [];
+  const replay = await run({
+    messages: longResearch,
+    guardrailInput: longResearch[0],
+    replay: first.journal,
+  });
+  assert.deepEqual(replay.output, first.output);
+  assert.equal(f.stepCalls, 0);
+  assert.equal(f.turnCompactions.length, 0);
+});
+
+test("finalization compacts an oversized context before its tool-free call", async () => {
+  const f = globalThis.__turnFailureFixture;
+  f.handoff = "Two of five files were migrated.";
+  f.final = {type: "text", content: "Stopped after two of five files."};
+  const {output} = await run({
+    finalize: true,
+    messages: longResearch,
+    measured: {inputTokens: 300_000, messages: 3},
+  });
+  assert.equal(output.outcome.response, "Stopped after two of five files.");
+  assert.equal(f.turnCompactions.length, 1);
+  const [request] = f.finalRequests;
+  assert.equal(request.tools.length, 0);
+  assert.match(request.messages[0].content, /Two of five files were migrated/);
+  // The finalization instruction is the newest message and stays verbatim.
+  assert.match(request.messages.at(-1).content, /\[Turn finalization\]/);
 });

@@ -56,6 +56,7 @@ export type AgentStepResult =
       type: "guardrail_blocked";
       guardrailId: string;
       reason: string;
+      inputTokens?: number;
     })
   | {type: "interrupted"; reason: string; tools?: ToolStep};
 
@@ -171,6 +172,9 @@ export function* agentStep({
         type: "guardrail_blocked",
         guardrailId: guarded.guardrailId,
         reason: guarded.reason,
+        ...(action.inputTokens === undefined
+          ? {}
+          : {inputTokens: action.inputTokens}),
         ...decisions,
       };
     }

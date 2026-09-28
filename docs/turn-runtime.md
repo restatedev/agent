@@ -32,6 +32,8 @@ turn. Its Restate invocation ID is the `turnId`. `agentStep` is one
 - `session/program-tool.ts` adapts PTC child calls to that same dispatcher and
   policy gate. `ptc/runtime.ts` supervises their execution inline in `doTurn`;
   `ptc/guest.ts` owns the bounded QuickJS/WebAssembly guest.
+- `session/turn-compaction.ts` compacts the turn's own working context when
+  it outgrows the model's window.
 - `sandbox/turn.ts` owns the sandbox lifecycle. The ref lives in AgentSession
   state; one turn acquires it lazily and suspends it on every handled exit.
 
@@ -82,6 +84,44 @@ deployed dynamic handlers as ordinary durable RPCs.
   structured `failed` outcome.
 - Reaching the step bound stops pending work and makes one tool-free final
   call. The outcome is `stopped` with `step_limit`, not a user interruption.
+
+## Working-context compaction
+
+Transcript compaction summarizes finished turns (see
+[architecture](architecture.md)). A single turn can still outgrow the model's
+window, because its tool results live only in working context. So before
+every agent-model call, including the tool-free finalization call, the turn
+checks its size:
+
+- The size is the last call's reported input tokens (which include the system
+  prompt and tool schemas) plus an estimate of about four characters per
+  token for the messages added since. Without a report it estimates all
+  messages.
+- Past `agentConfig.context.compactAt` (60%) of `windowTokens`, the turn
+  keeps the newest messages that fit 15% of the window verbatim and sends
+  the older ones to the compactor model, which writes a handoff note: goal,
+  results, exact identifiers, decisions, dead ends, approvals, pending work
+  and what remains.
+- The cut never falls between an assistant tool call and its results.
+- The new context is: the pinned notes (agent identity, memory count, MCP
+  availability), the handoff note, the guardrail approvals still in force,
+  the operation IDs of pending operations still running, then the verbatim
+  recent messages. When the current request or steering message was among
+  the older messages, the handoff note restates it verbatim.
+- The handoff note is derived from tool output, so it travels in an
+  `<untrusted-tool-output>` block, like a pending completion.
+- The guardrails' evidence index moves with the context: they judge the
+  current request plus the handoff note onwards, or the request's recent
+  position when it stayed verbatim.
+- Compaction blocks the turn and is not raced against the interrupt signal.
+  Steering and interrupts wait in their durable signals, pending operations
+  keep running, and the turn reacts to all of them once the smaller context is
+  in place. A `thinking` progress event says the turn is compacting.
+- A failed compaction (after bounded retries) leaves the context unchanged
+  and is not retried in that turn. The transcript is never affected.
+- Every decision is a function of journaled data and the compactor's
+  journaled note, so replay rebuilds the same context. Changing the window or
+  threshold affects new turns; drain in-flight turns before deploying one.
 
 ## Guardrails
 
@@ -308,3 +348,6 @@ Any rewrite must preserve:
     gate PTC children, not their wrapper or source.
 14. Durable approval before protected work and reevaluation after steering.
 15. One initial transcript read followed by direct append-only writes.
+16. Working-context compaction only between steps, never splitting a tool call
+    from its results, with the current request, approvals and pending
+    operation IDs kept.

@@ -57,7 +57,9 @@ replacement message belongs to a successor turn.
 
 Every terminal outcome carries the consumed steering count so late input can
 be recovered exactly. History is append-only. Compaction writes a summary
-checkpoint; it does not rewrite the event log. Raw tool I/O and internal
+checkpoint; it does not rewrite the event log. A turn that outgrows the
+model's window also compacts its own working context, which never touches the
+log; see [turn runtime](turn-runtime.md#working-context-compaction). Raw tool I/O and internal
 execution traces are distinct from public conversation events.
 
 ## Context and delegation

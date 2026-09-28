@@ -26,10 +26,13 @@ Paths below are relative to `packages/libs/core/src`.
    reconciliation. `agent/guards.ts` holds the shared authorization checks.
 3. `session/service.ts` implements `doTurn`: open history once, build context,
    run bounded steps, handle pending work and control, then finalize.
-4. `session/step.ts` performs one model/policy/tool transition.
-5. `agent-config.ts` says what the agent is: models, base instructions and
-   the built-in tools, which live in `tools/` and are written with
-   `tools-api.ts`. `session/tools.ts` is the tool registry and dispatcher;
+4. `session/step.ts` performs one model/policy/tool transition;
+   `session/turn-compaction.ts` shrinks the turn's working context when it
+   outgrows the model's window.
+5. `agent-config.ts` says what the agent is: models, context window, base
+   instructions and the built-in tools, which live in `tools/` and are
+   written with `tools-api.ts`. `session/tools.ts` is the tool registry and
+   dispatcher;
    `session/tool-search.ts` and `session/program-tool.ts` are the runtime's
    own searchTools and executeProgram. `dynamic-tools.ts` and `mcp-tools.ts`
    implement external catalogs and calls over one `refresh-cache.ts`;

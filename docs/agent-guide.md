@@ -172,7 +172,8 @@ The detailed turn-runtime list lives in
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |
 | Pending tool tasks and cancellation races | `session/pending.ts` |
-| Models, base instructions, the built-in tool list, PTC switch | `agent-config.ts` |
+| Compacting a turn's working context | `session/turn-compaction.ts` |
+| Models, context window, base instructions, the built-in tool list, PTC switch | `agent-config.ts` |
 | Built-in tool schema and execution | `tools/*.ts` |
 | How to write a tool (`defineAgentTool` and helpers) | `tools-api.ts` |
 | Tool registry, dispatch, result and transcript projection | `session/tools.ts` |

@@ -58,6 +58,14 @@ export function createPendingOperations() {
       return [...active.values()].map(({call}) => call.toolName).join(", ");
     },
 
+    /** The running operations, oldest first, by operation ID and tool. */
+    operations(): {operationId: string; toolName: string}[] {
+      return [...active.values()].map(({call}) => ({
+        operationId: call.toolCallId,
+        toolName: call.toolName,
+      }));
+    },
+
     /**
      * Commits the pending effects of one accepted tool step.
      *

@@ -1,6 +1,6 @@
 /** Durable model calls and the inference contract consumed by sessions. */
 
-export {compactConversation} from "./compactor.js";
+export {compactConversation, summarizeTurnContext} from "./compactor.js";
 export type {
   GuardrailApproval,
   ModelResult,
