@@ -120,7 +120,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <rect class="bar ok g6" x="170.0" y="193" width="393.1" height="14" rx="7"/>
 <text class="bar-t on-bar e7" x="180.0" y="204">running</text>
 <rect class="bar bad g8" x="563.1" y="193" width="131.0" height="14" rx="7"/>
-<text class="bar-t on-bar e9" x="573.1" y="204">down: redeploying</text>
+<text class="bar-t on-bar e9" x="573.1" y="204">down: outage</text>
 <rect class="bar ok g10" x="694.2" y="193" width="280.8" height="14" rx="7"/>
 <text class="bar-t on-bar e11" x="704.2" y="204">running</text>
 <g class="chip warn e12">

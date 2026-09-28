@@ -67,7 +67,8 @@ Read `agent/sub-agents.ts` and `tools/sub-agents.ts`.
 ### Schedules
 
 Send the agent a message later, once or on a recurrence. No cron and no
-scheduler to run, and a firing that comes due during a deploy still arrives.
+scheduler to run, and a firing that comes due while the service is down
+still arrives.
 
 ![Animation: a daily schedule fires and starts a turn; one firing comes due
 while the service is down and is delivered once it is
@@ -118,8 +119,8 @@ waits, for days if needed, without holding a process, and resumes where it
 stopped.
 
 ![Animation: a guardrail requires approval; the turn suspends for about a day
-and survives a redeploy; when a person approves, the turn resumes and
-finishes](docs/images/durable-wait.svg)
+while a new service version ships; when a person approves, the turn resumes
+and finishes](docs/images/durable-wait.svg)
 
 Read `session/approvals.ts`, `agent/approvals.ts` and `tools/approval.ts`.
 
@@ -148,8 +149,8 @@ Read `ptc/runtime.ts`.
 
 ## Durable by construction
 
-Agents run for minutes, wait for people for days, and get redeployed in the
-middle of both. Here that is handled underneath every feature above rather
+Agents run for minutes, wait for people for days, and crash or get new
+versions in the middle of both. Here that is handled underneath every feature above rather
 than by each of them: every model call, tool result, wait and message is
 recorded in Restate as the turn runs.
 
@@ -157,9 +158,11 @@ recorded in Restate as the turn runs.
 crashes, and after restart Restate replays the journal, reuses every recorded
 result and the turn finishes](docs/images/durable-turn.svg)
 
-- **Crashes and deploys resume the turn.** Restate replays the turn's
-  journal. Recorded model responses and tool results are reused, so the model
-  is never asked to repeat a decision and completed tool calls are not re-run.
+- **A crash resumes the turn.** Restate replays the turn's journal. Recorded
+  model responses and tool results are reused, so the model is never asked
+  to repeat a decision and completed tool calls are not re-run.
+- **New versions don't break running turns.** Restate keeps each turn on
+  the service version it started on; new turns use the new version.
 - **Waiting is free.** A turn can wait hours or days for an approval, a timer
   or a sub-agent. While it waits it holds no process, only stored state.
 - **Always responsive.** `ask`, `steer` and `interrupt` return right away,
