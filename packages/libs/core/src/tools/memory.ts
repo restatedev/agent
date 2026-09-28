@@ -6,7 +6,7 @@ import {AgentDefinition} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
-import {defineAgentTool, failed, succeeded} from "../tool-api/index.js";
+import {defineAgentTool, failed, succeeded} from "../tools-api.js";
 
 export const searchMemoriesTool = defineAgentTool({
   name: "searchMemories",

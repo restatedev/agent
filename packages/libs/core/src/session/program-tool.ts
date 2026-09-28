@@ -12,13 +12,14 @@ import {
   type Request,
 } from "../ptc/guest.js";
 import {executeProgram} from "../ptc/runtime.js";
-import {failed, succeeded, validationMessage} from "../tool-api/index.js";
+import {failed, succeeded, validationMessage} from "../tools-api.js";
 import {
   approvalCancelled,
   HUMAN_APPROVAL_TOOL,
   withdrawApproval,
 } from "./approvals.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";
+import type {TurnHistory} from "./history.js";
 import type {McpAgentTool} from "./mcp-tools.js";
 import {
   type AgentToolContext,
@@ -27,11 +28,19 @@ import {
   isInputObject,
   manifests,
   toolActivity,
-  type ToolExecutionScope,
   type ToolOutcome,
   toolsEvent,
   transcriptEntries,
+  unavailable,
 } from "./tools.js";
+
+/** Step-owned policy and lifecycle hooks used by PTC's nested calls. */
+export type ToolExecutionScope = {
+  transcript: TurnHistory;
+  step: number;
+  guard(call: ToolCall): Operation<string | undefined>;
+  cancelPending(outcome: ToolOutcome): Operation<ToolOutcome>;
+};
 
 export function* executeProgramTool(
   call: ToolCall,
@@ -40,6 +49,8 @@ export function* executeProgramTool(
   mcpTools: McpAgentTool[],
   scope: ToolExecutionScope,
 ): Operation<ToolOutcome> {
+  const reason = unavailable(call.toolName, context, discovered, mcpTools);
+  if (reason) return {call, ...failed(reason)};
   // Same validation and feedback as every built-in (defineAgentTool).
   const parsed = ProgramInputSchema.safeParse(call.input);
   if (!parsed.success) {

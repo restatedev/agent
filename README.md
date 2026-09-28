@@ -204,7 +204,7 @@ a tool too (`session/dynamic-tools.ts`).
 
 What the agent is — its models, base instructions and built-in tools — is
 set in code, in `packages/libs/core/src/agent-config.ts`. Each tool is one
-module in `src/tools/`, written with `defineAgentTool` from `src/tool-api/`;
+module in `src/tools/`, written with `defineAgentTool` from `src/tools-api.ts`;
 adding one is a new module and a line in that config. A tool carries its own
 prompt guidance (`instructions`), which reaches the model only in turns where
 the tool is offered. See [tools](docs/tools.md#built-in-tools).

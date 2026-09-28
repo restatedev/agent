@@ -9,7 +9,7 @@ import {z} from "zod";
 import {agentConfig} from "../agent-config.js";
 import type {ToolManifest} from "../model/index.js";
 import {rankedIds, words} from "../text-search.js";
-import {defineAgentTool, succeeded} from "../tool-api/index.js";
+import {defineAgentTool, succeeded, type TurnToolSearch} from "../tools-api.js";
 
 export const TOOL_SEARCH_NAME = "searchTools";
 const RESULT_LIMIT = 5;
@@ -41,7 +41,7 @@ function parameterNames(schema: unknown): string[] {
 export function createToolSearch(
   catalog: ToolManifest[],
   providers: ReadonlyMap<string, string>,
-) {
+): TurnToolSearch {
   const byName = new Map(catalog.map((tool) => [tool.name, tool]));
   let index: MiniSearch | undefined;
   const loaded = new Set<string>();
@@ -94,8 +94,6 @@ export function createToolSearch(
     },
   };
 }
-
-export type TurnToolSearch = ReturnType<typeof createToolSearch>;
 
 export const searchToolsTool = defineAgentTool({
   name: TOOL_SEARCH_NAME,

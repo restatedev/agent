@@ -22,7 +22,7 @@ import {
   succeeded,
   type ToolCallContext,
   type ToolExecution,
-} from "../tool-api/index.js";
+} from "../tools-api.js";
 
 // Profile schemas are not necessarily valid strict model schemas. A regular
 // union emits anyOf (supported by OpenAI); the distinct mode literals still

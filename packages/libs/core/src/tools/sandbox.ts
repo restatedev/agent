@@ -11,7 +11,7 @@ import {
   type ToolExecution,
   toolFailure,
   toolRun,
-} from "../tool-api/index.js";
+} from "../tools-api.js";
 
 export const listFilesTool = defineAgentTool({
   name: "listFiles",

@@ -5,6 +5,7 @@ import {TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 
 import {Agent} from "../src/agent/service.ts";
+import {executeCall} from "../src/session/step.ts";
 import * as tools from "../src/session/tools.ts";
 import {runHandler} from "./harness.mjs";
 import {context} from "./state-fixture.mjs";
@@ -273,7 +274,7 @@ async function runDelegation({
             *cancelPending() {},
           };
           try {
-            return yield* tools.execute(call, toolContext, [], [], scope);
+            return yield* executeCall(call, toolContext, [], [], scope);
           } catch (error) {
             return {interrupted: error instanceof durable.InterruptedError};
           }

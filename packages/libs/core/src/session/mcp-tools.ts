@@ -23,7 +23,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 
 import {isCancellation} from "../errors.js";
 import {abortable, createRefreshingCache} from "../refresh-cache.js";
-import {failed, succeeded, type ToolResult} from "../tool-api/index.js";
+import {failed, succeeded, type ToolResult} from "../tools-api.js";
 import {McpConfigurationError, resolveMcpToken} from "./mcp-config.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";

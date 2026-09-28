@@ -1,9 +1,10 @@
 // What this agent is: the models it runs on, its base instructions and its
 // built-in tools. This is the file to edit to change the agent; the runtime in
 // `session/` and `agent/` reads it and knows no tool by name except the ones
-// it provides itself (searchTools and executeProgram).
+// it provides itself (searchTools and executeProgram) and humanApproval, whose
+// requests it withdraws like a guardrail's.
 //
-// A tool is written with `defineAgentTool` from `tool-api/` and lives in
+// A tool is written with `defineAgentTool` from `tools-api.ts` and lives in
 // `tools/`. Adding one is a new file there and a line in `tools` below. What
 // the model needs to know about using a tool belongs in the tool's own
 // `description` and `instructions`, not in `baseInstructions`: a tool's

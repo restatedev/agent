@@ -5,7 +5,7 @@ import {setTimeout} from "node:timers/promises";
 
 import {z} from "zod";
 
-import {defineAgentTool, toolRun} from "../tool-api/index.js";
+import {defineAgentTool, toolRun} from "../tools-api.js";
 
 export const getWeatherTool = defineAgentTool({
   name: "getWeather",

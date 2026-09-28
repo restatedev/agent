@@ -11,12 +11,14 @@ import type {
   HistoryPage,
   McpServer,
 } from "@restate-agents/types";
-import {AgentSessionDefinition} from "@restate-agents/types/services";
+import {
+  AgentDefinition,
+  AgentSessionDefinition,
+} from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {ModelMessage} from "ai";
 
-import {Agent} from "../agent/index.js";
 import {errorMessage, isCancellation} from "../errors.js";
 import {
   AGENT_SESSION_SIGNALS,
@@ -168,7 +170,7 @@ export const AgentSession = restate.implement(AgentSessionDefinition, {
         // The controller reconciles late steering and interruption before
         // the outcome is recorded in the public transcript.
         reconciled = yield* restate
-          .client(Agent, objectKey())
+          .client(AgentDefinition, objectKey())
           .onTurnEnd(outcome);
       } catch (error) {
         if (error instanceof CancelledError) {
@@ -291,7 +293,7 @@ function* abandonTurn(
     reason: "Turn cancelled",
     consumedSteering: state?.consumedSteering ?? 0,
   };
-  yield* restate.sendClient(Agent, objectKey()).onTurnEnd(outcome);
+  yield* restate.sendClient(AgentDefinition, objectKey()).onTurnEnd(outcome);
   if (state && usesStatefulMcp(state))
     releaseMcpSessionsAfterCancellation(turnId);
   const stopped = state?.pending.cancelAll(error) ?? [];

@@ -21,12 +21,10 @@ import {
   type ToolAvailabilityContext,
   type ToolCompletion,
   type ToolExecution,
-} from "../tool-api/index.js";
+} from "../tools-api.js";
 import {approvalCancelled, HUMAN_APPROVAL_TOOL} from "./approvals.js";
 import {type DiscoveredAgentTool, executeDynamicTool} from "./dynamic-tools.js";
-import type {TurnHistory} from "./history.js";
 import {executeMcpTool, type McpAgentTool} from "./mcp-tools.js";
-import {executeProgramTool} from "./program-tool.js";
 import {toolAllowed} from "./tool-permissions.js";
 import {
   createToolSearch,
@@ -34,7 +32,7 @@ import {
   TOOL_SEARCH_NAME,
 } from "./tool-search.js";
 
-export type {AgentToolContext} from "../tool-api/index.js";
+export type {AgentToolContext} from "../tools-api.js";
 
 /** Initial result of invoking one model-selected tool. */
 export type ToolOutcome = ToolExecution & {call: ToolCall};
@@ -44,14 +42,6 @@ export type PendingEvent = {
   step: number;
   call: ToolCall;
   outcome: ToolCompletion;
-};
-
-/** Step-owned policy and lifecycle hooks used by PTC's nested calls. */
-export type ToolExecutionScope = {
-  transcript: TurnHistory;
-  step: number;
-  guard(call: ToolCall): restate.Operation<string | undefined>;
-  cancelPending(outcome: ToolOutcome): restate.Operation<ToolOutcome>;
 };
 
 /**
@@ -269,10 +259,11 @@ function externalManifest(
 
 /**
  * Why a tool cannot be used in this turn, or undefined when it can. The one
- * rule for both the catalog (manifests) and the dispatcher (execute), so a
- * tool the model cannot see is also one it cannot call.
+ * rule for the catalog (manifests) and the dispatchers (execute here and
+ * executeProgramTool), so a tool the model cannot see is also one it cannot
+ * call.
  */
-function unavailable(
+export function unavailable(
   name: string,
   context: ToolAvailabilityContext,
   discovered: DiscoveredAgentTool[],
@@ -357,27 +348,24 @@ export function modelManifests(
   );
 }
 
-/** Executes a static or dynamically discovered tool inside the active step. */
+/**
+ * Executes a built-in, dynamic or MCP tool. executeProgram is not dispatched
+ * here: the step runs it with executeProgramTool, which calls back into this
+ * function for each of the program's nested calls, and a program cannot run
+ * another program.
+ */
 export function* execute(
   call: ToolCall,
   context: AgentToolContext,
   discovered: DiscoveredAgentTool[],
   mcpTools: McpAgentTool[],
-  scope?: ToolExecutionScope,
 ): restate.Operation<ToolOutcome> {
   const reason = unavailable(call.toolName, context, discovered, mcpTools);
   if (reason) {
     return {call, ...failed(reason)};
   }
   if (call.toolName === PROGRAM_TOOL_NAME) {
-    if (!scope) throw new Error("PTC requires an active tool execution scope");
-    return yield* executeProgramTool(
-      call,
-      context,
-      discovered,
-      mcpTools,
-      scope,
-    );
+    return {call, ...failed(`${PROGRAM_TOOL_NAME} cannot call itself`)};
   }
   const tool = findTool(call.toolName);
   if (tool) {

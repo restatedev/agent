@@ -7,7 +7,7 @@ import {AgentDefinition} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 
 import {approvalSignalName} from "../internal-types.js";
-import type {AgentToolContext} from "../tool-api/index.js";
+import type {AgentToolContext} from "../tools-api.js";
 
 /**
  * The tool that asks a human for approval. Its pending calls are approval

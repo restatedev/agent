@@ -6,6 +6,7 @@ import * as durable from "@restatedev/restate-sdk-gen";
 
 import {Agent} from "../src/agent/service.ts";
 import {subAgentProfile} from "../src/agent/sub-agents.ts";
+import {executeCall} from "../src/session/step.ts";
 import * as agentTools from "../src/session/tools.ts";
 import {context} from "./state-fixture.mjs";
 
@@ -137,7 +138,7 @@ test("misclassified webSearch is recoverable directly and inside PTC without gra
             return ctx.genericCall(opts);
           },
         },
-        agentTools.execute(call, toolContext, [], [], scope),
+        executeCall(call, toolContext, [], [], scope),
       ),
     );
   const failed = await execute({
@@ -540,7 +541,7 @@ test("direct and PTC catalogs expose sub-agent tools and use the trusted Agent c
     f.invoke((ctx) =>
       durable.execute(
         ctx,
-        agentTools.execute(call, toolContext(), [], [], scope(gate)),
+        executeCall(call, toolContext(), [], [], scope(gate)),
       ),
     );
   const direct = await execute({

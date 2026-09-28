@@ -21,7 +21,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import {errorMessage} from "../errors.js";
 import type {ToolCall} from "../model/index.js";
 import {interruptAndJoin, raceBranches} from "../tasks.js";
-import {failed} from "../tool-api/index.js";
+import {failed} from "../tools-api.js";
 import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
 

@@ -4,6 +4,7 @@ import {test} from "node:test";
 import * as durable from "@restatedev/restate-sdk-gen";
 import MiniSearch from "minisearch";
 
+import {executeCall} from "../src/session/step.ts";
 import {createToolSearch} from "../src/session/tool-search.ts";
 import * as tools from "../src/session/tools.ts";
 import {runHandler} from "./harness.mjs";
@@ -157,7 +158,7 @@ test("PTC retains runtime access to permitted tools whose schemas are deferred",
       durable.gen(function* () {
         const state = context();
         tools.modelManifests(dynamic, mcp, state);
-        return yield* tools.execute(
+        return yield* executeCall(
           {
             toolName: "executeProgram",
             toolCallId: "program",

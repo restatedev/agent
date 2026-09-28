@@ -4,7 +4,7 @@
 import {TerminalError} from "@restatedev/restate-sdk";
 import {z} from "zod";
 
-import {defineAgentTool, toolRun} from "../tool-api/index.js";
+import {defineAgentTool, toolRun} from "../tools-api.js";
 
 const SearchResponseSchema = z.object({
   results: z.array(

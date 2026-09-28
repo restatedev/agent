@@ -22,6 +22,7 @@ import type {
   GuardrailApproval,
   ModelResult,
   ProposedAction,
+  ToolCall,
 } from "../model/index.js";
 import {callModel} from "../model/index.js";
 import {PROGRAM_TOOL_NAME} from "../ptc/definition.js";
@@ -31,12 +32,8 @@ import {type GuardrailDecisions, guardAction} from "./guardrails.js";
 import type {TurnHistory} from "./history.js";
 import type {McpAgentTool} from "./mcp-tools.js";
 import type {createPendingOperations} from "./pending.js";
-import type {
-  AgentToolContext,
-  PendingEvent,
-  ToolExecutionScope,
-  ToolOutcome,
-} from "./tools.js";
+import {executeProgramTool, type ToolExecutionScope} from "./program-tool.js";
+import type {AgentToolContext, PendingEvent, ToolOutcome} from "./tools.js";
 import * as agentTools from "./tools.js";
 
 type ToolCallAction = Extract<ModelResult, {type: "tool_calls"}>;
@@ -234,7 +231,7 @@ export function* agentStep({
       ...action.calls.map((call, index) =>
         spawn(
           gen(function* () {
-            const outcome = yield* agentTools.execute(
+            const outcome = yield* executeCall(
               call,
               context,
               discoveredTools,
@@ -380,6 +377,30 @@ export function* settleStep(
 }
 
 class AgentStepInterrupt extends InterruptedError {}
+
+/**
+ * Executes one model-selected call. A program runs here, because its nested
+ * calls need the step's policy gate and pending supervisor; every other tool
+ * goes to the tool dispatcher, which PTC also uses for the nested calls.
+ */
+export function* executeCall(
+  call: ToolCall,
+  context: AgentToolContext,
+  discovered: DiscoveredAgentTool[],
+  mcpTools: McpAgentTool[],
+  scope: ToolExecutionScope,
+): Operation<ToolOutcome> {
+  if (call.toolName === PROGRAM_TOOL_NAME) {
+    return yield* executeProgramTool(
+      call,
+      context,
+      discovered,
+      mcpTools,
+      scope,
+    );
+  }
+  return yield* agentTools.execute(call, context, discovered, mcpTools);
+}
 
 type ToolActivityStatus = Parameters<typeof agentTools.toolActivity>[1];
 

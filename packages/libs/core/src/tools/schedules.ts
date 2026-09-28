@@ -10,12 +10,7 @@ import {AgentDefinition} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
-import {
-  agentCall,
-  defineAgentTool,
-  failed,
-  succeeded,
-} from "../tool-api/index.js";
+import {agentCall, defineAgentTool, failed, succeeded} from "../tools-api.js";
 
 export const createScheduleTool = defineAgentTool({
   name: "createSchedule",

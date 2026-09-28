@@ -6,7 +6,7 @@ import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
 import {awaitApproval, HUMAN_APPROVAL_TOOL} from "../session/approvals.js";
-import {defineAgentTool, failed} from "../tool-api/index.js";
+import {defineAgentTool, failed} from "../tools-api.js";
 
 export const humanApprovalTool = defineAgentTool({
   name: HUMAN_APPROVAL_TOOL,

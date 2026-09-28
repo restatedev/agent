@@ -115,7 +115,7 @@ const exampleTool = defineAgentTool({
 });
 ```
 
-`defineAgentTool` and its helpers are in `src/tool-api/`. They include
+`defineAgentTool` and its helpers are in `src/tools-api.ts`. They include
 `toolRun(name, action, retry)` for a tool whose work is one journaled side
 effect, `agentCall(codes, op)` for calls into the Agent whose rejections the
 model should see, and `toolFailure(name, error)`. All of them rethrow

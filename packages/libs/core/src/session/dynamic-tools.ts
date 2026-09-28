@@ -9,12 +9,7 @@ import {z} from "zod";
 
 import {errorMessage, isCancellation} from "../errors.js";
 import {createRefreshingCache} from "../refresh-cache.js";
-import {
-  failed,
-  succeeded,
-  toolFailure,
-  type ToolResult,
-} from "../tool-api/index.js";
+import {failed, succeeded, toolFailure, type ToolResult} from "../tools-api.js";
 
 const AGENT_TOOL_ANNOTATION = "restate.dev/agent";
 

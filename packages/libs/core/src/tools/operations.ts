@@ -4,7 +4,7 @@
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
-import {defineAgentTool, succeeded} from "../tool-api/index.js";
+import {defineAgentTool, succeeded} from "../tools-api.js";
 
 export const sleepTool = defineAgentTool({
   name: "sleep",

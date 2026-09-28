@@ -157,7 +157,7 @@ The detailed turn-runtime list lives in
 
 | Change | Primary owner |
 | --- | --- |
-| User message routing and turn start/end | `agent/turns.ts` |
+| User message routing and turn start/end | `agent/turns.ts`, `agent/start-turn.ts` |
 | Authorization checks shared by Agent handlers | `agent/guards.ts` |
 | Agent creation and retirement | `agent/lifecycle.ts` |
 | Active turn ID, pending user queue, signal delivery/reconciliation | `agent/active-turn.ts` |
@@ -174,7 +174,7 @@ The detailed turn-runtime list lives in
 | Pending tool tasks and cancellation races | `session/pending.ts` |
 | Models, base instructions, the built-in tool list, PTC switch | `agent-config.ts` |
 | Built-in tool schema and execution | `tools/*.ts` |
-| How to write a tool (`defineAgentTool` and helpers) | `tool-api/index.ts` |
+| How to write a tool (`defineAgentTool` and helpers) | `tools-api.ts` |
 | Tool registry, dispatch, result and transcript projection | `session/tools.ts` |
 | Transcript-to-model projection | `session/context.ts` |
 | Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
@@ -197,7 +197,7 @@ contract.
 
 Read [tools.md](tools.md). Keep name, description, Zod schema, execution, and
 pending completion together in one `tools/*.ts` module, built with
-`defineAgentTool` and the helpers in `tool-api/` (`toolRun`, `agentCall`,
+`defineAgentTool` and the helpers in `tools-api.ts` (`toolRun`, `agentCall`,
 `toolFailure`, which preserve cancellation errors). Add it to `tools` in
 `agent-config.ts`, put its usage guidance in its `instructions`, and add a
 focused test when behavior affects the Agent protocol.

@@ -1,14 +1,88 @@
 // How to write a built-in tool: `defineAgentTool`, the context a tool body
 // receives, and the result helpers every tool uses. The tools themselves live
 // in `src/tools/`, and `src/agent-config.ts` chooses which ones the agent has.
+//
+// ## How a tool runs
+//
+// A turn is one durable Restate invocation (AgentSession.doTurn) made of
+// steps. In each step the model answers with text or with a batch of tool
+// calls. The guardrails check the batch, then every allowed call in it
+// starts at once, as a task of the turn, and the step waits for all of them.
+// (The one exception: if the user steers while an executeProgram program is
+// still running, the step hands the program to the turn as pending work so
+// the new input is not held back; see session/step.ts.) The results go back
+// to the model together as one tool message, and the next step begins.
+//
+// A tool body is durable handler code, not an ordinary async function. It is
+// a generator that yields Restate operations, and after a crash or restart
+// Restate replays it from its journal: operations that already completed
+// return their recorded results instead of running again. So a tool must
+// put every side effect or non-deterministic value (HTTP, clocks, random
+// numbers, the sandbox) inside `restate.run` (or `toolRun` below), or reach
+// it through another Restate handler (`restate.client(...)`). Code between
+// those operations runs again on every replay and must decide the same way.
+//
+// ## `run` and `complete`: foreground and pending tools
+//
+// Every tool has `run`. It is called when the model makes the call, and its
+// result is the call's result: what the model sees at its next step.
+//
+// Most tools are foreground tools: `run` does the work and returns
+// `succeeded` or `failed`. The step waits for it, so a foreground tool should
+// finish in seconds, not minutes. `getWeather`, `webSearch`, the memory and
+// sandbox tools all work this way.
+//
+// Some work takes much longer than a step should wait: a timer, a person's
+// decision. Such a tool is split in two:
+//
+//   1. `run` starts the operation and returns right away with
+//      `{status: "pending", result: {operationId, ...}}`. The model sees that
+//      result at its next step and can keep working: answer the user, call
+//      other tools, or cancel the operation with cancelOperation.
+//   2. `complete` waits for the operation to end. The runtime calls it as a
+//      background task of the turn (session/pending.ts), outside any one
+//      step, and it may take as long as it needs. When it settles, its
+//      result reaches the model as a runtime message before a later step.
+//      A call has only one tool result, and it was already `pending`.
+//
+//   model calls sleep ─> run() ──> {status: "pending", operationId}   (step N)
+//                        complete() ─> durable timer ... fires
+//                        ─> "[Runtime event] Pending tool sleep completed" (step N+k)
+//
+// `complete` gets the same input and the same `toolCallId` as `run`, but no
+// value from it. `run` has returned, and on replay only the journal connects
+// the two. So anything `complete` needs must be derivable from the input and
+// the call ID. `humanApproval` uses the call ID as its approval ID, and
+// `complete` waits on the signal named after it. `sleep` names its timer
+// after it.
+//
+// Pending work is bounded by its turn: the turn does not finish while any is
+// still running. If the turn is interrupted, or the model calls
+// cancelOperation with the operation ID, the runtime interrupts the
+// `complete` task. The call then ends as `cancelled`, which the model is
+// told about like any other completion. `cancelOperation` itself returns the
+// fourth status, `cancel_requested`, which only the runtime acts on.
+//
+// Inside an executeProgram program there is no later step to report to, so
+// a nested pending call is completed inline: the program's `await` resolves
+// only when `complete` does.
+//
+// ## Results and errors
+//
+// A result is a string for the model (JSON when it is structured). Return
+// `failed(...)` for anything the model can react to: bad input, a missing
+// file, a rejected request. Throw only for what the model cannot fix. The
+// helpers below turn unexpected errors into `failed` and always rethrow
+// cancellation, so an interrupted turn stops instead of reporting a failed
+// tool. A tool may also return `transcript` entries, events added to the
+// public conversation history (memory changes, approval requests).
 
 import type {AgentTools, ConversationEntry} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {z} from "zod";
 
-import {errorMessage, isCancellation, isRejection} from "../errors.js";
-import type {TurnSandbox} from "../sandbox/index.js";
-import type {TurnToolSearch} from "../session/tool-search.js";
+import {errorMessage, isCancellation, isRejection} from "./errors.js";
+import type {TurnSandbox} from "./sandbox/index.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
 type Succeeded = {status: "succeeded"; result: string};
@@ -31,6 +105,16 @@ export type ToolCompletion = (
   | {status: "cancelled"; reason: string}
 ) &
   ToolTranscript;
+
+/**
+ * The turn's search over its permitted catalog. Only the runtime's own
+ * searchTools uses it; it is created lazily by the dispatcher.
+ */
+export type TurnToolSearch = {
+  loaded: Set<string>;
+  search(query: string): string[];
+  load(names: string[]): {name: string; description: string}[];
+};
 
 /** Agent- and turn-scoped capabilities passed to tool definitions. */
 export type AgentToolContext = {
@@ -142,10 +226,21 @@ export function defineAgentTool<Schema extends z.ZodType>(definition: {
    * Permissions are checked separately; this is for the tool's own switches.
    */
   unavailable?(context: ToolAvailabilityContext): string | undefined;
+  /**
+   * Runs when the model makes the call; its result is the call's result. A
+   * foreground tool does its work here. A pending tool only starts it and
+   * returns `{status: "pending"}`. See "run and complete" at the top.
+   */
   run(
     input: z.output<Schema>,
     context: ToolCallContext,
   ): restate.Operation<ToolExecution>;
+  /**
+   * Only for pending tools: waits, as a background task of the turn, for the
+   * operation `run` started, with the same input and toolCallId. Its result
+   * reaches the model as a runtime message. An interrupted or cancelled
+   * operation interrupts this task.
+   */
   complete?(
     input: z.output<Schema>,
     context: ToolCallContext,

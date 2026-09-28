@@ -3,6 +3,7 @@
 // It knows nothing about conversation history, which AgentSession owns.
 
 import type {AgentTools, ConversationEntry} from "@restate-agents/types";
+import {AgentSessionDefinition} from "@restate-agents/types/services";
 import {TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
 
@@ -12,7 +13,6 @@ import {
   type AgentTurnOutcome,
   type AgentTurnRequest,
 } from "../internal-types.js";
-import {AgentSession} from "../session/index.js";
 import {listState, objectKey} from "../state.js";
 
 type ActiveTurn = {
@@ -64,7 +64,7 @@ export function* accepting(turnId: string): restate.Operation<boolean> {
  */
 export function* start(request: AgentTurnRequest): restate.Operation<string> {
   const started = yield* restate
-    .sendClient(AgentSession, objectKey())
+    .sendClient(AgentSessionDefinition, objectKey())
     .doTurn(request);
   restate.state().set("turn", {
     id: started.id,
