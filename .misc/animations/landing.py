@@ -1,4 +1,4 @@
-"""Generate the proposed README's three CSS-only motion studies.
+"""Generate the README's three CSS-only animations.
 
 Usage: python3 .misc/animations/landing.py [output-directory]
 The desktop and mobile compositions are deliberately different: text remains

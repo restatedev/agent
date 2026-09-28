@@ -7,13 +7,33 @@ the generator and regenerate.
 This file is written for whoever changes them next, human or Claude. Read it
 fully before touching an animation.
 
-## What exists
+## Landing-page animations
 
-| SVG | Generator | Used in README section | Behaviour it shows (check against this code) |
+[The README](../../README.md) uses three focused animations from `landing.py`.
+
+| SVG | What it shows | Check against |
+| --- | --- | --- |
+| `landing-control.svg` | The controller acknowledges steering while the turn preserves current tool work | `agent/active-turn.ts`, `session/steering.ts` |
+| `landing-recovery.svg` | Recorded model/tool results survive a process restart and are reused | `session/service.ts`, Restate replay |
+| `landing-context.svg` | Background conversation summarization keeps the full log and recent exchanges intact | `session/history.ts` |
+
+Each has a `-mobile.svg` composition, selected by a `<picture>` element in the
+README. Both compositions support dark appearance and reduced motion.
+Their 15-second cycle has three beats; inspect 1.5, 7, and 12.5 seconds.
+Each also has a `-still.svg` final state selected explicitly for reduced motion.
+Regenerate all twelve with `python3 .misc/animations/landing.py`. See
+[design notes](../../docs/readme-design-notes.md) for the visual rationale.
+
+## Reference diagrams
+
+These detailed diagrams remain in `docs/images/` for reference. The landing
+page uses the three animations above.
+
+| SVG | Generator | Topic | Behaviour it shows (check against this code) |
 | --- | --- | --- | --- |
 | `durable-turn.svg` | `hero.py` | Durable by construction | Journal replay after a crash (`session/service.ts`, Restate replay) |
 | `in-process.svg` | `timeline.py` → `in-process` | How a turn works | Model calls and tools run in-process in `doTurn`; results stream to the journal (`session/step.ts`) |
-| `steer-interrupt.svg` | `timeline.py` → `steer-interrupt` | top of the page | Controller answers at once; interrupt ends with a summary (`agent/active-turn.ts`) |
+| `steer-interrupt.svg` | `timeline.py` → `steer-interrupt` | Steering and interrupts | Controller answers at once; interrupt ends with a summary (`agent/active-turn.ts`) |
 | `durable-wait.svg` | `timeline.py` → `durable-wait` | Human approval | Guardrail approval, suspended turn (`session/guardrails.ts`, `agent/approvals.ts`) |
 | `sub-agents.svg` | `timeline.py` → `sub-agents` | Delegate to sub-agents | `createSubAgent` waits durably, parallel children, parent keeps answering (`tools/sub-agents.ts`) |
 | `programmatic-tool-calls.svg` | `timeline.py` → `programmatic-tool-calls` | Programmatic tool calls | QuickJS program, guardrails per call, compact result (`ptc/runtime.ts`) |
@@ -29,29 +49,12 @@ the code in the last column changes (a threshold, a handler becoming shared or
 exclusive, how steering is consumed), update the animation and its README
 caption in the same change. Before adding a claim, find it in the code.
 
-## Proposed landing-page animations
-
-[The README design study](../../README.design.md) uses three additional animations
-from `landing.py`. The existing main README still uses the diagrams above.
-
-| SVG | What it shows |
-| --- | --- |
-| `landing-control.svg` | The controller acknowledges steering while the turn preserves current tool work |
-| `landing-recovery.svg` | Recorded model/tool results survive a process restart and are reused |
-| `landing-context.svg` | Background conversation summarization keeps the full log and recent exchanges intact |
-
-Each has a `-mobile.svg` composition, selected by a `<picture>` element in the
-proposed README. Both compositions support dark appearance and reduced motion.
-Their 15-second cycle has three beats; inspect 1.5, 7, and 12.5 seconds.
-Each also has a `-still.svg` final state selected explicitly for reduced motion.
-Regenerate all twelve with `python3 .misc/animations/landing.py`. See
-[design notes](../../docs/readme-design-notes.md) for the visual rationale.
-
 ## Regenerate
 
 From the repository root:
 
 ```sh
+python3 .misc/animations/landing.py                 # all twelve README assets
 python3 .misc/animations/hero.py                    # docs/images/durable-turn.svg
 python3 .misc/animations/timeline.py                # every timeline animation
 python3 .misc/animations/timeline.py docs/images steering compaction   # only some
@@ -67,24 +70,28 @@ You cannot see an animation by reading the SVG. Render frames and look at
 them, in both themes, at several points in the loop:
 
 ```sh
-python3 .misc/animations/render_frames.py docs/images/steer-interrupt.svg /tmp/frames 3 6.5 14.5
+python3 .misc/animations/render_frames.py docs/images/landing-control.svg /tmp/frames 1.5 7 12.5
 ```
 
 The arguments after the output directory are seconds into the loop. The
 script writes `<name>-light-<t>.png` and `<name>-dark-<t>.png` using headless
 Chrome (set `CHROME=/path/to/chrome` if it is not in the macOS default
-location). Pick times that show each caption phase, plus the last frame
-(about 14.5s of a 16s loop, when everything is visible). To catch a moving
-element (a packet, the replay cursor), convert its percentage to seconds:
+location). The landing-page animations use a 15-second loop: inspect 1.5, 7,
+and 12.5s.
+For the reference timelines, inspect each caption phase and the final frame
+(about 14.5s of their 16-second loop, when everything is visible). To catch
+a moving element (a packet, the replay cursor), convert its percentage to seconds:
 `t = percent / 100 * loop_seconds`.
 
 Look for: overlapping chips, labels running into bars, anything past the
-right edge of a lane (x ≈ 984), and captions longer than the width.
+canvas, and captions longer than the width. The landing-page canvases are
+800px on desktop and 380px on mobile; the reference timeline lane ends near
+x = 984.
 
-For the README's mermaid sequence diagram:
+For the architecture guide's mermaid sequence diagram:
 
 ```sh
-awk '/```mermaid/{f=1;next}/```/{f=0}f' README.md > /tmp/seq.mmd
+awk '/```mermaid/{f=1;next}/```/{f=0}f' docs/architecture.md > /tmp/seq.mmd
 npx -y @mermaid-js/mermaid-cli@11 -i /tmp/seq.mmd -o /tmp/seq.png -w 1200
 ```
 
@@ -93,6 +100,13 @@ npx -y @mermaid-js/mermaid-cli@11 -i /tmp/seq.mmd -o /tmp/seq.png -w 1200
 They are plain SVG with an inline `<style>`: CSS `@keyframes`, no JavaScript,
 no external fonts or images. GitHub renders README images with `<img>`, which
 allows CSS animation but no scripts or external resources, so keep it that way.
+
+`landing.py` keeps the layout fixed while cycling through three phases. It
+uses `--accent` for active work and `--good` for acknowledged or recorded
+results. Its base styles show the final phase, and explicit still assets
+disable animation for reduced-motion sources.
+
+The reference diagrams use the following helpers:
 
 - **One clock.** Every animated element loops over the same duration
   (`seconds`, usually 16) with `linear infinite`, and its keyframes are in
@@ -153,21 +167,23 @@ unique class with `a.fresh("e")`, and give it keyframes with `a.appear_at`,
 
 ## Editing an animation
 
-1. Change the generator function (labels, percentages, widths).
-2. Regenerate only that one: `python3 .misc/animations/timeline.py docs/images <name>`.
+1. Change the appropriate generator function (labels, percentages, widths).
+2. For landing-page assets, run `python3 .misc/animations/landing.py`. For a
+   reference timeline, run `python3 .misc/animations/timeline.py docs/images <name>`.
 3. Render frames in both themes and look at them.
 4. If the story changed, update the README caption next to the image and
-   its alt text (the `![...]` text), and the `aria-label` in `a.write`.
+   its image alt text, and the SVG title/description or `aria-label`.
 
-Keep captions to one line at 15px (about 95 characters for a 1000px-wide
-SVG). Keep each chip's text within its width: bold 12.5px is about 7px per
-character, plus 14px of left padding for the stripe.
+For reference timelines, keep captions to one line at 15px (about 95
+characters for a 1000px-wide SVG). Keep each chip's text within its width:
+bold 12.5px is about 7px per character, plus 14px of left padding for the stripe.
 
 ## Adding an animation
 
 1. Confirm the behaviour in the code and note where it lives.
-2. Write a generator function in `timeline.py`, copying the closest existing
-   one, and register it in `ANIMATIONS` at the bottom.
+2. For a reference timeline, add a generator function in `timeline.py` and
+   register it in `ANIMATIONS`. For the landing page, use `landing.py` and
+   include desktop, mobile, and still compositions.
 3. Use three caption phases: the setup, the interesting moment, the payoff.
 4. Generate, render at each phase and the final frame, fix overlaps.
 5. Add it to the README next to the text it explains, with alt text

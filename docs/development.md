@@ -33,7 +33,7 @@ pnpm install
 
 ## Start the stack
 
-Follow [the root quickstart](../README.md#quickstart) to start a fresh private
+Follow [the root quickstart](../README.md#run-it-locally) to start a fresh private
 Restate server, the core endpoint, and the optional localhost UI.
 
 The core listens on 9080; Restate ingress is normally 8080 and its Admin API/UI
