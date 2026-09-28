@@ -14,8 +14,9 @@ The code is written to be read.
 **Context management**
 
 - **Compaction.** Long conversations are summarized in the background into a
-  checkpoint that later turns build on. The conversation log itself is never
-  rewritten, and compaction does not block a running turn.
+  checkpoint that later turns build on. The most recent exchanges stay out of
+  the summary, so the model always sees them verbatim. The conversation log
+  itself is never rewritten, and compaction does not block a running turn.
 - **Tool search.** Built-in tools are always visible. MCP and discovered tools
   are loaded on demand through `searchTools`, so large catalogs do not fill the
   context window.
