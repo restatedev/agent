@@ -1,25 +1,182 @@
-# Durable agents on Restate
+# A reference agent architecture
 
-**An LLM agent that survives crashes, deploys and days-long waits, without a
-database, queue or scheduler of its own.**
+**A complete LLM agent in readable TypeScript: steering, sub-agents,
+programmatic tool calls, background compaction, guardrails and human
+approval, built on [Restate](https://restate.dev).**
 
-This is a reference implementation of a modern agent harness on
-[Restate](https://restate.dev): context compaction, parallel and programmatic
-tool calls, steering, guardrails, human approval, memory, sub-agents and
-schedules. Every model call, tool call, wait and message is journaled, so a
-turn that is interrupted halfway resumes where it stopped. The code is written
-to be read.
+This repository shows how a modern agent fits together. A controller answers
+every message at once, a turn loop runs the model and its tools, and the
+features today's agents need sit on top as small modules you can read in one
+sitting: steering and interrupts, parallel and programmatic tool calls,
+sub-agents, context compaction, guardrails, memory, tool search, sandboxes
+and schedules.
 
+[Features](#features) · [Durable by construction](#durable-by-construction) ·
 [Quickstart](#quickstart) · [How a turn works](#how-a-turn-works) ·
-[Features](#features) · [Documentation](docs/README.md)
+[Documentation](docs/README.md)
+
+![Animation: while a turn runs tools in parallel, the client steers it and the
+controller answers at once; an interrupt later cancels the remaining tool and
+the turn ends with a summary](docs/images/steer-interrupt.svg)
+
+## Features
+
+Paths are relative to `packages/libs/core/src`.
+
+### Steer or interrupt a running turn
+
+A message sent to a busy agent is queued for the next turn, steered into the
+running one, or used to interrupt it. The controller answers each of them at
+once. Steering reaches the next model step without cancelling tools in
+flight; an interrupt cancels unfinished work and ends with a summary.
+
+When a steer arrives while tools run, quick tools finish and a long-running
+program moves to the background, so the new input reaches the next model
+step without waiting for it. A steer that arrives while the model is writing
+its answer makes that answer stale, and a new model step over every steer
+replaces it. Messages queued in the meantime go along with the steer.
+
+![Animation: a steer arrives while a search and a long program run; the search
+finishes, the program is handed off to the background and the next step sees
+the steer; a second steer replaces a draft answer](docs/images/steering.svg)
+
+Read `agent/active-turn.ts`, `session/steering.ts` and `session/step.ts`.
+
+### Parallel tool calls
+
+All tool calls in one model response run concurrently, after the guardrails
+check them as one batch. A call that fails is reported to the model as an
+error, without discarding the results of the others, and the next model step
+decides what to do about it.
+
+![Animation: one model step proposes three tool calls; the guardrails allow
+the batch in one check; the calls run concurrently, one fails and is reported
+as an error while the others finish; the next model step sees both results
+and the error](docs/images/parallel-tool-calls.svg)
+
+Read `session/step.ts`.
+
+### Background operations you can cancel
+
+Some tools outlive the model step that called them: a durable timer
+(`sleep`), a request for human approval, or a program handed off by a steer.
+They return a `pending` result at once, so the model keeps working while they
+run. It can answer and let the turn wait for them, or cancel one with
+`cancelOperation`. Each completion reaches the model as a message before its
+next step, and the turn finishes only when nothing is pending.
+
+![Animation: the model starts a human approval request and a durable timer;
+both return pending at once and run in the background; steered to stop, the
+model cancels the approval with cancelOperation; the timer completes and the
+turn replies](docs/images/background-operations.svg)
+
+Read `session/pending.ts` and `tools/operations.ts`.
+
+### Programmatic tool calls
+
+For work that needs many calls, the model writes a small JavaScript program
+instead of asking for one tool at a time. It runs in a sandboxed QuickJS
+guest, every call it makes passes the same guardrails, and only its compact
+result goes back into the model's context.
+
+![Animation: the model writes a program that calls getWeather for four cities
+in parallel inside a QuickJS guest; only the compact result returns to the
+model](docs/images/programmatic-tool-calls.svg)
+
+Read `ptc/runtime.ts`.
+
+### Delegate to sub-agents
+
+The agent creates sub-agents with their own history, sandbox and memory, and
+hands them tasks in parallel. The parent turn waits for their answers
+without holding its controller, so the agent keeps answering meanwhile.
+
+![Animation: a parent turn creates two sub-agents that work in parallel; a new
+message is queued meanwhile; the answers return as tool results and the
+queued message starts the next turn](docs/images/sub-agents.svg)
+
+Read `agent/sub-agents.ts` and `tools/sub-agents.ts`.
+
+### Compaction in the background
+
+Long conversations are summarized after a turn into a checkpoint that later
+turns build on. The most recent exchanges stay out of the summary, so the
+model always sees them verbatim, and the log itself is never rewritten: the
+model's context is built from the log, not stored in place of it.
+
+![Animation: after a turn the older messages are summarized while the 8 most
+recent stay verbatim; the log keeps growing and the model sees the summary
+plus recent messages](docs/images/compaction.svg)
+
+Compaction never blocks a turn. The ending turn reserves the older messages
+and sends `compact()` one way. That is a shared handler, so the summary is
+written next to the next turn rather than before it. The result is applied
+between turns, and only if the reserved range still matches.
+
+![Animation: turn 1 reserves messages for compaction; turn 2 starts at once
+while a shared compact handler summarizes them; the summary is applied between
+turns and turn 3 uses it](docs/images/async-compaction.svg)
+
+Read `session/history.ts`, `session/service.ts` and `model/compactor.ts`.
+
+### Guardrails
+
+Guardrails are rules in plain language ("never send email without asking").
+Before an answer is sent or a tool batch runs, a policy model checks it
+against them and allows it, blocks it with a reason the model sees, or asks
+a person to approve. Each call inside a program is checked the same way.
+
+Read `session/guardrails.ts`.
+
+### Human approval
+
+A person is asked to approve when a guardrail requires it, or when the model
+calls `humanApproval` itself. The request is listed on the agent
+(`Agent/<id>/approvals`) and in the UI, and the decision
+(`resolveApproval`) reaches the waiting turn as a signal. The turn can wait
+for days: it holds no process, survives redeploys, and resumes exactly where
+it stopped.
+
+![Animation: a guardrail requires approval; the turn suspends for about a day
+and survives a redeploy; when a person approves, the turn resumes and
+finishes](docs/images/durable-wait.svg)
+
+Read `session/approvals.ts`, `agent/approvals.ts` and `tools/approval.ts`.
+
+### Schedules
+
+A schedule delivers a message to the agent later, once or on a recurrence,
+and starts a turn like any other message. The agent sets them up with a
+tool, and there is no cron or separate scheduler to run.
+
+![Animation: a daily schedule fires and starts a turn; one firing comes due
+while the service is down and is delivered once it is
+back](docs/images/schedules.svg)
+
+Read `agent/schedules.ts` and `tools/schedules.ts`.
+
+### And the rest
+
+| Feature | What it does | Read |
+| --- | --- | --- |
+| **Tool search** | Built-ins are always visible. MCP and discovered tools load on demand through `searchTools`, so large catalogs do not fill the context. | `session/tool-search.ts` |
+| **Memory** | An index of short descriptions the model searches, reads from and writes to, so context does not grow with the number of memories. A simple illustration, not a full memory system. | `agent/memories.ts` |
+| **Sandbox** | A local directory or [Modal](https://modal.com) sandbox for files and shell commands, suspended between turns. | `sandbox/turn.ts` |
+| **Extensible tools** | A tool is one module plus a line in `agent-config.ts`. MCP servers and any Restate handler published with `restate.dev/agent: <tool-name>` metadata work too. | `tools-api.ts` |
+| **Output recovery** | A truncated model response gets one retry with a larger output budget instead of failing the turn. | `model/inference.ts` |
+
+## Durable by construction
+
+Agents run for minutes, wait for people for days, and get redeployed in the
+middle of both. Here that is handled underneath every feature above rather
+than by each of them: every model call, tool result, wait and message is
+recorded in Restate as the turn runs.
 
 ![Animation: a turn journals a model call and three tool results, the process
 crashes, and after restart Restate replays the journal, reuses every recorded
 result and the turn finishes](docs/images/durable-turn.svg)
 
-## Why durable
-
-- **Crash-proof turns.** After a crash or deploy, Restate replays the turn's
+- **Crashes and deploys resume the turn.** Restate replays the turn's
   journal. Recorded model responses and tool results are reused, so the model
   is never asked to repeat a decision and completed tool calls are not re-run.
 - **Waiting is free.** A turn can wait hours or days for an approval, a timer
@@ -27,9 +184,13 @@ result and the turn finishes](docs/images/durable-turn.svg)
 - **Always responsive.** `ask`, `steer` and `interrupt` return right away,
   even while a turn runs for minutes.
 - **Nothing else to operate.** State, messages, timers and notifications all
-  live in Restate. Each agent's state has a single owner, so there are no
-  locks. The service is stateless: it scales out, or builds into a single
-  bundle for serverless.
+  live in Restate: no database, queue or scheduler of the agent's own. Each
+  agent's state has a single owner, so there are no locks. The service is
+  stateless: it scales out, or builds into a single bundle for serverless.
+
+**What replay does not do:** make external side effects exactly-once. A crash
+between an MCP call completing and its result being recorded can repeat that
+call.
 
 ## Quickstart
 
@@ -140,122 +301,6 @@ order](docs/images/in-process.svg)
 
 ![Layers: agent features built on a durable agent runtime of two Virtual
 Objects, on top of Restate](docs/images/layers.svg)
-
-## Features
-
-Paths are relative to `packages/libs/core/src`.
-
-### Steer or interrupt a running turn
-
-A message sent to a busy agent is queued for the next turn, steered into the
-running one, or used to interrupt it. The controller answers each of them at
-once. Steering reaches the next model step without cancelling tools in
-flight; an interrupt cancels unfinished work and ends with a summary.
-
-![Animation: while a turn runs tools in parallel, the client steers it and the
-controller answers at once; an interrupt later cancels the remaining tool and
-the turn ends with a summary](docs/images/steer-interrupt.svg)
-
-A closer look at steering: when a steer arrives while tools run, quick tools
-finish and a long-running program moves to the background, so the new input
-reaches the next model step without waiting for it. A steer that arrives
-while the model is writing its answer makes that answer stale, and a new
-model step over every steer replaces it. Messages queued in the meantime go
-along with the steer.
-
-![Animation: a steer arrives while a search and a long program run; the search
-finishes, the program is handed off to the background and the next step sees
-the steer; a second steer replaces a draft answer](docs/images/steering.svg)
-
-Read `agent/active-turn.ts` and `session/step.ts`.
-
-### Wait for a person, for days
-
-A policy model checks each answer and tool batch against the agent's
-guardrails. A guardrail can require a person's approval. The turn then waits
-durably: it holds no process, survives redeploys, and resumes exactly where
-it stopped.
-
-![Animation: a guardrail requires approval; the turn suspends for about a day
-and survives a redeploy; when a person approves, the turn resumes and
-finishes](docs/images/durable-wait.svg)
-
-Read `session/guardrails.ts` and `agent/approvals.ts`.
-
-### Delegate to sub-agents
-
-The agent creates sub-agents with their own history, sandbox and memory, and
-hands them tasks in parallel. The parent turn waits durably without holding
-its controller, so the agent keeps answering meanwhile.
-
-![Animation: a parent turn creates two sub-agents that work in parallel; a new
-message is queued meanwhile; the answers return as tool results and the
-queued message starts the next turn](docs/images/sub-agents.svg)
-
-Read `agent/sub-agents.ts` and `tools/sub-agents.ts`.
-
-### Programmatic tool calls
-
-For work that needs many calls, the model writes a small JavaScript program
-instead of asking for one tool at a time. It runs in a sandboxed QuickJS
-guest, every call it makes passes the same guardrails and is journaled, and
-only its compact result goes back into the model's context.
-
-![Animation: the model writes a program that calls getWeather for four cities
-in parallel inside a QuickJS guest; only the compact result returns to the
-model](docs/images/programmatic-tool-calls.svg)
-
-Read `ptc/runtime.ts`.
-
-### Compaction
-
-Long conversations are summarized in the background, after a turn, into a
-checkpoint that later turns build on. The most recent exchanges stay out of
-the summary, so the model always sees them verbatim, and the log itself is
-never rewritten.
-
-![Animation: after a turn the older messages are summarized while the 8 most
-recent stay verbatim; the log keeps growing and the model sees the summary
-plus recent messages](docs/images/compaction.svg)
-
-Compaction never blocks a turn. The ending turn reserves the older messages
-and sends `compact()` one way. That is a shared handler, so the summary is
-written next to the next turn rather than before it. The result is applied
-between turns, and only if the reserved range still matches.
-
-![Animation: turn 1 reserves messages for compaction; turn 2 starts at once
-while a shared compact handler summarizes them; the summary is applied between
-turns and turn 3 uses it](docs/images/async-compaction.svg)
-
-Read `session/history.ts`, `session/service.ts` and `model/compactor.ts`.
-
-### Schedules
-
-A schedule delivers a message to the agent later, once or on a recurrence.
-Its timers live in Restate, so there is no cron and no separate scheduler,
-and a firing that comes due during a deploy is delivered afterwards.
-
-![Animation: a daily schedule fires and starts a turn; one firing comes due
-while the service is down and is delivered once it is
-back](docs/images/schedules.svg)
-
-Read `agent/schedules.ts`.
-
-### And the rest
-
-| Feature | What it does | Read |
-| --- | --- | --- |
-| **Parallel tool calls** | All tool calls in one model response run concurrently. A failing call is reported to the model without discarding the others. | `session/step.ts` |
-| **Background operations** | Timers, approvals, sub-agent tasks and long programs keep running across model steps. The model can wait for them, carry on, or cancel one. | `session/pending.ts` |
-| **Tool search** | Built-ins are always visible. MCP and discovered tools load on demand through `searchTools`, so large catalogs do not fill the context. | `session/tool-search.ts` |
-| **Memory** | An index of short descriptions the model searches, reads from and writes to, so context does not grow with the number of memories. A simple illustration, not a full memory system. | `agent/memories.ts` |
-| **Sandbox** | A local directory or [Modal](https://modal.com) sandbox for files and shell commands, suspended between turns. | `sandbox/turn.ts` |
-| **Extensible tools** | MCP servers, plus any Restate handler published with `restate.dev/agent: <tool-name>` metadata. | `session/dynamic-tools.ts` |
-| **Output recovery** | A truncated model response gets one retry with a larger output budget instead of failing the turn. | `model/inference.ts` |
-
-**What replay does not do:** make external side effects exactly-once. A crash
-between an MCP call completing and its result being recorded can repeat that
-call.
 
 ## Configuration
 
