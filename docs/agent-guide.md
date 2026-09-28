@@ -23,6 +23,11 @@ guide are relative to `packages/libs/core`.
    - validation: [development](development.md).
 5. State the behavior you intend to preserve before refactoring control flow.
 
+The `restate-agent` skill in `plugins/restate-agent/skills` is the short
+version of this guide for extending the agent. It covers tools, handlers
+and testing, and how to grow the agent into an app with users. When you
+change an extension point it describes, update it too.
+
 ## Source-of-truth order
 
 Use executable contracts before prose:

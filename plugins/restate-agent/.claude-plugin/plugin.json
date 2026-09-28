@@ -1,0 +1,13 @@
+{
+  "name": "restate-agent",
+  "version": "0.0.1",
+  "description": "Extend the Restate reference agent: tools, handlers, and growing it into a full application, with the generator SDK skill it builds on.",
+  "author": {
+    "name": "Restate"
+  },
+  "homepage": "https://restate.dev",
+  "repository": "https://github.com/restatedev/agent",
+  "keywords": ["restate", "durable-execution", "ai-agents", "generators"],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/"
+}

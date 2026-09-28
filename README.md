@@ -248,6 +248,26 @@ order](docs/images/in-process.svg)
 
 [The documentation index](docs/README.md) has the full list.
 
+### Skills for coding agents
+
+[`plugins/restate-agent`](plugins/restate-agent) has two skills:
+- `restate-agent`: how to extend this agent. It covers tools, handlers,
+  configuration and testing, and how to grow the agent into a full
+  application with users, sessions and credentials.
+- `restate-gen-sdk`: how to write the generator-SDK code the agent is built
+  from.
+
+The plugin also connects the Restate docs MCP server. Claude Code offers to
+install it when you open this repository. You can also install it by hand:
+
+```sh
+# Claude Code
+/plugin marketplace add restatedev/agent
+/plugin install restate-agent@restate-agent
+# Other coding agents
+npx skills add restatedev/agent
+```
+
 ## Quickstart
 
 You need Node.js 22+, pnpm, the Restate server and CLI, and an OpenAI API key.

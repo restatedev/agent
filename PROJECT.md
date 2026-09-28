@@ -74,3 +74,6 @@ topics on subsequent polls.
 - `packages/apps/web/test`: snapshot loading, pagination, merging and the
   request guard.
 - `docs/agent-guide.md`: invariants for maintainers and coding agents.
+- `plugins/restate-agent/skills`: coding-agent skills for extending the
+  agent (`restate-agent`) and for the generator SDK (`restate-gen-sdk`).
+  Update them when an extension point they describe changes.

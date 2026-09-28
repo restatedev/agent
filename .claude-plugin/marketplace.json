@@ -1,0 +1,15 @@
+{
+  "name": "restate-agent",
+  "metadata": {
+    "description": "Skills for extending the Restate reference agent and building with Restate's generator SDK"
+  },
+  "owner": {
+    "name": "Restate"
+  },
+  "plugins": [
+    {
+      "name": "restate-agent",
+      "source": "./plugins/restate-agent"
+    }
+  ]
+}

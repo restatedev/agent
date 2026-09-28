@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "restate-agent": {
+      "source": {
+        "source": "github",
+        "repo": "restatedev/agent"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "restate-agent@restate-agent": true
+  }
+}
