@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="350" viewBox="0 0 800 350" role="img" aria-labelledby="title desc"><title id="title">A smaller context, an intact history</title><desc id="desc">The conversation log stays append-only. Older exchanges become a background summary; eight recent exchanges remain verbatim in the model context. In-turn context compaction is a separate, blocking operation.</desc><style>
+:root { --bg:#ffffff; --ink:#242329; --muted:#66616f; --line:#ddd9e4; --surface:#f7f5fa; --paper:#ffffff; --accent:#6b49c8; --accent-soft:#f0eafa; --good:#177c67; --good-soft:#eaf6f1; --warn:#9a5b16; --warn-soft:#fff3e1; }
+@media(prefers-color-scheme:dark) { :root { --bg:#0d1117; --ink:#eceaf1; --muted:#aaa5b5; --line:#35333f; --surface:#181920; --paper:#11151c; --accent:#b7a0ff; --accent-soft:#272038; --good:#75d8ba; --good-soft:#132b25; --warn:#edc084; --warn-soft:#33291c; } }
+svg { background:var(--bg); }
+text { fill:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; font-size:18px; font-weight:400; }
+.label { font-size:12px; font-weight:600; letter-spacing:1.6px; fill:var(--muted); }
+.small { font-size:15px; fill:var(--muted); }
+.name { font-size:20px; font-weight:600; letter-spacing:-.4px; }
+.mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:14px; fill:var(--muted); }
+.box { fill:var(--paper); stroke:var(--line); stroke-width:1; }
+.surface { fill:var(--surface); stroke:var(--line); stroke-width:1; }
+.accent-box { fill:var(--accent-soft); stroke:var(--accent); stroke-width:1; }
+.good-box { fill:var(--good-soft); stroke:none; }
+.warn-box { fill:var(--warn-soft); stroke:none; }
+.accent { fill:var(--accent); } .good { fill:var(--good); } .warn { fill:var(--warn); }
+.wire { fill:none; stroke:var(--line); stroke-width:1.6; }
+.signal { fill:none; stroke:var(--accent); stroke-width:2; }
+.trace { fill:none; stroke:var(--accent); stroke-width:3; stroke-linecap:round; stroke-dasharray:8 100; stroke-dashoffset:108; }
+.tick { fill:none; stroke:var(--good); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.phase-1,.phase-2 { opacity:0; } .phase-3 { opacity:1; }
+.compact { opacity:0; }
+@media(prefers-reduced-motion:no-preference) {
+ .phase-1 { animation:phase-one 15s linear infinite; }
+ .phase-2 { animation:phase-two 15s linear infinite; }
+ .phase-3 { animation:phase-three 15s linear infinite; }
+ .send { animation:send 15s linear infinite; }
+ .receive { animation:receive 15s linear infinite; }
+ .signal-flow { animation:signal-flow 15s linear infinite; }
+ .work { transform-box:fill-box; transform-origin:left center; animation:work 15s linear infinite; }
+ .record { animation:record 15s linear infinite; }
+ .compact { transform-box:fill-box; transform-origin:left center; animation:compact 15s ease-in-out infinite; }
+ .show-summary { animation:show-summary 15s ease-in-out infinite; }
+}
+@keyframes phase-one { 0%,27%{opacity:1} 29%,97%{opacity:0} 100%{opacity:1} }
+@keyframes phase-two { 0%,29%{opacity:0} 31%,60%{opacity:1} 62%,100%{opacity:0} }
+@keyframes phase-three { 0%,62%{opacity:0} 64%,95%{opacity:1} 97%,100%{opacity:0} }
+@keyframes send { 0%,6%{stroke-dashoffset:108;opacity:0} 7%{opacity:1} 17%{stroke-dashoffset:0;opacity:1} 18%,100%{opacity:0} }
+@keyframes receive { 0%,17%{stroke-dashoffset:108;opacity:0} 18%{opacity:1} 27%{stroke-dashoffset:0;opacity:1} 28%,100%{opacity:0} }
+@keyframes signal-flow { 0%,35%{stroke-dashoffset:108;opacity:0} 36%{opacity:1} 52%{stroke-dashoffset:0;opacity:1} 53%,100%{opacity:0} }
+@keyframes work { 0%,18%{transform:scaleX(.12)} 58%,95%{transform:scaleX(1)} 100%{transform:scaleX(.12)} }
+@keyframes record { 0%,5%{opacity:.25} 20%,100%{opacity:1} }
+@keyframes compact { 0%,28%{transform:scaleX(1);opacity:1} 48%,95%{transform:scaleX(.2);opacity:0} 98%,100%{transform:scaleX(1);opacity:1} }
+@keyframes show-summary { 0%,38%{opacity:0} 49%,95%{opacity:1} 98%,100%{opacity:0} }
+svg * { animation:none!important; }</style>
+<text x="32" y="31" class="label" text-anchor="start">THE AGENT, IN MOTION</text>
+<g class="phase-1">
+<text x="768" y="31" class="mono" text-anchor="end">01 / Accumulate</text>
+</g>
+<g class="phase-2">
+<text x="768" y="31" class="mono" text-anchor="end">02 / Summarize</text>
+</g>
+<g class="phase-3">
+<text x="768" y="31" class="mono" text-anchor="end">03 / Reuse</text>
+</g>
+<text x="32" y="83" class="label" text-anchor="start">CONVERSATION LOG</text>
+<text x="768" y="83" class="mono" text-anchor="end">append-only</text>
+<rect x="32" y="102" width="34" height="36" rx="5" class="surface"/>
+<rect x="78" y="102" width="34" height="36" rx="5" class="surface"/>
+<rect x="124" y="102" width="34" height="36" rx="5" class="surface"/>
+<rect x="170" y="102" width="34" height="36" rx="5" class="surface"/>
+<rect x="216" y="102" width="34" height="36" rx="5" class="surface"/>
+<rect x="262" y="102" width="34" height="36" rx="5" class="surface"/>
+<rect x="308" y="102" width="34" height="36" rx="5" class="surface"/>
+<rect x="354" y="102" width="34" height="36" rx="5" class="surface"/>
+<rect x="400" y="102" width="34" height="36" rx="5" class="accent"/>
+<rect x="446" y="102" width="34" height="36" rx="5" class="accent"/>
+<rect x="492" y="102" width="34" height="36" rx="5" class="accent"/>
+<rect x="538" y="102" width="34" height="36" rx="5" class="accent"/>
+<rect x="584" y="102" width="34" height="36" rx="5" class="accent"/>
+<rect x="630" y="102" width="34" height="36" rx="5" class="accent"/>
+<rect x="676" y="102" width="34" height="36" rx="5" class="accent"/>
+<rect x="722" y="102" width="34" height="36" rx="5" class="accent"/>
+<text x="32" y="165" class="small" text-anchor="start">Older exchanges</text>
+<text x="408" y="165" class="small" text-anchor="start">8 recent exchanges</text>
+<path d="M190 178 V233" class="wire" />
+<path d="M578 178 V233" class="wire" />
+<text x="32" y="213" class="label" text-anchor="start">MODEL CONTEXT</text>
+<g class="compact">
+<rect x="32" y="233" width="31" height="62" rx="5" class="surface"/>
+<rect x="72" y="233" width="31" height="62" rx="5" class="surface"/>
+<rect x="112" y="233" width="31" height="62" rx="5" class="surface"/>
+<rect x="152" y="233" width="31" height="62" rx="5" class="surface"/>
+<rect x="192" y="233" width="31" height="62" rx="5" class="surface"/>
+<rect x="232" y="233" width="31" height="62" rx="5" class="surface"/>
+<rect x="272" y="233" width="31" height="62" rx="5" class="surface"/>
+<rect x="312" y="233" width="31" height="62" rx="5" class="surface"/>
+</g>
+<g class="show-summary">
+<rect x="32" y="233" width="292" height="62" rx="12" class="accent-box"/>
+<text x="52" y="260" class="name" text-anchor="start">Summary</text>
+<text x="52" y="282" class="small" text-anchor="start">written in the background</text>
+</g>
+<text x="358" y="270" class="name" text-anchor="start">+</text>
+<rect x="408" y="233" width="33" height="62" rx="5" class="accent"/>
+<rect x="453" y="233" width="33" height="62" rx="5" class="accent"/>
+<rect x="498" y="233" width="33" height="62" rx="5" class="accent"/>
+<rect x="543" y="233" width="33" height="62" rx="5" class="accent"/>
+<rect x="588" y="233" width="33" height="62" rx="5" class="accent"/>
+<rect x="633" y="233" width="33" height="62" rx="5" class="accent"/>
+<rect x="678" y="233" width="33" height="62" rx="5" class="accent"/>
+<rect x="723" y="233" width="33" height="62" rx="5" class="accent"/>
+<g class="phase-1">
+<text x="32" y="331" class="small" text-anchor="start">History grows. The most recent exchanges stay separate.</text>
+</g>
+<g class="phase-2">
+<text x="32" y="331" class="small" text-anchor="start">Summarize older exchanges without holding up the next turn.</text>
+</g>
+<g class="phase-3">
+<text x="32" y="331" class="small" text-anchor="start">A compact summary + recent exchanges. The log stays intact.</text>
+</g>
+</svg>

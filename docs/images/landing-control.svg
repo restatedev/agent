@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="416" viewBox="0 0 800 416" role="img" aria-labelledby="title desc"><title id="title">Responsive control, durable work</title><desc id="desc">A controller acknowledges a request and starts a turn. New steering reaches the next model step while the current tools finish. The controller remains available throughout.</desc><style>
+:root { --bg:#ffffff; --ink:#242329; --muted:#66616f; --line:#ddd9e4; --surface:#f7f5fa; --paper:#ffffff; --accent:#6b49c8; --accent-soft:#f0eafa; --good:#177c67; --good-soft:#eaf6f1; --warn:#9a5b16; --warn-soft:#fff3e1; }
+@media(prefers-color-scheme:dark) { :root { --bg:#0d1117; --ink:#eceaf1; --muted:#aaa5b5; --line:#35333f; --surface:#181920; --paper:#11151c; --accent:#b7a0ff; --accent-soft:#272038; --good:#75d8ba; --good-soft:#132b25; --warn:#edc084; --warn-soft:#33291c; } }
+svg { background:var(--bg); }
+text { fill:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; font-size:18px; font-weight:400; }
+.label { font-size:12px; font-weight:600; letter-spacing:1.6px; fill:var(--muted); }
+.small { font-size:15px; fill:var(--muted); }
+.name { font-size:20px; font-weight:600; letter-spacing:-.4px; }
+.mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:14px; fill:var(--muted); }
+.box { fill:var(--paper); stroke:var(--line); stroke-width:1; }
+.surface { fill:var(--surface); stroke:var(--line); stroke-width:1; }
+.accent-box { fill:var(--accent-soft); stroke:var(--accent); stroke-width:1; }
+.good-box { fill:var(--good-soft); stroke:none; }
+.warn-box { fill:var(--warn-soft); stroke:none; }
+.accent { fill:var(--accent); } .good { fill:var(--good); } .warn { fill:var(--warn); }
+.wire { fill:none; stroke:var(--line); stroke-width:1.6; }
+.signal { fill:none; stroke:var(--accent); stroke-width:2; }
+.trace { fill:none; stroke:var(--accent); stroke-width:3; stroke-linecap:round; stroke-dasharray:8 100; stroke-dashoffset:108; }
+.tick { fill:none; stroke:var(--good); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.phase-1,.phase-2 { opacity:0; } .phase-3 { opacity:1; }
+.compact { opacity:0; }
+@media(prefers-reduced-motion:no-preference) {
+ .phase-1 { animation:phase-one 15s linear infinite; }
+ .phase-2 { animation:phase-two 15s linear infinite; }
+ .phase-3 { animation:phase-three 15s linear infinite; }
+ .send { animation:send 15s linear infinite; }
+ .receive { animation:receive 15s linear infinite; }
+ .signal-flow { animation:signal-flow 15s linear infinite; }
+ .work { transform-box:fill-box; transform-origin:left center; animation:work 15s linear infinite; }
+ .record { animation:record 15s linear infinite; }
+ .compact { transform-box:fill-box; transform-origin:left center; animation:compact 15s ease-in-out infinite; }
+ .show-summary { animation:show-summary 15s ease-in-out infinite; }
+}
+@keyframes phase-one { 0%,27%{opacity:1} 29%,97%{opacity:0} 100%{opacity:1} }
+@keyframes phase-two { 0%,29%{opacity:0} 31%,60%{opacity:1} 62%,100%{opacity:0} }
+@keyframes phase-three { 0%,62%{opacity:0} 64%,95%{opacity:1} 97%,100%{opacity:0} }
+@keyframes send { 0%,6%{stroke-dashoffset:108;opacity:0} 7%{opacity:1} 17%{stroke-dashoffset:0;opacity:1} 18%,100%{opacity:0} }
+@keyframes receive { 0%,17%{stroke-dashoffset:108;opacity:0} 18%{opacity:1} 27%{stroke-dashoffset:0;opacity:1} 28%,100%{opacity:0} }
+@keyframes signal-flow { 0%,35%{stroke-dashoffset:108;opacity:0} 36%{opacity:1} 52%{stroke-dashoffset:0;opacity:1} 53%,100%{opacity:0} }
+@keyframes work { 0%,18%{transform:scaleX(.12)} 58%,95%{transform:scaleX(1)} 100%{transform:scaleX(.12)} }
+@keyframes record { 0%,5%{opacity:.25} 20%,100%{opacity:1} }
+@keyframes compact { 0%,28%{transform:scaleX(1);opacity:1} 48%,95%{transform:scaleX(.2);opacity:0} 98%,100%{transform:scaleX(1);opacity:1} }
+@keyframes show-summary { 0%,38%{opacity:0} 49%,95%{opacity:1} 98%,100%{opacity:0} }
+</style>
+<text x="32" y="31" class="label" text-anchor="start">THE AGENT, IN MOTION</text>
+<g class="phase-1">
+<text x="768" y="31" class="mono" text-anchor="end">01 / Start</text>
+</g>
+<g class="phase-2">
+<text x="768" y="31" class="mono" text-anchor="end">02 / Steer</text>
+</g>
+<g class="phase-3">
+<text x="768" y="31" class="mono" text-anchor="end">03 / Continue</text>
+</g>
+<rect x="32" y="76" width="216" height="82" rx="12" class="box"/>
+<text x="50" y="101" class="label" text-anchor="start">YOUR MESSAGE</text>
+<g class="phase-1">
+<text x="50" y="134" class="name" text-anchor="start">Plan a Berlin trip</text>
+</g>
+<g class="phase-2">
+<text x="50" y="134" class="name" text-anchor="start">Only direct flights</text>
+</g>
+<g class="phase-3">
+<text x="50" y="134" class="name" text-anchor="start">Only direct flights</text>
+</g>
+<path d="M248 117 H304" class="wire" />
+<path d="M248 117 H304" class="trace send" pathLength="100"/>
+<rect x="304" y="76" width="208" height="82" rx="12" class="accent-box"/>
+<text x="324" y="102" class="label" text-anchor="start">CONTROLLER</text>
+<text x="324" y="134" class="name" text-anchor="start">Agent</text>
+<path d="M512 117 H576" class="wire" />
+<path d="M512 117 H576" class="trace receive" pathLength="100"/>
+<rect x="576" y="96" width="192" height="42" rx="12" class="good-box"/>
+<path d="M593 117 l4 4 l8 -9" class="tick" />
+<text x="616" y="124" class="small" text-anchor="start">Acknowledged</text>
+<path d="M408 158 V196" class="wire" />
+<path d="M408 158 V196" class="trace signal-flow" pathLength="100"/>
+<rect x="32" y="196" width="736" height="148" rx="12" class="surface"/>
+<text x="52" y="226" class="label" text-anchor="start">TURN · AgentSession.doTurn</text>
+<rect x="52" y="248" width="154" height="70" rx="12" class="box"/>
+<text x="70" y="277" class="name" text-anchor="start">Model</text>
+<text x="70" y="302" class="small" text-anchor="start">proposes tools</text>
+<path d="M206 283 H254" class="wire" />
+<path d="M206 283 H254" class="trace send" pathLength="100"/>
+<rect x="254" y="248" width="240" height="70" rx="12" class="box"/>
+<text x="272" y="276" class="small" text-anchor="start">Weather + flight search</text>
+<rect x="272" y="292" width="204" height="5" rx="2" class="surface"/>
+<rect x="272" y="292" width="204" height="5" rx="2" class="accent work"/>
+<path d="M494 283 H558" class="wire" />
+<path d="M494 283 H558" class="trace signal-flow" pathLength="100"/>
+<rect x="558" y="248" width="190" height="70" rx="12" class="accent-box"/>
+<text x="576" y="277" class="name" text-anchor="start">Next model step</text>
+<g class="phase-1">
+<text x="576" y="303" class="small" text-anchor="start">reads tool results</text>
+</g>
+<g class="phase-2">
+<text x="576" y="303" class="small" text-anchor="start">steering is waiting</text>
+</g>
+<g class="phase-3">
+<text x="576" y="303" class="small" text-anchor="start">uses steering too</text>
+</g>
+<g class="phase-1">
+<text x="32" y="385" class="small" text-anchor="start">Start the turn. The controller stays available.</text>
+</g>
+<g class="phase-2">
+<text x="32" y="385" class="small" text-anchor="start">Steer while tools run. Their work is preserved.</text>
+</g>
+<g class="phase-3">
+<text x="32" y="385" class="small" text-anchor="start">The next model step uses the new direction.</text>
+</g>
+</svg>

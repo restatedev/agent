@@ -29,6 +29,24 @@ the code in the last column changes (a threshold, a handler becoming shared or
 exclusive, how steering is consumed), update the animation and its README
 caption in the same change. Before adding a claim, find it in the code.
 
+## Proposed landing-page animations
+
+[The README design study](../../README.design.md) uses three additional animations
+from `landing.py`. The existing main README still uses the diagrams above.
+
+| SVG | What it shows |
+| --- | --- |
+| `landing-control.svg` | The controller acknowledges steering while the turn preserves current tool work |
+| `landing-recovery.svg` | Recorded model/tool results survive a process restart and are reused |
+| `landing-context.svg` | Background conversation summarization keeps the full log and recent exchanges intact |
+
+Each has a `-mobile.svg` composition, selected by a `<picture>` element in the
+proposed README. Both compositions support dark appearance and reduced motion.
+Their 15-second cycle has three beats; inspect 1.5, 7, and 12.5 seconds.
+Each also has a `-still.svg` final state selected explicitly for reduced motion.
+Regenerate all twelve with `python3 .misc/animations/landing.py`. See
+[design notes](../../docs/readme-design-notes.md) for the visual rationale.
+
 ## Regenerate
 
 From the repository root:
