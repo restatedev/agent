@@ -27,6 +27,7 @@ pnpm install
 | `packages/libs/client` | Typed ingress client for one agent |
 | `packages/apps/web` | Reference conversation UI (Next.js), an example client |
 | `docs` | Design documentation |
+| `plugins/restate-agent` | Coding-agent skills: extending this agent, and the generator SDK |
 
 [PROJECT.md](../PROJECT.md) gives a file-by-file reading order.
 
