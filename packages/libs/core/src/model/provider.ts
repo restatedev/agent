@@ -358,15 +358,15 @@ export async function completeAgent(
       },
     });
 
-    const inputTokens = result.usage.inputTokens;
     return {
-      ...agentResult(result, maxOutputTokens),
-      ...(inputTokens === undefined ? {} : {inputTokens}),
+      ...modelResult(result, maxOutputTokens),
+      inputTokens: result.usage.inputTokens,
     };
   });
 }
 
-function agentResult(
+/** What the turn needs from one generation: its text, tool calls or error. */
+function modelResult(
   result: Awaited<ReturnType<typeof generateText>>,
   maxOutputTokens: number,
 ): ModelResult {

@@ -345,7 +345,7 @@ function* executeTurn(
 
     yield* reportProgress(state, "thinking", "Thinking...");
 
-    const sent = state.messages.length;
+    const messagesSent = state.messages.length;
     const task = restate.spawn(
       agentStep({
         context: state.context,
@@ -401,7 +401,9 @@ function* executeTurn(
       });
     }
 
-    recordUsage(state, step.type === "tools" ? step.action : step, sent);
+    const inputTokens =
+      step.type === "tools" ? step.action.inputTokens : step.inputTokens;
+    recordUsage(state, inputTokens, messagesSent);
     const steering = state.steeringInbox.drain();
     state.steps += 1;
     if (steering.length === 0 || step.type === "tools") {

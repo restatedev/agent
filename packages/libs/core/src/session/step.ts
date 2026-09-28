@@ -172,9 +172,7 @@ export function* agentStep({
         type: "guardrail_blocked",
         guardrailId: guarded.guardrailId,
         reason: guarded.reason,
-        ...(action.inputTokens === undefined
-          ? {}
-          : {inputTokens: action.inputTokens}),
+        inputTokens: action.inputTokens,
         ...decisions,
       };
     }
