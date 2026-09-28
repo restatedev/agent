@@ -18,6 +18,18 @@ Install dependencies:
 pnpm install
 ```
 
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `packages/libs/core` | The durable runtime: agent, session, scheduler, sandbox, model calls |
+| `packages/libs/types` | Zod wire schemas and Restate service contracts |
+| `packages/libs/client` | Typed ingress client for one agent |
+| `packages/apps/web` | Reference conversation UI (Next.js), an example client |
+| `docs` | Design documentation |
+
+[PROJECT.md](../PROJECT.md) gives a file-by-file reading order.
+
 ## Start the stack
 
 Follow [the root quickstart](../README.md#quickstart) to start a fresh private
@@ -96,6 +108,9 @@ pnpm build
 pnpm test
 pnpm bundle
 ```
+
+The tests run real handlers against recorded journals and fakes; they need no
+Restate server or API key.
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every pull request and
 also builds both container images.
