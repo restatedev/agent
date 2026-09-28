@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-label="Animation: the model writes a JavaScript program that calls getWeather for four cities in parallel inside a QuickJS guest, each call checked by the guardrails; only the compact result returns to the model context.">
+<style>
+:root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
+  --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d; --lane:#161b22;
+    --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214; --warn:#d29922; --warn-bg:#2b2111;
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd; }
+}
+svg { background: var(--bg); }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
+.lane { fill: var(--lane); }
+.lane-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
+.lane-sub { font-size: 11.5px; fill: var(--muted); }
+.chip rect { stroke: var(--stroke); }
+.chip.user rect { fill: var(--user); }
+.chip.model rect { fill: var(--model); }
+.chip.tool rect { fill: var(--tool); }
+.chip.reply rect { fill: var(--reply); }
+.chip.ok rect { fill: var(--ok-bg); stroke: var(--ok); }
+.chip.bad rect { fill: var(--bad-bg); stroke: var(--bad); }
+.chip.warn rect { fill: var(--warn-bg); stroke: var(--warn); }
+.chip-t { font-size: 12.5px; font-weight: 600; }
+.chip-s { font-size: 12px; fill: var(--muted); }
+.bar { transform-box: fill-box; transform-origin: 0 50%; }
+.bar.tool { fill: var(--tool-bar); }
+.bar.ok { fill: var(--ok); }
+.bar.wait { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.bad { fill: var(--bad); }
+.chip.code rect { fill: var(--lane); stroke: var(--accent); }
+.chip.code .chip-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; font-size: 12px; }
+.chip.code .chip-s { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.mark.accent { fill: var(--accent); }
+.msg.user { fill: var(--muted); }
+.msg.assistant { fill: var(--tool-bar); }
+.summary rect { fill: var(--model); stroke: var(--accent); }
+.bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.row-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
+.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar-t { font-size: 12px; font-weight: 600; }
+.bar-t.on-bar { fill: #ffffff; }
+.mark { font-size: 13px; font-weight: 700; }
+.mark.bad { fill: var(--bad); }
+.mark.ok { fill: var(--ok); }
+.playhead { stroke: var(--accent); stroke-width: 2; opacity: 0; }
+.caption { font-size: 15px; }
+.axis { font-size: 11.5px; fill: var(--muted); }
+.break { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.cap23, .cap24 { opacity: 0; }
+@keyframes e1 { 0%, 0.99% { opacity: 0 } 2.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g2 { 0%, 0.99% { opacity: 0; transform: scaleX(0.001) } 1.00% { opacity: 1; transform: scaleX(0.001) } 9.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e3 { 0%, 1.99% { opacity: 0 } 3.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e4 { 0%, 8.99% { opacity: 0 } 10.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e5 { 0%, 21.49% { opacity: 0 } 22.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g6 { 0%, 23.99% { opacity: 0; transform: scaleX(0.001) } 24.00% { opacity: 1; transform: scaleX(0.001) } 38.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e7 { 0%, 24.99% { opacity: 0 } 26.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e8 { 0%, 21.49% { opacity: 0 } 22.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g9 { 0%, 23.99% { opacity: 0; transform: scaleX(0.001) } 24.00% { opacity: 1; transform: scaleX(0.001) } 42.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e10 { 0%, 24.99% { opacity: 0 } 26.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e11 { 0%, 21.49% { opacity: 0 } 22.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g12 { 0%, 23.99% { opacity: 0; transform: scaleX(0.001) } 24.00% { opacity: 1; transform: scaleX(0.001) } 37.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e13 { 0%, 24.99% { opacity: 0 } 26.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e14 { 0%, 21.49% { opacity: 0 } 22.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g15 { 0%, 23.99% { opacity: 0; transform: scaleX(0.001) } 24.00% { opacity: 1; transform: scaleX(0.001) } 44.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e16 { 0%, 24.99% { opacity: 0 } 26.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e17 { 0%, 44.99% { opacity: 0 } 46.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g18 { 0%, 44.99% { opacity: 0; transform: scaleX(0.001) } 45.00% { opacity: 1; transform: scaleX(0.001) } 50.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e19 { 0%, 45.99% { opacity: 0 } 47.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e20 { 0%, 51.99% { opacity: 0 } 53.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e21 { 0%, 55.99% { opacity: 0 } 57.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e22 { 0%, 75.49% { opacity: 0 } 76.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes playhead { 0% { opacity: 1; transform: translateX(0px) } 86% { opacity: 1; transform: translateX(805.0px) } 89%, 100% { opacity: 0; transform: translateX(805.0px) } }
+@keyframes cap23 { 0% { opacity: 1 } 19.20% { opacity: 1 } 20.00%, 100% { opacity: 0 } }
+@keyframes cap24 { 0%, 19.99% { opacity: 0 } 20.80% { opacity: 1 } 44.20% { opacity: 1 } 45.00%, 100% { opacity: 0 } }
+@keyframes cap25 { 0%, 44.99% { opacity: 0 } 45.80% { opacity: 1 } 100% { opacity: 1 } }
+.e1 { animation: e1 16s linear infinite; }
+.g2 { animation: g2 16s linear infinite; }
+.e3 { animation: e3 16s linear infinite; }
+.e4 { animation: e4 16s linear infinite; }
+.e5 { animation: e5 16s linear infinite; }
+.g6 { animation: g6 16s linear infinite; }
+.e7 { animation: e7 16s linear infinite; }
+.e8 { animation: e8 16s linear infinite; }
+.g9 { animation: g9 16s linear infinite; }
+.e10 { animation: e10 16s linear infinite; }
+.e11 { animation: e11 16s linear infinite; }
+.g12 { animation: g12 16s linear infinite; }
+.e13 { animation: e13 16s linear infinite; }
+.e14 { animation: e14 16s linear infinite; }
+.g15 { animation: g15 16s linear infinite; }
+.e16 { animation: e16 16s linear infinite; }
+.e17 { animation: e17 16s linear infinite; }
+.g18 { animation: g18 16s linear infinite; }
+.e19 { animation: e19 16s linear infinite; }
+.e20 { animation: e20 16s linear infinite; }
+.e21 { animation: e21 16s linear infinite; }
+.e22 { animation: e22 16s linear infinite; }
+.playhead { animation: playhead 16s linear infinite; }
+.cap23 { animation: cap23 16s linear infinite; }
+.cap24 { animation: cap24 16s linear infinite; }
+.cap25 { animation: cap25 16s linear infinite; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<rect class="lane" x="16" y="20" width="968" height="64" rx="10"/>
+<text class="lane-label" x="32" y="57">Model</text>
+<rect class="lane" x="16" y="94" width="968" height="176" rx="10"/>
+<text class="lane-label" x="32" y="182">Program</text>
+<text class="lane-sub" x="32" y="198">QuickJS guest</text>
+<rect class="lane" x="16" y="280" width="968" height="56" rx="10"/>
+<text class="lane-label" x="32" y="313">Model context</text>
+<g class="chip model e1">
+<rect x="179.4" y="34" width="140" height="44" rx="8"/>
+<text class="chip-t" x="189.4" y="53">model step</text>
+<text class="chip-s" x="189.4" y="70">writes a program</text>
+</g>
+<rect class="bar tool g2" x="179.4" y="308" width="74.9" height="14" rx="7"/>
+<text class="bar-t e3" x="179.4" y="302">program</text>
+<g class="chip code e4">
+<rect x="254.2" y="104" width="300" height="44" rx="8"/>
+<text class="chip-t" x="264.2" y="123">const cities = [4 cities]</text>
+<text class="chip-s" x="264.2" y="140">Promise.all(cities.map(getWeather))</text>
+</g>
+<text class="mark accent e5" x="373.2" y="172">✓</text>
+<rect class="bar tool g6" x="394.7" y="158" width="131.0" height="18" rx="9"/>
+<text class="bar-t on-bar e7" x="404.7" y="171">getWeather(Berlin)</text>
+<text class="mark accent e8" x="373.2" y="196">✓</text>
+<rect class="bar tool g9" x="394.7" y="182" width="168.5" height="18" rx="9"/>
+<text class="bar-t on-bar e10" x="404.7" y="195">getWeather(Paris)</text>
+<text class="mark accent e11" x="373.2" y="220">✓</text>
+<rect class="bar tool g12" x="394.7" y="206" width="121.7" height="18" rx="9"/>
+<text class="bar-t on-bar e13" x="404.7" y="219">getWeather(Rome)</text>
+<text class="mark accent e14" x="373.2" y="244">✓</text>
+<rect class="bar tool g15" x="394.7" y="230" width="187.2" height="18" rx="9"/>
+<text class="bar-t on-bar e16" x="404.7" y="243">getWeather(Oslo)</text>
+<g class="chip code e17">
+<rect x="591.2" y="104" width="200" height="44" rx="8"/>
+<text class="chip-t" x="601.2" y="123">return</text>
+<text class="chip-s" x="601.2" y="140">{warmest: 'Rome', 21°C}</text>
+</g>
+<rect class="bar tool g18" x="591.2" y="308" width="46.8" height="14" rx="7"/>
+<text class="bar-t e19" x="591.2" y="302">result</text>
+<text class="axis e20" x="656.7" y="320">the 4 raw tool results never enter it</text>
+<g class="chip model e21">
+<rect x="694.2" y="34" width="160" height="44" rx="8"/>
+<text class="chip-t" x="704.2" y="53">model step</text>
+<text class="chip-s" x="704.2" y="70">reads 1 small result</text>
+</g>
+<g class="chip reply e22">
+<rect x="876.7" y="41" width="80" height="30" rx="8"/>
+<text class="chip-t" x="886.7" y="61">reply</text>
+</g>
+<line class="playhead" x1="170" y1="20" x2="170" y2="336"/>
+<text class="caption cap23" x="24" y="372">For work that needs many tool calls, the model writes one small JavaScript program.</text>
+<text class="caption cap24" x="24" y="372">Each tool call the program makes passes the guardrails (✓) and is journaled, and they run in parallel.</text>
+<text class="caption cap25" x="24" y="372">Only the compact result goes back to the model: one model step instead of four.</text>
+</svg>

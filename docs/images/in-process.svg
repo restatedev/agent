@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-label="Animation: inside the agent service process, doTurn runs a model call and three tools as in-process function calls; each result is appended over one open stream to the turn journal in Restate, in completion order.">
+<style>
+:root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
+  --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d; --lane:#161b22;
+    --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214; --warn:#d29922; --warn-bg:#2b2111;
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd; }
+}
+svg { background: var(--bg); }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
+.lane { fill: var(--lane); }
+.lane-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
+.lane-sub { font-size: 11.5px; fill: var(--muted); }
+.chip rect { stroke: var(--stroke); }
+.chip.user rect { fill: var(--user); }
+.chip.model rect { fill: var(--model); }
+.chip.tool rect { fill: var(--tool); }
+.chip.reply rect { fill: var(--reply); }
+.chip.ok rect { fill: var(--ok-bg); stroke: var(--ok); }
+.chip.bad rect { fill: var(--bad-bg); stroke: var(--bad); }
+.chip.warn rect { fill: var(--warn-bg); stroke: var(--warn); }
+.chip-t { font-size: 12.5px; font-weight: 600; }
+.chip-s { font-size: 12px; fill: var(--muted); }
+.bar { transform-box: fill-box; transform-origin: 0 50%; }
+.bar.tool { fill: var(--tool-bar); }
+.bar.ok { fill: var(--ok); }
+.bar.wait { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.bad { fill: var(--bad); }
+.chip.code rect { fill: var(--lane); stroke: var(--accent); }
+.chip.code .chip-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; font-size: 12px; }
+.chip.code .chip-s { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.mark.accent { fill: var(--accent); }
+.msg.user { fill: var(--muted); }
+.msg.assistant { fill: var(--tool-bar); }
+.summary rect { fill: var(--model); stroke: var(--accent); }
+.bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.row-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
+.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar-t { font-size: 12px; font-weight: 600; }
+.bar-t.on-bar { fill: #ffffff; }
+.mark { font-size: 13px; font-weight: 700; }
+.mark.bad { fill: var(--bad); }
+.mark.ok { fill: var(--ok); }
+.playhead { stroke: var(--accent); stroke-width: 2; opacity: 0; }
+.caption { font-size: 15px; }
+.axis { font-size: 11.5px; fill: var(--muted); }
+.break { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.e2, .e7, .e12, .e17, .e22, .e27, .cap31, .cap32 { opacity: 0; }
+.box { fill: var(--lane); stroke: var(--stroke); }
+.inner { fill: var(--bg); stroke: var(--stroke); }
+.box-t { font-size: 14px; font-weight: 600; }
+.stream { fill: var(--model); stroke: var(--accent); stroke-width: 1.5; }
+.packet { fill: var(--accent); }
+.pending { font-size: 12px; fill: var(--muted); }
+
+@keyframes e1 { 0%, 2.99% { opacity: 0 } 4.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e2 { 0%, 2.99% { opacity: 0 } 3.80% { opacity: 1 } 8.20% { opacity: 1 } 9.00%, 100% { opacity: 0 } }
+@keyframes e3 { 0%, 12.99% { opacity: 0 } 14.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e4 { 0%, 8.99% { opacity: 0; transform: translateX(0px) } 9.00% { opacity: 1; transform: translateX(0px) } 12.50% { opacity: 1; transform: translateX(150px) } 13.00%, 100% { opacity: 0; transform: translateX(150px) } }
+@keyframes e5 { 0%, 12.99% { opacity: 0 } 14.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e6 { 0%, 16.99% { opacity: 0 } 18.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e7 { 0%, 16.99% { opacity: 0 } 17.80% { opacity: 1 } 21.20% { opacity: 1 } 22.00%, 100% { opacity: 0 } }
+@keyframes e8 { 0%, 25.99% { opacity: 0 } 27.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e9 { 0%, 21.99% { opacity: 0; transform: translateX(0px) } 22.00% { opacity: 1; transform: translateX(0px) } 25.50% { opacity: 1; transform: translateX(150px) } 26.00%, 100% { opacity: 0; transform: translateX(150px) } }
+@keyframes e10 { 0%, 25.99% { opacity: 0 } 27.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e11 { 0%, 17.99% { opacity: 0 } 19.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e12 { 0%, 17.99% { opacity: 0 } 18.80% { opacity: 1 } 31.20% { opacity: 1 } 32.00%, 100% { opacity: 0 } }
+@keyframes e13 { 0%, 35.99% { opacity: 0 } 37.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e14 { 0%, 31.99% { opacity: 0; transform: translateX(0px) } 32.00% { opacity: 1; transform: translateX(0px) } 35.50% { opacity: 1; transform: translateX(150px) } 36.00%, 100% { opacity: 0; transform: translateX(150px) } }
+@keyframes e15 { 0%, 35.99% { opacity: 0 } 37.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e16 { 0%, 18.99% { opacity: 0 } 20.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e17 { 0%, 18.99% { opacity: 0 } 19.80% { opacity: 1 } 25.20% { opacity: 1 } 26.00%, 100% { opacity: 0 } }
+@keyframes e18 { 0%, 29.99% { opacity: 0 } 31.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e19 { 0%, 25.99% { opacity: 0; transform: translateX(0px) } 26.00% { opacity: 1; transform: translateX(0px) } 29.50% { opacity: 1; transform: translateX(150px) } 30.00%, 100% { opacity: 0; transform: translateX(150px) } }
+@keyframes e20 { 0%, 29.99% { opacity: 0 } 31.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e21 { 0%, 39.99% { opacity: 0 } 41.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e22 { 0%, 39.99% { opacity: 0 } 40.80% { opacity: 1 } 46.20% { opacity: 1 } 47.00%, 100% { opacity: 0 } }
+@keyframes e23 { 0%, 50.99% { opacity: 0 } 52.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e24 { 0%, 46.99% { opacity: 0; transform: translateX(0px) } 47.00% { opacity: 1; transform: translateX(0px) } 50.50% { opacity: 1; transform: translateX(150px) } 51.00%, 100% { opacity: 0; transform: translateX(150px) } }
+@keyframes e25 { 0%, 50.99% { opacity: 0 } 52.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e26 { 0%, 55.99% { opacity: 0 } 57.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e27 { 0%, 55.99% { opacity: 0 } 56.80% { opacity: 1 } 59.20% { opacity: 1 } 60.00%, 100% { opacity: 0 } }
+@keyframes e28 { 0%, 63.99% { opacity: 0 } 65.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e29 { 0%, 59.99% { opacity: 0; transform: translateX(0px) } 60.00% { opacity: 1; transform: translateX(0px) } 63.50% { opacity: 1; transform: translateX(150px) } 64.00%, 100% { opacity: 0; transform: translateX(150px) } }
+@keyframes e30 { 0%, 63.99% { opacity: 0 } 65.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes cap31 { 0% { opacity: 1 } 23.20% { opacity: 1 } 24.00%, 100% { opacity: 0 } }
+@keyframes cap32 { 0%, 23.99% { opacity: 0 } 24.80% { opacity: 1 } 55.20% { opacity: 1 } 56.00%, 100% { opacity: 0 } }
+@keyframes cap33 { 0%, 55.99% { opacity: 0 } 56.80% { opacity: 1 } 100% { opacity: 1 } }
+.e1 { animation: e1 16s linear infinite; }
+.e2 { animation: e2 16s linear infinite; }
+.e3 { animation: e3 16s linear infinite; }
+.e4 { animation: e4 16s linear infinite; }
+.e5 { animation: e5 16s linear infinite; }
+.e6 { animation: e6 16s linear infinite; }
+.e7 { animation: e7 16s linear infinite; }
+.e8 { animation: e8 16s linear infinite; }
+.e9 { animation: e9 16s linear infinite; }
+.e10 { animation: e10 16s linear infinite; }
+.e11 { animation: e11 16s linear infinite; }
+.e12 { animation: e12 16s linear infinite; }
+.e13 { animation: e13 16s linear infinite; }
+.e14 { animation: e14 16s linear infinite; }
+.e15 { animation: e15 16s linear infinite; }
+.e16 { animation: e16 16s linear infinite; }
+.e17 { animation: e17 16s linear infinite; }
+.e18 { animation: e18 16s linear infinite; }
+.e19 { animation: e19 16s linear infinite; }
+.e20 { animation: e20 16s linear infinite; }
+.e21 { animation: e21 16s linear infinite; }
+.e22 { animation: e22 16s linear infinite; }
+.e23 { animation: e23 16s linear infinite; }
+.e24 { animation: e24 16s linear infinite; }
+.e25 { animation: e25 16s linear infinite; }
+.e26 { animation: e26 16s linear infinite; }
+.e27 { animation: e27 16s linear infinite; }
+.e28 { animation: e28 16s linear infinite; }
+.e29 { animation: e29 16s linear infinite; }
+.e30 { animation: e30 16s linear infinite; }
+.cap31 { animation: cap31 16s linear infinite; }
+.cap32 { animation: cap32 16s linear infinite; }
+.cap33 { animation: cap33 16s linear infinite; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<rect class="box" x="16" y="20" width="520" height="300" rx="12"/>
+<text class="box-t" x="36" y="46">Agent service process</text>
+<rect class="inner" x="36" y="60" width="480" height="244" rx="10"/>
+<text class="lane-label" x="52" y="84">doTurn · model calls and tools are in-process function calls</text>
+<rect class="box" x="664" y="20" width="320" height="300" rx="12"/>
+<text class="box-t" x="684" y="46">Restate</text>
+<text class="lane-label" x="684" y="84">turn journal, persisted</text>
+<rect class="stream" x="536" y="150" width="128" height="40" rx="6"/>
+<text class="axis" x="600" y="140" text-anchor="middle">one open stream</text>
+<text class="axis" x="600" y="210" text-anchor="middle">low-latency appends</text>
+<g class="chip tool e1"><rect x="52" y="96" width="300" height="28" rx="7"/><text class="chip-t" x="64" y="115">model step · OpenAI</text></g>
+<text class="pending e2" x="364" y="115">running…</text>
+<text class="mark ok e3" x="364" y="115">✓ journaled</text>
+<circle class="packet e4" cx="524" cy="170" r="6"/>
+<g class="chip ok e5"><rect x="684" y="96" width="280" height="28" rx="7"/><text class="chip-t" x="696" y="115">1 · model response</text></g>
+<g class="chip tool e6"><rect x="52" y="130" width="300" height="28" rx="7"/><text class="chip-t" x="64" y="149">getWeather()</text></g>
+<text class="pending e7" x="364" y="149">running…</text>
+<text class="mark ok e8" x="364" y="149">✓ journaled</text>
+<circle class="packet e9" cx="524" cy="170" r="6"/>
+<g class="chip ok e10"><rect x="684" y="130" width="280" height="28" rx="7"/><text class="chip-t" x="696" y="149">2 · getWeather result</text></g>
+<g class="chip tool e11"><rect x="52" y="164" width="300" height="28" rx="7"/><text class="chip-t" x="64" y="183">webSearch()</text></g>
+<text class="pending e12" x="364" y="183">running…</text>
+<text class="mark ok e13" x="364" y="183">✓ journaled</text>
+<circle class="packet e14" cx="524" cy="170" r="6"/>
+<g class="chip ok e15"><rect x="684" y="198" width="280" height="28" rx="7"/><text class="chip-t" x="696" y="217">4 · webSearch result</text></g>
+<g class="chip tool e16"><rect x="52" y="198" width="300" height="28" rx="7"/><text class="chip-t" x="64" y="217">runCommand() · sandbox</text></g>
+<text class="pending e17" x="364" y="217">running…</text>
+<text class="mark ok e18" x="364" y="217">✓ journaled</text>
+<circle class="packet e19" cx="524" cy="170" r="6"/>
+<g class="chip ok e20"><rect x="684" y="164" width="280" height="28" rx="7"/><text class="chip-t" x="696" y="183">3 · runCommand result</text></g>
+<g class="chip tool e21"><rect x="52" y="232" width="300" height="28" rx="7"/><text class="chip-t" x="64" y="251">model step · OpenAI</text></g>
+<text class="pending e22" x="364" y="251">running…</text>
+<text class="mark ok e23" x="364" y="251">✓ journaled</text>
+<circle class="packet e24" cx="524" cy="170" r="6"/>
+<g class="chip ok e25"><rect x="684" y="232" width="280" height="28" rx="7"/><text class="chip-t" x="696" y="251">5 · model response</text></g>
+<g class="chip tool e26"><rect x="52" y="266" width="300" height="28" rx="7"/><text class="chip-t" x="64" y="285">publish reply</text></g>
+<text class="pending e27" x="364" y="285">running…</text>
+<text class="mark ok e28" x="364" y="285">✓ journaled</text>
+<circle class="packet e29" cx="524" cy="170" r="6"/>
+<g class="chip ok e30"><rect x="684" y="266" width="280" height="28" rx="7"/><text class="chip-t" x="696" y="285">6 · reply</text></g>
+<text class="caption cap31" x="24" y="360">doTurn runs the model calls and tools itself, in the process: no queue or service hop per step.</text>
+<text class="caption cap32" x="24" y="360">Each result is appended to the turn&#8217;s journal over one open, low-latency stream to Restate.</text>
+<text class="caption cap33" x="24" y="360">Entries land in completion order and are persisted, so a crash replays them instead of re-running.</text>
+</svg>
