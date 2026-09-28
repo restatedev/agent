@@ -13,18 +13,31 @@ HOLD_END = 93  # everything stays visible until here, then fades before the loop
 THEME = """
 :root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
   --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
-  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff; }
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff;
+  --tool-bar-2:#0969da; --reply-ink:#bc4c00; --user-ink:#6e7781; --tool-ink:#0969da;
+  --shadow:rgba(31,35,40,0.10); --glow:rgba(130,80,223,0.45); }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d; --lane:#161b22;
     --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214; --warn:#d29922; --warn-bg:#2b2111;
-    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd; }
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd;
+    --tool-bar-2:#79c0ff; --reply-ink:#f0883e; --user-ink:#8b949e; --tool-ink:#58a6ff;
+    --shadow:rgba(0,0,0,0.45); --glow:rgba(163,113,247,0.55); }
 }
 svg { background: var(--bg); }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
-.lane { fill: var(--lane); }
+.lane { fill: var(--lane); stroke: var(--stroke); stroke-opacity: 0.55; }
 .lane-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
 .lane-sub { font-size: 11.5px; fill: var(--muted); }
+.chip { transform-box: fill-box; transform-origin: 50% 50%; }
 .chip rect { stroke: var(--stroke); }
+.chip > rect:first-child { filter: drop-shadow(0 2px 3px var(--shadow)); }
+.chip rect.stripe { stroke: none; fill: var(--user-ink); }
+.chip.model rect.stripe, .chip.code rect.stripe { fill: var(--accent); }
+.chip.tool rect.stripe { fill: var(--tool-ink); }
+.chip.reply rect.stripe { fill: var(--reply-ink); }
+.chip.ok rect.stripe { fill: var(--ok); }
+.chip.bad rect.stripe { fill: var(--bad); }
+.chip.warn rect.stripe { fill: var(--warn); }
 .chip.user rect { fill: var(--user); }
 .chip.model rect { fill: var(--model); }
 .chip.tool rect { fill: var(--tool); }
@@ -35,30 +48,49 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .chip-t { font-size: 12.5px; font-weight: 600; }
 .chip-s { font-size: 12px; fill: var(--muted); }
 .bar { transform-box: fill-box; transform-origin: 0 50%; }
-.bar.tool { fill: var(--tool-bar); }
+.bar.tool { fill: url(#toolGradient); }
 .bar.ok { fill: var(--ok); }
-.bar.wait { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.wait { fill: var(--warn-bg); stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; animation: march 1s linear infinite; }
+@keyframes march { to { stroke-dashoffset: -22; } }
 .bar.bad { fill: var(--bad); }
 .chip.code rect { fill: var(--lane); stroke: var(--accent); }
 .chip.code .chip-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; font-size: 12px; }
 .chip.code .chip-s { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.mark.accent { fill: var(--accent); }
 .msg.user { fill: var(--muted); }
 .msg.assistant { fill: var(--tool-bar); }
 .summary rect { fill: var(--model); stroke: var(--accent); }
 .bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .row-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
-.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; animation: march 1s linear infinite; }
 .bar-t { font-size: 12px; font-weight: 600; }
 .bar-t.on-bar { fill: #ffffff; }
-.mark { font-size: 13px; font-weight: 700; }
-.mark.bad { fill: var(--bad); }
-.mark.ok { fill: var(--ok); }
-.playhead { stroke: var(--accent); stroke-width: 2; opacity: 0; }
-.caption { font-size: 15px; }
+.mark { transform-box: fill-box; transform-origin: 50% 50%; }
+.mark circle { stroke-width: 1.5; }
+.mark text { font-size: 10.5px; font-weight: 800; text-anchor: middle; }
+.mark.bad circle { fill: var(--bad-bg); stroke: var(--bad); }
+.mark.bad text { fill: var(--bad); }
+.mark.ok circle { fill: var(--ok-bg); stroke: var(--ok); }
+.mark.ok text { fill: var(--ok); }
+.mark.accent circle { fill: var(--model); stroke: var(--accent); }
+.mark.accent text { fill: var(--accent); }
+.playhead { opacity: 0; }
+.playhead line { stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 3px var(--glow)); }
+.playhead circle { fill: var(--accent); filter: drop-shadow(0 0 4px var(--glow)); }
+.caption text { font-size: 15px; }
+.caption .step { fill: var(--accent); }
+.caption .step-n { fill: #ffffff; font-size: 11.5px; font-weight: 700; text-anchor: middle; }
 .axis { font-size: 11.5px; fill: var(--muted); }
 .break { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.link path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.8; }
+.link polygon { fill: var(--accent); opacity: 0.8; }
 """
+
+
+DEFS = (
+    '<defs><linearGradient id="toolGradient" x1="0" y1="0" x2="1" y2="0">'
+    '<stop offset="0" style="stop-color: var(--tool-bar)"/>'
+    '<stop offset="1" style="stop-color: var(--tool-bar-2)"/></linearGradient></defs>'
+)
 
 
 class Animation:
@@ -91,9 +123,10 @@ class Animation:
 
     def appear_at(self, name, p):
         self.keyframes(name, [
-            ("0%%, %.2f%%" % max(p - 0.01, 0), "opacity: 0"),
-            ("%.2f%%, %d%%" % (p + 1.2, HOLD_END), "opacity: 1"),
-            ("%d%%, 100%%" % (HOLD_END + 5), "opacity: 0"),
+            ("0%%, %.2f%%" % max(p - 0.01, 0), "opacity: 0; transform: translateY(5px) scale(0.94)"),
+            ("%.2f%%" % (p + 1.2), "opacity: 1; transform: translateY(-1px) scale(1.02)"),
+            ("%.2f%%, %d%%" % (p + 2.2, HOLD_END), "opacity: 1; transform: none"),
+            ("%d%%, 100%%" % (HOLD_END + 5), "opacity: 0; transform: none"),
         ])
 
     def visible_between(self, name, a, b):
@@ -129,10 +162,12 @@ class Animation:
         x = self.x(p)
         self.body.append('<g class="chip %s %s">' % (kind, name))
         self.body.append('<rect x="%.1f" y="%d" width="%d" height="%d" rx="8"/>' % (x, y, width, height))
+        self.body.append('<rect class="stripe" x="%.1f" y="%d" width="3" height="%d" rx="1.5"/>'
+                         % (x + 5, y + 7, height - 14))
         title_y = y + (19 if sub else 20)
-        self.body.append('<text class="chip-t" x="%.1f" y="%d">%s</text>' % (x + 10, title_y, title))
+        self.body.append('<text class="chip-t" x="%.1f" y="%d">%s</text>' % (x + 14, title_y, title))
         if sub:
-            self.body.append('<text class="chip-s" x="%.1f" y="%d">%s</text>' % (x + 10, y + 36, sub))
+            self.body.append('<text class="chip-s" x="%.1f" y="%d">%s</text>' % (x + 14, y + 36, sub))
         self.body.append("</g>")
 
     def bar(self, p_start, p_end, y, kind, label=None, label_on_bar=False, height=14):
@@ -146,8 +181,10 @@ class Animation:
         ])
         x_start = self.x(p_start)
         width = self.x(p_end) - x_start
-        self.body.append('<rect class="bar %s %s" x="%.1f" y="%d" width="%.1f" height="%d" rx="%d"/>'
-                         % (kind, name, x_start, y, width, height, height / 2))
+        # The grow animation sits on a wrapper so a dashed bar can also march
+        # its dashes (an element takes only one animation shorthand).
+        self.body.append('<g class="bar %s"><rect class="bar %s" x="%.1f" y="%d" width="%.1f" height="%d" rx="%d"/></g>'
+                         % (name, kind, x_start, y, width, height, height / 2))
         if label:
             label_name = self.fresh("e")
             self.appear_at(label_name, p_start + 1)
@@ -161,7 +198,20 @@ class Animation:
     def mark(self, p, y, kind, text):
         name = self.fresh("e")
         self.appear_at(name, p)
-        self.body.append('<text class="mark %s %s" x="%.1f" y="%d">%s</text>' % (kind, name, self.x(p) + 2, y, text))
+        cx, cy = self.x(p) + 9, y - 4.5
+        self.body.append('<g class="mark %s %s"><circle cx="%.1f" cy="%.1f" r="7.5"/>'
+                         '<text x="%.1f" y="%.1f">%s</text></g>' % (kind, name, cx, cy, cx, cy + 3.8, text))
+
+    def link(self, p, y0, y1, dx=16):
+        """A dashed arrow from y0 down (or up) to y1, showing one event causing
+        another; it hangs from the chip placed at p, dx pixels in."""
+        name = self.fresh("e")
+        self.appear_at(name, p)
+        x = self.x(p) + dx
+        tip = 5 if y1 > y0 else -5
+        self.body.append('<g class="link %s"><path d="M %.1f %d V %d"/>'
+                         '<polygon points="%.1f,%d %.1f,%d %.1f,%d"/></g>'
+                         % (name, x, y0, y1 - tip, x - 4, y1 - tip, x + 4, y1 - tip, x, y1))
 
     def axis_label(self, p, y, text):
         name = self.fresh("e")
@@ -194,13 +244,16 @@ class Animation:
             ("%d%%" % end, "opacity: 1; transform: translateX(%.1fpx)" % travel),
             ("%d%%, 100%%" % (end + 3), "opacity: 0; transform: translateX(%.1fpx)" % travel),
         ])
-        self.body.append('<line class="playhead" x1="%d" y1="%d" x2="%d" y2="%d"/>' % (self.x0, y0, self.x0, y1))
+        self.body.append('<g class="playhead"><line x1="%d" y1="%d" x2="%d" y2="%d"/>'
+                         '<circle cx="%d" cy="%d" r="4"/></g>' % (self.x0, y0, self.x0, y1, self.x0, y0))
 
     def captions(self, y, phases):
-        for text, a, b in phases:
+        for step, (text, a, b) in enumerate(phases, 1):
             name = self.fresh("cap")
             self.visible_between(name, a, b)
-            self.body.append('<text class="caption %s" x="24" y="%d">%s</text>' % (name, y, text))
+            self.body.append('<g class="caption %s"><circle class="step" cx="33" cy="%.1f" r="9"/>'
+                             '<text class="step-n" x="33" y="%.1f">%d</text>'
+                             '<text x="50" y="%d">%s</text></g>' % (name, y - 5, y - 1, step, y, text))
 
     def write(self, filename, aria):
         animations = "\n".join(
@@ -214,8 +267,8 @@ class Animation:
         style += "@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }\n"
         svg = (
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" '
-            'role="img" aria-label="%s">\n<style>%s</style>\n%s\n</svg>\n'
-        ) % (self.width, self.height, self.width, self.height, aria, style, "\n".join(self.body))
+            'role="img" aria-label="%s">\n<style>%s</style>\n%s\n%s\n</svg>\n'
+        ) % (self.width, self.height, self.width, self.height, aria, style, DEFS, "\n".join(self.body))
         with open("%s/%s" % (OUT_DIR, filename), "w") as f:
             f.write(svg)
 
@@ -228,6 +281,8 @@ def steering():
 
     a.chip(2, 34, 150, "user", "ask", "Plan a Berlin trip")
     a.chip(4, 108, 110, "ok", "turn started")
+    a.link(4, 80, 106)
+    a.link(6, 140, 176)
 
     a.chip(6, 178, 116, "model", "model step", "2 tool calls")
     a.bar(14, 26, 250, "tool", "getWeather")
@@ -237,7 +292,9 @@ def steering():
 
     a.chip(30, 34, 170, "user", "steer", "Only direct flights")
     a.chip(32, 108, 90, "ok", "steered")
-    a.chip(32, 178, 130, "warn", "steering signal", "queued for next step")
+    a.chip(32, 178, 140, "warn", "steering signal", "queued for next step")
+    a.link(32, 80, 106)
+    a.link(32, 140, 176)
 
     a.chip(48, 178, 138, "model", "model step", "sees tools + steer")
     a.bar(57, 70, 294, "tool", "webSearch: direct only")
@@ -246,6 +303,8 @@ def steering():
     a.chip(69, 34, 100, "user", "interrupt")
     a.chip(71, 108, 110, "ok", "interrupted")
     a.chip(73, 178, 112, "reply", "summary", "what got done")
+    a.link(71, 66, 106)
+    a.link(73, 140, 176)
 
     a.playhead(20, 332)
     a.captions(372, [
@@ -275,6 +334,7 @@ def durable_wait():
     a.bar(31, 62, 124, "idle", "suspended: no process, only state")
     a.chip(42, 142, 124, "tool", "new version v2")
     a.bar(63, 86, 124, "ok", "resumed", label_on_bar=True)
+    a.link(63, 196, 140)
 
     a.time_break(54, 24, 256, "")
     a.axis_label(46, 272, "≈ 1 day later")
@@ -312,6 +372,8 @@ def sub_agents():
     a.chip(21, 274, 148, "tool", "own history", "sandbox and memory")
     a.bar(38, 50, 302, "tool")
     a.chip(50.5, 281, 76, "reply", "answer")
+    a.link(21, 176, 198)
+    a.link(52, 205, 150, dx=10)
 
     a.chip(28, 34, 110, "user", "ask", "Add Rome")
     a.chip(41, 38, 150, "ok", "queued for next turn")
@@ -343,7 +405,7 @@ def programmatic_tool_calls():
     a.chip(9, 104, 300, "code", "const cities = [4 cities]",
            "Promise.all(cities.map(getWeather))")
 
-    rows = [("Berlin", 38), ("Paris", 42), ("Rome", 37), ("Oslo", 44)]
+    rows = [("Berlin", 38), ("Paris", 42), ("Rome", 39), ("Oslo", 44)]
     for n, (city, end) in enumerate(rows):
         y = 158 + n * 24
         a.mark(21.5, y + 14, "accent", "✓")
@@ -369,9 +431,9 @@ def programmatic_tool_calls():
 
 
 def compaction():
-    a = Animation(1000, 300, 16, 86)
+    a = Animation(1000, 264, 16, 86)
     pitch, size, x0 = 22, 16, 40
-    log_y, context_y = 64, 214
+    log_y, context_y = 64, 178
     summarized, recent = 24, 8
 
     def square(x, y, index, name):
@@ -380,7 +442,7 @@ def compaction():
                       % (kind, name, x, y, size, size))
 
     a.body.append('<text class="row-label" x="%d" y="50">Conversation log · append-only</text>' % x0)
-    a.body.append('<text class="row-label" x="%d" y="200">What the model sees</text>' % x0)
+    a.body.append('<text class="row-label" x="%d" y="164">What the model sees</text>' % x0)
 
     # First 32 messages: in the log, and in the model context until compaction.
     for i in range(summarized + recent):
@@ -428,7 +490,7 @@ def compaction():
         a.appear_at(name, p)
         square(context_x + (recent + j) * pitch, context_y, index, name)
 
-    a.captions(272, [
+    a.captions(238, [
         ("Every message is appended to the conversation log, and the model sees all of it.", 0, 36),
         ("After a turn, older messages are summarized in the background. The 8 most recent stay verbatim.", 36, 57),
         ("The log is never rewritten. Later turns build on the summary plus the recent messages.", 57, 101),
@@ -448,6 +510,7 @@ def schedules():
     a.chip(1, 108, 170, "user", "createSchedule", "daily 08:00: weather")
     a.chip(20, 34, 100, "ok", "fire", "Mon 08:00")
     a.chip(22, 108, 110, "reply", "turn", "Berlin 12°C")
+    a.link(22, 80, 106)
 
     a.time_break(36, 24, 232, "")
     a.axis_label(33, 250, "next day")
@@ -457,11 +520,13 @@ def schedules():
     a.bar(56, 86, 193, "ok", "running", label_on_bar=True)
     a.chip(46, 34, 100, "warn", "fire", "Tue 08:00")
     a.chip(57, 108, 110, "ok", "delivered", "once it is back")
+    a.link(57, 80, 106)
 
     a.time_break(70, 24, 232, "")
     a.axis_label(67, 250, "next day")
     a.chip(73, 34, 100, "ok", "fire", "Wed 08:00")
     a.chip(75, 108, 110, "reply", "turn", "Berlin 15°C")
+    a.link(75, 80, 106)
 
     a.playhead(20, 232)
     a.captions(292, [
@@ -481,7 +546,9 @@ def parallel_tool_calls():
     a.lane(158, 128, "Tools")
 
     a.chip(1, 34, 124, "model", "model step", "3 tool calls")
-    a.chip(15, 99, 150, "ok", "batch allowed", "one check, 3 calls")
+    a.chip(13, 99, 150, "ok", "batch allowed", "one check, 3 calls")
+    a.link(13, 80, 97, dx=6)
+    a.link(26, 145, 182, dx=-10)
 
     a.bar(26, 40, 190, "tool", "getWeather")
     a.mark(40, 202, "ok", "✓")
@@ -492,6 +559,7 @@ def parallel_tool_calls():
     a.axis_label(37, 274, "failed: reported to the model, the others keep running")
 
     a.chip(54, 34, 164, "model", "model step", "2 results + 1 error")
+    a.link(54, 176, 80)
     a.chip(73, 41, 80, "reply", "reply")
 
     a.playhead(20, 286)
@@ -520,12 +588,16 @@ def background_operations():
     a.bar(19, 64, 266, "tool", "sleep 120s: durable timer")
     a.mark(64, 278, "ok", "✓")
     a.axis_label(19, 294, "both return pending at once")
+    a.link(19, 150, 208, dx=-10)
 
     a.chip(20, 104, 150, "model", "model step", "answers, stays open")
     a.chip(37, 111, 100, "warn", "waiting on 2")
     a.chip(40, 34, 170, "user", "steer", "Cancel the order")
     a.chip(49, 104, 140, "model", "model step", "cancelOperation")
+    a.link(49, 80, 102)
+    a.link(57, 150, 219, dx=9)
     a.chip(65, 104, 120, "model", "model step", "timer fired")
+    a.link(65, 264, 150, dx=0)
     a.chip(79, 111, 70, "reply", "reply")
 
     a.playhead(20, 300)
@@ -541,73 +613,6 @@ def background_operations():
             "completes, the next model step sees it and the turn replies.")
 
 
-def steering_detail():
-    a = Animation(1000, 360, 16, 86)
-    a.lane(20, 64, "Client")
-    a.lane(94, 86, "Turn", "model steps")
-    a.lane(190, 100, "Tools")
-
-    a.chip(1, 34, 150, "user", "ask", "Find a Berlin hotel")
-    a.chip(4, 110, 120, "model", "model step", "2 tool calls")
-
-    a.bar(12, 34, 218, "tool", "webSearch")
-    a.mark(34, 230, "ok", "✓")
-    a.bar(12, 34, 262, "tool", "executeProgram")
-    a.bar(34, 60, 262, "idle", "handed off, keeps running")
-    a.mark(60, 274, "ok", "✓")
-
-    a.chip(20, 34, 130, "user", "steer", "Under €150")
-    a.chip(20.5, 110, 126, "warn", "steer waiting", "quick tools finish")
-    a.chip(35, 110, 120, "model", "model step", "sees the steer")
-
-    a.chip(46, 34, 130, "user", "steer", "Near the river")
-    a.chip(49, 110, 116, "bad", "draft answer", "stale, replaced")
-    a.chip(62.5, 110, 120, "model", "model step", "both steers")
-    a.chip(76.5, 117, 80, "reply", "reply")
-
-    a.playhead(20, 290)
-    a.captions(330, [
-        ("The turn runs a model step, then a quick search and a long program in parallel.", 0, 20),
-        ("A steer arrives: quick tools finish, the long program moves to the background, and the next step sees the steer.", 20, 46),
-        ("A steer that arrives while the answer is being written replaces it. The next step sees every steer.", 46, 101),
-    ])
-    a.write("steering.svg",
-            "Animation: while a search and a long program run, the client steers; the search finishes, the "
-            "program is handed off to the background, and the next model step sees the steer; a second steer "
-            "arrives while the answer is being drafted, so the draft is replaced by a step that sees both steers.")
-
-
-def async_compaction():
-    a = Animation(1000, 330, 16, 86)
-    a.lane(20, 64, "Client")
-    a.lane(94, 64, "AgentSession", "exclusive handlers")
-    a.lane(168, 64, "AgentSession", "shared handlers")
-
-    a.chip(1, 34, 70, "user", "ask")
-    a.bar(2, 19, 119, "ok", "turn 1", label_on_bar=True)
-    a.chip(19.5, 108, 120, "warn", "reserve 1–24", "send compact()")
-
-    a.chip(24, 34, 70, "user", "ask")
-    a.bar(33, 58, 119, "ok", "turn 2 · previous context", label_on_bar=True)
-
-    a.chip(33, 178, 104, "tool", "compact()", "reads 1–24")
-    a.bar(45, 52, 193, "tool", "summarize")
-    a.chip(52.5, 182, 150, "warn", "result sent", "queued behind turn 2")
-
-    a.chip(59, 108, 120, "reply", "applyCompaction", "range matches ✓")
-    a.chip(66, 34, 70, "user", "ask")
-    a.bar(73, 86, 119, "ok", "turn 3 · summary", label_on_bar=True)
-
-    a.playhead(20, 232)
-    a.captions(292, [
-        ("When a turn ends with a long log, it reserves the older messages and sends compact() one way.", 0, 23),
-        ("compact() is a shared handler: it summarizes next to the running turn and never blocks it.", 23, 58),
-        ("The summary is applied between turns, and only if the reserved range still matches.", 58, 101),
-    ])
-    a.write("async-compaction.svg",
-            "Animation: turn 1 ends and reserves messages 1 to 24 for compaction; turn 2 starts at once while "
-            "a shared compact handler summarizes them in parallel; the summary is applied between turns and "
-            "turn 3 uses it.")
 
 
 def in_process():
@@ -619,6 +624,7 @@ def in_process():
         ".stream { fill: var(--model); stroke: var(--accent); stroke-width: 1.5; }\n"
         ".packet { fill: var(--accent); }\n"
         ".pending { font-size: 12px; fill: var(--muted); }\n"
+        ".journaled { font-size: 13px; font-weight: 700; fill: var(--ok); }\n"
     )
     a.css.append(box_css)
 
@@ -655,7 +661,7 @@ def in_process():
         a.body.append('<text class="pending %s" x="364" y="%d">running…</text>' % (name, y + 19))
         name = a.fresh("e")
         a.appear_at(name, done + 4)
-        a.body.append('<text class="mark ok %s" x="364" y="%d">✓ journaled</text>' % (name, y + 19))
+        a.body.append('<text class="journaled %s" x="364" y="%d">✓ journaled</text>' % (name, y + 19))
 
         # The append travels across the stream.
         name = a.fresh("e")
@@ -693,8 +699,6 @@ def in_process():
 ANIMATIONS = {
     "steer-interrupt": steering,
     "in-process": in_process,
-    "steering": steering_detail,
-    "async-compaction": async_compaction,
     "durable-wait": durable_wait,
     "sub-agents": sub_agents,
     "programmatic-tool-calls": programmatic_tool_calls,

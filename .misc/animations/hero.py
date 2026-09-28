@@ -42,9 +42,10 @@ def kf(name, frames):
 def show_from(name, p):
     # Hidden until p%, visible until HOLD_END, then fades before the loop restarts.
     kf(name, [
-        ("0%%, %.2f%%" % (p - 0.01), "opacity: 0"),
-        ("%.2f%%, %d%%" % (p + 1.5, HOLD_END), "opacity: 1"),
-        ("%d%%, 100%%" % (HOLD_END + 5), "opacity: 0"),
+        ("0%%, %.2f%%" % (p - 0.01), "opacity: 0; transform: translateY(6px) scale(0.94)"),
+        ("%.2f%%" % (p + 1.5), "opacity: 1; transform: translateY(-1px) scale(1.02)"),
+        ("%.2f%%, %d%%" % (p + 2.5, HOLD_END), "opacity: 1; transform: none"),
+        ("%d%%, 100%%" % (HOLD_END + 5), "opacity: 0; transform: none"),
     ])
 
 
@@ -134,7 +135,9 @@ captions = [
 for n, (text, a, b) in enumerate(captions):
     name = "cap%d" % n
     visible_between(name, a, b)
-    body.append('<text class="caption %s" x="28" y="304">%s</text>' % (name, text))
+    body.append('<g class="caption %s"><circle class="step" cx="37" cy="299" r="9"/>'
+                '<text class="step-n" x="37" y="303">%d</text>'
+                '<text x="54" y="304">%s</text></g>' % (name, n + 1, text))
 
 names = (
     ["proc", "cursor"]
@@ -150,11 +153,13 @@ animations = "\n".join(".%s { animation: %s %ds linear infinite; }" % (n, n, T) 
 style = """
 :root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de;
   --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9;
-  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; }
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df;
+  --shadow:rgba(31,35,40,0.10); --glow:rgba(130,80,223,0.45); }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d;
     --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214;
-    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; }
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7;
+    --shadow:rgba(0,0,0,0.45); --glow:rgba(163,113,247,0.55); }
 }
 svg { background: var(--bg); }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
@@ -165,7 +170,9 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .state.bad, .state.bad .dot { fill: var(--bad); }
 .st0, .st1 { opacity: 0; }
 .slot { fill: none; stroke: var(--stroke); stroke-dasharray: 5 4; }
-.cell { stroke: var(--stroke); }
+.cell { stroke: var(--stroke); filter: drop-shadow(0 2px 3px var(--shadow)); }
+g { transform-box: fill-box; transform-origin: 50% 50%; }
+.proc { filter: drop-shadow(0 2px 3px var(--shadow)); }
 .cell.user { fill: var(--user); }
 .cell.model { fill: var(--model); }
 .cell.tool { fill: var(--tool); }
@@ -173,10 +180,12 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .idx { font-size: 11.5px; font-weight: 600; fill: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .line { font-size: 13px; }
 .muted { fill: var(--muted); }
-.cursor { fill: none; stroke: var(--accent); stroke-width: 2.5; opacity: 0; }
+.cursor { fill: none; stroke: var(--accent); stroke-width: 2.5; opacity: 0; filter: drop-shadow(0 0 5px var(--glow)); }
 .badge { fill: var(--ok-bg); stroke: var(--ok); }
 .badge-t { font-size: 11px; font-weight: 600; fill: var(--ok); text-anchor: middle; }
-.caption { font-size: 15px; }
+.caption text { font-size: 15px; }
+.caption .step { fill: var(--accent); }
+.caption .step-n { fill: #ffffff; font-size: 11.5px; font-weight: 700; text-anchor: middle; }
 .cap0, .cap1, .cap2 { opacity: 0; }
 """ + "\n".join(css) + "\n" + animations + """
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }

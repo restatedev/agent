@@ -2,18 +2,31 @@
 <style>
 :root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
   --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
-  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff; }
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff;
+  --tool-bar-2:#0969da; --reply-ink:#bc4c00; --user-ink:#6e7781; --tool-ink:#0969da;
+  --shadow:rgba(31,35,40,0.10); --glow:rgba(130,80,223,0.45); }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d; --lane:#161b22;
     --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214; --warn:#d29922; --warn-bg:#2b2111;
-    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd; }
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd;
+    --tool-bar-2:#79c0ff; --reply-ink:#f0883e; --user-ink:#8b949e; --tool-ink:#58a6ff;
+    --shadow:rgba(0,0,0,0.45); --glow:rgba(163,113,247,0.55); }
 }
 svg { background: var(--bg); }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
-.lane { fill: var(--lane); }
+.lane { fill: var(--lane); stroke: var(--stroke); stroke-opacity: 0.55; }
 .lane-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
 .lane-sub { font-size: 11.5px; fill: var(--muted); }
+.chip { transform-box: fill-box; transform-origin: 50% 50%; }
 .chip rect { stroke: var(--stroke); }
+.chip > rect:first-child { filter: drop-shadow(0 2px 3px var(--shadow)); }
+.chip rect.stripe { stroke: none; fill: var(--user-ink); }
+.chip.model rect.stripe, .chip.code rect.stripe { fill: var(--accent); }
+.chip.tool rect.stripe { fill: var(--tool-ink); }
+.chip.reply rect.stripe { fill: var(--reply-ink); }
+.chip.ok rect.stripe { fill: var(--ok); }
+.chip.bad rect.stripe { fill: var(--bad); }
+.chip.warn rect.stripe { fill: var(--warn); }
 .chip.user rect { fill: var(--user); }
 .chip.model rect { fill: var(--model); }
 .chip.tool rect { fill: var(--tool); }
@@ -24,49 +37,63 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .chip-t { font-size: 12.5px; font-weight: 600; }
 .chip-s { font-size: 12px; fill: var(--muted); }
 .bar { transform-box: fill-box; transform-origin: 0 50%; }
-.bar.tool { fill: var(--tool-bar); }
+.bar.tool { fill: url(#toolGradient); }
 .bar.ok { fill: var(--ok); }
-.bar.wait { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.wait { fill: var(--warn-bg); stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; animation: march 1s linear infinite; }
+@keyframes march { to { stroke-dashoffset: -22; } }
 .bar.bad { fill: var(--bad); }
 .chip.code rect { fill: var(--lane); stroke: var(--accent); }
 .chip.code .chip-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; font-size: 12px; }
 .chip.code .chip-s { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.mark.accent { fill: var(--accent); }
 .msg.user { fill: var(--muted); }
 .msg.assistant { fill: var(--tool-bar); }
 .summary rect { fill: var(--model); stroke: var(--accent); }
 .bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .row-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
-.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; animation: march 1s linear infinite; }
 .bar-t { font-size: 12px; font-weight: 600; }
 .bar-t.on-bar { fill: #ffffff; }
-.mark { font-size: 13px; font-weight: 700; }
-.mark.bad { fill: var(--bad); }
-.mark.ok { fill: var(--ok); }
-.playhead { stroke: var(--accent); stroke-width: 2; opacity: 0; }
-.caption { font-size: 15px; }
+.mark { transform-box: fill-box; transform-origin: 50% 50%; }
+.mark circle { stroke-width: 1.5; }
+.mark text { font-size: 10.5px; font-weight: 800; text-anchor: middle; }
+.mark.bad circle { fill: var(--bad-bg); stroke: var(--bad); }
+.mark.bad text { fill: var(--bad); }
+.mark.ok circle { fill: var(--ok-bg); stroke: var(--ok); }
+.mark.ok text { fill: var(--ok); }
+.mark.accent circle { fill: var(--model); stroke: var(--accent); }
+.mark.accent text { fill: var(--accent); }
+.playhead { opacity: 0; }
+.playhead line { stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 3px var(--glow)); }
+.playhead circle { fill: var(--accent); filter: drop-shadow(0 0 4px var(--glow)); }
+.caption text { font-size: 15px; }
+.caption .step { fill: var(--accent); }
+.caption .step-n { fill: #ffffff; font-size: 11.5px; font-weight: 700; text-anchor: middle; }
 .axis { font-size: 11.5px; fill: var(--muted); }
 .break { fill: none; stroke: var(--muted); stroke-width: 1.5; }
-.cap16, .cap17 { opacity: 0; }
-@keyframes e1 { 0%, 0.99% { opacity: 0 } 2.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e2 { 0%, 4.99% { opacity: 0 } 6.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+.link path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.8; }
+.link polygon { fill: var(--accent); opacity: 0.8; }
+.cap18, .cap19 { opacity: 0; }
+@keyframes e1 { 0%, 0.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 2.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 3.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e2 { 0%, 4.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 6.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 7.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes g3 { 0%, 20.99% { opacity: 0; transform: scaleX(0.001) } 21.00% { opacity: 1; transform: scaleX(0.001) } 51.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e4 { 0%, 21.99% { opacity: 0 } 23.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e5 { 0%, 20.99% { opacity: 0 } 22.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e4 { 0%, 21.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 23.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 24.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e5 { 0%, 20.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 22.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 23.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes g6 { 0%, 37.99% { opacity: 0; transform: scaleX(0.001) } 38.00% { opacity: 1; transform: scaleX(0.001) } 45.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e7 { 0%, 45.49% { opacity: 0 } 46.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e8 { 0%, 20.99% { opacity: 0 } 22.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e7 { 0%, 45.49% { opacity: 0; transform: translateY(5px) scale(0.94) } 46.70% { opacity: 1; transform: translateY(-1px) scale(1.02) } 47.70%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e8 { 0%, 20.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 22.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 23.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes g9 { 0%, 37.99% { opacity: 0; transform: scaleX(0.001) } 38.00% { opacity: 1; transform: scaleX(0.001) } 50.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e10 { 0%, 50.49% { opacity: 0 } 51.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e11 { 0%, 27.99% { opacity: 0 } 29.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e12 { 0%, 40.99% { opacity: 0 } 42.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e13 { 0%, 51.99% { opacity: 0 } 53.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e14 { 0%, 65.99% { opacity: 0 } 67.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e15 { 0%, 73.99% { opacity: 0 } 75.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e10 { 0%, 50.49% { opacity: 0; transform: translateY(5px) scale(0.94) } 51.70% { opacity: 1; transform: translateY(-1px) scale(1.02) } 52.70%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e11 { 0%, 20.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 22.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 23.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e12 { 0%, 51.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 53.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 54.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e13 { 0%, 27.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 29.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 30.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e14 { 0%, 40.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 42.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 43.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e15 { 0%, 51.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 53.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 54.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e16 { 0%, 65.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 67.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 68.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e17 { 0%, 73.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 75.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 76.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes playhead { 0% { opacity: 1; transform: translateX(0px) } 86% { opacity: 1; transform: translateX(805.0px) } 89%, 100% { opacity: 0; transform: translateX(805.0px) } }
-@keyframes cap16 { 0% { opacity: 1 } 26.20% { opacity: 1 } 27.00%, 100% { opacity: 0 } }
-@keyframes cap17 { 0%, 26.99% { opacity: 0 } 27.80% { opacity: 1 } 51.20% { opacity: 1 } 52.00%, 100% { opacity: 0 } }
-@keyframes cap18 { 0%, 51.99% { opacity: 0 } 52.80% { opacity: 1 } 100% { opacity: 1 } }
+@keyframes cap18 { 0% { opacity: 1 } 26.20% { opacity: 1 } 27.00%, 100% { opacity: 0 } }
+@keyframes cap19 { 0%, 26.99% { opacity: 0 } 27.80% { opacity: 1 } 51.20% { opacity: 1 } 52.00%, 100% { opacity: 0 } }
+@keyframes cap20 { 0%, 51.99% { opacity: 0 } 52.80% { opacity: 1 } 100% { opacity: 1 } }
 .e1 { animation: e1 16s linear infinite; }
 .e2 { animation: e2 16s linear infinite; }
 .g3 { animation: g3 16s linear infinite; }
@@ -82,12 +109,15 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .e13 { animation: e13 16s linear infinite; }
 .e14 { animation: e14 16s linear infinite; }
 .e15 { animation: e15 16s linear infinite; }
+.e16 { animation: e16 16s linear infinite; }
+.e17 { animation: e17 16s linear infinite; }
 .playhead { animation: playhead 16s linear infinite; }
-.cap16 { animation: cap16 16s linear infinite; }
-.cap17 { animation: cap17 16s linear infinite; }
 .cap18 { animation: cap18 16s linear infinite; }
+.cap19 { animation: cap19 16s linear infinite; }
+.cap20 { animation: cap20 16s linear infinite; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 </style>
+<defs><linearGradient id="toolGradient" x1="0" y1="0" x2="1" y2="0"><stop offset="0" style="stop-color: var(--tool-bar)"/><stop offset="1" style="stop-color: var(--tool-bar-2)"/></linearGradient></defs>
 <rect class="lane" x="16" y="20" width="968" height="64" rx="10"/>
 <text class="lane-label" x="32" y="57">Client</text>
 <rect class="lane" x="16" y="94" width="968" height="86" rx="10"/>
@@ -101,61 +131,74 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text class="lane-sub" x="32" y="312">paris</text>
 <g class="chip user e1">
 <rect x="179.4" y="34" width="176" height="44" rx="8"/>
-<text class="chip-t" x="189.4" y="53">ask</text>
-<text class="chip-s" x="189.4" y="70">Compare Berlin and Paris</text>
+<rect class="stripe" x="184.4" y="41" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="193.4" y="53">ask</text>
+<text class="chip-s" x="193.4" y="70">Compare Berlin and Paris</text>
 </g>
 <g class="chip model e2">
 <rect x="216.8" y="104" width="140" height="44" rx="8"/>
-<text class="chip-t" x="226.8" y="123">model step</text>
-<text class="chip-s" x="226.8" y="140">2 × createSubAgent</text>
+<rect class="stripe" x="221.8" y="111" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="230.8" y="123">model step</text>
+<text class="chip-s" x="230.8" y="140">2 × createSubAgent</text>
 </g>
-<rect class="bar wait g3" x="366.6" y="160" width="280.8" height="14" rx="7"/>
+<g class="bar g3"><rect class="bar wait" x="366.6" y="160" width="280.8" height="14" rx="7"/></g>
 <text class="bar-t e4" x="366.6" y="154">waiting on both, durably</text>
 <g class="chip tool e5">
 <rect x="366.6" y="200" width="148" height="44" rx="8"/>
-<text class="chip-t" x="376.6" y="219">own history</text>
-<text class="chip-s" x="376.6" y="236">sandbox and memory</text>
+<rect class="stripe" x="371.6" y="207" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="380.6" y="219">own history</text>
+<text class="chip-s" x="380.6" y="236">sandbox and memory</text>
 </g>
-<rect class="bar tool g6" x="525.7" y="228" width="65.5" height="14" rx="7"/>
+<g class="bar g6"><rect class="bar tool" x="525.7" y="228" width="65.5" height="14" rx="7"/></g>
 <g class="chip reply e7">
 <rect x="595.9" y="207" width="76" height="30" rx="8"/>
-<text class="chip-t" x="605.9" y="227">answer</text>
+<rect class="stripe" x="600.9" y="214" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="609.9" y="227">answer</text>
 </g>
 <g class="chip tool e8">
 <rect x="366.6" y="274" width="148" height="44" rx="8"/>
-<text class="chip-t" x="376.6" y="293">own history</text>
-<text class="chip-s" x="376.6" y="310">sandbox and memory</text>
+<rect class="stripe" x="371.6" y="281" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="380.6" y="293">own history</text>
+<text class="chip-s" x="380.6" y="310">sandbox and memory</text>
 </g>
-<rect class="bar tool g9" x="525.7" y="302" width="112.3" height="14" rx="7"/>
+<g class="bar g9"><rect class="bar tool" x="525.7" y="302" width="112.3" height="14" rx="7"/></g>
 <g class="chip reply e10">
 <rect x="642.7" y="281" width="76" height="30" rx="8"/>
-<text class="chip-t" x="652.7" y="301">answer</text>
+<rect class="stripe" x="647.7" y="288" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="656.7" y="301">answer</text>
 </g>
-<g class="chip user e11">
+<g class="link e11"><path d="M 382.6 176 V 193"/><polygon points="378.6,193 386.6,193 382.6,198"/></g>
+<g class="link e12"><path d="M 666.7 205 V 155"/><polygon points="662.7,155 670.7,155 666.7,150"/></g>
+<g class="chip user e13">
 <rect x="432.1" y="34" width="110" height="44" rx="8"/>
-<text class="chip-t" x="442.1" y="53">ask</text>
-<text class="chip-s" x="442.1" y="70">Add Rome</text>
+<rect class="stripe" x="437.1" y="41" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="446.1" y="53">ask</text>
+<text class="chip-s" x="446.1" y="70">Add Rome</text>
 </g>
-<g class="chip ok e12">
+<g class="chip ok e14">
 <rect x="553.8" y="38" width="150" height="30" rx="8"/>
-<text class="chip-t" x="563.8" y="58">queued for next turn</text>
+<rect class="stripe" x="558.8" y="45" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="567.8" y="58">queued for next turn</text>
 </g>
-<g class="chip model e13">
+<g class="chip model e15">
 <rect x="656.7" y="104" width="128" height="44" rx="8"/>
-<text class="chip-t" x="666.7" y="123">model step</text>
-<text class="chip-s" x="666.7" y="140">compare answers</text>
+<rect class="stripe" x="661.7" y="111" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="670.7" y="123">model step</text>
+<text class="chip-s" x="670.7" y="140">compare answers</text>
 </g>
-<g class="chip reply e14">
+<g class="chip reply e16">
 <rect x="787.8" y="111" width="70" height="30" rx="8"/>
-<text class="chip-t" x="797.8" y="131">reply</text>
+<rect class="stripe" x="792.8" y="118" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="801.8" y="131">reply</text>
 </g>
-<g class="chip warn e15">
+<g class="chip warn e17">
 <rect x="862.7" y="104" width="104" height="44" rx="8"/>
-<text class="chip-t" x="872.7" y="123">next turn</text>
-<text class="chip-s" x="872.7" y="140">Add Rome</text>
+<rect class="stripe" x="867.7" y="111" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="876.7" y="123">next turn</text>
+<text class="chip-s" x="876.7" y="140">Add Rome</text>
 </g>
-<line class="playhead" x1="170" y1="20" x2="170" y2="328"/>
-<text class="caption cap16" x="24" y="372">The agent hands the work to two sub-agents, each with its own history, sandbox and memory.</text>
-<text class="caption cap17" x="24" y="372">While the parent turn waits, its controller still answers. A new message is queued.</text>
-<text class="caption cap18" x="24" y="372">The answers come back as tool results, and the queued message starts the next turn.</text>
+<g class="playhead"><line x1="170" y1="20" x2="170" y2="328"/><circle cx="170" cy="20" r="4"/></g>
+<g class="caption cap18"><circle class="step" cx="33" cy="367.0" r="9"/><text class="step-n" x="33" y="371.0">1</text><text x="50" y="372">The agent hands the work to two sub-agents, each with its own history, sandbox and memory.</text></g>
+<g class="caption cap19"><circle class="step" cx="33" cy="367.0" r="9"/><text class="step-n" x="33" y="371.0">2</text><text x="50" y="372">While the parent turn waits, its controller still answers. A new message is queued.</text></g>
+<g class="caption cap20"><circle class="step" cx="33" cy="367.0" r="9"/><text class="step-n" x="33" y="371.0">3</text><text x="50" y="372">The answers come back as tool results, and the queued message starts the next turn.</text></g>
 </svg>
