@@ -182,6 +182,8 @@ of the model contract, not cosmetic documentation.
 
 ## Sub-agents
 
+![Animation: a parent turn creates two sub-agents that work in parallel; a new message is queued meanwhile; the answers return as tool results and the queued message starts the next turn](images/sub-agents.svg)
+
 `createSubAgent` accepts a name, nullable configuration overrides and optional
 initial message. It copies parent instructions, guardrails and current tool
 grants, then applies narrower access or additional policy. The child starts
@@ -250,6 +252,8 @@ Quota/auth failures are not automatically retried. Responses are capped at
 Normal tool guardrails and interruption apply, including calls emitted by PTC.
 
 ## Programmatic tool calling (PTC)
+
+![Animation: the model writes a program that calls getWeather for four cities in parallel inside a QuickJS guest; only the compact result returns to the model](images/programmatic-tool-calls.svg)
 
 PTC reduces intermediate model context: instead of returning every tool response
 to the model for the next decision, the model writes a program that calls tools,
@@ -440,6 +444,8 @@ Built-in tools are deliberately local handler code. Do not turn one into a
 Restate service merely to fit a generic abstraction.
 
 ### Pending tools
+
+![Animation: the model starts a human approval request and a durable timer; both return pending at once and run in the background; steered to stop, the model cancels the approval with cancelOperation; the timer completes and the turn replies](images/background-operations.svg)
 
 A pending tool acknowledges immediately from `run`, then implements `complete`.
 The turn runtime starts completion as a task that may survive across loop iterations:
