@@ -4,7 +4,8 @@
 // The append-only transcript remains the source of truth. User messages record
 // how they originally arrived; later routing decisions are separate lifecycle
 // events. A rolling summary is a replaceable model-context checkpoint over an
-// older prefix of that log.
+// older prefix of that log. The most recent exchanges are never summarized, so
+// the model always sees them verbatim.
 
 import type {
   ConversationCompactionPlan,
@@ -47,7 +48,10 @@ export type TurnHistory = {
   context(): ConversationContext;
   /** Appends entries using the invocation-local sequence and tail chunk. */
   append(...entries: ConversationEntry[]): restate.Operation<void>;
-  /** Reserves the finished prefix when the local message count reaches the threshold. */
+  /**
+   * Reserves the finished prefix, minus the recent exchanges, when the local
+   * message count reaches the threshold.
+   */
   beginCompaction(): restate.Operation<ConversationCompactionPlan | undefined>;
 };
 
@@ -55,6 +59,8 @@ const HISTORY_META = "history/meta";
 const HISTORY_SUMMARY = "history/summary";
 const CHUNK_SIZE = 32;
 const COMPACT_AFTER_MESSAGES = 32;
+// At least this many of the newest messages stay out of the summary.
+const KEEP_RECENT_MESSAGES = 8;
 
 /**
  * Handler-scoped access to conversation history for the current AgentSession.
@@ -147,19 +153,25 @@ export function* openTurn(): restate.Operation<TurnHistory> {
       // fallen a whole threshold behind lost its applyCompaction (the
       // one-way compact call was cancelled or failed), so replace it rather
       // than blocking compaction forever; a late result for it no longer
-      // matches the plan and is ignored.
+      // matches the plan and is ignored. The messages after a reservation
+      // include the verbatim tail it left out, so that tail is not counted
+      // as falling behind.
       const reserved = meta.compaction;
+      const staleAfter = COMPACT_AFTER_MESSAGES + KEEP_RECENT_MESSAGES;
       if (
         reserved &&
-        messagesAfter(uncompacted, reserved.through) < COMPACT_AFTER_MESSAGES
+        messagesAfter(uncompacted, reserved.through) < staleAfter
       ) {
         return undefined;
       }
 
-      meta.compaction = {
-        baseThrough: summary?.through ?? 0,
-        through: meta.nextSequence - 1,
-      };
+      const baseThrough = summary?.through ?? 0;
+      const through = recentTailBoundary(uncompacted);
+      if (through === undefined || through <= baseThrough) {
+        return undefined;
+      }
+
+      meta.compaction = {baseThrough, through};
       restate.state().set(HISTORY_META, meta);
       return meta.compaction;
     },
@@ -218,6 +230,27 @@ function messagesAfter(entries: StoredEntry[], sequence: number): number {
   return entries.filter(
     (stored) => stored.sequence > sequence && stored.entry.role !== "event",
   ).length;
+}
+
+/**
+ * The last sequence before the verbatim tail. The tail holds at least
+ * KEEP_RECENT_MESSAGES messages and starts at a user message, so the model
+ * never sees a reply whose request was summarized away. Returns undefined when
+ * no user message starts such a tail.
+ */
+function recentTailBoundary(entries: StoredEntry[]): number | undefined {
+  let kept = 0;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const {sequence, entry} = entries[i];
+    if (entry.role === "event") {
+      continue;
+    }
+    kept += 1;
+    if (kept >= KEEP_RECENT_MESSAGES && entry.role === "user") {
+      return sequence - 1;
+    }
+  }
+  return undefined;
 }
 
 function chunkKey(index: number): string {
