@@ -1,7 +1,10 @@
 # A reference agent architecture
 
-This repository demonstrates how to build a modern agent on
-[Restate](https://restate.dev):
+A complete agent, built on [Restate](https://restate.dev). Every feature a
+modern agent needs is here as a small module you can read in one sitting,
+and Restate keeps each turn running through crashes and days-long waits.
+
+What's inside:
 
 - [Parallel tool calls](#parallel-tool-calls)
 - [Background operations](#background-operations-you-can-cancel) the model
