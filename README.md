@@ -42,6 +42,36 @@ the steer; a second steer replaces a draft answer](docs/images/steering.svg)
 
 Read `agent/active-turn.ts`, `session/steering.ts` and `session/step.ts`.
 
+### Parallel tool calls
+
+All tool calls in one model response run concurrently, after the guardrails
+check them as one batch. A call that fails is reported to the model as an
+error, without discarding the results of the others, and the next model step
+decides what to do about it.
+
+![Animation: one model step proposes three tool calls; the guardrails allow
+the batch in one check; the calls run concurrently, one fails and is reported
+as an error while the others finish; the next model step sees both results
+and the error](docs/images/parallel-tool-calls.svg)
+
+Read `session/step.ts`.
+
+### Background operations you can cancel
+
+Some tools outlive the model step that called them: a durable timer
+(`sleep`), a request for human approval, or a program handed off by a steer.
+They return a `pending` result at once, so the model keeps working while they
+run. It can answer and let the turn wait for them, or cancel one with
+`cancelOperation`. Each completion reaches the model as a message before its
+next step, and the turn finishes only when nothing is pending.
+
+![Animation: the model starts a human approval request and a durable timer;
+both return pending at once and run in the background; steered to stop, the
+model cancels the approval with cancelOperation; the timer completes and the
+turn replies](docs/images/background-operations.svg)
+
+Read `session/pending.ts` and `tools/operations.ts`.
+
 ### Programmatic tool calls
 
 For work that needs many calls, the model writes a small JavaScript program
@@ -89,15 +119,29 @@ turns and turn 3 uses it](docs/images/async-compaction.svg)
 
 Read `session/history.ts`, `session/service.ts` and `model/compactor.ts`.
 
-### Guardrails and human approval
+### Guardrails
 
-A policy model checks each answer and tool batch against the agent's
-guardrails, in plain language ("never send email without asking"). A
-guardrail can block a step or require a person's approval, and the model can
-also ask for approval itself. How long the turn can then wait is covered
-[below](#wait-for-a-person-for-days).
+Guardrails are rules in plain language ("never send email without asking").
+Before an answer is sent or a tool batch runs, a policy model checks it
+against them and allows it, blocks it with a reason the model sees, or asks
+a person to approve. Each call inside a program is checked the same way.
 
-Read `session/guardrails.ts`, `session/approvals.ts` and `agent/approvals.ts`.
+Read `session/guardrails.ts`.
+
+### Human approval
+
+A person is asked to approve when a guardrail requires it, or when the model
+calls `humanApproval` itself. The request is listed on the agent
+(`Agent/<id>/approvals`) and in the UI, and the decision
+(`resolveApproval`) reaches the waiting turn as a signal. The turn can wait
+for days: it holds no process, survives redeploys, and resumes exactly where
+it stopped.
+
+![Animation: a guardrail requires approval; the turn suspends for about a day
+and survives a redeploy; when a person approves, the turn resumes and
+finishes](docs/images/durable-wait.svg)
+
+Read `session/approvals.ts`, `agent/approvals.ts` and `tools/approval.ts`.
 
 ### Schedules
 
@@ -115,8 +159,6 @@ Read `agent/schedules.ts` and `tools/schedules.ts`.
 
 | Feature | What it does | Read |
 | --- | --- | --- |
-| **Parallel tool calls** | All tool calls in one model response run concurrently. A failing call is reported to the model without discarding the others. | `session/step.ts` |
-| **Background operations** | Timers, approvals, sub-agent tasks and long programs keep running across model steps. The model can wait for them, carry on, or cancel one. | `session/pending.ts` |
 | **Tool search** | Built-ins are always visible. MCP and discovered tools load on demand through `searchTools`, so large catalogs do not fill the context. | `session/tool-search.ts` |
 | **Memory** | An index of short descriptions the model searches, reads from and writes to, so context does not grow with the number of memories. A simple illustration, not a full memory system. | `agent/memories.ts` |
 | **Sandbox** | A local directory or [Modal](https://modal.com) sandbox for files and shell commands, suspended between turns. | `sandbox/turn.ts` |
@@ -145,16 +187,6 @@ result and the turn finishes](docs/images/durable-turn.svg)
   live in Restate: no database, queue or scheduler of the agent's own. Each
   agent's state has a single owner, so there are no locks. The service is
   stateless: it scales out, or builds into a single bundle for serverless.
-
-### Wait for a person, for days
-
-When a guardrail requires approval, the turn suspends. It holds no process,
-survives redeploys, and resumes exactly where it stopped when someone
-decides. Sub-agent answers and schedule timers wait the same way.
-
-![Animation: a guardrail requires approval; the turn suspends for about a day
-and survives a redeploy; when a person approves, the turn resumes and
-finishes](docs/images/durable-wait.svg)
 
 **What replay does not do:** make external side effects exactly-once. A crash
 between an MCP call completing and its result being recorded can repeat that
