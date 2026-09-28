@@ -14,18 +14,15 @@ fully before touching an animation.
 | `durable-turn.svg` | `hero.py` | Durable by construction | Journal replay after a crash (`session/service.ts`, Restate replay) |
 | `in-process.svg` | `timeline.py` → `in-process` | How a turn works | Model calls and tools run in-process in `doTurn`; results stream to the journal (`session/step.ts`) |
 | `steer-interrupt.svg` | `timeline.py` → `steer-interrupt` | top of the page | Controller answers at once; interrupt ends with a summary (`agent/active-turn.ts`) |
-| `steering.svg` | `timeline.py` → `steering` | Steer or interrupt a running turn | Quick tools finish, programs are handed off, a steer replaces a stale non-tool proposal (`session/step.ts` `select({tools, steering})`, `session/service.ts` `consumeSteering`) |
 | `durable-wait.svg` | `timeline.py` → `durable-wait` | Human approval | Guardrail approval, suspended turn (`session/guardrails.ts`, `agent/approvals.ts`) |
 | `sub-agents.svg` | `timeline.py` → `sub-agents` | Delegate to sub-agents | `createSubAgent` waits durably, parallel children, parent keeps answering (`tools/sub-agents.ts`) |
 | `programmatic-tool-calls.svg` | `timeline.py` → `programmatic-tool-calls` | Programmatic tool calls | QuickJS program, guardrails per call, compact result (`ptc/runtime.ts`) |
 | `compaction.svg` | `timeline.py` → `compaction` | Compaction in the background | `COMPACT_AFTER_MESSAGES = 32`, `KEEP_RECENT_MESSAGES = 8` (`session/history.ts`) |
-| `async-compaction.svg` | `timeline.py` → `async-compaction` | Compaction in the background, second image | `compact` is a **shared** handler, `applyCompaction` exclusive and checks the plan (`session/service.ts` options, `history.ts` `finishCompaction`) |
 | `schedules.svg` | `timeline.py` → `schedules` | Schedules | Timers are delayed `Agent.fire` invocations in Restate (`agent/schedules.ts`, `docs/schedules.md`) |
 | `parallel-tool-calls.svg` | `timeline.py` → `parallel-tool-calls` | Parallel tool calls | Guardrails gate the batch once, calls run concurrently, a failure is a result not a throw (`session/step.ts`, `session/tools.ts`) |
 | `background-operations.svg` | `timeline.py` → `background-operations` | Background operations you can cancel | Pending results, the turn waits while its text answer stands, `cancelOperation`, completion as a runtime message (`session/pending.ts`, `session/service.ts`, `tools/operations.ts`) |
 
-Code paths are relative to `packages/libs/core/src`. `docs/images/layers.svg`
-is a static diagram written by hand, not generated.
+Code paths are relative to `packages/libs/core/src`.
 
 **Accuracy rule.** Every animation makes claims about runtime behaviour. When
 the code in the last column changes (a threshold, a handler becoming shared or
@@ -52,7 +49,7 @@ You cannot see an animation by reading the SVG. Render frames and look at
 them, in both themes, at several points in the loop:
 
 ```sh
-python3 .misc/animations/render_frames.py docs/images/steering.svg /tmp/frames 3 6.5 14.5
+python3 .misc/animations/render_frames.py docs/images/steer-interrupt.svg /tmp/frames 3 6.5 14.5
 ```
 
 The arguments after the output directory are seconds into the loop. The
@@ -109,7 +106,8 @@ a = Animation(width, height, seconds, playhead_end)
 a.lane(y, h, "Label", "sub-label")                   # background band
 a.chip(p, y, width, kind, "title", "subtitle")      # event box, left edge at x(p)
 a.bar(p_start, p_end, y, kind, "label", label_on_bar=False, height=14)
-a.mark(p, y, kind, "✓")                             # small symbol
+a.mark(p, y, kind, "✓")                             # round badge; y is the text baseline
+a.link(p, y0, y1, dx=16)                            # dashed arrow: this event causes that one
 a.axis_label(p, y, "text")                          # muted small text
 a.time_break(p, y0, y1, "")                         # zig-zag: compressed time
 a.playhead(y0, y1)
@@ -118,8 +116,17 @@ a.write("file.svg", "aria-label describing the whole animation")
 ```
 
 Chip kinds: `user`, `model`, `tool`, `reply`, `ok`, `bad`, `warn`, `code`.
-Bar kinds: `tool`, `ok`, `bad`, `wait` (dashed, warn colour), `idle` (dashed,
-muted). Mark kinds: `ok`, `bad`, `accent`.
+Bar kinds: `tool` (gradient), `ok`, `bad`, `wait` (dashed, warn colour),
+`idle` (dashed, muted). Dashed bars march their dashes to show something is
+still waiting. Mark kinds: `ok`, `bad`, `accent`.
+
+**Shared look.** Chips pop in (a small rise and scale in `appear_at`), carry
+a coloured stripe on the left for their kind, and cast a soft shadow; the
+playhead glows; each caption has a numbered step badge. All of it lives in
+`THEME` and the helpers, so a new animation gets it for free. Use `a.link`
+sparingly, for the one or two causes a reader must not miss (a steer reaching
+the turn, an approval resuming it). An arrow is vertical and hangs at
+`x(p) + dx`, so pick `p` and `dx` so both ends touch the chips they connect.
 
 For layouts that are not a timeline (`compaction`, `in-process`) the same
 object is used without a playhead: append raw SVG to `a.body`, create a
@@ -136,7 +143,7 @@ unique class with `a.fresh("e")`, and give it keyframes with `a.appear_at`,
 
 Keep captions to one line at 15px (about 95 characters for a 1000px-wide
 SVG). Keep each chip's text within its width: bold 12.5px is about 7px per
-character.
+character, plus 14px of left padding for the stripe.
 
 ## Adding an animation
 

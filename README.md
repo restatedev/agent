@@ -79,13 +79,9 @@ Read `agent/schedules.ts` and `tools/schedules.ts`.
 ### Steer or interrupt a running turn
 
 A new message can wait for the next turn, steer the running one, or
-interrupt it. The controller routes it and answers at once. A steer reaches the next model step
-without cancelling tools in flight. An interrupt stops the turn and ends it
-with a summary.
-
-![Animation: a steer arrives while a search and a long program run; the search
-finishes, the program is handed off to the background and the next step sees
-the steer; a second steer replaces a draft answer](docs/images/steering.svg)
+interrupt it. The controller routes it and answers at once. A steer reaches
+the next model step without cancelling tools in flight. An interrupt stops
+the turn and ends it with a summary.
 
 Read `agent/active-turn.ts`, `session/steering.ts` and `session/step.ts`.
 
@@ -97,10 +93,6 @@ one. Recent exchanges stay verbatim, and the log is never rewritten.
 ![Animation: after a turn the older messages are summarized while the 8 most
 recent stay verbatim; the log keeps growing and the model sees the summary
 plus recent messages](docs/images/compaction.svg)
-
-![Animation: turn 1 reserves messages for compaction; turn 2 starts at once
-while a shared compact handler summarizes them; the summary is applied between
-turns and turn 3 uses it](docs/images/async-compaction.svg)
 
 Read `session/history.ts`, `session/service.ts` and `model/compactor.ts`.
 
@@ -239,9 +231,6 @@ stream to Restate. That append is the only persistence a step needs.
 three tools as in-process function calls; each result is appended over one
 open stream to the turn journal in Restate, in completion
 order](docs/images/in-process.svg)
-
-![Layers: agent features built on a durable agent runtime of two Virtual
-Objects, on top of Restate](docs/images/layers.svg)
 
 ## Further reading
 

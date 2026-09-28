@@ -2,18 +2,31 @@
 <style>
 :root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
   --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
-  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff; }
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff;
+  --tool-bar-2:#0969da; --reply-ink:#bc4c00; --user-ink:#6e7781; --tool-ink:#0969da;
+  --shadow:rgba(31,35,40,0.10); --glow:rgba(130,80,223,0.45); }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d; --lane:#161b22;
     --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214; --warn:#d29922; --warn-bg:#2b2111;
-    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd; }
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd;
+    --tool-bar-2:#79c0ff; --reply-ink:#f0883e; --user-ink:#8b949e; --tool-ink:#58a6ff;
+    --shadow:rgba(0,0,0,0.45); --glow:rgba(163,113,247,0.55); }
 }
 svg { background: var(--bg); }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
-.lane { fill: var(--lane); }
+.lane { fill: var(--lane); stroke: var(--stroke); stroke-opacity: 0.55; }
 .lane-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
 .lane-sub { font-size: 11.5px; fill: var(--muted); }
+.chip { transform-box: fill-box; transform-origin: 50% 50%; }
 .chip rect { stroke: var(--stroke); }
+.chip > rect:first-child { filter: drop-shadow(0 2px 3px var(--shadow)); }
+.chip rect.stripe { stroke: none; fill: var(--user-ink); }
+.chip.model rect.stripe, .chip.code rect.stripe { fill: var(--accent); }
+.chip.tool rect.stripe { fill: var(--tool-ink); }
+.chip.reply rect.stripe { fill: var(--reply-ink); }
+.chip.ok rect.stripe { fill: var(--ok); }
+.chip.bad rect.stripe { fill: var(--bad); }
+.chip.warn rect.stripe { fill: var(--warn); }
 .chip.user rect { fill: var(--user); }
 .chip.model rect { fill: var(--model); }
 .chip.tool rect { fill: var(--tool); }
@@ -24,68 +37,87 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .chip-t { font-size: 12.5px; font-weight: 600; }
 .chip-s { font-size: 12px; fill: var(--muted); }
 .bar { transform-box: fill-box; transform-origin: 0 50%; }
-.bar.tool { fill: var(--tool-bar); }
+.bar.tool { fill: url(#toolGradient); }
 .bar.ok { fill: var(--ok); }
-.bar.wait { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.wait { fill: var(--warn-bg); stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; animation: march 1s linear infinite; }
+@keyframes march { to { stroke-dashoffset: -22; } }
 .bar.bad { fill: var(--bad); }
 .chip.code rect { fill: var(--lane); stroke: var(--accent); }
 .chip.code .chip-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; font-size: 12px; }
 .chip.code .chip-s { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.mark.accent { fill: var(--accent); }
 .msg.user { fill: var(--muted); }
 .msg.assistant { fill: var(--tool-bar); }
 .summary rect { fill: var(--model); stroke: var(--accent); }
 .bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .row-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
-.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; animation: march 1s linear infinite; }
 .bar-t { font-size: 12px; font-weight: 600; }
 .bar-t.on-bar { fill: #ffffff; }
-.mark { font-size: 13px; font-weight: 700; }
-.mark.bad { fill: var(--bad); }
-.mark.ok { fill: var(--ok); }
-.playhead { stroke: var(--accent); stroke-width: 2; opacity: 0; }
-.caption { font-size: 15px; }
+.mark { transform-box: fill-box; transform-origin: 50% 50%; }
+.mark circle { stroke-width: 1.5; }
+.mark text { font-size: 10.5px; font-weight: 800; text-anchor: middle; }
+.mark.bad circle { fill: var(--bad-bg); stroke: var(--bad); }
+.mark.bad text { fill: var(--bad); }
+.mark.ok circle { fill: var(--ok-bg); stroke: var(--ok); }
+.mark.ok text { fill: var(--ok); }
+.mark.accent circle { fill: var(--model); stroke: var(--accent); }
+.mark.accent text { fill: var(--accent); }
+.playhead { opacity: 0; }
+.playhead line { stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 3px var(--glow)); }
+.playhead circle { fill: var(--accent); filter: drop-shadow(0 0 4px var(--glow)); }
+.caption text { font-size: 15px; }
+.caption .step { fill: var(--accent); }
+.caption .step-n { fill: #ffffff; font-size: 11.5px; font-weight: 700; text-anchor: middle; }
 .axis { font-size: 11.5px; fill: var(--muted); }
 .break { fill: none; stroke: var(--muted); stroke-width: 1.5; }
-.cap15, .cap16 { opacity: 0; }
-@keyframes e1 { 0%, 0.99% { opacity: 0 } 2.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e2 { 0%, 14.99% { opacity: 0 } 16.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes g3 { 0%, 25.99% { opacity: 0; transform: scaleX(0.001) } 26.00% { opacity: 1; transform: scaleX(0.001) } 40.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e4 { 0%, 26.99% { opacity: 0 } 28.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e5 { 0%, 39.99% { opacity: 0 } 41.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes g6 { 0%, 25.99% { opacity: 0; transform: scaleX(0.001) } 26.00% { opacity: 1; transform: scaleX(0.001) } 52.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e7 { 0%, 26.99% { opacity: 0 } 28.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e8 { 0%, 51.99% { opacity: 0 } 53.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes g9 { 0%, 25.99% { opacity: 0; transform: scaleX(0.001) } 26.00% { opacity: 1; transform: scaleX(0.001) } 34.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e10 { 0%, 26.99% { opacity: 0 } 28.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e11 { 0%, 33.99% { opacity: 0 } 35.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e12 { 0%, 36.99% { opacity: 0 } 38.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e13 { 0%, 53.99% { opacity: 0 } 55.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e14 { 0%, 72.99% { opacity: 0 } 74.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+.link path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.8; }
+.link polygon { fill: var(--accent); opacity: 0.8; }
+.cap18, .cap19 { opacity: 0; }
+@keyframes e1 { 0%, 0.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 2.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 3.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e2 { 0%, 12.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 14.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 15.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e3 { 0%, 12.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 14.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 15.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e4 { 0%, 25.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 27.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 28.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes g5 { 0%, 25.99% { opacity: 0; transform: scaleX(0.001) } 26.00% { opacity: 1; transform: scaleX(0.001) } 40.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e6 { 0%, 26.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 28.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 29.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e7 { 0%, 39.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 41.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 42.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes g8 { 0%, 25.99% { opacity: 0; transform: scaleX(0.001) } 26.00% { opacity: 1; transform: scaleX(0.001) } 52.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e9 { 0%, 26.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 28.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 29.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e10 { 0%, 51.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 53.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 54.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes g11 { 0%, 25.99% { opacity: 0; transform: scaleX(0.001) } 26.00% { opacity: 1; transform: scaleX(0.001) } 34.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e12 { 0%, 26.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 28.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 29.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e13 { 0%, 33.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 35.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 36.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e14 { 0%, 36.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 38.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 39.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e15 { 0%, 53.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 55.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 56.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e16 { 0%, 53.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 55.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 56.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e17 { 0%, 72.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 74.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 75.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes playhead { 0% { opacity: 1; transform: translateX(0px) } 86% { opacity: 1; transform: translateX(805.0px) } 89%, 100% { opacity: 0; transform: translateX(805.0px) } }
-@keyframes cap15 { 0% { opacity: 1 } 24.20% { opacity: 1 } 25.00%, 100% { opacity: 0 } }
-@keyframes cap16 { 0%, 24.99% { opacity: 0 } 25.80% { opacity: 1 } 52.20% { opacity: 1 } 53.00%, 100% { opacity: 0 } }
-@keyframes cap17 { 0%, 52.99% { opacity: 0 } 53.80% { opacity: 1 } 100% { opacity: 1 } }
+@keyframes cap18 { 0% { opacity: 1 } 24.20% { opacity: 1 } 25.00%, 100% { opacity: 0 } }
+@keyframes cap19 { 0%, 24.99% { opacity: 0 } 25.80% { opacity: 1 } 52.20% { opacity: 1 } 53.00%, 100% { opacity: 0 } }
+@keyframes cap20 { 0%, 52.99% { opacity: 0 } 53.80% { opacity: 1 } 100% { opacity: 1 } }
 .e1 { animation: e1 16s linear infinite; }
 .e2 { animation: e2 16s linear infinite; }
-.g3 { animation: g3 16s linear infinite; }
+.e3 { animation: e3 16s linear infinite; }
 .e4 { animation: e4 16s linear infinite; }
-.e5 { animation: e5 16s linear infinite; }
-.g6 { animation: g6 16s linear infinite; }
+.g5 { animation: g5 16s linear infinite; }
+.e6 { animation: e6 16s linear infinite; }
 .e7 { animation: e7 16s linear infinite; }
-.e8 { animation: e8 16s linear infinite; }
-.g9 { animation: g9 16s linear infinite; }
+.g8 { animation: g8 16s linear infinite; }
+.e9 { animation: e9 16s linear infinite; }
 .e10 { animation: e10 16s linear infinite; }
-.e11 { animation: e11 16s linear infinite; }
+.g11 { animation: g11 16s linear infinite; }
 .e12 { animation: e12 16s linear infinite; }
 .e13 { animation: e13 16s linear infinite; }
 .e14 { animation: e14 16s linear infinite; }
+.e15 { animation: e15 16s linear infinite; }
+.e16 { animation: e16 16s linear infinite; }
+.e17 { animation: e17 16s linear infinite; }
 .playhead { animation: playhead 16s linear infinite; }
-.cap15 { animation: cap15 16s linear infinite; }
-.cap16 { animation: cap16 16s linear infinite; }
-.cap17 { animation: cap17 16s linear infinite; }
+.cap18 { animation: cap18 16s linear infinite; }
+.cap19 { animation: cap19 16s linear infinite; }
+.cap20 { animation: cap20 16s linear infinite; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 </style>
+<defs><linearGradient id="toolGradient" x1="0" y1="0" x2="1" y2="0"><stop offset="0" style="stop-color: var(--tool-bar)"/><stop offset="1" style="stop-color: var(--tool-bar-2)"/></linearGradient></defs>
 <rect class="lane" x="16" y="20" width="968" height="64" rx="10"/>
 <text class="lane-label" x="32" y="52">Turn</text>
 <text class="lane-sub" x="32" y="68">model steps</text>
@@ -95,35 +127,42 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text class="lane-label" x="32" y="227">Tools</text>
 <g class="chip model e1">
 <rect x="179.4" y="34" width="124" height="44" rx="8"/>
-<text class="chip-t" x="189.4" y="53">model step</text>
-<text class="chip-s" x="189.4" y="70">3 tool calls</text>
+<rect class="stripe" x="184.4" y="41" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="193.4" y="53">model step</text>
+<text class="chip-s" x="193.4" y="70">3 tool calls</text>
 </g>
 <g class="chip ok e2">
-<rect x="310.4" y="99" width="150" height="44" rx="8"/>
-<text class="chip-t" x="320.4" y="118">batch allowed</text>
-<text class="chip-s" x="320.4" y="135">one check, 3 calls</text>
+<rect x="291.7" y="99" width="150" height="44" rx="8"/>
+<rect class="stripe" x="296.7" y="106" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="305.7" y="118">batch allowed</text>
+<text class="chip-s" x="305.7" y="135">one check, 3 calls</text>
 </g>
-<rect class="bar tool g3" x="413.4" y="190" width="131.0" height="14" rx="7"/>
-<text class="bar-t e4" x="413.4" y="184">getWeather</text>
-<text class="mark ok e5" x="546.4" y="202">✓</text>
-<rect class="bar tool g6" x="413.4" y="226" width="243.4" height="14" rx="7"/>
-<text class="bar-t e7" x="413.4" y="220">webSearch</text>
-<text class="mark ok e8" x="658.7" y="238">✓</text>
-<rect class="bar tool g9" x="413.4" y="262" width="74.9" height="14" rx="7"/>
-<text class="bar-t e10" x="413.4" y="256">runCommand</text>
-<text class="mark bad e11" x="490.3" y="274">✕</text>
-<text class="axis e12" x="516.3" y="274">failed: reported to the model, the others keep running</text>
-<g class="chip model e13">
+<g class="link e3"><path d="M 297.7 80 V 92"/><polygon points="293.7,92 301.7,92 297.7,97"/></g>
+<g class="link e4"><path d="M 403.4 145 V 177"/><polygon points="399.4,177 407.4,177 403.4,182"/></g>
+<g class="bar g5"><rect class="bar tool" x="413.4" y="190" width="131.0" height="14" rx="7"/></g>
+<text class="bar-t e6" x="413.4" y="184">getWeather</text>
+<g class="mark ok e7"><circle cx="553.4" cy="197.5" r="7.5"/><text x="553.4" y="201.3">✓</text></g>
+<g class="bar g8"><rect class="bar tool" x="413.4" y="226" width="243.4" height="14" rx="7"/></g>
+<text class="bar-t e9" x="413.4" y="220">webSearch</text>
+<g class="mark ok e10"><circle cx="665.7" cy="233.5" r="7.5"/><text x="665.7" y="237.3">✓</text></g>
+<g class="bar g11"><rect class="bar tool" x="413.4" y="262" width="74.9" height="14" rx="7"/></g>
+<text class="bar-t e12" x="413.4" y="256">runCommand</text>
+<g class="mark bad e13"><circle cx="497.3" cy="269.5" r="7.5"/><text x="497.3" y="273.3">✕</text></g>
+<text class="axis e14" x="516.3" y="274">failed: reported to the model, the others keep running</text>
+<g class="chip model e15">
 <rect x="675.5" y="34" width="164" height="44" rx="8"/>
-<text class="chip-t" x="685.5" y="53">model step</text>
-<text class="chip-s" x="685.5" y="70">2 results + 1 error</text>
+<rect class="stripe" x="680.5" y="41" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="689.5" y="53">model step</text>
+<text class="chip-s" x="689.5" y="70">2 results + 1 error</text>
 </g>
-<g class="chip reply e14">
+<g class="link e16"><path d="M 691.5 176 V 85"/><polygon points="687.5,85 695.5,85 691.5,80"/></g>
+<g class="chip reply e17">
 <rect x="853.3" y="41" width="80" height="30" rx="8"/>
-<text class="chip-t" x="863.3" y="61">reply</text>
+<rect class="stripe" x="858.3" y="48" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="867.3" y="61">reply</text>
 </g>
-<line class="playhead" x1="170" y1="20" x2="170" y2="286"/>
-<text class="caption cap15" x="24" y="330">One model response proposes three tool calls, and the guardrails check them as one batch.</text>
-<text class="caption cap16" x="24" y="330">They run concurrently. runCommand fails, and its error does not discard the other results.</text>
-<text class="caption cap17" x="24" y="330">The next model step sees both results and the error, and decides what to do.</text>
+<g class="playhead"><line x1="170" y1="20" x2="170" y2="286"/><circle cx="170" cy="20" r="4"/></g>
+<g class="caption cap18"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">1</text><text x="50" y="330">One model response proposes three tool calls, and the guardrails check them as one batch.</text></g>
+<g class="caption cap19"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">2</text><text x="50" y="330">They run concurrently. runCommand fails, and its error does not discard the other results.</text></g>
+<g class="caption cap20"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">3</text><text x="50" y="330">The next model step sees both results and the error, and decides what to do.</text></g>
 </svg>

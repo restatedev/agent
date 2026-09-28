@@ -2,11 +2,13 @@
 <style>
 :root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de;
   --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9;
-  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; }
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df;
+  --shadow:rgba(31,35,40,0.10); --glow:rgba(130,80,223,0.45); }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d;
     --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214;
-    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; }
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7;
+    --shadow:rgba(0,0,0,0.45); --glow:rgba(163,113,247,0.55); }
 }
 svg { background: var(--bg); }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
@@ -17,7 +19,9 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .state.bad, .state.bad .dot { fill: var(--bad); }
 .st0, .st1 { opacity: 0; }
 .slot { fill: none; stroke: var(--stroke); stroke-dasharray: 5 4; }
-.cell { stroke: var(--stroke); }
+.cell { stroke: var(--stroke); filter: drop-shadow(0 2px 3px var(--shadow)); }
+g { transform-box: fill-box; transform-origin: 50% 50%; }
+.proc { filter: drop-shadow(0 2px 3px var(--shadow)); }
 .cell.user { fill: var(--user); }
 .cell.model { fill: var(--model); }
 .cell.tool { fill: var(--tool); }
@@ -25,28 +29,30 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .idx { font-size: 11.5px; font-weight: 600; fill: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .line { font-size: 13px; }
 .muted { fill: var(--muted); }
-.cursor { fill: none; stroke: var(--accent); stroke-width: 2.5; opacity: 0; }
+.cursor { fill: none; stroke: var(--accent); stroke-width: 2.5; opacity: 0; filter: drop-shadow(0 0 5px var(--glow)); }
 .badge { fill: var(--ok-bg); stroke: var(--ok); }
 .badge-t { font-size: 11px; font-weight: 600; fill: var(--ok); text-anchor: middle; }
-.caption { font-size: 15px; }
+.caption text { font-size: 15px; }
+.caption .step { fill: var(--accent); }
+.caption .step-n { fill: #ffffff; font-size: 11.5px; font-weight: 700; text-anchor: middle; }
 .cap0, .cap1, .cap2 { opacity: 0; }
 @keyframes proc { 0%, 30.9% { fill: var(--ok-bg); stroke: var(--ok) } 31.5%, 46.9% { fill: var(--bad-bg); stroke: var(--bad) } 47.5%, 100% { fill: var(--ok-bg); stroke: var(--ok) } }
 @keyframes st0 { 0% { opacity: 1 } 30.20% { opacity: 1 } 31.00%, 100% { opacity: 0 } }
 @keyframes st1 { 0%, 30.99% { opacity: 0 } 31.80% { opacity: 1 } 46.20% { opacity: 1 } 47.00%, 100% { opacity: 0 } }
 @keyframes st2 { 0%, 46.99% { opacity: 0 } 47.80% { opacity: 1 } 100% { opacity: 1 } }
-@keyframes c0 { 0%, 2.99% { opacity: 0 } 4.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes c1 { 0%, 8.99% { opacity: 0 } 10.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes c2 { 0%, 14.99% { opacity: 0 } 16.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes c3 { 0%, 18.99% { opacity: 0 } 20.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes c4 { 0%, 22.99% { opacity: 0 } 24.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes c5 { 0%, 69.99% { opacity: 0 } 71.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes c6 { 0%, 76.99% { opacity: 0 } 78.50%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes c0 { 0%, 2.99% { opacity: 0; transform: translateY(6px) scale(0.94) } 4.50% { opacity: 1; transform: translateY(-1px) scale(1.02) } 5.50%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes c1 { 0%, 8.99% { opacity: 0; transform: translateY(6px) scale(0.94) } 10.50% { opacity: 1; transform: translateY(-1px) scale(1.02) } 11.50%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes c2 { 0%, 14.99% { opacity: 0; transform: translateY(6px) scale(0.94) } 16.50% { opacity: 1; transform: translateY(-1px) scale(1.02) } 17.50%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes c3 { 0%, 18.99% { opacity: 0; transform: translateY(6px) scale(0.94) } 20.50% { opacity: 1; transform: translateY(-1px) scale(1.02) } 21.50%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes c4 { 0%, 22.99% { opacity: 0; transform: translateY(6px) scale(0.94) } 24.50% { opacity: 1; transform: translateY(-1px) scale(1.02) } 25.50%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes c5 { 0%, 69.99% { opacity: 0; transform: translateY(6px) scale(0.94) } 71.50% { opacity: 1; transform: translateY(-1px) scale(1.02) } 72.50%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes c6 { 0%, 76.99% { opacity: 0; transform: translateY(6px) scale(0.94) } 78.50% { opacity: 1; transform: translateY(-1px) scale(1.02) } 79.50%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes cursor { 0%, 51.0% { opacity: 0; transform: translateX(0px) } 52.0% { opacity: 1; transform: translateX(0px) } 64.0% { opacity: 1; transform: translateX(544px) } 67.0%, 100% { opacity: 0; transform: translateX(544px) } }
-@keyframes b0 { 0%, 52.49% { opacity: 0 } 54.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes b1 { 0%, 55.49% { opacity: 0 } 57.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes b2 { 0%, 58.49% { opacity: 0 } 60.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes b3 { 0%, 61.49% { opacity: 0 } 63.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes b4 { 0%, 64.49% { opacity: 0 } 66.00%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes b0 { 0%, 52.49% { opacity: 0; transform: translateY(6px) scale(0.94) } 54.00% { opacity: 1; transform: translateY(-1px) scale(1.02) } 55.00%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes b1 { 0%, 55.49% { opacity: 0; transform: translateY(6px) scale(0.94) } 57.00% { opacity: 1; transform: translateY(-1px) scale(1.02) } 58.00%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes b2 { 0%, 58.49% { opacity: 0; transform: translateY(6px) scale(0.94) } 60.00% { opacity: 1; transform: translateY(-1px) scale(1.02) } 61.00%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes b3 { 0%, 61.49% { opacity: 0; transform: translateY(6px) scale(0.94) } 63.00% { opacity: 1; transform: translateY(-1px) scale(1.02) } 64.00%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes b4 { 0%, 64.49% { opacity: 0; transform: translateY(6px) scale(0.94) } 66.00% { opacity: 1; transform: translateY(-1px) scale(1.02) } 67.00%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes cap0 { 0% { opacity: 1 } 30.20% { opacity: 1 } 31.00%, 100% { opacity: 0 } }
 @keyframes cap1 { 0%, 30.99% { opacity: 0 } 31.80% { opacity: 1 } 50.20% { opacity: 1 } 51.00%, 100% { opacity: 0 } }
 @keyframes cap2 { 0%, 50.99% { opacity: 0 } 51.80% { opacity: 1 } 67.20% { opacity: 1 } 68.00%, 100% { opacity: 0 } }
@@ -134,8 +140,8 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <g class="b2"><rect class="badge" x="312" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="345" y="244">✓ reused</text></g>
 <g class="b3"><rect class="badge" x="448" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="481" y="244">✓ reused</text></g>
 <g class="b4"><rect class="badge" x="584" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="617" y="244">✓ reused</text></g>
-<text class="caption cap0" x="28" y="304">Each model response and tool result is recorded in the turn&#8217;s journal.</text>
-<text class="caption cap1" x="28" y="304">The process crashes in the middle of the turn. The journal is safe in Restate.</text>
-<text class="caption cap2" x="28" y="304">After restart, Restate replays the journal: recorded results are reused, nothing runs twice.</text>
-<text class="caption cap3" x="28" y="304">The turn continues from where it stopped and publishes its answer.</text>
+<g class="caption cap0"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">1</text><text x="54" y="304">Each model response and tool result is recorded in the turn&#8217;s journal.</text></g>
+<g class="caption cap1"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">2</text><text x="54" y="304">The process crashes in the middle of the turn. The journal is safe in Restate.</text></g>
+<g class="caption cap2"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">3</text><text x="54" y="304">After restart, Restate replays the journal: recorded results are reused, nothing runs twice.</text></g>
+<g class="caption cap3"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">4</text><text x="54" y="304">The turn continues from where it stopped and publishes its answer.</text></g>
 </svg>

@@ -2,18 +2,31 @@
 <style>
 :root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
   --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
-  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff; }
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff;
+  --tool-bar-2:#0969da; --reply-ink:#bc4c00; --user-ink:#6e7781; --tool-ink:#0969da;
+  --shadow:rgba(31,35,40,0.10); --glow:rgba(130,80,223,0.45); }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d; --lane:#161b22;
     --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214; --warn:#d29922; --warn-bg:#2b2111;
-    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd; }
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd;
+    --tool-bar-2:#79c0ff; --reply-ink:#f0883e; --user-ink:#8b949e; --tool-ink:#58a6ff;
+    --shadow:rgba(0,0,0,0.45); --glow:rgba(163,113,247,0.55); }
 }
 svg { background: var(--bg); }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
-.lane { fill: var(--lane); }
+.lane { fill: var(--lane); stroke: var(--stroke); stroke-opacity: 0.55; }
 .lane-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
 .lane-sub { font-size: 11.5px; fill: var(--muted); }
+.chip { transform-box: fill-box; transform-origin: 50% 50%; }
 .chip rect { stroke: var(--stroke); }
+.chip > rect:first-child { filter: drop-shadow(0 2px 3px var(--shadow)); }
+.chip rect.stripe { stroke: none; fill: var(--user-ink); }
+.chip.model rect.stripe, .chip.code rect.stripe { fill: var(--accent); }
+.chip.tool rect.stripe { fill: var(--tool-ink); }
+.chip.reply rect.stripe { fill: var(--reply-ink); }
+.chip.ok rect.stripe { fill: var(--ok); }
+.chip.bad rect.stripe { fill: var(--bad); }
+.chip.warn rect.stripe { fill: var(--warn); }
 .chip.user rect { fill: var(--user); }
 .chip.model rect { fill: var(--model); }
 .chip.tool rect { fill: var(--tool); }
@@ -24,78 +37,103 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .chip-t { font-size: 12.5px; font-weight: 600; }
 .chip-s { font-size: 12px; fill: var(--muted); }
 .bar { transform-box: fill-box; transform-origin: 0 50%; }
-.bar.tool { fill: var(--tool-bar); }
+.bar.tool { fill: url(#toolGradient); }
 .bar.ok { fill: var(--ok); }
-.bar.wait { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.wait { fill: var(--warn-bg); stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; animation: march 1s linear infinite; }
+@keyframes march { to { stroke-dashoffset: -22; } }
 .bar.bad { fill: var(--bad); }
 .chip.code rect { fill: var(--lane); stroke: var(--accent); }
 .chip.code .chip-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; font-size: 12px; }
 .chip.code .chip-s { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.mark.accent { fill: var(--accent); }
 .msg.user { fill: var(--muted); }
 .msg.assistant { fill: var(--tool-bar); }
 .summary rect { fill: var(--model); stroke: var(--accent); }
 .bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .row-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
-.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; animation: march 1s linear infinite; }
 .bar-t { font-size: 12px; font-weight: 600; }
 .bar-t.on-bar { fill: #ffffff; }
-.mark { font-size: 13px; font-weight: 700; }
-.mark.bad { fill: var(--bad); }
-.mark.ok { fill: var(--ok); }
-.playhead { stroke: var(--accent); stroke-width: 2; opacity: 0; }
-.caption { font-size: 15px; }
+.mark { transform-box: fill-box; transform-origin: 50% 50%; }
+.mark circle { stroke-width: 1.5; }
+.mark text { font-size: 10.5px; font-weight: 800; text-anchor: middle; }
+.mark.bad circle { fill: var(--bad-bg); stroke: var(--bad); }
+.mark.bad text { fill: var(--bad); }
+.mark.ok circle { fill: var(--ok-bg); stroke: var(--ok); }
+.mark.ok text { fill: var(--ok); }
+.mark.accent circle { fill: var(--model); stroke: var(--accent); }
+.mark.accent text { fill: var(--accent); }
+.playhead { opacity: 0; }
+.playhead line { stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 3px var(--glow)); }
+.playhead circle { fill: var(--accent); filter: drop-shadow(0 0 4px var(--glow)); }
+.caption text { font-size: 15px; }
+.caption .step { fill: var(--accent); }
+.caption .step-n { fill: #ffffff; font-size: 11.5px; font-weight: 700; text-anchor: middle; }
 .axis { font-size: 11.5px; fill: var(--muted); }
 .break { fill: none; stroke: var(--muted); stroke-width: 1.5; }
-.cap20, .cap21 { opacity: 0; }
-@keyframes e1 { 0%, 1.99% { opacity: 0 } 3.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e2 { 0%, 3.99% { opacity: 0 } 5.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e3 { 0%, 5.99% { opacity: 0 } 7.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes g4 { 0%, 13.99% { opacity: 0; transform: scaleX(0.001) } 14.00% { opacity: 1; transform: scaleX(0.001) } 26.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e5 { 0%, 14.99% { opacity: 0 } 16.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e6 { 0%, 25.99% { opacity: 0 } 27.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes g7 { 0%, 13.99% { opacity: 0; transform: scaleX(0.001) } 14.00% { opacity: 1; transform: scaleX(0.001) } 46.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e8 { 0%, 14.99% { opacity: 0 } 16.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e9 { 0%, 45.99% { opacity: 0 } 47.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e10 { 0%, 29.99% { opacity: 0 } 31.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e11 { 0%, 31.99% { opacity: 0 } 33.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e12 { 0%, 31.99% { opacity: 0 } 33.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e13 { 0%, 47.99% { opacity: 0 } 49.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes g14 { 0%, 56.99% { opacity: 0; transform: scaleX(0.001) } 57.00% { opacity: 1; transform: scaleX(0.001) } 70.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
-@keyframes e15 { 0%, 57.99% { opacity: 0 } 59.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e16 { 0%, 69.99% { opacity: 0 } 71.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e17 { 0%, 68.99% { opacity: 0 } 70.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e18 { 0%, 70.99% { opacity: 0 } 72.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
-@keyframes e19 { 0%, 72.99% { opacity: 0 } 74.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+.link path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.8; }
+.link polygon { fill: var(--accent); opacity: 0.8; }
+.cap26, .cap27 { opacity: 0; }
+@keyframes e1 { 0%, 1.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 3.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 4.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e2 { 0%, 3.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 5.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 6.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e3 { 0%, 3.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 5.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 6.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e4 { 0%, 5.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 7.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 8.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e5 { 0%, 5.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 7.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 8.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes g6 { 0%, 13.99% { opacity: 0; transform: scaleX(0.001) } 14.00% { opacity: 1; transform: scaleX(0.001) } 26.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e7 { 0%, 14.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 16.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 17.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e8 { 0%, 25.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 27.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 28.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes g9 { 0%, 13.99% { opacity: 0; transform: scaleX(0.001) } 14.00% { opacity: 1; transform: scaleX(0.001) } 46.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e10 { 0%, 14.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 16.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 17.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e11 { 0%, 45.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 47.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 48.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e12 { 0%, 29.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 31.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 32.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e13 { 0%, 31.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 33.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 34.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e14 { 0%, 31.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 33.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 34.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e15 { 0%, 31.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 33.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 34.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e16 { 0%, 31.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 33.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 34.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e17 { 0%, 47.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 49.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 50.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes g18 { 0%, 56.99% { opacity: 0; transform: scaleX(0.001) } 57.00% { opacity: 1; transform: scaleX(0.001) } 70.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e19 { 0%, 57.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 59.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 60.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e20 { 0%, 69.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 71.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 72.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e21 { 0%, 68.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 70.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 71.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e22 { 0%, 70.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 72.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 73.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e23 { 0%, 72.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 74.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 75.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e24 { 0%, 70.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 72.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 73.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e25 { 0%, 72.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 74.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 75.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes playhead { 0% { opacity: 1; transform: translateX(0px) } 86% { opacity: 1; transform: translateX(805.0px) } 89%, 100% { opacity: 0; transform: translateX(805.0px) } }
-@keyframes cap20 { 0% { opacity: 1 } 28.20% { opacity: 1 } 29.00%, 100% { opacity: 0 } }
-@keyframes cap21 { 0%, 28.99% { opacity: 0 } 29.80% { opacity: 1 } 66.20% { opacity: 1 } 67.00%, 100% { opacity: 0 } }
-@keyframes cap22 { 0%, 66.99% { opacity: 0 } 67.80% { opacity: 1 } 100% { opacity: 1 } }
+@keyframes cap26 { 0% { opacity: 1 } 28.20% { opacity: 1 } 29.00%, 100% { opacity: 0 } }
+@keyframes cap27 { 0%, 28.99% { opacity: 0 } 29.80% { opacity: 1 } 66.20% { opacity: 1 } 67.00%, 100% { opacity: 0 } }
+@keyframes cap28 { 0%, 66.99% { opacity: 0 } 67.80% { opacity: 1 } 100% { opacity: 1 } }
 .e1 { animation: e1 16s linear infinite; }
 .e2 { animation: e2 16s linear infinite; }
 .e3 { animation: e3 16s linear infinite; }
-.g4 { animation: g4 16s linear infinite; }
+.e4 { animation: e4 16s linear infinite; }
 .e5 { animation: e5 16s linear infinite; }
-.e6 { animation: e6 16s linear infinite; }
-.g7 { animation: g7 16s linear infinite; }
+.g6 { animation: g6 16s linear infinite; }
+.e7 { animation: e7 16s linear infinite; }
 .e8 { animation: e8 16s linear infinite; }
-.e9 { animation: e9 16s linear infinite; }
+.g9 { animation: g9 16s linear infinite; }
 .e10 { animation: e10 16s linear infinite; }
 .e11 { animation: e11 16s linear infinite; }
 .e12 { animation: e12 16s linear infinite; }
 .e13 { animation: e13 16s linear infinite; }
-.g14 { animation: g14 16s linear infinite; }
+.e14 { animation: e14 16s linear infinite; }
 .e15 { animation: e15 16s linear infinite; }
 .e16 { animation: e16 16s linear infinite; }
 .e17 { animation: e17 16s linear infinite; }
-.e18 { animation: e18 16s linear infinite; }
+.g18 { animation: g18 16s linear infinite; }
 .e19 { animation: e19 16s linear infinite; }
+.e20 { animation: e20 16s linear infinite; }
+.e21 { animation: e21 16s linear infinite; }
+.e22 { animation: e22 16s linear infinite; }
+.e23 { animation: e23 16s linear infinite; }
+.e24 { animation: e24 16s linear infinite; }
+.e25 { animation: e25 16s linear infinite; }
 .playhead { animation: playhead 16s linear infinite; }
-.cap20 { animation: cap20 16s linear infinite; }
-.cap21 { animation: cap21 16s linear infinite; }
-.cap22 { animation: cap22 16s linear infinite; }
+.cap26 { animation: cap26 16s linear infinite; }
+.cap27 { animation: cap27 16s linear infinite; }
+.cap28 { animation: cap28 16s linear infinite; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 </style>
+<defs><linearGradient id="toolGradient" x1="0" y1="0" x2="1" y2="0"><stop offset="0" style="stop-color: var(--tool-bar)"/><stop offset="1" style="stop-color: var(--tool-bar-2)"/></linearGradient></defs>
 <rect class="lane" x="16" y="20" width="968" height="64" rx="10"/>
 <text class="lane-label" x="32" y="57">Client</text>
 <rect class="lane" x="16" y="94" width="968" height="64" rx="10"/>
@@ -106,61 +144,77 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text class="lane-sub" x="32" y="266">AgentSession</text>
 <g class="chip user e1">
 <rect x="188.7" y="34" width="150" height="44" rx="8"/>
-<text class="chip-t" x="198.7" y="53">ask</text>
-<text class="chip-s" x="198.7" y="70">Plan a Berlin trip</text>
+<rect class="stripe" x="193.7" y="41" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="202.7" y="53">ask</text>
+<text class="chip-s" x="202.7" y="70">Plan a Berlin trip</text>
 </g>
 <g class="chip ok e2">
 <rect x="207.4" y="108" width="110" height="30" rx="8"/>
-<text class="chip-t" x="217.4" y="128">turn started</text>
+<rect class="stripe" x="212.4" y="115" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="221.4" y="128">turn started</text>
 </g>
-<g class="chip model e3">
+<g class="link e3"><path d="M 223.4 80 V 101"/><polygon points="219.4,101 227.4,101 223.4,106"/></g>
+<g class="link e4"><path d="M 242.2 140 V 171"/><polygon points="238.2,171 246.2,171 242.2,176"/></g>
+<g class="chip model e5">
 <rect x="226.2" y="178" width="116" height="44" rx="8"/>
-<text class="chip-t" x="236.2" y="197">model step</text>
-<text class="chip-s" x="236.2" y="214">2 tool calls</text>
+<rect class="stripe" x="231.2" y="185" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="240.2" y="197">model step</text>
+<text class="chip-s" x="240.2" y="214">2 tool calls</text>
 </g>
-<rect class="bar tool g4" x="301.0" y="250" width="112.3" height="14" rx="7"/>
-<text class="bar-t e5" x="301.0" y="244">getWeather</text>
-<text class="mark ok e6" x="415.4" y="262">✓</text>
-<rect class="bar tool g7" x="301.0" y="294" width="299.5" height="14" rx="7"/>
-<text class="bar-t e8" x="301.0" y="288">webSearch: flights</text>
-<text class="mark ok e9" x="602.6" y="306">✓</text>
-<g class="chip user e10">
+<g class="bar g6"><rect class="bar tool" x="301.0" y="250" width="112.3" height="14" rx="7"/></g>
+<text class="bar-t e7" x="301.0" y="244">getWeather</text>
+<g class="mark ok e8"><circle cx="422.4" cy="257.5" r="7.5"/><text x="422.4" y="261.3">✓</text></g>
+<g class="bar g9"><rect class="bar tool" x="301.0" y="294" width="299.5" height="14" rx="7"/></g>
+<text class="bar-t e10" x="301.0" y="288">webSearch: flights</text>
+<g class="mark ok e11"><circle cx="609.6" cy="301.5" r="7.5"/><text x="609.6" y="305.3">✓</text></g>
+<g class="chip user e12">
 <rect x="450.8" y="34" width="170" height="44" rx="8"/>
-<text class="chip-t" x="460.8" y="53">steer</text>
-<text class="chip-s" x="460.8" y="70">Only direct flights</text>
+<rect class="stripe" x="455.8" y="41" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="464.8" y="53">steer</text>
+<text class="chip-s" x="464.8" y="70">Only direct flights</text>
 </g>
-<g class="chip ok e11">
+<g class="chip ok e13">
 <rect x="469.5" y="108" width="90" height="30" rx="8"/>
-<text class="chip-t" x="479.5" y="128">steered</text>
+<rect class="stripe" x="474.5" y="115" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="483.5" y="128">steered</text>
 </g>
-<g class="chip warn e12">
-<rect x="469.5" y="178" width="130" height="44" rx="8"/>
-<text class="chip-t" x="479.5" y="197">steering signal</text>
-<text class="chip-s" x="479.5" y="214">queued for next step</text>
+<g class="chip warn e14">
+<rect x="469.5" y="178" width="140" height="44" rx="8"/>
+<rect class="stripe" x="474.5" y="185" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="483.5" y="197">steering signal</text>
+<text class="chip-s" x="483.5" y="214">queued for next step</text>
 </g>
-<g class="chip model e13">
+<g class="link e15"><path d="M 485.5 80 V 101"/><polygon points="481.5,101 489.5,101 485.5,106"/></g>
+<g class="link e16"><path d="M 485.5 140 V 171"/><polygon points="481.5,171 489.5,171 485.5,176"/></g>
+<g class="chip model e17">
 <rect x="619.3" y="178" width="138" height="44" rx="8"/>
-<text class="chip-t" x="629.3" y="197">model step</text>
-<text class="chip-s" x="629.3" y="214">sees tools + steer</text>
+<rect class="stripe" x="624.3" y="185" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="633.3" y="197">model step</text>
+<text class="chip-s" x="633.3" y="214">sees tools + steer</text>
 </g>
-<rect class="bar tool g14" x="703.5" y="294" width="121.7" height="14" rx="7"/>
-<text class="bar-t e15" x="703.5" y="288">webSearch: direct only</text>
-<text class="mark bad e16" x="827.2" y="306">✕</text>
-<g class="chip user e17">
+<g class="bar g18"><rect class="bar tool" x="703.5" y="294" width="121.7" height="14" rx="7"/></g>
+<text class="bar-t e19" x="703.5" y="288">webSearch: direct only</text>
+<g class="mark bad e20"><circle cx="834.2" cy="301.5" r="7.5"/><text x="834.2" y="305.3">✕</text></g>
+<g class="chip user e21">
 <rect x="815.9" y="34" width="100" height="30" rx="8"/>
-<text class="chip-t" x="825.9" y="54">interrupt</text>
+<rect class="stripe" x="820.9" y="41" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="829.9" y="54">interrupt</text>
 </g>
-<g class="chip ok e18">
+<g class="chip ok e22">
 <rect x="834.6" y="108" width="110" height="30" rx="8"/>
-<text class="chip-t" x="844.6" y="128">interrupted</text>
+<rect class="stripe" x="839.6" y="115" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="848.6" y="128">interrupted</text>
 </g>
-<g class="chip reply e19">
+<g class="chip reply e23">
 <rect x="853.3" y="178" width="112" height="44" rx="8"/>
-<text class="chip-t" x="863.3" y="197">summary</text>
-<text class="chip-s" x="863.3" y="214">what got done</text>
+<rect class="stripe" x="858.3" y="185" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="867.3" y="197">summary</text>
+<text class="chip-s" x="867.3" y="214">what got done</text>
 </g>
-<line class="playhead" x1="170" y1="20" x2="170" y2="332"/>
-<text class="caption cap20" x="24" y="372">A turn is running: one model step, then its tool calls in parallel.</text>
-<text class="caption cap21" x="24" y="372">Steering is answered at once. It reaches the next model step, and no running tool is cancelled.</text>
-<text class="caption cap22" x="24" y="372">An interrupt cancels unfinished work, and the turn ends with a summary of what it did.</text>
+<g class="link e24"><path d="M 850.6 66 V 101"/><polygon points="846.6,101 854.6,101 850.6,106"/></g>
+<g class="link e25"><path d="M 869.3 140 V 171"/><polygon points="865.3,171 873.3,171 869.3,176"/></g>
+<g class="playhead"><line x1="170" y1="20" x2="170" y2="332"/><circle cx="170" cy="20" r="4"/></g>
+<g class="caption cap26"><circle class="step" cx="33" cy="367.0" r="9"/><text class="step-n" x="33" y="371.0">1</text><text x="50" y="372">A turn is running: one model step, then its tool calls in parallel.</text></g>
+<g class="caption cap27"><circle class="step" cx="33" cy="367.0" r="9"/><text class="step-n" x="33" y="371.0">2</text><text x="50" y="372">Steering is answered at once. It reaches the next model step, and no running tool is cancelled.</text></g>
+<g class="caption cap28"><circle class="step" cx="33" cy="367.0" r="9"/><text class="step-n" x="33" y="371.0">3</text><text x="50" y="372">An interrupt cancels unfinished work, and the turn ends with a summary of what it did.</text></g>
 </svg>
