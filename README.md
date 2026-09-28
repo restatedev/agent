@@ -146,6 +146,17 @@ flight; an interrupt cancels unfinished work and ends with a summary.
 controller answers at once; an interrupt later cancels the remaining tool and
 the turn ends with a summary](docs/images/steer-interrupt.svg)
 
+A closer look at steering: when a steer arrives while tools run, quick tools
+finish and a long-running program moves to the background, so the new input
+reaches the next model step without waiting for it. A steer that arrives
+while the model is writing its answer makes that answer stale, and a new
+model step over every steer replaces it. Messages queued in the meantime go
+along with the steer.
+
+![Animation: a steer arrives while a search and a long program run; the search
+finishes, the program is handed off to the background and the next step sees
+the steer; a second steer replaces a draft answer](docs/images/steering.svg)
+
 Read `agent/active-turn.ts` and `session/step.ts`.
 
 ### Wait for a person, for days
@@ -197,7 +208,16 @@ never rewritten.
 recent stay verbatim; the log keeps growing and the model sees the summary
 plus recent messages](docs/images/compaction.svg)
 
-Read `session/history.ts` and `model/compactor.ts`.
+Compaction never blocks a turn. The ending turn reserves the older messages
+and sends `compact()` one way. That is a shared handler, so the summary is
+written next to the next turn rather than before it. The result is applied
+between turns, and only if the reserved range still matches.
+
+![Animation: turn 1 reserves messages for compaction; turn 2 starts at once
+while a shared compact handler summarizes them; the summary is applied between
+turns and turn 3 uses it](docs/images/async-compaction.svg)
+
+Read `session/history.ts`, `session/service.ts` and `model/compactor.ts`.
 
 ### Schedules
 

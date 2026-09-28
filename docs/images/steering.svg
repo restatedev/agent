@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="Animation: while a search and a long program run, the client steers; the search finishes, the program is handed off to the background, and the next model step sees the steer; a second steer arrives while the answer is being drafted, so the draft is replaced by a step that sees both steers.">
+<style>
+:root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
+  --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
+  --user:#f6f8fa; --model:#f3efff; --tool:#eaf4ff; --reply:#fff4e8; --accent:#8250df; --tool-bar:#54aeff; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --stroke:#30363d; --lane:#161b22;
+    --ok:#3fb950; --ok-bg:#12261e; --bad:#f85149; --bad-bg:#2d1214; --warn:#d29922; --warn-bg:#2b2111;
+    --user:#161b22; --model:#1f1935; --tool:#0f2238; --reply:#2a1c0e; --accent:#a371f7; --tool-bar:#388bfd; }
+}
+svg { background: var(--bg); }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
+.lane { fill: var(--lane); }
+.lane-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
+.lane-sub { font-size: 11.5px; fill: var(--muted); }
+.chip rect { stroke: var(--stroke); }
+.chip.user rect { fill: var(--user); }
+.chip.model rect { fill: var(--model); }
+.chip.tool rect { fill: var(--tool); }
+.chip.reply rect { fill: var(--reply); }
+.chip.ok rect { fill: var(--ok-bg); stroke: var(--ok); }
+.chip.bad rect { fill: var(--bad-bg); stroke: var(--bad); }
+.chip.warn rect { fill: var(--warn-bg); stroke: var(--warn); }
+.chip-t { font-size: 12.5px; font-weight: 600; }
+.chip-s { font-size: 12px; fill: var(--muted); }
+.bar { transform-box: fill-box; transform-origin: 0 50%; }
+.bar.tool { fill: var(--tool-bar); }
+.bar.ok { fill: var(--ok); }
+.bar.wait { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.bad { fill: var(--bad); }
+.chip.code rect { fill: var(--lane); stroke: var(--accent); }
+.chip.code .chip-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; font-size: 12px; }
+.chip.code .chip-s { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.mark.accent { fill: var(--accent); }
+.msg.user { fill: var(--muted); }
+.msg.assistant { fill: var(--tool-bar); }
+.summary rect { fill: var(--model); stroke: var(--accent); }
+.bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.row-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
+.bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar-t { font-size: 12px; font-weight: 600; }
+.bar-t.on-bar { fill: #ffffff; }
+.mark { font-size: 13px; font-weight: 700; }
+.mark.bad { fill: var(--bad); }
+.mark.ok { fill: var(--ok); }
+.playhead { stroke: var(--accent); stroke-width: 2; opacity: 0; }
+.caption { font-size: 15px; }
+.axis { font-size: 11.5px; fill: var(--muted); }
+.break { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.cap18, .cap19 { opacity: 0; }
+@keyframes e1 { 0%, 0.99% { opacity: 0 } 2.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e2 { 0%, 3.99% { opacity: 0 } 5.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g3 { 0%, 11.99% { opacity: 0; transform: scaleX(0.001) } 12.00% { opacity: 1; transform: scaleX(0.001) } 34.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e4 { 0%, 12.99% { opacity: 0 } 14.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e5 { 0%, 33.99% { opacity: 0 } 35.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g6 { 0%, 11.99% { opacity: 0; transform: scaleX(0.001) } 12.00% { opacity: 1; transform: scaleX(0.001) } 34.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e7 { 0%, 12.99% { opacity: 0 } 14.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes g8 { 0%, 33.99% { opacity: 0; transform: scaleX(0.001) } 34.00% { opacity: 1; transform: scaleX(0.001) } 60.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e9 { 0%, 34.99% { opacity: 0 } 36.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e10 { 0%, 59.99% { opacity: 0 } 61.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e11 { 0%, 19.99% { opacity: 0 } 21.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e12 { 0%, 20.49% { opacity: 0 } 21.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e13 { 0%, 34.99% { opacity: 0 } 36.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e14 { 0%, 45.99% { opacity: 0 } 47.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e15 { 0%, 48.99% { opacity: 0 } 50.20%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e16 { 0%, 62.49% { opacity: 0 } 63.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes e17 { 0%, 76.49% { opacity: 0 } 77.70%, 93% { opacity: 1 } 98%, 100% { opacity: 0 } }
+@keyframes playhead { 0% { opacity: 1; transform: translateX(0px) } 86% { opacity: 1; transform: translateX(805.0px) } 89%, 100% { opacity: 0; transform: translateX(805.0px) } }
+@keyframes cap18 { 0% { opacity: 1 } 19.20% { opacity: 1 } 20.00%, 100% { opacity: 0 } }
+@keyframes cap19 { 0%, 19.99% { opacity: 0 } 20.80% { opacity: 1 } 45.20% { opacity: 1 } 46.00%, 100% { opacity: 0 } }
+@keyframes cap20 { 0%, 45.99% { opacity: 0 } 46.80% { opacity: 1 } 100% { opacity: 1 } }
+.e1 { animation: e1 16s linear infinite; }
+.e2 { animation: e2 16s linear infinite; }
+.g3 { animation: g3 16s linear infinite; }
+.e4 { animation: e4 16s linear infinite; }
+.e5 { animation: e5 16s linear infinite; }
+.g6 { animation: g6 16s linear infinite; }
+.e7 { animation: e7 16s linear infinite; }
+.g8 { animation: g8 16s linear infinite; }
+.e9 { animation: e9 16s linear infinite; }
+.e10 { animation: e10 16s linear infinite; }
+.e11 { animation: e11 16s linear infinite; }
+.e12 { animation: e12 16s linear infinite; }
+.e13 { animation: e13 16s linear infinite; }
+.e14 { animation: e14 16s linear infinite; }
+.e15 { animation: e15 16s linear infinite; }
+.e16 { animation: e16 16s linear infinite; }
+.e17 { animation: e17 16s linear infinite; }
+.playhead { animation: playhead 16s linear infinite; }
+.cap18 { animation: cap18 16s linear infinite; }
+.cap19 { animation: cap19 16s linear infinite; }
+.cap20 { animation: cap20 16s linear infinite; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<rect class="lane" x="16" y="20" width="968" height="64" rx="10"/>
+<text class="lane-label" x="32" y="57">Client</text>
+<rect class="lane" x="16" y="94" width="968" height="86" rx="10"/>
+<text class="lane-label" x="32" y="137">Turn</text>
+<text class="lane-sub" x="32" y="153">model steps</text>
+<rect class="lane" x="16" y="190" width="968" height="100" rx="10"/>
+<text class="lane-label" x="32" y="245">Tools</text>
+<g class="chip user e1">
+<rect x="179.4" y="34" width="150" height="44" rx="8"/>
+<text class="chip-t" x="189.4" y="53">ask</text>
+<text class="chip-s" x="189.4" y="70">Find a Berlin hotel</text>
+</g>
+<g class="chip model e2">
+<rect x="207.4" y="110" width="120" height="44" rx="8"/>
+<text class="chip-t" x="217.4" y="129">model step</text>
+<text class="chip-s" x="217.4" y="146">2 tool calls</text>
+</g>
+<rect class="bar tool g3" x="282.3" y="218" width="205.9" height="14" rx="7"/>
+<text class="bar-t e4" x="282.3" y="212">webSearch</text>
+<text class="mark ok e5" x="490.3" y="230">✓</text>
+<rect class="bar tool g6" x="282.3" y="262" width="205.9" height="14" rx="7"/>
+<text class="bar-t e7" x="282.3" y="256">executeProgram</text>
+<rect class="bar idle g8" x="488.3" y="262" width="243.4" height="14" rx="7"/>
+<text class="bar-t e9" x="488.3" y="256">handed off, keeps running</text>
+<text class="mark ok e10" x="733.6" y="274">✓</text>
+<g class="chip user e11">
+<rect x="357.2" y="34" width="130" height="44" rx="8"/>
+<text class="chip-t" x="367.2" y="53">steer</text>
+<text class="chip-s" x="367.2" y="70">Under €150</text>
+</g>
+<g class="chip warn e12">
+<rect x="361.9" y="110" width="126" height="44" rx="8"/>
+<text class="chip-t" x="371.9" y="129">steer waiting</text>
+<text class="chip-s" x="371.9" y="146">quick tools finish</text>
+</g>
+<g class="chip model e13">
+<rect x="497.6" y="110" width="120" height="44" rx="8"/>
+<text class="chip-t" x="507.6" y="129">model step</text>
+<text class="chip-s" x="507.6" y="146">sees the steer</text>
+</g>
+<g class="chip user e14">
+<rect x="600.6" y="34" width="130" height="44" rx="8"/>
+<text class="chip-t" x="610.6" y="53">steer</text>
+<text class="chip-s" x="610.6" y="70">Near the river</text>
+</g>
+<g class="chip bad e15">
+<rect x="628.7" y="110" width="116" height="44" rx="8"/>
+<text class="chip-t" x="638.7" y="129">draft answer</text>
+<text class="chip-s" x="638.7" y="146">stale, replaced</text>
+</g>
+<g class="chip model e16">
+<rect x="755.0" y="110" width="120" height="44" rx="8"/>
+<text class="chip-t" x="765.0" y="129">model step</text>
+<text class="chip-s" x="765.0" y="146">both steers</text>
+</g>
+<g class="chip reply e17">
+<rect x="886.1" y="117" width="80" height="30" rx="8"/>
+<text class="chip-t" x="896.1" y="137">reply</text>
+</g>
+<line class="playhead" x1="170" y1="20" x2="170" y2="290"/>
+<text class="caption cap18" x="24" y="330">The turn runs a model step, then a quick search and a long program in parallel.</text>
+<text class="caption cap19" x="24" y="330">A steer arrives: quick tools finish, the long program moves to the background, and the next step sees the steer.</text>
+<text class="caption cap20" x="24" y="330">A steer that arrives while the answer is being written replaces it. The next step sees every steer.</text>
+</svg>
