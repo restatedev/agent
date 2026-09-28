@@ -9,8 +9,7 @@ description: >
   server as a tool, adding Agent handlers, transcript events or UI
   operations, changing models or instructions, or growing the reference into
   a full application with users, sessions, credentials and a backend for the
-  web UI. Not for the Restate agent SDK library (restatedev/agentsdk, with
-  agent(), asyncTool and handoff), which has its own restate-agents skill.
+  web UI.
 ---
 
 # Extending the Restate reference agent
