@@ -173,17 +173,52 @@ queued message starts the next turn](docs/images/sub-agents.svg)
 
 Read `agent/sub-agents.ts` and `session/tools/sub-agents.ts`.
 
+### Programmatic tool calls
+
+For work that needs many calls, the model writes a small JavaScript program
+instead of asking for one tool at a time. It runs in a sandboxed QuickJS
+guest, every call it makes passes the same guardrails and is journaled, and
+only its compact result goes back into the model's context.
+
+![Animation: the model writes a program that calls getWeather for four cities
+in parallel inside a QuickJS guest; only the compact result returns to the
+model](docs/images/programmatic-tool-calls.svg)
+
+Read `ptc/runtime.ts`.
+
+### Compaction
+
+Long conversations are summarized in the background, after a turn, into a
+checkpoint that later turns build on. The most recent exchanges stay out of
+the summary, so the model always sees them verbatim, and the log itself is
+never rewritten.
+
+![Animation: after a turn the older messages are summarized while the 8 most
+recent stay verbatim; the log keeps growing and the model sees the summary
+plus recent messages](docs/images/compaction.svg)
+
+Read `session/history.ts` and `model/compactor.ts`.
+
+### Schedules
+
+A schedule delivers a message to the agent later, once or on a recurrence.
+Its timers live in Restate, so there is no cron and no separate scheduler,
+and a firing that comes due during a deploy is delivered afterwards.
+
+![Animation: a daily schedule fires and starts a turn; one firing comes due
+while the service is down and is delivered once it is
+back](docs/images/schedules.svg)
+
+Read `agent/schedules.ts`.
+
 ### And the rest
 
 | Feature | What it does | Read |
 | --- | --- | --- |
 | **Parallel tool calls** | All tool calls in one model response run concurrently. A failing call is reported to the model without discarding the others. | `session/step.ts` |
 | **Background operations** | Timers, approvals, sub-agent tasks and long programs keep running across model steps. The model can wait for them, carry on, or cancel one. | `session/pending.ts` |
-| **Programmatic tool calls** | For work that needs many calls, the model writes a JavaScript program that runs in a sandboxed QuickJS guest. Each call it makes passes the same guardrails. | `ptc/runtime.ts` |
-| **Compaction** | Long conversations are summarized in the background into a checkpoint. Recent exchanges stay verbatim, and the log itself is never rewritten. | `session/history.ts`, `model/compactor.ts` |
 | **Tool search** | Built-ins are always visible. MCP and discovered tools load on demand through `searchTools`, so large catalogs do not fill the context. | `session/tool-search.ts` |
 | **Memory** | An index of short descriptions the model searches, reads from and writes to, so context does not grow with the number of memories. A simple illustration, not a full memory system. | `agent/memories.ts` |
-| **Schedules** | Deliver a message to the agent later, once or repeatedly. | `agent/schedules.ts` |
 | **Sandbox** | A local directory or [Modal](https://modal.com) sandbox for files and shell commands, suspended between turns. | `sandbox/turn.ts` |
 | **Extensible tools** | MCP servers, plus any Restate handler published with `restate.dev/agent: <tool-name>` metadata. | `session/dynamic-tools.ts` |
 | **Output recovery** | A truncated model response gets one retry with a larger output budget instead of failing the turn. | `model/inference.ts` |

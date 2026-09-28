@@ -27,6 +27,16 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .bar.tool { fill: var(--tool-bar); }
 .bar.ok { fill: var(--ok); }
 .bar.wait { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 5; }
+.bar.bad { fill: var(--bad); }
+.chip.code rect { fill: var(--lane); stroke: var(--accent); }
+.chip.code .chip-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; font-size: 12px; }
+.chip.code .chip-s { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.mark.accent { fill: var(--accent); }
+.msg.user { fill: var(--muted); }
+.msg.assistant { fill: var(--tool-bar); }
+.summary rect { fill: var(--model); stroke: var(--accent); }
+.bracket { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.row-label { font-size: 13px; font-weight: 600; fill: var(--muted); }
 .bar.idle { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; }
 .bar-t { font-size: 12px; font-weight: 600; }
 .bar-t.on-bar { fill: #ffffff; }
