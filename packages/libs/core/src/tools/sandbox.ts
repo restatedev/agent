@@ -4,14 +4,14 @@
 import type * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
-import type {SandboxClient} from "../../sandbox/index.js";
+import type {SandboxClient} from "../sandbox/index.js";
 import {
   defineAgentTool,
   type ToolCallContext,
   type ToolExecution,
   toolFailure,
   toolRun,
-} from "./define.js";
+} from "../tool-api/index.js";
 
 export const listFilesTool = defineAgentTool({
   name: "listFiles",

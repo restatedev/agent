@@ -1,46 +1,19 @@
-// Human approval shared by the humanApproval tool and guardrail gates. The
-// Agent registers the request; the turn waits for the decision signal.
+// Lets the model ask a human to approve an action. The request stays pending
+// across later steps; the decision arrives as a runtime update.
 
-import type {ApprovalDecision} from "@restate-agents/types";
+import {AgentDefinition} from "@restate-agents/types/services";
 import * as restate from "@restatedev/restate-sdk-gen";
 import {z} from "zod";
 
-import {Agent} from "../../agent/index.js";
-import {approvalSignalName} from "../../internal-types.js";
-import {type AgentToolContext, defineAgentTool, failed} from "./define.js";
-
-/**
- * Waits for the decision on a registered approval. If the wait is
- * interrupted, the request is withdrawn so it no longer shows as pending.
- */
-export function* awaitApproval(
-  context: Pick<AgentToolContext, "agentId" | "turnId">,
-  approvalId: string,
-): restate.Operation<ApprovalDecision> {
-  try {
-    return yield* restate.signal<ApprovalDecision>(
-      approvalSignalName(approvalId),
-    );
-  } catch (error) {
-    yield* withdrawApproval(context, approvalId);
-    throw error;
-  }
-}
-
-/** Removes a request nobody is waiting for any more. One-way and idempotent. */
-export function* withdrawApproval(
-  context: Pick<AgentToolContext, "agentId" | "turnId">,
-  approvalId: string,
-): restate.Operation<void> {
-  yield* restate
-    .sendClient(Agent, context.agentId)
-    .cancelApproval({approvalId, turnId: context.turnId});
-}
+import {awaitApproval, HUMAN_APPROVAL_TOOL} from "../session/approvals.js";
+import {defineAgentTool, failed} from "../tool-api/index.js";
 
 export const humanApprovalTool = defineAgentTool({
-  name: "humanApproval",
+  name: HUMAN_APPROVAL_TOOL,
   description:
     "Request human approval for a proposed action. The request remains pending across later agent steps. Call it by itself and do not perform dependent actions until a runtime update reports approval.",
+  instructions:
+    "For direct calls, call humanApproval by itself and do not perform dependent actions while its result is pending.",
   inputSchema: z.object({
     question: z
       .string()
@@ -54,7 +27,7 @@ export const humanApprovalTool = defineAgentTool({
       question,
     };
     const registered = yield* restate
-      .client(Agent, context.agentId)
+      .client(AgentDefinition, context.agentId)
       .requestApproval(request);
     if (!registered)
       return failed(

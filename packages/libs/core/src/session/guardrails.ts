@@ -15,9 +15,9 @@ import {
   type GuardrailApproval,
   type ProposedAction,
 } from "../model/index.js";
+import type {AgentToolContext} from "../tool-api/index.js";
+import {approvalCancelled, awaitApproval} from "./approvals.js";
 import type {TurnHistory} from "./history.js";
-import {type AgentToolContext, approvalCancelled} from "./tools.js";
-import {awaitApproval} from "./tools/approval.js";
 
 export type GuardrailDecisions = {
   approvedActions: GuardrailApproval[];

@@ -6,7 +6,7 @@ import {TerminalError} from "@restatedev/restate-sdk";
 import * as durable from "@restatedev/restate-sdk-gen";
 
 import * as agentTools from "../src/session/tools.ts";
-import {searchWeb} from "../src/session/web-search.ts";
+import {searchWeb} from "../src/tools/web-search.ts";
 import {runHandler} from "./harness.mjs";
 
 const input = {query: "durable execution", maxResults: 2};

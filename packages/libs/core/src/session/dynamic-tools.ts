@@ -14,7 +14,7 @@ import {
   succeeded,
   toolFailure,
   type ToolResult,
-} from "./tools/define.js";
+} from "../tool-api/index.js";
 
 const AGENT_TOOL_ANNOTATION = "restate.dev/agent";
 

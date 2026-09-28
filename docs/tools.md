@@ -93,11 +93,13 @@ or new search configuration are required.
 
 ## Built-in tools
 
-Built-ins live in `packages/libs/core/src/session/tools/`, one module per
-family (`local`, `approval`, `sub-agents`, `agent-state`, `sandbox`), and are
-registered in `session/tools.ts`. A definition owns
-its name, model-facing description, Zod input schema, validation, durable
-behavior, and optional pending completion:
+The agent's built-ins live in `packages/libs/core/src/tools/`, one module per
+capability (`weather`, `web-search`, `operations`, `approval`, `memory`,
+`schedules`, `sub-agents`, `sandbox`), and `src/agent-config.ts` lists the ones
+the agent has. `searchTools` and `executeProgram` are the exception: they work
+on the turn's catalog, so the runtime provides them itself (`session/tool-search.ts`
+and `ptc/`). A definition owns its name, model-facing description, Zod input
+schema, validation, durable behavior, and optional pending completion:
 
 ```ts
 const exampleTool = defineAgentTool({
@@ -113,13 +115,27 @@ const exampleTool = defineAgentTool({
 });
 ```
 
-`tools/define.ts` also has `toolRun(name, action, retry)` for a tool whose
-work is one journaled side effect, `agentCall(codes, op)` for calls into the
-Agent whose rejections the model should see, and `toolFailure(name, error)`.
-All of them rethrow cancellation.
+`defineAgentTool` and its helpers are in `src/tool-api/`. They include
+`toolRun(name, action, retry)` for a tool whose work is one journaled side
+effect, `agentCall(codes, op)` for calls into the Agent whose rejections the
+model should see, and `toolFailure(name, error)`. All of them rethrow
+cancellation. Tools call the Agent through its contract,
+`restate.client(AgentDefinition, context.agentId)`, not through the Agent
+implementation, so the tools do not depend on the runtime that runs them.
 
-Add the definition to the `definitions` array. The rest follows from that one
-registration:
+Two optional fields keep everything about a tool in its own definition:
+
+- `instructions` is guidance for the system prompt, added in turns where the
+  tool is offered: when to use it, beyond what the description says about one
+  call. The memory tools use it to say when to search and what to remember, so
+  an agent without them is never told to.
+- `unavailable(context)` returns why the tool cannot be used in this turn, for
+  the tool's own switches. `webSearch` uses it for the profile's web-search
+  setting. An unavailable tool is hidden from the model and its calls are
+  refused, like one the agent has no permission for.
+
+Add the definition to `tools` in `agent-config.ts`. The rest follows from that
+one registration:
 
 - `agentTools.names` reserves the name from dynamic discovery;
 - `agentTools.manifests()` converts the Zod schema to JSON Schema;
@@ -496,8 +512,9 @@ interruption of the creating turn does not roll it back.
 
 ## Adding a built-in tool
 
-1. Define it in the matching `session/tools/*.ts` family with
-   `defineAgentTool`, and register it in `definitions` in `session/tools.ts`.
+1. Define it in a `src/tools/*.ts` module with `defineAgentTool`, and add it
+   to `tools` in `src/agent-config.ts`. Put usage guidance in its
+   `description` and `instructions`, not in the base instructions.
 2. Give it a unique model-safe name and a precise description.
 3. Define the complete Zod object schema. Make nullable fields explicitly
    nullable rather than optional when strict model schemas require every

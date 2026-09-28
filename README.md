@@ -185,7 +185,7 @@ client, not part of the runtime: start it with `pnpm dev:ui` and open
 | Crash recovery | Kill `pnpm dev:service` mid-turn and restart it | `session/service.ts`, `session/step.ts` |
 | Guardrails and approvals | Add a guardrail; ask for something it blocks | `session/guardrails.ts`, `agent/approvals.ts` |
 | Memory | Ask the agent to remember a preference, then refer to it in a later turn | `agent/memories.ts` |
-| Sub-agents | Ask it to delegate research to a helper | `agent/sub-agents.ts`, `session/tools/sub-agents.ts` |
+| Sub-agents | Ask it to delegate research to a helper | `agent/sub-agents.ts`, `tools/sub-agents.ts` |
 | Schedules | "Remind me in 2 minutes to check the weather" | `agent/schedules.ts` |
 | Programmatic tool calls | Ask for work that needs many tool calls; the model writes a QuickJS program | `ptc/runtime.ts` |
 | Tool search | MCP and dynamic tools load on demand through `searchTools` | `session/tool-search.ts` |
@@ -202,7 +202,14 @@ a tool too (`session/dynamic-tools.ts`).
 
 ## Configuration
 
-The agent service (`packages/libs/core`):
+What the agent is — its models, base instructions and built-in tools — is
+set in code, in `packages/libs/core/src/agent-config.ts`. Each tool is one
+module in `src/tools/`, written with `defineAgentTool` from `src/tool-api/`;
+adding one is a new module and a line in that config. A tool carries its own
+prompt guidance (`instructions`), which reaches the model only in turns where
+the tool is offered. See [tools](docs/tools.md#built-in-tools).
+
+The agent service reads these environment variables:
 
 | Variable | Purpose |
 | --- | --- |

@@ -1,79 +1,84 @@
-// The built-in tool registry and dispatcher. Tool definitions live in
-// `tools/`, grouped by what they touch; this module resolves a model call to
-// a built-in, dynamic (Restate handler) or MCP tool, and converts outcomes
-// into model and transcript messages.
+// The tool registry and dispatcher. The built-in tools come from
+// agent-config.ts, plus searchTools and executeProgram, which the runtime
+// provides itself; this module resolves a model call to a built-in, dynamic
+// (Restate handler) or MCP tool, and converts outcomes into model and
+// transcript messages.
 
 import type {AgentTools, ConversationEntry} from "@restate-agents/types";
 import type * as restate from "@restatedev/restate-sdk-gen";
 import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 
+import {agentConfig} from "../agent-config.js";
 import {errorMessage, isCancellation} from "../errors.js";
 import type {ToolCall, ToolManifest} from "../model/index.js";
-import {
-  PROGRAM_TOOL_NAME,
-  programToolManifest,
-  PTC_ENABLED,
-} from "../ptc/definition.js";
+import {PROGRAM_TOOL_NAME, programToolManifest} from "../ptc/definition.js";
 import {openTurnSandbox} from "../sandbox/index.js";
-import {type DiscoveredAgentTool, executeDynamicTool} from "./dynamic-tools.js";
-import {executeMcpTool, type McpAgentTool} from "./mcp-tools.js";
-import {executeProgramTool} from "./program-tool.js";
-import {toolAllowed} from "./tool-permissions.js";
-import {createToolSearch, TOOL_SEARCH_NAME} from "./tool-search.js";
-import * as state from "./tools/agent-state.js";
-import {humanApprovalTool} from "./tools/approval.js";
 import {
   type AgentTool,
   type AgentToolContext,
   failed,
-  isInputObject,
-  type PendingEvent,
-  type ToolExecutionScope,
-  type ToolOutcome,
-} from "./tools/define.js";
-import * as local from "./tools/local.js";
-import * as sandbox from "./tools/sandbox.js";
-import * as subAgents from "./tools/sub-agents.js";
+  type ToolAvailabilityContext,
+  type ToolCompletion,
+  type ToolExecution,
+} from "../tool-api/index.js";
+import {approvalCancelled, HUMAN_APPROVAL_TOOL} from "./approvals.js";
+import {type DiscoveredAgentTool, executeDynamicTool} from "./dynamic-tools.js";
+import type {TurnHistory} from "./history.js";
+import {executeMcpTool, type McpAgentTool} from "./mcp-tools.js";
+import {executeProgramTool} from "./program-tool.js";
+import {toolAllowed} from "./tool-permissions.js";
+import {
+  createToolSearch,
+  searchToolsTool,
+  TOOL_SEARCH_NAME,
+} from "./tool-search.js";
 
-export type {
-  AgentToolContext,
-  PendingEvent,
-  ToolExecutionScope,
-  ToolOutcome,
-} from "./tools/define.js";
+export type {AgentToolContext} from "../tool-api/index.js";
+
+/** Initial result of invoking one model-selected tool. */
+export type ToolOutcome = ToolExecution & {call: ToolCall};
+
+/** Completion emitted later by a tool that initially returned pending. */
+export type PendingEvent = {
+  step: number;
+  call: ToolCall;
+  outcome: ToolCompletion;
+};
+
+/** Step-owned policy and lifecycle hooks used by PTC's nested calls. */
+export type ToolExecutionScope = {
+  transcript: TurnHistory;
+  step: number;
+  guard(call: ToolCall): restate.Operation<string | undefined>;
+  cancelPending(outcome: ToolOutcome): restate.Operation<ToolOutcome>;
+};
+
+/**
+ * External tools (dynamic, MCP) and PTC's nested calls take one JSON object;
+ * their schemas are third-party JSON Schema, so this is the only shape check
+ * the runtime can make before dispatching.
+ */
+export function isInputObject(
+  input: unknown,
+): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
 
 const definitions: readonly AgentTool[] = [
-  local.searchToolsTool,
-  local.getWeatherTool,
-  local.webSearchTool,
-  local.sleepTool,
-  humanApprovalTool,
-  local.cancelOperationTool,
-  state.searchMemoriesTool,
-  state.readMemoriesTool,
-  state.manageMemoryTool,
-  subAgents.createSubAgentTool,
-  subAgents.messageSubAgentTool,
-  subAgents.deleteSubAgentTool,
-  subAgents.listSubAgentsTool,
-  state.createScheduleTool,
-  state.cancelScheduleTool,
-  state.listSchedulesTool,
-  sandbox.listFilesTool,
-  sandbox.readFileTool,
-  sandbox.writeFileTool,
-  sandbox.executeCommandTool,
+  searchToolsTool,
+  ...agentConfig.tools,
 ];
 
 /**
  * Names reserved by built-in tools and unavailable to dynamic discovery. PTC
- * stays reserved (and executable) even when disabled; see PTC_ENABLED.
+ * stays reserved (and executable) even when disabled; see
+ * agentConfig.programTool.
  */
 export const names = [PROGRAM_TOOL_NAME, ...definitions.map(({name}) => name)];
 
 /** The PTC manifest when enabled; every catalog starts from this. */
-const programManifests = PTC_ENABLED ? [programToolManifest] : [];
+const programManifests = agentConfig.programTool ? [programToolManifest] : [];
 
 /** Every built-in tool, as the tool-permission UI lists them. */
 export const builtinCatalog = [...programManifests, ...definitions].map(
@@ -218,7 +223,7 @@ export function transcriptEntries(
   const result = pendingEvent ? event.outcome : event;
   const entries = [...(result.transcript ?? [])];
   const cancelledApproval =
-    event.call.toolName === "humanApproval" &&
+    event.call.toolName === HUMAN_APPROVAL_TOOL &&
     ((pendingEvent && result.status === "cancelled") ||
       (!pendingEvent &&
         result.status === "pending" &&
@@ -232,13 +237,14 @@ export function transcriptEntries(
 export function manifests(
   discovered: DiscoveredAgentTool[],
   mcpTools: McpAgentTool[],
-  context: Pick<AgentToolContext, "webSearchEnabled" | "permissions">,
+  context: ToolAvailabilityContext,
 ): ToolManifest[] {
   const builtins = definitions.map((tool): ToolManifest => ({
     name: tool.name,
     description: tool.description,
     inputSchema: z.toJSONSchema(tool.inputSchema, {target: "draft-7"}),
     strict: true,
+    instructions: tool.instructions,
   }));
   return [
     ...programManifests,
@@ -268,17 +274,14 @@ function externalManifest(
  */
 function unavailable(
   name: string,
-  context: Pick<AgentToolContext, "webSearchEnabled" | "permissions">,
+  context: ToolAvailabilityContext,
   discovered: DiscoveredAgentTool[],
   mcpTools: McpAgentTool[],
 ): string | undefined {
   if (!toolAllowed(name, context.permissions, discovered, mcpTools, names)) {
     return "This tool is not enabled for this agent.";
   }
-  if (name === "webSearch" && !context.webSearchEnabled) {
-    return "Web search is disabled for this turn.";
-  }
-  return undefined;
+  return findTool(name)?.unavailable?.(context);
 }
 
 type ToolsEvent = Extract<ConversationEntry, {role: "event"; type: "tools"}>;
@@ -305,13 +308,6 @@ export function toolsEvent(
   calls: ToolsEvent["calls"],
 ): ToolsEvent {
   return {role: "event", type: "tools", turnId, step, phase, calls};
-}
-
-export function approvalCancelled(
-  approvalId: string,
-  turnId: string,
-): ConversationEntry {
-  return {role: "event", type: "approval_cancelled", approvalId, turnId};
 }
 
 /** The concise user-facing activity label for a tool call; never its input. */

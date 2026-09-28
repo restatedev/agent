@@ -23,8 +23,8 @@ import * as restate from "@restatedev/restate-sdk-gen";
 
 import {isCancellation} from "../errors.js";
 import {abortable, createRefreshingCache} from "../refresh-cache.js";
+import {failed, succeeded, type ToolResult} from "../tool-api/index.js";
 import {McpConfigurationError, resolveMcpToken} from "./mcp-config.js";
-import {failed, succeeded, type ToolResult} from "./tools/define.js";
 
 const MCP_PROTOCOL_VERSION = "2026-07-28";
 const MCP_CLIENT = {name: "restate-agent-reference", version: "0.0.1"};

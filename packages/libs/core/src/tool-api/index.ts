@@ -1,14 +1,14 @@
-// The shape of a built-in tool and the helpers every tool body uses.
+// How to write a built-in tool: `defineAgentTool`, the context a tool body
+// receives, and the result helpers every tool uses. The tools themselves live
+// in `src/tools/`, and `src/agent-config.ts` chooses which ones the agent has.
 
 import type {AgentTools, ConversationEntry} from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
 import type {z} from "zod";
 
-import {errorMessage, isCancellation, isRejection} from "../../errors.js";
-import type {ToolCall} from "../../model/index.js";
-import type {TurnSandbox} from "../../sandbox/index.js";
-import type {TurnHistory} from "../history.js";
-import type {TurnToolSearch} from "../tool-search.js";
+import {errorMessage, isCancellation, isRejection} from "../errors.js";
+import type {TurnSandbox} from "../sandbox/index.js";
+import type {TurnToolSearch} from "../session/tool-search.js";
 
 type ToolTranscript = {transcript?: ConversationEntry[]};
 type Succeeded = {status: "succeeded"; result: string};
@@ -25,18 +25,12 @@ export type ToolExecution = (
 ) &
   ToolTranscript;
 
-type ToolCompletion = (ToolResult | {status: "cancelled"; reason: string}) &
+/** How a tool that returned pending eventually ends. */
+export type ToolCompletion = (
+  | ToolResult
+  | {status: "cancelled"; reason: string}
+) &
   ToolTranscript;
-
-/** Initial result of invoking one model-selected tool. */
-export type ToolOutcome = ToolExecution & {call: ToolCall};
-
-/** Completion emitted later by a tool that initially returned pending. */
-export type PendingEvent = {
-  step: number;
-  call: ToolCall;
-  outcome: ToolCompletion;
-};
 
 /** Agent- and turn-scoped capabilities passed to tool definitions. */
 export type AgentToolContext = {
@@ -48,21 +42,21 @@ export type AgentToolContext = {
   sandbox: TurnSandbox;
 };
 
-/** Step-owned policy and lifecycle hooks used by PTC's nested calls. */
-export type ToolExecutionScope = {
-  transcript: TurnHistory;
-  step: number;
-  guard(call: ToolCall): restate.Operation<string | undefined>;
-  cancelPending(outcome: ToolOutcome): restate.Operation<ToolOutcome>;
-};
-
 export type ToolCallContext = AgentToolContext & {toolCallId: string};
+
+/** What decides whether a tool is offered in a turn. */
+export type ToolAvailabilityContext = Pick<
+  AgentToolContext,
+  "webSearchEnabled" | "permissions"
+>;
 
 export type AgentTool = {
   name: string;
   description: string;
   inputSchema: z.ZodType;
   summary?: string;
+  instructions?: string;
+  unavailable?(context: ToolAvailabilityContext): string | undefined;
   execute(
     input: unknown,
     context: ToolCallContext,
@@ -136,6 +130,18 @@ export function defineAgentTool<Schema extends z.ZodType>(definition: {
    * in the Restate journal.
    */
   summary?: string;
+  /**
+   * Guidance added to the agent's system prompt in turns where this tool is
+   * offered: when to use it and how, beyond what its description says about
+   * one call. An agent without the tool is never told about it.
+   */
+  instructions?: string;
+  /**
+   * Why the tool cannot be used in this turn, or undefined when it can. The
+   * runtime hides an unavailable tool from the model and refuses its calls.
+   * Permissions are checked separately; this is for the tool's own switches.
+   */
+  unavailable?(context: ToolAvailabilityContext): string | undefined;
   run(
     input: z.output<Schema>,
     context: ToolCallContext,
@@ -145,12 +151,14 @@ export function defineAgentTool<Schema extends z.ZodType>(definition: {
     context: ToolCallContext,
   ): restate.Operation<ToolCompletion>;
 }): AgentTool {
-  const {name, description, inputSchema, summary} = definition;
+  const {name, description, inputSchema, summary, instructions} = definition;
   return {
     name,
     description,
     inputSchema,
     summary,
+    instructions,
+    unavailable: definition.unavailable,
     *execute(input, context) {
       const parsed = inputSchema.safeParse(input);
       if (!parsed.success)
@@ -168,17 +176,6 @@ export function defineAgentTool<Schema extends z.ZodType>(definition: {
       return yield* definition.complete(parsed.data, context);
     },
   };
-}
-
-/**
- * External tools (dynamic, MCP) and PTC's nested calls take one JSON object;
- * their schemas are third-party JSON Schema, so this is the only shape check
- * the runtime can make before dispatching.
- */
-export function isInputObject(
-  input: unknown,
-): input is Record<string, unknown> {
-  return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
 /** The first few Zod issues, as `path: message` feedback for the model. */

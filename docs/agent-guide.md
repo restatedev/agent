@@ -172,7 +172,9 @@ The detailed turn-runtime list lives in
 | One model/guardrail/foreground-tool transition | `session/step.ts` |
 | Steering signal receiver and transient FIFO | `session/steering.ts` |
 | Pending tool tasks and cancellation races | `session/pending.ts` |
-| Built-in tool schema and execution | `session/tools/*.ts` |
+| Models, base instructions, the built-in tool list, PTC switch | `agent-config.ts` |
+| Built-in tool schema and execution | `tools/*.ts` |
+| How to write a tool (`defineAgentTool` and helpers) | `tool-api/index.ts` |
 | Tool registry, dispatch, result and transcript projection | `session/tools.ts` |
 | Transcript-to-model projection | `session/context.ts` |
 | Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
@@ -194,11 +196,11 @@ contract.
 ### Built-in tool
 
 Read [tools.md](tools.md). Keep name, description, Zod schema, execution, and
-pending completion together in one `session/tools/*.ts` family module, built
-with `defineAgentTool` and the helpers in `tools/define.ts` (`toolRun`,
-`agentCall`, `toolFailure`, which preserve cancellation errors). Register it
-in `definitions` in `session/tools.ts`, and add a focused test when behavior
-affects the Agent protocol.
+pending completion together in one `tools/*.ts` module, built with
+`defineAgentTool` and the helpers in `tool-api/` (`toolRun`, `agentCall`,
+`toolFailure`, which preserve cancellation errors). Add it to `tools` in
+`agent-config.ts`, put its usage guidance in its `instructions`, and add a
+focused test when behavior affects the Agent protocol.
 
 ### Dynamic Restate tool
 

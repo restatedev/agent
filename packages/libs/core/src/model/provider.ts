@@ -14,9 +14,9 @@ import {
 } from "ai";
 import {z} from "zod";
 
+import {agentConfig} from "../agent-config.js";
 import {errorMessage} from "../errors.js";
 import {
-  AGENT_SYSTEM,
   COMPACTOR_SYSTEM,
   GUARDRAIL_REVIEW_SYSTEM,
   GUARDRAIL_SYSTEM,
@@ -28,6 +28,8 @@ export type ToolManifest = {
   description: string;
   inputSchema: Record<string, unknown>;
   strict?: boolean;
+  /** Guidance for the system prompt while this tool is offered. */
+  instructions?: string;
 };
 
 /** Complete input for one agent-model inference step. */
@@ -88,10 +90,6 @@ export type GuardrailDecision =
       reason: string;
       question: string;
     };
-
-const AGENT_MODEL = "gpt-5.6-luna";
-const GUARDRAIL_MODEL = "gpt-5.6-terra";
-const COMPACTOR_MODEL = "gpt-5.6-terra";
 
 export const MAX_AGENT_OUTPUT_TOKENS = 64_000;
 /** Evaluated inside a journaled inference, never in replayed Turn control flow. */
@@ -208,7 +206,7 @@ export async function evaluateGuardrails(
 ): Promise<GuardrailDecision> {
   return withOpenAI(async (openai) => {
     const result = await generateText({
-      model: openai.responses(GUARDRAIL_MODEL),
+      model: openai.responses(agentConfig.models.guardrail),
       system: GUARDRAIL_SYSTEM,
       prompt: JSON.stringify({
         ...guardrailEvidence(request),
@@ -275,7 +273,7 @@ export async function confirmGuardrailDecision(
 
   return withOpenAI(async (openai) => {
     const result = await generateText({
-      model: openai.responses(GUARDRAIL_MODEL),
+      model: openai.responses(agentConfig.models.guardrail),
       system: GUARDRAIL_REVIEW_SYSTEM,
       prompt: JSON.stringify({
         ...guardrailEvidence(request),
@@ -289,6 +287,26 @@ export async function confirmGuardrailDecision(
     });
     return result.output.confirmed;
   });
+}
+
+/**
+ * The base instructions, then the guidance of each tool offered in this step,
+ * then the user's persistent instructions.
+ */
+export function agentSystemPrompt(request: AgentModelRequest): string {
+  const toolInstructions: string[] = [];
+  for (const tool of request.tools) {
+    if (tool.instructions) toolInstructions.push(tool.instructions);
+  }
+  const prompt = [agentConfig.baseInstructions, ...toolInstructions].join(" ");
+  if (!request.instructions) return prompt;
+  return [
+    prompt,
+    "",
+    "[Persistent user instructions]",
+    "These instructions apply across turns.",
+    request.instructions,
+  ].join("\n");
 }
 
 /** Performs one provider inference and normalizes text, tool, and error output. */
@@ -320,16 +338,8 @@ export async function completeAgent(
           }
         : {};
     const result = await generateText({
-      model: openai.responses(AGENT_MODEL),
-      system: request.instructions
-        ? [
-            AGENT_SYSTEM,
-            "",
-            "[Persistent user instructions]",
-            "These instructions apply across turns.",
-            request.instructions,
-          ].join("\n")
-        : AGENT_SYSTEM,
+      model: openai.responses(agentConfig.models.agent),
+      system: agentSystemPrompt(request),
       messages,
       ...toolOptions,
       maxOutputTokens,
@@ -417,7 +427,7 @@ export async function summarizeConversation(
 ): Promise<string> {
   return withOpenAI(async (openai) => {
     const result = await generateText({
-      model: openai.responses(COMPACTOR_MODEL),
+      model: openai.responses(agentConfig.models.compactor),
       system: COMPACTOR_SYSTEM,
       prompt: JSON.stringify(input),
       maxOutputTokens: COMPACTOR_MAX_OUTPUT_TOKENS,
