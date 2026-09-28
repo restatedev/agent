@@ -245,7 +245,6 @@ async function runDelegation({
             "parent-turn",
             true,
             grants,
-            "alice",
           );
           const toolName = create ? "createSubAgent" : "messageSubAgent";
           const input = create

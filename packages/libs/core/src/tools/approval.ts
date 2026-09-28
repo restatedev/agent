@@ -12,8 +12,6 @@ export const humanApprovalTool = defineAgentTool({
   name: HUMAN_APPROVAL_TOOL,
   description:
     "Request human approval for a proposed action. The request remains pending across later agent steps. Call it by itself and do not perform dependent actions until a runtime update reports approval.",
-  instructions:
-    "For direct calls, call humanApproval by itself and do not perform dependent actions while its result is pending.",
   inputSchema: z.object({
     question: z
       .string()

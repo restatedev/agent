@@ -50,7 +50,7 @@ const permissions = {
   ],
 };
 const context = () =>
-  tools.createAgentToolContext("agent", "turn", false, permissions, "alice");
+  tools.createAgentToolContext("agent", "turn", false, permissions);
 const names = (catalog) => catalog.map((t) => t.name);
 const call = {
   toolName: "searchTools",
