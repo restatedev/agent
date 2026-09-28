@@ -214,7 +214,7 @@ function startState(
   const modelContext = buildModelContext(
     conversation.entries,
     conversation.summary,
-    req.memories,
+    req.memoryCount,
     req.agentName,
   );
   return {

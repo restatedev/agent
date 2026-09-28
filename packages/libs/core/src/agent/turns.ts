@@ -158,7 +158,7 @@ export function* route(delivery: AgentDelivery): restate.Operation<void> {
 export function* startTurn(
   entries: ConversationEntry[],
 ): restate.Operation<string> {
-  const agentProfile = yield* profile.read();
+  const {memories, ...config} = yield* profile.read();
   const metadata = yield* readMetadata();
   // Read configuration before any state change: an invalid configuration
   // throws, and state written by a failed invocation is not rolled back.
@@ -170,9 +170,10 @@ export function* startTurn(
   // Normally empty while idle. It holds a successor's input that onTurnEnd
   // could not start, which must open the next turn ahead of the new input.
   const parked = yield* activeTurn.drainPending();
-  const tools = resolveMcpGrants(agentProfile.tools, servers);
+  const tools = resolveMcpGrants(config.tools, servers);
   return yield* activeTurn.start({
-    ...agentProfile,
+    ...config,
+    memoryCount: memories.length,
     agentName: metadata.name,
     tools,
     mcpServers: grantedMcpServers(tools, servers),

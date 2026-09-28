@@ -140,7 +140,8 @@ of the model contract, not cosmetic documentation.
 | `sleep` | Durable timer | Pending |
 | `humanApproval` | Signal-backed human decision | Pending |
 | `cancelOperation` | Cancel one pending operation by ID | Foreground control |
-| `readMemories` | Read memory content by ID from the index | Foreground Agent RPC |
+| `searchMemories` | Search memory descriptions by keyword; returns IDs and descriptions | Foreground Agent RPC |
+| `readMemories` | Read memory content by ID | Foreground Agent RPC |
 | `manageMemory` | Atomically create, update or delete agent-local memories | Foreground Agent RPC |
 | `createSubAgent` | Create a persistent child and await its optional first task | Durable child-turn wait |
 | `messageSubAgent` | Ask a direct child a follow-up and return its answer | Durable child-turn wait |

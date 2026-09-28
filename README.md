@@ -54,10 +54,10 @@ The code is written to be read.
 
 **Capabilities**
 
-- **Memory.** Each agent keeps a small index of memories (an ID and a short
-  description each), shown to every turn. The model reads a memory's content
-  when it looks relevant and decides what to store; this is a simple
-  illustration, not a full memory system.
+- **Memory.** Each agent keeps an index of memories, an ID and a short
+  description each. The model searches the index, reads the memories it needs
+  and decides what to store, so context does not grow with the number of
+  memories. This is a simple illustration, not a full memory system.
 - **Sub-agents** that the agent creates, delegates to and follows up with.
 - **Schedules** that deliver a message to the agent later, once or repeatedly.
 - **A sandbox** (a local directory or [Modal](https://modal.com)) for files and

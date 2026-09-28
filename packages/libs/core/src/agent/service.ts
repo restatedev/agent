@@ -55,6 +55,7 @@ export const Agent = restate.implement(AgentDefinition, {
 
       profile: shared(noRetention),
       updateProfile: noRetention,
+      searchMemories: shared(noRetention),
       readMemories: shared(noRetention),
       deleteMemory: noRetention,
       updateMemory: internal(noRetention),

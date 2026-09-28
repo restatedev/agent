@@ -67,10 +67,9 @@ deployed dynamic handlers as ordinary durable RPCs.
   bounded to 128 child calls plus source, output, memory, and computation limits.
 - Each step receives a copy of the complete live model context accumulated by
   the run.
-- The memory index (IDs and descriptions, not content) read by Agent is
-  injected once as data before conversation context; the model reads content
-  with `readMemories`. User instructions are supplied to every agent-model
-  call.
+- Only the number of memories is injected before conversation context; the
+  model searches them with `searchMemories` and reads content with
+  `readMemories`. User instructions are supplied to every agent-model call.
 - A normal iteration returns text, tool outcomes, a recoverable model error, or
   a guardrail block.
 - Invalid or empty model output becomes corrective user feedback and another

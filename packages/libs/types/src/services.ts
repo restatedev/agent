@@ -30,6 +30,8 @@ import {
   InterruptRequestSchema,
   MemoryIdRequestSchema,
   MemoryReadRequestSchema,
+  MemorySearchRequestSchema,
+  MemoryIndexEntrySchema,
   MemorySchema,
   MemoryUpdateResultSchema,
   MemoryUpdateSchema,
@@ -151,6 +153,10 @@ export const AgentDefinition = iface.object(AGENT_SERVICE_NAME, {
     output: AgentMetadataSchema,
   }),
   children: iface.schemas({input: z.void(), output: z.array(ChildAgentSchema)}),
+  searchMemories: iface.schemas({
+    input: MemorySearchRequestSchema,
+    output: z.array(MemoryIndexEntrySchema),
+  }),
   readMemories: iface.schemas({
     input: MemoryReadRequestSchema,
     output: z.array(MemorySchema),

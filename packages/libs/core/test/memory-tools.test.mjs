@@ -120,17 +120,26 @@ test("readMemories returns the found memories and names the missing IDs", async 
   });
 });
 
-test("model context carries the whole memory index but no memory content", () => {
-  const {messages} = buildModelContext([], undefined, [
-    {id: "mem0", description: "units"},
-    {id: "mem2", description: "editor preference"},
-  ]);
-  const index = messages[0].content;
-  assert.match(index, /^\[Agent memory index/);
-  assert.match(index, /readMemories/);
-  assert.match(index, /mem0: "units"/);
-  assert.match(index, /mem2: "editor preference"/);
+test("searchMemories asks the Agent and returns index entries only", async () => {
+  const {outcome, calls} = await runTool(
+    "searchMemories",
+    {query: "units"},
+    () => [{id: "mem0", description: "units"}],
+  );
+  assert.equal(calls[0].method, "searchMemories");
+  assert.deepEqual(calls[0].parameter, {query: "units"});
+  assert.deepEqual(JSON.parse(outcome.result), {
+    memories: [{id: "mem0", description: "units"}],
+  });
+});
 
-  const empty = buildModelContext([], undefined, []);
+test("model context says how many memories exist but lists none of them", () => {
+  const {messages} = buildModelContext([], undefined, 3);
+  const note = messages[0].content;
+  assert.match(note, /^\[Agent memory\]/);
+  assert.match(note, /3 saved memories/);
+  assert.match(note, /searchMemories/);
+
+  const empty = buildModelContext([], undefined, 0);
   assert.equal(empty.messages.length, 0);
 });

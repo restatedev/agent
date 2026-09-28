@@ -101,8 +101,8 @@ export const ToolCatalogSchema = z.object({
   mcp: z.array(McpServerSchema),
 });
 export type ToolCatalog = z.infer<typeof ToolCatalogSchema>;
-// An agent's memories are an index plus one state key per memory. The index
-// is small enough to give every turn in full; content is read on demand.
+// An agent's memories are an index plus one state key per memory. Turns
+// search the index and read the content of the memories they need.
 const MemoryIdSchema = z.string().trim().min(1);
 const MemoryDescriptionSchema = z.string().trim().min(1);
 const MemoryContentSchema = z.string().trim().min(1);
@@ -120,6 +120,9 @@ export const MemorySchema = MemoryIndexEntrySchema.extend({
 export type Memory = z.infer<typeof MemorySchema>;
 
 export const MemoryIdRequestSchema = z.object({id: MemoryIdSchema}).strict();
+export const MemorySearchRequestSchema = z
+  .object({query: z.string().trim().min(1)})
+  .strict();
 export const MemoryReadRequestSchema = z
   .object({ids: z.array(MemoryIdSchema).min(1)})
   .strict();
@@ -378,7 +381,7 @@ export const AgentConfigSchema = z.object({
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 
-/** The configuration plus the memory index; a turn snapshots this at start. */
+/** The configuration plus the memory index, as the profile handler returns it. */
 export const AgentProfileSchema = AgentConfigSchema.extend({
   memories: z.array(MemoryIndexEntrySchema).default([]),
 });
@@ -640,7 +643,10 @@ export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
 });
 export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;
 
-export const AgentTurnRequestSchema = AgentProfileSchema.extend({
+// A turn snapshots the configuration and only the number of memories; the
+// model searches the index itself when it needs earlier context.
+export const AgentTurnRequestSchema = AgentConfigSchema.extend({
+  memoryCount: z.number().int().nonnegative(),
   // Optional for already-journaled turns; new dispatches always include the name.
   agentName: z.string().optional(),
   mcpServers: z.array(McpServerSchema),

@@ -1,7 +1,7 @@
 // The agent's memories: an index in one state key and each memory's content
 // in a key of its own. Agent runs with lazy state, so a handler loads only
-// the keys it reads: every turn gets the whole index in its profile snapshot,
-// and the model reads the content it needs with the readMemories tool.
+// the keys it reads. A turn is told only how many memories exist; the model
+// finds relevant ones with searchMemories and reads them with readMemories.
 //
 // The index holds `{nextId, entries}`. IDs are `mem0`, `mem1`, … and are
 // never reused, so a deleted memory's ID cannot come back meaning something
@@ -14,7 +14,9 @@ import type {
   MemoryUpdateResult,
 } from "@restate-agents/types";
 import * as restate from "@restatedev/restate-sdk-gen";
+import MiniSearch from "minisearch";
 
+import {rankedIds, words} from "../text-search.js";
 import * as activeTurn from "./active-turn.js";
 import {type AgentHandlers, requireDirectAccess} from "./guards.js";
 import * as notifications from "./notifications.js";
@@ -27,14 +29,40 @@ type MemoryIndex = {
 };
 
 const EMPTY_INDEX: MemoryIndex = {nextId: 0, entries: []};
+const SEARCH_LIMIT = 10;
 
 function contentKey(id: string): string {
   return `memory/${id}`;
 }
 
 export const handlers: AgentHandlers<
-  "readMemories" | "deleteMemory" | "updateMemory"
+  "searchMemories" | "readMemories" | "deleteMemory" | "updateMemory"
 > = {
+  /**
+   * The index entries that best match `query`. A shared handler, so it reads
+   * only the index key and never waits for the controller's lock.
+   */
+  *searchMemories({query}) {
+    const {entries} = yield* readIndex();
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    const index = new MiniSearch({
+      fields: ["description"],
+      searchOptions: {prefix: true},
+    });
+    index.addAll(
+      entries.map(({id, description}) => ({
+        id,
+        description: words(description),
+      })),
+    );
+    const found: MemoryIndexEntry[] = [];
+    for (const id of rankedIds(index, query).slice(0, SEARCH_LIMIT)) {
+      const entry = byId.get(id);
+      if (entry) found.push(entry);
+    }
+    return found;
+  },
+
   /** Full memories for the given IDs, in index order; unknown IDs are skipped. */
   *readMemories({ids}) {
     const wanted = new Set(ids);

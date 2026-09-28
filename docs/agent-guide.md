@@ -53,9 +53,9 @@ Preserve these unless the requested change explicitly replaces them:
    existing user entry to explain later routing.
 3. At most one `AgentSession.doTurn` invocation is active for an Agent. Its
    Restate invocation ID is the stable `turnId` and signal target.
-4. A turn receives a stable Agent profile including the memory index.
-   Instructions, guardrails, tool grants and index changes made during that
-   turn show up in the next turn's snapshot.
+4. A turn receives a stable Agent profile and the number of memories.
+   Instructions, guardrails and tool grants changed during that turn affect
+   the next turn. Memory tools read and write the live index.
    The session loads its conversation context once at the beginning of
    `doTurn`.
 5. Steering does not cancel the current model/tool step or existing pending

@@ -76,6 +76,7 @@ The browser's `snapshot` and `sync` endpoints implement this sequence in
 | --- | --- |
 | `profile` | No input; instructions, guardrails, memory index, tools, webSearchEnabled |
 | `updateProfile` | Any of `{instructions: string \| null, guardrails: [{id, rule}], tools: AgentTools, webSearchEnabled: boolean}`; each given field is replaced whole |
+| `searchMemories` | `{query}`; up to 10 matching `{id, description}` index entries, no content |
 | `readMemories` | `{ids}`; full memories for known IDs, unknown IDs left out |
 | `deleteMemory` | `{id}`; returns whether the memory existed |
 | `metadata` | No input; `{name, parentAgentId?}` |
@@ -132,7 +133,7 @@ for await (const {entry} of agent.follow()) {
 ```
 
 The client also exposes profile setters, approvals, metadata, children, memory
-reads and deletion, schedules and retirement. It maps empty-body handlers explicitly.
+search, reads and deletion, schedules and retirement. It maps empty-body handlers explicitly.
 
 The Next.js server exposes a limited `/api/agent/{agentId}/{operation}`
 adapter whose operation names match the Agent handlers. `GET` serves

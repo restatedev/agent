@@ -502,9 +502,7 @@ test("child dispatch uses its own session and memory with no account calls", asy
   });
   const turn = f.sends.find((s) => s.method === "doTurn");
   assert.equal(turn.key, "child");
-  assert.deepEqual(turn.parameter.memories, [
-    {id: "mem0", description: "local"},
-  ]);
+  assert.equal(turn.parameter.memoryCount, 1);
   assert.deepEqual(turn.parameter.entries[0].delegatedBy, {
     agentId: "parent",
     turnId: "turn",

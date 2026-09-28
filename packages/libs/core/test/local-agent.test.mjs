@@ -24,7 +24,8 @@ test("a new agent starts directly, snapshots local memory, and queues later inpu
   const run = f.sends.find((send) => send.method === "doTurn");
   assert.equal(run.service, "AgentSession");
   assert.equal(run.key, "demo");
-  assert.deepEqual(run.parameter.memories, []);
+  assert.equal(run.parameter.memoryCount, 0);
+  assert.equal(Object.hasOwn(run.parameter, "memories"), false);
   assert.equal(run.parameter.agentName, "demo");
   assert.equal(Object.hasOwn(run.parameter, "ownerUserId"), false);
   assert.equal(Object.hasOwn(run.parameter, "mcpCredentials"), false);
@@ -73,6 +74,31 @@ test("memory is isolated per agent and only the current non-interrupting turn ma
   assert.deepEqual((await a.invoke(Agent.object.profile)).memories, []);
   assert.equal(a.state.has("memory/mem0"), false);
   assert.ok(a.state.get("notifications").versions.profile > 0);
+});
+
+test("memory search ranks index descriptions and returns no content", async () => {
+  const f = context("a", {
+    "memory/index": {
+      nextId: 3,
+      entries: [
+        {id: "mem0", description: "temperature units: Celsius"},
+        {id: "mem1", description: "current project restate-agent"},
+        {id: "mem2", description: "preferred editor"},
+      ],
+    },
+    "memory/mem1": "Building a durable agent on Restate",
+  });
+  const search = (query) => f.invoke(Agent.object.searchMemories, {query});
+
+  assert.deepEqual(await search("restate project"), [
+    {id: "mem1", description: "current project restate-agent"},
+  ]);
+  // Prefix matching: "temp" finds "temperature".
+  assert.deepEqual(
+    (await search("temp")).map(({id}) => id),
+    ["mem0"],
+  );
+  assert.deepEqual(await search("holiday plans"), []);
 });
 
 test("memory batches are atomic, keep unrelated memories, and never reuse IDs", async () => {

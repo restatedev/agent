@@ -23,6 +23,7 @@ import type {
   ChildAgent,
   HistoryPage,
   Memory,
+  MemoryIndexEntry,
   ProfileUpdate,
   ScheduleCancellationResult,
   ScheduledMessage,
@@ -136,6 +137,9 @@ export interface AgentClient {
    * `instructions: null` and `guardrails: []` clear them.
    */
   updateProfile(update: ProfileUpdate): Promise<void>;
+
+  /** Memory index entries matching `query`, best first; no content. */
+  searchMemories(query: string): Promise<MemoryIndexEntry[]>;
 
   /** Full memories for index IDs; unknown IDs are left out. */
   readMemories(ids: string[]): Promise<Memory[]>;
@@ -295,6 +299,7 @@ export function createAgentClient({
 
     profile: () => invoke(agent.profile(noInput())),
     updateProfile: (update) => invoke(agent.updateProfile(update)),
+    searchMemories: (query) => invoke(agent.searchMemories({query})),
     readMemories: (ids) => invoke(agent.readMemories({ids})),
     deleteMemory: (id) => invoke(agent.deleteMemory({id})),
     toolCatalog: () => invoke(agent.toolCatalog(noInput())),
