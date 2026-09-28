@@ -69,7 +69,10 @@ deployed dynamic handlers as ordinary durable RPCs.
   the run.
 - Only the number of memories is injected before conversation context; the
   model searches them with `searchMemories` and reads content with
-  `readMemories`. User instructions are supplied to every agent-model call.
+  `readMemories`. An agent-model call's system prompt is the base
+  instructions, then the instructions of the built-in tools it offers, then
+  the user's instructions. The tool-free finalization call offers no tools, so
+  it gets only the base and user instructions.
 - A normal iteration returns text, tool outcomes, a recoverable model error, or
   a guardrail block.
 - Invalid or empty model output becomes corrective user feedback and another

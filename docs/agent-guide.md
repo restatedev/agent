@@ -176,6 +176,9 @@ The detailed turn-runtime list lives in
 | Built-in tool schema and execution | `tools/*.ts` |
 | How to write a tool (`defineAgentTool` and helpers) | `tools-api.ts` |
 | Tool registry, dispatch, result and transcript projection | `session/tools.ts` |
+| Turn-local tool search (`searchTools`) | `session/tool-search.ts` |
+| PTC dispatch and nested-call policy (`executeProgram`) | `session/program-tool.ts`, `ptc/` |
+| Waiting on and withdrawing human approvals | `session/approvals.ts` |
 | Transcript-to-model projection | `session/context.ts` |
 | Dynamic Restate tool discovery | `session/dynamic-tools.ts` |
 | MCP tool discovery and invocation | `session/mcp-tools.ts` |
@@ -199,7 +202,8 @@ Read [tools.md](tools.md). Keep name, description, Zod schema, execution, and
 pending completion together in one `tools/*.ts` module, built with
 `defineAgentTool` and the helpers in `tools-api.ts` (`toolRun`, `agentCall`,
 `toolFailure`, which preserve cancellation errors). Add it to `tools` in
-`agent-config.ts`, put its usage guidance in its `instructions`, and add a
+`agent-config.ts`, put guidance about when to use it in its `instructions`
+(one call's contract belongs in its `description`), and add a
 focused test when behavior affects the Agent protocol.
 
 ### Dynamic Restate tool
