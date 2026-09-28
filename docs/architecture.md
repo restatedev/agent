@@ -18,7 +18,7 @@ controller, not the model loop.
 ## One request
 
 1. `Agent.ask` starts a turn while idle or stores a pending user entry while busy.
-2. Starting snapshots instructions, guardrails, memories, tool grants, web search
+2. Starting snapshots instructions, guardrails, the memory count, tool grants, web search
    preference and configured MCP server references. It sends `doTurn` one way.
 3. `AgentSession` opens history once and appends the activated entries. It builds
    model context from the summary checkpoint and remaining conversation.
@@ -62,12 +62,20 @@ execution traces are distinct from public conversation events.
 
 ## Context and delegation
 
-Memories live on each Agent (at most 32). A turn reads a stable snapshot and
-`manageMemory` affects future turns. Unrelated agent IDs share no memory.
+Memories live on each Agent as an index in one state key (`memory/index`:
+IDs such as `mem0` with a short description) and one key per memory's
+content. Agent uses lazy state, so a handler loads only the keys it touches.
+A turn is told only how many memories exist. The model finds relevant ones
+with `searchMemories` (a local MiniSearch over the index descriptions, run by a
+shared Agent handler), reads content with `readMemories` and changes memories
+with `manageMemory`. Model context therefore does not grow with the number of
+memories.
+Unrelated agent IDs share no memory.
 
 The parent stores its child directory; each child stores its parent ID and
 its own profile, history and sandbox. Creation copies the parent's instructions,
-memories, guardrails and effective tools, then applies any narrower selection.
+guardrails and effective tools, then applies any narrower selection. A child
+starts with an empty memory of its own.
 The copy does not follow later parent changes. Children cannot create children
 or schedules; the parent initiates their tasks and follow-ups. Tool waits attach
 to the exact child turn. Cleanup never interrupts an unrelated successor turn.

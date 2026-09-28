@@ -50,6 +50,8 @@ const definitions: readonly AgentTool[] = [
   local.sleepTool,
   humanApprovalTool,
   local.cancelOperationTool,
+  state.searchMemoriesTool,
+  state.readMemoriesTool,
   state.manageMemoryTool,
   subAgents.createSubAgentTool,
   subAgents.messageSubAgentTool,

@@ -278,7 +278,8 @@ When changing a request or schema:
 | Change active-turn bookkeeping/signals | `src/agent/active-turn.ts` |
 | Change transcript storage | `src/session/history.ts` |
 | Change invalidation subscriptions | `src/agent/notifications.ts` |
-| Change instructions/guardrails/memories | `src/agent/profile.ts` |
+| Change instructions/guardrails | `src/agent/profile.ts` |
+| Change memories | `src/agent/memories.ts` |
 | Change approvals | `src/agent/approvals.ts` |
 | Change sub-agents | `src/agent/sub-agents.ts` |
 | Change schedules and timer delivery | `src/agent/schedules.ts` |

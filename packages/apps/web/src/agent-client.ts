@@ -139,8 +139,8 @@ export function createUiClient(agentId: string) {
       return read("toolCatalog");
     },
     /** Resolves whether the memory existed. */
-    deleteMemory(key: string) {
-      return write("deleteMemory", {key});
+    deleteMemory(id: string) {
+      return write("deleteMemory", {id});
     },
     cancelSchedule(scheduleId: string) {
       return write("cancelSchedule", {scheduleId});

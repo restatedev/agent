@@ -1,4 +1,4 @@
-import type {MemoryEntry, ScheduledMessage} from "@restate-agents/types";
+import type {MemoryIndexEntry, ScheduledMessage} from "@restate-agents/types";
 
 import type {UiAgentClient} from "./agent-client";
 import {type Notify, runAction} from "./format";
@@ -14,20 +14,20 @@ function MemoryRow({
   client,
   notify,
   readOnly,
-}: Props & {memory: MemoryEntry}) {
+}: Props & {memory: MemoryIndexEntry}) {
   function remove() {
     return runAction(notify, async () => {
-      const existed = await client.deleteMemory(memory.key);
+      const existed = await client.deleteMemory(memory.id);
       if (!existed) {
-        return [`Memory "${memory.key}" was already gone`, true];
+        return [`Memory ${memory.id} was already gone`, true];
       }
-      return `Memory "${memory.key}" deleted`;
+      return `Memory ${memory.id} deleted`;
     });
   }
 
   return (
     <p>
-      <strong>{memory.key}</strong>: {memory.content}
+      <strong>{memory.id}</strong>: {memory.description}
       {!readOnly && (
         <button type="button" onClick={() => void remove()}>
           Delete
@@ -76,7 +76,7 @@ export function MemoriesAndSchedules({
   memories,
   schedules,
   ...props
-}: Props & {memories: MemoryEntry[]; schedules: ScheduledMessage[]}) {
+}: Props & {memories: MemoryIndexEntry[]; schedules: ScheduledMessage[]}) {
   return (
     <details className="demo-state">
       <summary>Memories and schedules</summary>
@@ -88,7 +88,7 @@ export function MemoriesAndSchedules({
         </p>
       )}
       {memories.map((memory) => (
-        <MemoryRow key={memory.key} memory={memory} {...props} />
+        <MemoryRow key={memory.id} memory={memory} {...props} />
       ))}
       <h3>Scheduled messages</h3>
       {schedules.length === 0 && (

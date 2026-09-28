@@ -8,7 +8,7 @@
 import {createHash} from "node:crypto";
 
 import type {
-  AgentProfile,
+  AgentConfig,
   AgentTools,
   ChildAgent,
   SubAgentConfig,
@@ -257,13 +257,16 @@ const PARENT_ONLY_TOOLS = new Set([
   "cancelSchedule",
 ]);
 
-/** Copy creation-time configuration, with runtime-enforced attenuation. */
+/**
+ * Copy creation-time configuration, with runtime-enforced attenuation. Memories
+ * are not inherited: a child starts with an empty memory of its own.
+ */
 export function subAgentProfile(
-  parent: AgentProfile,
+  parent: AgentConfig,
   grants: AgentTools,
   config: SubAgentConfig,
   builtins: readonly string[],
-): AgentProfile {
+): AgentConfig {
   const tools = structuredClone(config.tools ?? grants);
   let denied: string | undefined;
   if (!subset(tools.builtin, grants.builtin)) {
@@ -323,7 +326,6 @@ export function subAgentProfile(
   return {
     ...(instructions ? {instructions} : {}),
     guardrails,
-    memories: structuredClone(parent.memories),
     tools,
     webSearchEnabled: config.webSearchEnabled ?? parent.webSearchEnabled,
   };

@@ -32,12 +32,6 @@ export const handlers: AgentHandlers<"initialize" | "retire" | "metadata"> = {
     }
     restate.state().set("metadata", metadata);
     if (initial) {
-      yield* profile.applyMemory(
-        initial.memories.map((entry) => ({
-          operation: "set" as const,
-          ...entry,
-        })),
-      );
       yield* profile.write({
         instructions: initial.instructions ?? null,
         guardrails: initial.guardrails,
@@ -67,7 +61,7 @@ export const handlers: AgentHandlers<"initialize" | "retire" | "metadata"> = {
     // keeps a retired agent's memories and instructions from staying
     // readable. `metadata` stays so a repeated retire still sees its parent,
     // and `turn` stays until the interrupted invocation reports to onTurnEnd.
-    profile.clear();
+    yield* profile.clear();
     yield* subAgents.retireAll();
     // One-way: AgentSession.retire queues behind the interrupted turn, which
     // still needs this controller's lock to report its outcome.

@@ -1,13 +1,10 @@
 import MiniSearch from "minisearch";
 
 import type {ToolManifest} from "../model/index.js";
+import {rankedIds, words} from "../text-search.js";
 
 export const TOOL_SEARCH_NAME = "searchTools";
 const RESULT_LIMIT = 5;
-
-function words(value: string): string {
-  return value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_/.-]+/g, " ");
-}
 
 // Index schema field names, not examples/defaults or arbitrary schema values.
 function parameterNames(schema: unknown): string[] {
@@ -67,19 +64,15 @@ export function createToolSearch(
             })),
         );
       }
-      const normalized = words(query.trim());
       // No fuzzy matching initially: misspellings should not bury exact terms.
-      const matches = index.search(normalized);
-      matches.sort(
-        (a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-      );
+      const matches = rankedIds(index, query);
       const exact = catalog.find(
         (tool) => tool.name.toLowerCase() === query.trim().toLowerCase(),
       );
       return [
         ...new Set([
           ...(exact && exact.name !== TOOL_SEARCH_NAME ? [exact.name] : []),
-          ...matches.map((match) => String(match.id)),
+          ...matches,
         ]),
       ].slice(0, RESULT_LIMIT);
     },

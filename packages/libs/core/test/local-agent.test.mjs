@@ -24,7 +24,8 @@ test("a new agent starts directly, snapshots local memory, and queues later inpu
   const run = f.sends.find((send) => send.method === "doTurn");
   assert.equal(run.service, "AgentSession");
   assert.equal(run.key, "demo");
-  assert.deepEqual(run.parameter.memories, []);
+  assert.equal(run.parameter.memoryCount, 0);
+  assert.equal(Object.hasOwn(run.parameter, "memories"), false);
   assert.equal(run.parameter.agentName, "demo");
   assert.equal(Object.hasOwn(run.parameter, "ownerUserId"), false);
   assert.equal(Object.hasOwn(run.parameter, "mcpCredentials"), false);
@@ -38,61 +39,110 @@ test("a new agent starts directly, snapshots local memory, and queues later inpu
 test("memory is isolated per agent and only the current non-interrupting turn may save it", async () => {
   const a = context("a", {turn: {id: "turn", tools, steeringBatches: []}});
   const b = context("b");
-  const changes = [{operation: "set", key: "units", content: "Fahrenheit"}];
-  assert.equal(
-    (await a.invoke(Agent.object.updateMemory, {turnId: "old", changes}))
-      .applied,
-    false,
-  );
-  assert.equal(
-    (await a.invoke(Agent.object.updateMemory, {turnId: "turn", changes}))
-      .applied,
-    true,
-  );
+  const changes = [
+    {operation: "create", description: "units", content: "Fahrenheit"},
+  ];
+
+  const stale = await a.invoke(Agent.object.updateMemory, {
+    turnId: "old",
+    changes,
+  });
+  assert.equal(stale.applied, false);
+
+  const saved = await a.invoke(Agent.object.updateMemory, {
+    turnId: "turn",
+    changes,
+  });
+  assert.deepEqual(saved, {applied: true, ids: ["mem0"]});
   assert.deepEqual((await a.invoke(Agent.object.profile)).memories, [
-    {key: "units", content: "Fahrenheit"},
+    {id: "mem0", description: "units"},
   ]);
-  assert.deepEqual((await b.invoke(Agent.object.profile)).memories, []);
-  a.state.get("turn").interruptReason = "Stop";
-  assert.equal(
-    (await a.invoke(Agent.object.updateMemory, {turnId: "turn", changes}))
-      .applied,
-    false,
+  assert.deepEqual(
+    await a.invoke(Agent.object.readMemories, {ids: ["mem0", "mem9"]}),
+    [{id: "mem0", description: "units", content: "Fahrenheit"}],
   );
-  assert.equal(await a.invoke(Agent.object.deleteMemory, {key: "units"}), true);
+  assert.deepEqual((await b.invoke(Agent.object.profile)).memories, []);
+
+  a.state.get("turn").interruptReason = "Stop";
+  const interrupting = await a.invoke(Agent.object.updateMemory, {
+    turnId: "turn",
+    changes,
+  });
+  assert.equal(interrupting.applied, false);
+
+  assert.equal(await a.invoke(Agent.object.deleteMemory, {id: "mem0"}), true);
   assert.deepEqual((await a.invoke(Agent.object.profile)).memories, []);
+  assert.equal(a.state.has("memory/mem0"), false);
   assert.ok(a.state.get("notifications").versions.profile > 0);
 });
 
-test("memory batches respect the cap atomically and replacement preserves unrelated keys", async () => {
-  const memories = Array.from({length: 32}, (_, i) => ({
-    key: `key-${i}`,
-    content: `value-${i}`,
-  }));
+test("memory search ranks index descriptions and returns no content", async () => {
   const f = context("a", {
-    memories,
+    "memory/index": {
+      nextId: 3,
+      entries: [
+        {id: "mem0", description: "temperature units: Celsius"},
+        {id: "mem1", description: "current project restate-agent"},
+        {id: "mem2", description: "preferred editor"},
+      ],
+    },
+    "memory/mem1": "Building a durable agent on Restate",
+  });
+  const search = (query) => f.invoke(Agent.object.searchMemories, {query});
+
+  assert.deepEqual(await search("restate project"), [
+    {id: "mem1", description: "current project restate-agent"},
+  ]);
+  // Prefix matching: "temp" finds "temperature".
+  assert.deepEqual(
+    (await search("temp")).map(({id}) => id),
+    ["mem0"],
+  );
+  assert.deepEqual(await search("holiday plans"), []);
+});
+
+test("memory batches are atomic, keep unrelated memories, and never reuse IDs", async () => {
+  const f = context("a", {
+    "memory/index": {
+      nextId: 2,
+      entries: [
+        {id: "mem0", description: "units"},
+        {id: "mem1", description: "project"},
+      ],
+    },
+    "memory/mem0": "Fahrenheit",
+    "memory/mem1": "Restate agent",
     turn: {id: "turn", tools, steeringBatches: []},
   });
-  const changes = [
-    {operation: "set", key: "key-0", content: "changed"},
-    {operation: "set", key: "overflow", content: "extra"},
-  ];
-  assert.equal(
-    (await f.invoke(Agent.object.updateMemory, {turnId: "turn", changes}))
-      .applied,
-    false,
-  );
-  assert.deepEqual((await f.invoke(Agent.object.profile)).memories, memories);
-  changes.unshift({operation: "delete", key: "key-1"});
-  assert.equal(
-    (await f.invoke(Agent.object.updateMemory, {turnId: "turn", changes}))
-      .applied,
-    true,
-  );
-  const saved = (await f.invoke(Agent.object.profile)).memories;
-  assert.equal(saved.length, 32);
-  assert.equal(saved.find((entry) => entry.key === "key-0").content, "changed");
-  assert.equal(saved.find((entry) => entry.key === "key-2").content, "value-2");
+  const update = (changes) =>
+    f.invoke(Agent.object.updateMemory, {turnId: "turn", changes});
+
+  // An unknown ID rejects the whole batch, including its valid changes.
+  const rejected = await update([
+    {operation: "update", id: "mem0", description: "units", content: "Kelvin"},
+    {operation: "delete", id: "mem7"},
+  ]);
+  assert.equal(rejected.applied, false);
+  assert.equal(f.state.get("memory/mem0"), "Fahrenheit");
+
+  const applied = await update([
+    {operation: "delete", id: "mem1"},
+    {operation: "update", id: "mem0", description: "units", content: "Celsius"},
+    {operation: "create", description: "editor", content: "Vim"},
+  ]);
+  assert.deepEqual(applied, {applied: true, ids: ["mem1", "mem0", "mem2"]});
+  assert.deepEqual((await f.invoke(Agent.object.profile)).memories, [
+    {id: "mem0", description: "units"},
+    {id: "mem2", description: "editor"},
+  ]);
+  assert.equal(f.state.get("memory/mem0"), "Celsius");
+  assert.equal(f.state.has("memory/mem1"), false);
+
+  // The deleted mem1 is not handed out again.
+  const created = await update([
+    {operation: "create", description: "shell", content: "bash"},
+  ]);
+  assert.deepEqual(created.ids, ["mem3"]);
 });
 
 test("notifications advance locally and wake subscribers registered before the change", async () => {

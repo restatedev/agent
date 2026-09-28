@@ -34,7 +34,7 @@ Paths below are relative to `packages/libs/core/src`.
    configuration and credential references.
 6. `session/history.ts` owns append-only storage and compaction checkpoints.
    `agent/notifications.ts` supplies change watermarks to consumers.
-7. `agent/profile.ts` (memories included), `agent/approvals.ts`,
+7. `agent/profile.ts`, `agent/memories.ts`, `agent/approvals.ts`,
    `agent/schedules.ts` and `agent/sub-agents.ts` each own their state keys,
    handlers and notification topic. `agent/lifecycle.ts` creates and retires
    the agent.

@@ -17,6 +17,7 @@ import {
 } from "../retention.js";
 import * as approvals from "./approvals.js";
 import * as lifecycle from "./lifecycle.js";
+import * as memories from "./memories.js";
 import * as notifications from "./notifications.js";
 import * as profile from "./profile.js";
 import * as schedules from "./schedules.js";
@@ -33,6 +34,7 @@ export const Agent = restate.implement(AgentDefinition, {
     ...turns.handlers,
     ...lifecycle.handlers,
     ...profile.handlers,
+    ...memories.handlers,
     ...approvals.handlers,
     ...schedules.handlers,
     ...subAgents.handlers,
@@ -53,6 +55,8 @@ export const Agent = restate.implement(AgentDefinition, {
 
       profile: shared(noRetention),
       updateProfile: noRetention,
+      searchMemories: shared(noRetention),
+      readMemories: shared(noRetention),
       deleteMemory: noRetention,
       updateMemory: internal(noRetention),
       toolCatalog: shared(noRetention),

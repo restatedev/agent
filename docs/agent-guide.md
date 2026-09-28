@@ -53,8 +53,9 @@ Preserve these unless the requested change explicitly replaces them:
    existing user entry to explain later routing.
 3. At most one `AgentSession.doTurn` invocation is active for an Agent. Its
    Restate invocation ID is the stable `turnId` and signal target.
-4. A turn receives a stable Agent profile including its local memory snapshot. Instructions, memories,
-   guardrails, and tool grants changed during that turn affect the next turn.
+4. A turn receives a stable Agent profile and the number of memories.
+   Instructions, guardrails and tool grants changed during that turn affect
+   the next turn. Memory tools read and write the live index.
    The session loads its conversation context once at the beginning of
    `doTurn`.
 5. Steering does not cancel the current model/tool step or existing pending
@@ -147,7 +148,8 @@ The detailed turn-runtime list lives in
   or schedules.
 - `activity` and `progress` are status communication, not chain-of-thought or
   model reasoning.
-- The per-Agent `memories` collection is persistent semantic memory for one conversation.
+- The per-Agent memory index and its memory keys are persistent context for
+  one conversation; the model decides what to store and what to read.
   Active-turn messages are working context, and conversation history is a separate
   canonical log.
 
@@ -161,7 +163,8 @@ The detailed turn-runtime list lives in
 | Active turn ID, pending user queue, signal delivery/reconciliation | `agent/active-turn.ts` |
 | History chunks, cursor, writer, summary checkpoint | `session/history.ts` |
 | Notification revisions, subscriptions, and awakeables | `agent/notifications.ts` |
-| Instructions, guardrails, tool grants, memories | `agent/profile.ts` |
+| Instructions, guardrails, tool grants | `agent/profile.ts` |
+| Memory index and memory content | `agent/memories.ts` |
 | Pending approval state and decision signal | `agent/approvals.ts` |
 | Children, delegated tasks, inherited profile | `agent/sub-agents.ts` |
 | Durable scheduled-message state and timers | `agent/schedules.ts` |

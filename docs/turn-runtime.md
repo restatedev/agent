@@ -67,8 +67,9 @@ deployed dynamic handlers as ordinary durable RPCs.
   bounded to 128 child calls plus source, output, memory, and computation limits.
 - Each step receives a copy of the complete live model context accumulated by
   the run.
-- The entire local memory snapshot read by Agent is injected once as data before conversation context;
-  user instructions are supplied to every agent-model call.
+- Only the number of memories is injected before conversation context; the
+  model searches them with `searchMemories` and reads content with
+  `readMemories`. User instructions are supplied to every agent-model call.
 - A normal iteration returns text, tool outcomes, a recoverable model error, or
   a guardrail block.
 - Invalid or empty model output becomes corrective user feedback and another
@@ -160,8 +161,9 @@ write history.
 - Parallel sandbox calls share one in-flight acquisition; dependent operations must
   either be proposed in separate loop iterations or awaited in order inside a
   PTC program.
-- `manageMemory` atomically updates this Agent's collection (at most 32 entries).
-  Agent accepts only its active, non-interrupting `turnId`.
+- `manageMemory` atomically applies creates, updates and deletes to this
+  Agent's memories and returns the IDs it touched. Agent accepts only its
+  active, non-interrupting `turnId`.
 - Schedule tools persist on the same-key Agent. Once saved, that
   durable side effect survives the turn and is not a pending turn operation.
 
@@ -268,7 +270,7 @@ directly through its invocation-local history writer. Tool events include IDs,
 names, summaries, and final statuses, but not raw arguments or results.
 
 Approval registration/cancellation and delivered decisions are also appended
-by the active session. A successful memory tool appends changed keys. External
+by the active session. A successful memory tool appends the changed memory IDs. External
 delivery appends its source and selected route with the delivered input. These
 derived events are omitted from future model context and compaction where
 appropriate.

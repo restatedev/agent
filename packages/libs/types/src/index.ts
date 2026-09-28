@@ -101,14 +101,31 @@ export const ToolCatalogSchema = z.object({
   mcp: z.array(McpServerSchema),
 });
 export type ToolCatalog = z.infer<typeof ToolCatalogSchema>;
-export const MemoryEntrySchema = z.object({
-  key: z.string().trim().min(1),
-  content: z.string().trim().min(1),
+// An agent's memories are an index plus one state key per memory. Turns
+// search the index and read the content of the memories they need.
+const MemoryIdSchema = z.string().trim().min(1);
+const MemoryDescriptionSchema = z.string().trim().min(1);
+const MemoryContentSchema = z.string().trim().min(1);
+
+/** One line of the memory index: a stable ID and a short description. */
+export const MemoryIndexEntrySchema = z.object({
+  id: MemoryIdSchema,
+  description: MemoryDescriptionSchema,
 });
-export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
-export const MemoryKeyRequestSchema = MemoryEntrySchema.pick({
-  key: true,
-}).strict();
+export type MemoryIndexEntry = z.infer<typeof MemoryIndexEntrySchema>;
+
+export const MemorySchema = MemoryIndexEntrySchema.extend({
+  content: MemoryContentSchema,
+});
+export type Memory = z.infer<typeof MemorySchema>;
+
+export const MemoryIdRequestSchema = z.object({id: MemoryIdSchema}).strict();
+export const MemorySearchRequestSchema = z
+  .object({query: z.string().trim().min(1)})
+  .strict();
+export const MemoryReadRequestSchema = z
+  .object({ids: z.array(MemoryIdSchema).min(1)})
+  .strict();
 const AskStatsSchema = z.object({
   pendingMessages: z.number().int().nonnegative(),
 });
@@ -287,17 +304,23 @@ const ToolEventSchema = z.object({
   ),
 });
 
-// Keyed updates to this agent's memories: model-managed context data, not
+// Changes to this agent's memories: model-managed context data, not
 // authoritative instructions or policy. Agent configuration remains separate.
 export const MemoryChangeSchema = z.discriminatedUnion("operation", [
   z.object({
-    operation: z.literal("set"),
-    key: z.string().trim().min(1),
-    content: z.string().trim().min(1),
+    operation: z.literal("create"),
+    description: MemoryDescriptionSchema,
+    content: MemoryContentSchema,
+  }),
+  z.object({
+    operation: z.literal("update"),
+    id: MemoryIdSchema,
+    description: MemoryDescriptionSchema,
+    content: MemoryContentSchema,
   }),
   z.object({
     operation: z.literal("delete"),
-    key: z.string().trim().min(1),
+    id: MemoryIdSchema,
   }),
 ]);
 export type MemoryChange = z.infer<typeof MemoryChangeSchema>;
@@ -311,7 +334,8 @@ export type MemoryUpdate = z.infer<typeof MemoryUpdateSchema>;
 export const MemoryUpdateResultSchema = z.discriminatedUnion("applied", [
   z.object({
     applied: z.literal(true),
-    memoryCount: z.number().int().nonnegative(),
+    // The memory each change touched, in order; creates get fresh IDs.
+    ids: z.array(MemoryIdSchema),
   }),
   z.object({
     applied: z.literal(false),
@@ -348,12 +372,18 @@ const GuardrailListSchema = z
     "guardrail ids must be unique",
   );
 
-export const AgentProfileSchema = z.object({
-  memories: z.array(MemoryEntrySchema).max(32).default([]),
+/** What an agent is configured with, and what a sub-agent inherits. */
+export const AgentConfigSchema = z.object({
   instructions: z.string().optional(),
   guardrails: z.array(GuardrailSchema),
   tools: AgentToolsSchema.default(DEFAULT_AGENT_TOOLS),
   webSearchEnabled: z.boolean().default(true),
+});
+export type AgentConfig = z.infer<typeof AgentConfigSchema>;
+
+/** The configuration plus the memory index, as the profile handler returns it. */
+export const AgentProfileSchema = AgentConfigSchema.extend({
+  memories: z.array(MemoryIndexEntrySchema).default([]),
 });
 export type AgentProfile = z.infer<typeof AgentProfileSchema>;
 
@@ -373,7 +403,7 @@ export const ProfileUpdateSchema = z
 export type ProfileUpdate = z.infer<typeof ProfileUpdateSchema>;
 
 export const AgentInitializationSchema = AgentMetadataSchema.extend({
-  profile: AgentProfileSchema.optional(),
+  profile: AgentConfigSchema.optional(),
 });
 export const SubAgentConfigSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -472,8 +502,8 @@ const ConversationEventSchema = z.discriminatedUnion("type", [
     turnId: z.string(),
     changes: z.array(
       z.object({
-        operation: z.enum(["set", "delete"]),
-        key: z.string(),
+        operation: z.enum(["create", "update", "delete"]),
+        id: z.string(),
       }),
     ),
   }),
@@ -613,7 +643,10 @@ export const ApprovalCancellationSchema = ApprovalRequestSchema.pick({
 });
 export type ApprovalCancellation = z.infer<typeof ApprovalCancellationSchema>;
 
-export const AgentTurnRequestSchema = AgentProfileSchema.extend({
+// A turn snapshots the configuration and only the number of memories; the
+// model searches the index itself when it needs earlier context.
+export const AgentTurnRequestSchema = AgentConfigSchema.extend({
+  memoryCount: z.number().int().nonnegative(),
   // Optional for already-journaled turns; new dispatches always include the name.
   agentName: z.string().optional(),
   mcpServers: z.array(McpServerSchema),

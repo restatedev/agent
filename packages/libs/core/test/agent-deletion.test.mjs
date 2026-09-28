@@ -15,7 +15,8 @@ test("retirement interrupts the turn, drops queued work, and asynchronously reti
     turn: {id: "turn-1", steeringBatches: [], tools: {}},
     pending: [{role: "user", text: "queued"}],
     approvals: [{turnId: "turn-1", approvalId: "approval"}],
-    memories: [{key: "secret", content: "private"}],
+    "memory/index": {nextId: 1, entries: [{id: "mem0", description: "secret"}]},
+    "memory/mem0": "private",
     "profile/instructions": "Be terse",
     "sub-agent-tasks": [],
   });
@@ -27,8 +28,13 @@ test("retirement interrupts the turn, drops queued work, and asynchronously reti
   assert.equal(f.state.has("pending"), false);
   assert.equal(f.state.has("approvals"), false);
   assert.ok(f.state.get("notifications").versions.approvals > 0);
-  for (const key of ["memories", "profile/instructions", "sub-agent-tasks"])
-    assert.equal(f.state.has(key), false, key);
+  const cleared = [
+    "memory/index",
+    "memory/mem0",
+    "profile/instructions",
+    "sub-agent-tasks",
+  ];
+  for (const key of cleared) assert.equal(f.state.has(key), false, key);
   assert.deepEqual((await f.invoke(Agent.object.profile)).memories, []);
   assert.equal((await f.invoke(Agent.object.profile)).instructions, undefined);
   assert.equal(f.state.get("turn").interruptReason, "Agent deleted");

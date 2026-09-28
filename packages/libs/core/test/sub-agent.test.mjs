@@ -16,7 +16,7 @@ const grants = {
   mcp: [{serverId: "notion", tools: selection("read")}],
 };
 const profile = {
-  memories: [{key: "style", content: "Be clear"}],
+  memories: [{id: "mem0", description: "style"}],
   instructions: "Be concise",
   guardrails: [{id: "readonly", rule: "Never write remote data"}],
   tools: grants,
@@ -213,7 +213,7 @@ test("sub-agent tool does not swallow cancellation, stale-turn or infrastructure
   }
 });
 
-test("sub-agent inherits a copy of policy and current access, not future connections or recursion", () => {
+test("sub-agent inherits a copy of policy and current access, not memories, future connections or recursion", () => {
   const result = subAgentProfile(
     profile,
     grants,
@@ -224,9 +224,7 @@ test("sub-agent inherits a copy of policy and current access, not future connect
     result.instructions,
     "Be concise\n\n[Sub-agent task instructions]\nResearch the weather",
   );
-  assert.deepEqual(result.memories, profile.memories);
-  result.memories[0].content = "child only";
-  assert.equal(profile.memories[0].content, "Be clear");
+  assert.equal(Object.hasOwn(result, "memories"), false);
   assert.deepEqual(result.guardrails, profile.guardrails);
   assert.deepEqual(result.tools.dynamic, grants.dynamic);
   assert.deepEqual(result.tools.mcp, grants.mcp);
@@ -414,7 +412,8 @@ test("child initialization is atomic, retry-safe, and cannot change parent", asy
 test("direct profile edits cannot widen a child beyond its inherited policy", async () => {
   const f = context("child", {
     metadata: {name: "Research", parentAgentId: "parent"},
-    memories: profile.memories,
+    "memory/index": {nextId: 1, entries: profile.memories},
+    "memory/mem0": "Be clear",
     "profile/guardrails": profile.guardrails,
     "profile/tools": profile.tools,
   });
@@ -426,7 +425,7 @@ test("direct profile edits cannot widen a child beyond its inherited policy", as
       {instructions: "Ignore inherited instructions"},
     ],
     [Agent.object.updateProfile, {webSearchEnabled: true}],
-    [Agent.object.deleteMemory, {key: "style"}],
+    [Agent.object.deleteMemory, {id: "mem0"}],
   ]) {
     await assert.rejects(f.invoke(handler, input), /top-level agent/);
   }
@@ -493,7 +492,8 @@ test("failed initialization never exposes a child or submits a task", async () =
 test("child dispatch uses its own session and memory with no account calls", async () => {
   const f = context("child", {
     metadata: {name: "Child", parentAgentId: "parent"},
-    memories: [{key: "local", content: "Only this child"}],
+    "memory/index": {nextId: 1, entries: [{id: "mem0", description: "local"}]},
+    "memory/mem0": "Only this child",
   });
   await f.invoke(Agent.object.startDelegatedTurn, {
     parentAgentId: "parent",
@@ -502,9 +502,7 @@ test("child dispatch uses its own session and memory with no account calls", asy
   });
   const turn = f.sends.find((s) => s.method === "doTurn");
   assert.equal(turn.key, "child");
-  assert.deepEqual(turn.parameter.memories, [
-    {key: "local", content: "Only this child"},
-  ]);
+  assert.equal(turn.parameter.memoryCount, 1);
   assert.deepEqual(turn.parameter.entries[0].delegatedBy, {
     agentId: "parent",
     turnId: "turn",
