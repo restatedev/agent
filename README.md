@@ -133,23 +133,60 @@ Objects, on top of Restate](docs/images/layers.svg)
 
 ## Features
 
+Paths are relative to `packages/libs/core/src`.
+
+### Steer or interrupt a running turn
+
+A message sent to a busy agent is queued for the next turn, steered into the
+running one, or used to interrupt it. The controller answers each of them at
+once. Steering reaches the next model step without cancelling tools in
+flight; an interrupt cancels unfinished work and ends with a summary.
+
+![Animation: while a turn runs tools in parallel, the client steers it and the
+controller answers at once; an interrupt later cancels the remaining tool and
+the turn ends with a summary](docs/images/steer-interrupt.svg)
+
+Read `agent/active-turn.ts` and `session/step.ts`.
+
+### Wait for a person, for days
+
+A policy model checks each answer and tool batch against the agent's
+guardrails. A guardrail can require a person's approval. The turn then waits
+durably: it holds no process, survives redeploys, and resumes exactly where
+it stopped.
+
+![Animation: a guardrail requires approval; the turn suspends for about a day
+and survives a redeploy; when a person approves, the turn resumes and
+finishes](docs/images/durable-wait.svg)
+
+Read `session/guardrails.ts` and `agent/approvals.ts`.
+
+### Delegate to sub-agents
+
+The agent creates sub-agents with their own history, sandbox and memory, and
+hands them tasks in parallel. The parent turn waits durably without holding
+its controller, so the agent keeps answering meanwhile.
+
+![Animation: a parent turn creates two sub-agents that work in parallel; a new
+message is queued meanwhile; the answers return as tool results and the
+queued message starts the next turn](docs/images/sub-agents.svg)
+
+Read `agent/sub-agents.ts` and `session/tools/sub-agents.ts`.
+
+### And the rest
+
 | Feature | What it does | Read |
 | --- | --- | --- |
-| **Queue, steer, interrupt** | A message sent to a busy agent is queued, steered into the running turn, or used to interrupt it. Steering never cancels running tools; an interrupt ends with a summary of what was done. | `agent/active-turn.ts` |
 | **Parallel tool calls** | All tool calls in one model response run concurrently. A failing call is reported to the model without discarding the others. | `session/step.ts` |
 | **Background operations** | Timers, approvals, sub-agent tasks and long programs keep running across model steps. The model can wait for them, carry on, or cancel one. | `session/pending.ts` |
 | **Programmatic tool calls** | For work that needs many calls, the model writes a JavaScript program that runs in a sandboxed QuickJS guest. Each call it makes passes the same guardrails. | `ptc/runtime.ts` |
-| **Guardrails and approval** | A policy model checks each answer and tool batch against the agent's rules. Rules can require a person's approval, and the turn waits durably. | `session/guardrails.ts`, `agent/approvals.ts` |
 | **Compaction** | Long conversations are summarized in the background into a checkpoint. Recent exchanges stay verbatim, and the log itself is never rewritten. | `session/history.ts`, `model/compactor.ts` |
 | **Tool search** | Built-ins are always visible. MCP and discovered tools load on demand through `searchTools`, so large catalogs do not fill the context. | `session/tool-search.ts` |
 | **Memory** | An index of short descriptions the model searches, reads from and writes to, so context does not grow with the number of memories. A simple illustration, not a full memory system. | `agent/memories.ts` |
-| **Sub-agents** | The agent creates helpers, delegates tasks and follows up with them. | `agent/sub-agents.ts` |
 | **Schedules** | Deliver a message to the agent later, once or repeatedly. | `agent/schedules.ts` |
 | **Sandbox** | A local directory or [Modal](https://modal.com) sandbox for files and shell commands, suspended between turns. | `sandbox/turn.ts` |
 | **Extensible tools** | MCP servers, plus any Restate handler published with `restate.dev/agent: <tool-name>` metadata. | `session/dynamic-tools.ts` |
-
-Paths are relative to `packages/libs/core/src`. A truncated model response
-also gets one retry with a larger output budget instead of failing the turn.
+| **Output recovery** | A truncated model response gets one retry with a larger output budget instead of failing the turn. | `model/inference.ts` |
 
 **What replay does not do:** make external side effects exactly-once. A crash
 between an MCP call completing and its result being recorded can repeat that
