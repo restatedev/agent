@@ -50,6 +50,8 @@ sequenceDiagram
 
 ## Control and history
 
+![Animation: after a turn the older messages are summarized while the 8 most recent stay verbatim; the log keeps growing and the model sees the summary plus recent messages](images/compaction.svg)
+
 Busy `ask` queues FIFO. `steer` drains queued input into an ordered signal for
 the active turn and preserves current tool work. `interrupt` cancels unfinished
 work, joins cleanup, and makes one tool-free finalization call. Its optional

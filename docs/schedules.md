@@ -7,6 +7,8 @@ it. There is no account scheduler or fresh agent per occurrence.
 
 ## Contract
 
+![Animation: a daily schedule fires and starts a turn; one firing comes due while the service is down and is delivered once it is back](images/schedules.svg)
+
 ```sh
 curl localhost:8080/Agent/demo/createSchedule --json '{
   "scheduleId":"reminder",

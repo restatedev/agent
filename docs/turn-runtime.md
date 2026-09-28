@@ -44,6 +44,8 @@ deployed dynamic handlers as ordinary durable RPCs.
 
 ## Execution shape
 
+![Animation: inside the agent service process, doTurn runs a model call and three tools as in-process function calls; each result is appended over one open stream to the turn journal in Restate, in completion order](images/in-process.svg)
+
 - `doTurn` runs the state-machine loop directly. Each loop iteration spawns one
   `agentStep` and settles it against the durable interrupt signal.
 - Invocation cancellation rejects a parked operation at the handler boundary.

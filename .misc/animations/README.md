@@ -9,18 +9,18 @@ fully before touching an animation.
 
 ## What exists
 
-| SVG | Generator | Used in README section | Behaviour it shows (check against this code) |
+| SVG | Generator | Used in | Behaviour it shows (check against this code) |
 | --- | --- | --- | --- |
-| `durable-turn.svg` | `hero.py` | Durable by construction | Journal replay after a crash (`session/service.ts`, Restate replay) |
-| `in-process.svg` | `timeline.py` → `in-process` | How a turn works | Model calls and tools run in-process in `doTurn`; results stream to the journal (`session/step.ts`) |
-| `steer-interrupt.svg` | `timeline.py` → `steer-interrupt` | top of the page | Controller answers at once; interrupt ends with a summary (`agent/active-turn.ts`) |
-| `durable-wait.svg` | `timeline.py` → `durable-wait` | Human approval | Guardrail approval, suspended turn (`session/guardrails.ts`, `agent/approvals.ts`) |
-| `sub-agents.svg` | `timeline.py` → `sub-agents` | Delegate to sub-agents | `createSubAgent` waits durably, parallel children, parent keeps answering (`tools/sub-agents.ts`) |
-| `programmatic-tool-calls.svg` | `timeline.py` → `programmatic-tool-calls` | Programmatic tool calls | QuickJS program, guardrails per call, compact result (`ptc/runtime.ts`) |
-| `compaction.svg` | `timeline.py` → `compaction` | Compaction in the background | `COMPACT_AFTER_MESSAGES = 32`, `KEEP_RECENT_MESSAGES = 8` (`session/history.ts`) |
-| `schedules.svg` | `timeline.py` → `schedules` | Schedules | Timers are delayed `Agent.fire` invocations in Restate (`agent/schedules.ts`, `docs/schedules.md`) |
-| `parallel-tool-calls.svg` | `timeline.py` → `parallel-tool-calls` | Parallel tool calls | Guardrails gate the batch once, calls run concurrently, a failure is a result not a throw (`session/step.ts`, `session/tools.ts`) |
-| `background-operations.svg` | `timeline.py` → `background-operations` | Background operations you can cancel | Pending results, the turn waits while its text answer stands, `cancelOperation`, completion as a runtime message (`session/pending.ts`, `session/service.ts`, `tools/operations.ts`) |
+| `durable-turn.svg` | `hero.py` | README: 4. It survives a crash | Journal replay after a crash (`session/service.ts`, Restate replay) |
+| `in-process.svg` | `timeline.py` → `in-process` | docs/turn-runtime.md: Execution shape | Model calls and tools run in-process in `doTurn`; results stream to the journal (`session/step.ts`) |
+| `steer-interrupt.svg` | `timeline.py` → `steer-interrupt` | README: 2. You steer it while it works | Controller answers at once; interrupt ends with a summary (`agent/active-turn.ts`) |
+| `durable-wait.svg` | `timeline.py` → `durable-wait` | README: 3. It waits a day for your approval | Guardrail approval, suspended turn (`session/guardrails.ts`, `agent/approvals.ts`) |
+| `sub-agents.svg` | `timeline.py` → `sub-agents` | docs/tools.md: Sub-agents | `createSubAgent` waits durably, parallel children, parent keeps answering (`tools/sub-agents.ts`) |
+| `programmatic-tool-calls.svg` | `timeline.py` → `programmatic-tool-calls` | docs/tools.md: Programmatic tool calling | QuickJS program, guardrails per call, compact result (`ptc/runtime.ts`) |
+| `compaction.svg` | `timeline.py` → `compaction` | docs/architecture.md: Control and history | `COMPACT_AFTER_MESSAGES = 32`, `KEEP_RECENT_MESSAGES = 8` (`session/history.ts`) |
+| `schedules.svg` | `timeline.py` → `schedules` | docs/schedules.md: Contract | Timers are delayed `Agent.fire` invocations in Restate (`agent/schedules.ts`, `docs/schedules.md`) |
+| `parallel-tool-calls.svg` | `timeline.py` → `parallel-tool-calls` | README: 1. It calls tools in parallel | Guardrails gate the batch once, calls run concurrently, a failure is a result not a throw (`session/step.ts`, `session/tools.ts`) |
+| `background-operations.svg` | `timeline.py` → `background-operations` | docs/tools.md: Pending tools | Pending results, the turn waits while its text answer stands, `cancelOperation`, completion as a runtime message (`session/pending.ts`, `session/service.ts`, `tools/operations.ts`) |
 
 Code paths are relative to `packages/libs/core/src`.
 
@@ -157,6 +157,10 @@ character, plus 14px of left padding for the stripe.
 
 Put an animation where it breaks up a long stretch of text and illustrates
 exactly that text. Do not stack animations with nothing between them.
+
+The README keeps only the four animations of its "One turn, start to finish"
+story, so the page has room to breathe. Every other animation belongs in the
+doc page that explains that feature, right under its heading.
 
 ## Environment gotchas
 
