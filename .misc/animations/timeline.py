@@ -273,7 +273,7 @@ def durable_wait():
 
     a.bar(0, 30, 124, "ok", "running", label_on_bar=True)
     a.bar(31, 62, 124, "idle", "suspended: no process, only state")
-    a.chip(42, 142, 100, "tool", "redeploy v2")
+    a.chip(42, 142, 124, "tool", "new version v2")
     a.bar(63, 86, 124, "ok", "resumed", label_on_bar=True)
 
     a.time_break(54, 24, 256, "")
@@ -287,12 +287,12 @@ def durable_wait():
     a.playhead(20, 256)
     a.captions(318, [
         ("A guardrail requires a person to approve the deploy before it runs.", 0, 30),
-        ("The turn suspends while it waits: it holds no process, and redeploys in between are safe.", 30, 62),
+        ("The turn suspends: no process, only state. New versions can ship while it waits.", 30, 62),
         ("When the approval arrives a day later, the turn resumes exactly where it waited.", 62, 101),
     ])
     a.write("durable-wait.svg",
             "Animation: a guardrail requires approval; the turn suspends and holds no process for about a day, "
-            "surviving a redeploy; when a person approves, the turn resumes, runs the deploy and replies.")
+            "while a new service version ships; when a person approves, the turn resumes, runs the deploy and replies.")
 
 
 def sub_agents():
@@ -453,7 +453,7 @@ def schedules():
     a.axis_label(33, 250, "next day")
 
     a.bar(0, 42, 193, "ok", "running", label_on_bar=True)
-    a.bar(42, 56, 193, "bad", "down: redeploying", label_on_bar=True)
+    a.bar(42, 56, 193, "bad", "down: outage", label_on_bar=True)
     a.bar(56, 86, 193, "ok", "running", label_on_bar=True)
     a.chip(46, 34, 100, "warn", "fire", "Tue 08:00")
     a.chip(57, 108, 110, "ok", "delivered", "once it is back")
