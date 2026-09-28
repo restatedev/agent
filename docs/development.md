@@ -31,7 +31,7 @@ if you need different ingress connectivity.
 
 Configure optional MCP servers on the core process using
 [MCP configuration](mcp-configuration.md). PTC is enabled by default; disable it
-with `AGENT_PTC_ENABLED=false`. Web search is enabled by default and uses
+with `programTool` in `src/agent-config.ts`. Web search is enabled by default and uses
 Tavily's keyless endpoint; Context → Web search saves an agent-local preference.
 
 `AGENT_MODEL_MAX_OUTPUT_TOKENS` controls the model output budget: default

@@ -87,13 +87,12 @@ export const agentConfig = {
 
   /**
    * Whether the model may write JavaScript programs that call tools
-   * (executeProgram). `AGENT_PTC_ENABLED=false` turns it off.
+   * (executeProgram).
    *
-   * Read once, at module load, so one process gives every turn the same
-   * catalog. Turning it off only hides the tool from new proposals: the
-   * dispatcher still executes an `executeProgram` call already recorded in a
-   * journal, and the name stays reserved, so replaying an in-flight turn after
-   * a restart with the flag flipped does not diverge.
+   * The catalogs read it once, at module load. Turning it off only hides the
+   * tool from new proposals: the dispatcher still executes an `executeProgram`
+   * call already recorded in a journal, and the name stays reserved, so
+   * replaying an in-flight turn after deploying the change does not diverge.
    */
-  programTool: process.env.AGENT_PTC_ENABLED !== "false",
+  programTool: true,
 };

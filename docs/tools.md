@@ -248,16 +248,14 @@ to the model for the next decision, the model writes a program that calls tools,
 branches on their results, and computes a compact answer. It is another tool in
 the existing agent loop, not a separate agent or a replacement tool backend.
 
-PTC is enabled by default. Set `AGENT_PTC_ENABLED=false` on the core service to
-disable it, for example `AGENT_PTC_ENABLED=false pnpm dev:service`.
-Only the exact value `false` disables PTC; leaving the variable unset or setting
-it to `true` enables it. The flag is read once when the service starts
-(`PTC_ENABLED` in `ptc/definition.ts`). When disabled, `executeProgram` is left
+PTC is enabled by default. Set `programTool: false` in
+`packages/libs/core/src/agent-config.ts` to disable it. The catalogs read it
+once, when the service loads. When disabled, `executeProgram` is left
 out of every catalog: the model's tools (`manifests()`), the tool-search index,
 the tool-permission UI (`builtinCatalog`) and the `searchTools` description.
 Its name stays reserved, and already-recorded program calls retain their
-normal execution and replay behavior, so restarting with the flag flipped does
-not break an in-flight turn.
+normal execution and replay behavior, so deploying the change does not break
+an in-flight turn.
 
 The model can use `executeProgram({source})` to coordinate the same static,
 Restate-discovered, and MCP tools that it can call directly. The source evaluates

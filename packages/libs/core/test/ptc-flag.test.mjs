@@ -3,8 +3,11 @@ import {execFile} from "node:child_process";
 import {test} from "node:test";
 import {promisify} from "node:util";
 
-// The flag is read at module load, so each case runs in a fresh process.
-const probe = `
+// The catalogs read agentConfig.programTool once, at module load, so each case
+// sets it in a fresh process before the tool registry is loaded.
+const probe = (programTool) => `
+  const {agentConfig} = await import("./src/agent-config.ts");
+  agentConfig.programTool = ${programTool};
   const tools = await import("./src/session/tools.ts");
   const permissions = {builtin: {mode: "all"}, dynamic: {mode: "selected", names: []}, mcp: []};
   const context = tools.createAgentToolContext("agent", "turn", false, permissions);
@@ -18,28 +21,23 @@ const probe = `
   }));
 `;
 
-async function catalogWith(flag) {
-  const env = {...process.env};
-  delete env.AGENT_PTC_ENABLED;
-  if (flag !== undefined) {
-    env.AGENT_PTC_ENABLED = flag;
-  }
+async function catalogWith(programTool) {
   const {stdout} = await promisify(execFile)(
     process.execPath,
-    ["--import", "tsx", "--input-type=module", "-e", probe],
-    {cwd: new URL("..", import.meta.url), env},
+    ["--import", "tsx", "--input-type=module", "-e", probe(programTool)],
+    {cwd: new URL("..", import.meta.url)},
   );
   return JSON.parse(stdout.trim().split("\n").at(-1));
 }
 
-test("AGENT_PTC_ENABLED=false hides PTC from every catalog but keeps the name reserved", async () => {
-  assert.deepEqual(await catalogWith("false"), {
+test("programTool: false hides PTC from every catalog but keeps the name reserved", async () => {
+  assert.deepEqual(await catalogWith(false), {
     reserved: true,
     permissionCatalog: false,
     modelCatalog: false,
     searchMentionsPrograms: false,
   });
-  assert.deepEqual(await catalogWith(undefined), {
+  assert.deepEqual(await catalogWith(true), {
     reserved: true,
     permissionCatalog: true,
     modelCatalog: true,

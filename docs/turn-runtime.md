@@ -234,7 +234,7 @@ cancel losing branches, but program return, failure, or turn interruption stops
 and joins outstanding children. Completed side effects are not undone.
 
 See [the PTC guide](tools.md#programmatic-tool-calling-ptc) for examples, limits,
-failure handling, and the replay-safe `AGENT_PTC_ENABLED=false` opt-out.
+failure handling, and the replay-safe `programTool` opt-out in `agent-config.ts`.
 
 ## Interruption and stopping
 
