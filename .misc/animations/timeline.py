@@ -474,6 +474,73 @@ def schedules():
             "service is down and is delivered once the service is back; on Wednesday it fires again.")
 
 
+def parallel_tool_calls():
+    a = Animation(1000, 360, 16, 86)
+    a.lane(20, 64, "Turn", "model steps")
+    a.lane(94, 54, "Guardrails")
+    a.lane(158, 128, "Tools")
+
+    a.chip(1, 34, 124, "model", "model step", "3 tool calls")
+    a.chip(15, 99, 150, "ok", "batch allowed", "one check, 3 calls")
+
+    a.bar(26, 40, 190, "tool", "getWeather")
+    a.mark(40, 202, "ok", "✓")
+    a.bar(26, 52, 226, "tool", "webSearch")
+    a.mark(52, 238, "ok", "✓")
+    a.bar(26, 34, 262, "tool", "runCommand")
+    a.mark(34, 274, "bad", "✕")
+    a.axis_label(37, 274, "failed: reported to the model, the others keep running")
+
+    a.chip(54, 34, 164, "model", "model step", "2 results + 1 error")
+    a.chip(73, 41, 80, "reply", "reply")
+
+    a.playhead(20, 286)
+    a.captions(330, [
+        ("One model response proposes three tool calls, and the guardrails check them as one batch.", 0, 25),
+        ("They run concurrently. runCommand fails, and its error does not discard the other results.", 25, 53),
+        ("The next model step sees both results and the error, and decides what to do.", 53, 101),
+    ])
+    a.write("parallel-tool-calls.svg",
+            "Animation: one model step proposes three tool calls; the guardrails allow the batch in one check; "
+            "the calls run concurrently, one fails and is reported as an error while the others finish; the "
+            "next model step sees both results and the error, and replies.")
+
+
+def background_operations():
+    a = Animation(1000, 380, 16, 86)
+    a.lane(20, 64, "Client")
+    a.lane(94, 86, "Turn", "model steps")
+    a.lane(190, 110, "Background", "pending operations")
+
+    a.chip(1, 34, 214, "user", "ask", "Order laptops, remind me in 2 min")
+    a.chip(3, 104, 150, "model", "model step", "humanApproval + sleep")
+
+    a.bar(19, 57, 222, "wait", "humanApproval: waiting for a person")
+    a.mark(57, 234, "bad", "✕")
+    a.bar(19, 64, 266, "tool", "sleep 120s: durable timer")
+    a.mark(64, 278, "ok", "✓")
+    a.axis_label(19, 294, "both return pending at once")
+
+    a.chip(20, 104, 150, "model", "model step", "answers, stays open")
+    a.chip(37, 111, 100, "warn", "waiting on 2")
+    a.chip(40, 34, 170, "user", "steer", "Cancel the order")
+    a.chip(49, 104, 140, "model", "model step", "cancelOperation")
+    a.chip(65, 104, 120, "model", "model step", "timer fired")
+    a.chip(79, 111, 70, "reply", "reply")
+
+    a.playhead(20, 300)
+    a.captions(344, [
+        ("An approval request and a timer return pending at once, then keep running in the background.", 0, 36),
+        ("The turn waits for them without blocking. Steered to stop, the model calls cancelOperation.", 36, 63),
+        ("A completion arrives as a message before the next model step, and the turn then finishes.", 63, 101),
+    ])
+    a.write("background-operations.svg",
+            "Animation: the model starts a human approval request and a durable timer, both return pending "
+            "at once and run in the background; the model answers and the turn waits on them; the client "
+            "steers it to cancel, and the model cancels the approval with cancelOperation; the timer "
+            "completes, the next model step sees it and the turn replies.")
+
+
 def steering_detail():
     a = Animation(1000, 360, 16, 86)
     a.lane(20, 64, "Client")
@@ -633,6 +700,8 @@ ANIMATIONS = {
     "programmatic-tool-calls": programmatic_tool_calls,
     "compaction": compaction,
     "schedules": schedules,
+    "parallel-tool-calls": parallel_tool_calls,
+    "background-operations": background_operations,
 }
 
 for animation_name, generate in ANIMATIONS.items():
