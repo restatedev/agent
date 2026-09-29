@@ -10,14 +10,14 @@ managing a large infra stack.
 
 ## Core idea
 
-Each agent execution is a durable async process that can is:
+Each agent execution is a durable async process that is:
 
 - **Steerable**: Each execution has a handle that is stable across process
   restarts and can be used to steer it, interrupt it, or approve an action.
   Interrupts automatically propagate through subagents.
 - **Stateful**: Execution is isolated per agent session and stateful. Transcripts
-  and model context like preferences and instructions are stored in Restate's
-  embedded KV store, and supplied together with the request to the agent execution.
+  and model context (preferences, instructions) are stored in Restate's
+  embedded KV store.
 - **Recoverable**: Restate automatically keeps a journal per agent execution,
   to recover it automatically after a failure.
 - **Concurrent**: Agents can spawn parallel subagents and tools. Tools execute
@@ -26,11 +26,15 @@ Each agent execution is a durable async process that can is:
   own state and resources.
 - **Scalable**: Agents can scale up to thousands of concurrent executions, with
   protection against concurrency issues and race conditions. 
-- **Pausable**: When an execution needs to wait, Restate persists the timers, 
-  approval promises, or subagent invocations, and lets the execution continue 
-  when the waiting is over.
+- **Pausable**: When an execution needs to wait, it scales to zero. Restate 
+  persists the timers, approval promises, or subagent invocations, and lets 
+  the execution resume when the waiting is over.
  
-![Agent architecture: Chat, Restate durable runtime, and the agent loop](./docs/images/agent-architecture.png)
+**Implementing these characteristics in a production-grade manner is extremely
+challenging and usually requires a lot of infra and coordination logic. In this 
+reference architecture, the agent processes rely on Restate to handle this complexity**:
+
+![Agent architecture: Chat, Restate durable runtime, and the agent loop](./docs/images/agent-architecture.svg)
 
 
 [Features](#features) · [One turn, start to finish](#one-turn-start-to-finish) ·
