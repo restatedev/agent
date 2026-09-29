@@ -1,32 +1,18 @@
 # A reference architecture for durable agents
 
-Build stateful, steerable agents with [Restate](https://restate.dev) and run the
-service on your container platform or serverless provider. This runnable
-TypeScript reference shows how a responsive controller, durable turns,
-parallel tools, and sub-agents fit together. Restate holds the journal, agent
-state, messages, and timers, so the agent needs no separate database, queue,
-or scheduler.
+An agent can be halfway through tool calls when the user changes direction—or
+waiting a day for approval when its service restarts. Those events should not
+erase finished work or leave the user unable to control the turn.
 
-[Architecture](#how-it-fits-together) · [Key ideas](#most-important-bits) ·
-[Features](#full-list-of-features) · [Quickstart](#quickstart) ·
+This runnable TypeScript reference shows how to build that with
+[Restate](https://restate.dev). Run its stateless service on your container
+platform or serverless provider. Restate keeps the journal, per-agent state,
+messages, and timers, so the agent needs no separate database, queue, or
+scheduler.
+
+[Key ideas](#most-important-bits) · [Features](#full-list-of-features) ·
+[Architecture](#how-it-fits-together) · [Quickstart](#quickstart) ·
 [Documentation](docs/README.md)
-
-## How it fits together
-
-```mermaid
-flowchart TB
-  Client["Client / UI"] -->|ask, steer, interrupt, approve| Controller["Agent controller"]
-  Controller -->|start or signal a turn| Turn["AgentSession.doTurn"]
-  Turn -->|model step| Model["Model"]
-  Turn -->|parallel calls| Tools["Tools"]
-  Turn -->|delegate| Children["Child agents"]
-  Restate[("Restate: state, journal, messages, timers")] --- Controller
-  Restate --- Turn
-```
-
-`Agent` handles incoming messages without waiting for the turn. `AgentSession`
-runs one turn at a time for the same agent ID; child agents have their own IDs,
-conversations, and sandboxes.
 
 ## Most important bits
 
@@ -80,57 +66,22 @@ conversations, and sandboxes.
 </tr>
 </table>
 
-## Quickstart
+## How it fits together
 
-You need Node.js 22+, pnpm, the Restate server and CLI, and an OpenAI API key.
-
-```sh
-pnpm install
+```mermaid
+flowchart TB
+  Client["Client / UI"] -->|ask, steer, interrupt, approve| Controller["Agent controller"]
+  Controller -->|start or signal a turn| Turn["AgentSession.doTurn"]
+  Turn -->|model step| Model["Model"]
+  Turn -->|parallel calls| Tools["Tools"]
+  Turn -->|delegate| Children["Child agents"]
+  Restate[("Restate: state, journal, messages, timers")] --- Controller
+  Restate --- Turn
 ```
 
-Start Restate in one terminal:
-
-```sh
-RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true restate-server
-```
-
-Start the agent service in a second terminal:
-
-```sh
-export OPENAI_API_KEY=your-api-key
-pnpm dev:service
-```
-
-Once the service is listening on port 9080, register it from a third terminal:
-
-```sh
-restate deployments register http://localhost:9080
-```
-
-Talk to an agent through Restate ingress on port 8080. Any agent ID works;
-the first message creates the agent.
-
-```sh
-# Start a turn (or queue the message if one is running)
-curl localhost:8080/Agent/demo/ask --json '{"message":"What is the weather in Berlin?"}'
-
-# Redirect the running turn without cancelling its tools
-curl localhost:8080/Agent/demo/steer --json '{"message":"Use Fahrenheit"}'
-
-# Stop it, optionally queueing a replacement request
-curl localhost:8080/Agent/demo/interrupt --json '{"reason":"Changed my mind"}'
-
-# Read the conversation log
-curl localhost:8080/AgentSession/demo/history --json '{"fromSequence":1,"limit":100}'
-```
-
-Or chat in the reference UI: run `pnpm dev:ui` and open
-[http://127.0.0.1:3000/?agent=demo](http://127.0.0.1:3000/?agent=demo).
-
-**Try this:** ask it to sleep for four minutes, then kill `pnpm dev:service`
-and start it again. The turn picks up where it was, and the Restate UI
-(`http://localhost:9070`) shows every model call and tool result in the
-turn's journal.
+`Agent` handles incoming messages without waiting for the turn. `AgentSession`
+runs one turn at a time for the same agent ID; child agents have their own IDs,
+conversations, and sandboxes.
 
 ## Four execution scenarios
 
@@ -282,3 +233,55 @@ install it when you open this repository. You can also install it by hand:
 # Other coding agents
 npx skills add restatedev/agent
 ```
+
+## Quickstart
+
+You need Node.js 22+, pnpm, the Restate server and CLI, and an OpenAI API key.
+
+```sh
+pnpm install
+```
+
+Start Restate in one terminal:
+
+```sh
+RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true restate-server
+```
+
+Start the agent service in a second terminal:
+
+```sh
+export OPENAI_API_KEY=your-api-key
+pnpm dev:service
+```
+
+Once the service is listening on port 9080, register it from a third terminal:
+
+```sh
+restate deployments register http://localhost:9080
+```
+
+Talk to an agent through Restate ingress on port 8080. Any agent ID works;
+the first message creates the agent.
+
+```sh
+# Start a turn (or queue the message if one is running)
+curl localhost:8080/Agent/demo/ask --json '{"message":"What is the weather in Berlin?"}'
+
+# Redirect the running turn without cancelling its tools
+curl localhost:8080/Agent/demo/steer --json '{"message":"Use Fahrenheit"}'
+
+# Stop it, optionally queueing a replacement request
+curl localhost:8080/Agent/demo/interrupt --json '{"reason":"Changed my mind"}'
+
+# Read the conversation log
+curl localhost:8080/AgentSession/demo/history --json '{"fromSequence":1,"limit":100}'
+```
+
+Or chat in the reference UI: run `pnpm dev:ui` and open
+[http://127.0.0.1:3000/?agent=demo](http://127.0.0.1:3000/?agent=demo).
+
+**Try this:** ask it to sleep for four minutes, then kill `pnpm dev:service`
+and start it again. The turn picks up where it was, and the Restate UI
+(`http://localhost:9070`) shows every model call and tool result in the
+turn's journal.
