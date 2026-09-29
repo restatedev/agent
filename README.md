@@ -1,8 +1,36 @@
 # A reference agent architecture
 
-A complete agent, built on [Restate](https://restate.dev). Every feature a
-modern agent needs is here as a small module you can read in one sitting,
-and Restate keeps each turn running through crashes and days-long waits.
+This reference architecture shows you how you can build **durable, stateful,
+steerable, concurrent agents and agentic systems**.
+
+The architecture fully runs on Restate and your favorite container platform or
+serverless provider. Restate is a durable runtime for agents that gives you
+all the building blocks you need to build advanced agentic systems without
+managing a large infra stack.
+
+This reference architecture combines learnings and best practices from how
+customers are building and operating large-scale agentic platforms on top of
+Restate.
+
+## Core idea
+
+Each agent execution is a durable async process that can is:
+
+- **Steerable**: Each execution has a handle that is stable across process
+  restarts and can be used to steer it, interrupt it, or approve an action.
+  Interrupts automatically propagate through subagents.
+- **Stateful**: Execution is isolated per agent session and stateful. Transcripts
+  and model context like preferences and instructions are stored in Restate's
+  embedded KV store, and supplied together with the request to the agent execution.
+- **Recoverable**: Restate automatically keeps a journal per agent execution,
+  to recover it automatically after a failure.
+- **Concurrent**: Agents can spawn parallel subagents and tools. Tools execute
+  as durable concurrent tasks within the process and can share resources like
+  sandbox connections. Subagents run as separate durable invocations with their
+  own state and resources.
+
+![Agent architecture: Chat, Restate durable runtime, and the agent loop](./docs/images/agent-architecture.png)
+
 
 [Features](#features) · [One turn, start to finish](#one-turn-start-to-finish) ·
 [How a turn works](#how-a-turn-works) · [Quickstart](#quickstart) ·
