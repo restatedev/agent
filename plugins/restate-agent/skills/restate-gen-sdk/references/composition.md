@@ -102,7 +102,6 @@ export const refundIface = restate.iface.service("RefundService", {
   issueRefund: restate.iface.schemas({
     input: z.object({orderId: z.string(), amountCents: z.number().int().positive()}),
     output: z.object({refundId: z.string()}),
-    description: "Issue a refund for an order.",
   }),
 });
 
@@ -118,11 +117,22 @@ export const refundService = restate.implement(refundIface, {
 yield* restate.client(refundIface).issueRefund({orderId: "O-1", amountCents: 500});
 ```
 
-`restate.iface.object` and `restate.iface.workflow` work the same way, and
-`restate.iface.shared.schemas` marks a shared handler.
+`restate.iface.object` and `restate.iface.workflow` work the same way.
+
+- `restate.iface.shared.schemas` marks a handler as shared in the types
+  only. `restate.implement` does not carry the flag over, so the handler
+  runs exclusive unless the implementation also sets
+  `options: {handlers: {name: {shared: true}}}`.
+- A handler's description belongs in its options
+  (`options: {handlers: {name: {description}}}`), not in the schemas.
 
 ## Scopes
 
 `restate.scope("tenant-123").client(def).handler(input)` routes calls within
-a named scope, for per-tenant concurrency and fairness. Query the docs MCP
+a named scope, for per-tenant concurrency and fairness.
+
+Scopes are experimental. They need restate-server 1.7 or later, started on a
+new cluster with `RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true` and
+`RESTATE_EXPERIMENTAL_ENABLE_VQUEUES=true`; otherwise the call fails. A
+scope key is 1 to 36 characters from `[a-zA-Z0-9_.-]`. Query the docs MCP
 server for flow-control details.

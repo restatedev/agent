@@ -1,10 +1,12 @@
 # Add an application layer
 
-The core reference starts from an `agentId`. `Agent` controls one conversation;
-`AgentSession` runs its turns and stores its transcript. Ingress and the local UI
-are operator-facing. To let people sign in, own several agents, and share MCP
-connections, add an application layer around those two objects. This is an
-extension pattern, not a description of services already in the repository.
+The core reference starts from an `agentId`. `Agent` controls one
+conversation; `AgentSession` runs its turns and stores its transcript.
+Ingress and the local UI are operator-facing.
+
+To let people sign in, own several agents and share MCP connections, add an
+application layer around those two objects. This is an extension pattern,
+not a description of services already in the repository.
 
 ## Separate the owners
 
@@ -84,16 +86,19 @@ calls.
 
 ## Send workspace updates without copying state
 
-The existing UI captures an Agent revision, reads authoritative data, then
-long-polls `Agent.watch`; notifications carry invalidation rather than data.
-Extend that pattern one level up. `UserNotifications` receives one-way updates
-for account changes and changes to owned agents. The backend reads a user
-revision, fetches the owned-agent directory and selected agent state, then
-watches for a later revision. Re-read only changed topics; page sequenced
-`AgentSession.history` separately. A single user-level poll can therefore
-update a workspace with many agents without transferring every transcript or
-credential on each tick. Read `docs/protocol.md#history-and-notifications` and
-`agent/notifications.ts` before adding fan-out.
+Extend the Agent's notification protocol one level up
+(`references/agent-controller.md#notify-clients-without-copying-state`).
+
+- `UserNotifications` receives one-way updates for account changes and
+  for changes to the user's agents.
+- The backend reads a user revision, fetches the agent directory and the
+  agent state it shows, then watches for a later revision.
+- It re-reads only the changed topics, and pages through
+  `AgentSession.history` separately.
+
+One user-level poll then keeps a workspace with many agents up to date,
+without sending every transcript or credential on each tick. Read
+`agent/notifications.ts` before adding the fan-out.
 
 ## Decide what becomes user-wide
 
