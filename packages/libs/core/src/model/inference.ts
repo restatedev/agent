@@ -1,7 +1,7 @@
 // Durable model calls made inside the turn. Each provider attempt is a
 // journaled run: replay reuses the recorded result, and interrupting the turn
-// aborts the in-flight request through the run's signal. Provider-specific
-// inference remains in provider.ts.
+// aborts the in-flight request through the run's signal. The provider calls
+// themselves are in provider.ts.
 
 import * as restate from "@restatedev/restate-sdk-gen";
 

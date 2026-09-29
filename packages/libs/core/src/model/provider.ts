@@ -1,14 +1,19 @@
-// Provider-specific model inference and the contracts the turn consumes.
+// Model inference through the AI SDK, and the contracts the turn consumes.
 
-import {createOpenAI, type OpenAIProvider} from "@ai-sdk/openai";
+import {anthropic} from "@ai-sdk/anthropic";
+import {google} from "@ai-sdk/google";
+import {openai} from "@ai-sdk/openai";
 import type {Guardrail} from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
   APICallError,
   type AssistantModelMessage,
+  createProviderRegistry,
   generateText,
   jsonSchema,
+  LoadAPIKeyError,
   type ModelMessage,
+  NoSuchModelError,
   Output,
   type ToolSet,
 } from "ai";
@@ -151,35 +156,58 @@ const GuardrailReviewSchema = z.object({
     ),
 });
 
-let provider: OpenAIProvider | undefined;
+/**
+ * The providers a model ID in agent-config.ts may name, as "provider:model".
+ * Each provider reads its API key from the environment when a call is made
+ * (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY), so only
+ * the providers the configured models use need a key.
+ */
+const providers = createProviderRegistry({openai, anthropic, google});
 
-/** Applies consistent provider construction and terminal-error classification. */
-export async function withOpenAI<T>(
-  call: (provider: OpenAIProvider) => Promise<T>,
-): Promise<T> {
+export type ModelId = Parameters<typeof providers.languageModel>[0];
+
+/** Runs one provider call and classifies the failures a retry cannot fix. */
+async function withModel<T>(call: () => Promise<T>): Promise<T> {
   try {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new TerminalError("OPENAI_API_KEY is not set");
-    }
-    provider ??= createOpenAI({apiKey});
-    return await call(provider);
+    return await call();
   } catch (error) {
-    // Restate owns retries. Invalid requests and authentication failures are
-    // terminal; throttling and transient provider failures remain retryable.
+    // Restate owns retries. A missing API key, an unknown model ID, invalid
+    // requests and authentication failures are terminal; throttling and
+    // transient provider failures remain retryable.
+    if (
+      LoadAPIKeyError.isInstance(error) ||
+      NoSuchModelError.isInstance(error)
+    ) {
+      throw new TerminalError(error.message);
+    }
     if (APICallError.isInstance(error) && !error.isRetryable) {
-      throw new TerminalError(`OpenAI rejected the request: ${error.message}`, {
-        errorCode: error.statusCode,
-      });
+      throw new TerminalError(
+        `The model provider rejected the request: ${error.message}`,
+        {errorCode: error.statusCode},
+      );
     }
     throw error;
   }
 }
 
-// Every call leaves retries to Restate and opts out of provider-side storage.
-export function openaiOptions(signal: AbortSignal, timeout: number) {
-  return {maxRetries: 0, abortSignal: signal, timeout};
+/**
+ * Settings every call shares. Retries are left to Restate. The reasoning
+ * level is provider-neutral: each provider maps it to its own setting
+ * (OpenAI's reasoning effort, Anthropic's and Google's thinking).
+ */
+function callOptions(model: ModelId, signal: AbortSignal, timeout: number) {
+  return {
+    model: providers.languageModel(model),
+    maxRetries: 0,
+    abortSignal: signal,
+    timeout,
+    reasoning: "low" as const,
+  };
 }
+
+// Options for providers that the configured model does not use are ignored.
+// OpenAI would otherwise store every response on its side.
+const PROVIDER_OPTIONS = {openai: {store: false}} as const;
 
 /** The evidence both guardrail passes judge: policy, history and the action. */
 function guardrailEvidence(request: GuardrailEvaluationRequest) {
@@ -191,10 +219,6 @@ function guardrailEvidence(request: GuardrailEvaluationRequest) {
     proposedAction: request.action,
   };
 }
-
-const GUARDRAIL_PROVIDER_OPTIONS = {
-  openai: {reasoningEffort: "low", store: false},
-} as const;
 
 // The Responses API counts reasoning tokens against max_output_tokens. The
 // decision object itself is a few hundred tokens, but a 500-token budget left
@@ -209,9 +233,8 @@ export async function evaluateGuardrails(
   request: GuardrailEvaluationRequest,
   signal: AbortSignal,
 ): Promise<GuardrailDecision> {
-  return withOpenAI(async (openai) => {
+  return withModel(async () => {
     const result = await generateText({
-      model: openai.responses(agentConfig.models.guardrail),
       system: GUARDRAIL_SYSTEM,
       prompt: JSON.stringify({
         ...guardrailEvidence(request),
@@ -219,8 +242,8 @@ export async function evaluateGuardrails(
       }),
       output: Output.object({schema: GuardrailEvaluationSchema}),
       maxOutputTokens: GUARDRAIL_MAX_OUTPUT_TOKENS,
-      ...openaiOptions(signal, 30_000),
-      providerOptions: GUARDRAIL_PROVIDER_OPTIONS,
+      ...callOptions(agentConfig.models.guardrail, signal, 30_000),
+      providerOptions: PROVIDER_OPTIONS,
     });
     const evaluation = result.output;
     if (evaluation.decision === "allow") {
@@ -276,9 +299,8 @@ export async function confirmGuardrailDecision(
     return false;
   }
 
-  return withOpenAI(async (openai) => {
+  return withModel(async () => {
     const result = await generateText({
-      model: openai.responses(agentConfig.models.guardrail),
       system: GUARDRAIL_REVIEW_SYSTEM,
       prompt: JSON.stringify({
         ...guardrailEvidence(request),
@@ -287,8 +309,8 @@ export async function confirmGuardrailDecision(
       }),
       output: Output.object({schema: GuardrailReviewSchema}),
       maxOutputTokens: GUARDRAIL_MAX_OUTPUT_TOKENS,
-      ...openaiOptions(signal, 30_000),
-      providerOptions: GUARDRAIL_PROVIDER_OPTIONS,
+      ...callOptions(agentConfig.models.guardrail, signal, 30_000),
+      providerOptions: PROVIDER_OPTIONS,
     });
     return result.output.confirmed;
   });
@@ -320,7 +342,7 @@ export async function completeAgent(
   signal: AbortSignal,
   maxOutputTokens = agentOutputBudget(),
 ): Promise<ModelResult> {
-  return withOpenAI(async (openai) => {
+  return withModel(async () => {
     const {messages, tools} = request;
     const toolOptions =
       tools.length > 0
@@ -343,19 +365,12 @@ export async function completeAgent(
           }
         : {};
     const result = await generateText({
-      model: openai.responses(agentConfig.models.agent),
       system: agentSystemPrompt(request),
       messages,
       ...toolOptions,
       maxOutputTokens,
-      ...openaiOptions(signal, 120_000),
-      providerOptions: {
-        openai: {
-          reasoningEffort: "low",
-          parallelToolCalls: true,
-          store: false,
-        },
-      },
+      ...callOptions(agentConfig.models.agent, signal, 120_000),
+      providerOptions: {openai: {store: false, parallelToolCalls: true}},
     });
 
     return {
@@ -441,14 +456,13 @@ export async function summarizeConversation(
   input: {previousSummary: string | null; conversation: unknown[]},
   signal: AbortSignal,
 ): Promise<string> {
-  return withOpenAI(async (openai) => {
+  return withModel(async () => {
     const result = await generateText({
-      model: openai.responses(agentConfig.models.compactor),
       system: COMPACTOR_SYSTEM,
       prompt: JSON.stringify(input),
       maxOutputTokens: COMPACTOR_MAX_OUTPUT_TOKENS,
-      ...openaiOptions(signal, 30_000),
-      providerOptions: {openai: {reasoningEffort: "low", store: false}},
+      ...callOptions(agentConfig.models.compactor, signal, 30_000),
+      providerOptions: PROVIDER_OPTIONS,
     });
     const summary = result.text.trim();
     if (!summary) {
@@ -471,14 +485,13 @@ export async function summarizeTurn(
   input: {request: string | null; messages: unknown[]},
   signal: AbortSignal,
 ): Promise<string> {
-  return withOpenAI(async (openai) => {
+  return withModel(async () => {
     const result = await generateText({
-      model: openai.responses(agentConfig.models.compactor),
       system: TURN_COMPACTOR_SYSTEM,
       prompt: JSON.stringify(input),
       maxOutputTokens: TURN_COMPACTOR_MAX_OUTPUT_TOKENS,
-      ...openaiOptions(signal, 120_000),
-      providerOptions: {openai: {reasoningEffort: "low", store: false}},
+      ...callOptions(agentConfig.models.compactor, signal, 120_000),
+      providerOptions: PROVIDER_OPTIONS,
     });
     const note = result.text.trim();
     if (!note) {

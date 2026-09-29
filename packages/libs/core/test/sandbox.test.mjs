@@ -41,7 +41,7 @@ test("local commands do not inherit service credentials from the process environ
   assert.equal(result.exitCode, 0);
   assert.doesNotMatch(
     result.stdout,
-    /must-not-leak|TEST_SERVICE_SECRET|OPENAI_API_KEY/,
+    /must-not-leak|TEST_SERVICE_SECRET|OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_GENERATIVE_AI_API_KEY/,
   );
   const vars = parseEnv(result.stdout);
   assert.equal(vars.HOME, ref.root);

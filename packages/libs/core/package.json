@@ -23,13 +23,15 @@
     "postbundle": "cd dist && zip -r index.zip app.js*"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.65",
+    "@ai-sdk/google": "^4.0.82",
+    "@ai-sdk/openai": "^4.0.78",
     "@jitl/quickjs-singlefile-cjs-release-sync": "0.31.0",
-    "@ai-sdk/openai": "^4.0.10",
     "@modelcontextprotocol/client": "^2.0.0",
     "@restate-agents/types": "workspace:*",
     "@restatedev/restate-sdk": "1.17.0",
     "@restatedev/restate-sdk-gen": "1.17.0",
-    "ai": "^7.0.26",
+    "ai": "^7.0.118",
     "minisearch": "7.2.0",
     "modal": "^0.9.0",
     "quickjs-emscripten-core": "0.31.0",
