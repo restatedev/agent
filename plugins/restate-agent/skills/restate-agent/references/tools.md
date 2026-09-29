@@ -12,6 +12,7 @@ comment explains how a tool runs.
 | Needs the turn's sandbox, pending tasks or the agent's own state | Built-in tool | `tools/*.ts` |
 | Already is, or should be, an independently deployed Restate handler | Discovered Restate tool | Any service in the cluster |
 | Is offered by a remote MCP server | MCP tool | `MCP_SERVERS_JSON` on the core service |
+| Runs in the client, such as a browser action | Client tool, an extension | `references/client-tools.md` |
 
 ## A foreground tool
 

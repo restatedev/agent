@@ -7,9 +7,8 @@
 // Two things do not map one to one, and both come from the log:
 // - Model calls are journaled whole, so an answer arrives as a single
 //   TEXT_MESSAGE_CONTENT, never token by token.
-// - A tool call is recorded by name and a short summary, never by its
-//   arguments or output, so TOOL_CALL_ARGS is always "{}" and a result
-//   carries the call's status.
+// - A tool call is recorded with its input (unless it is too long), but
+//   never its output, so a result carries the call's status.
 import {type Event, EventType, type Message} from "@ag-ui/core";
 import type {HistoryPage} from "@restate-agents/types";
 
@@ -19,6 +18,7 @@ type ToolsEntry = Extract<ConversationEntry, {type: "tools"}>;
 type ToolActivity = ToolsEntry["calls"][number];
 
 const HISTORY_ID_PREFIX = "seq-";
+const HISTORY_ID = /^seq-(\d+)(?:-|$)/;
 
 /**
  * The AG-UI message ID of a history entry. It is stable, so the same entry
@@ -30,13 +30,15 @@ export function historyMessageId(sequence: number): string {
 
 /**
  * The history sequence a message ID was minted from, or undefined for an ID
- * the client made up, such as the one on a message it is sending now.
+ * the client made up, such as the one on a message it is sending now. A tool
+ * result's ID adds the call ID after the sequence.
  */
 export function historySequence(messageId: string): number | undefined {
-  if (!messageId.startsWith(HISTORY_ID_PREFIX)) {
+  const match = HISTORY_ID.exec(messageId);
+  if (!match) {
     return undefined;
   }
-  const sequence = Number(messageId.slice(HISTORY_ID_PREFIX.length));
+  const sequence = Number(match[1]);
   if (!Number.isSafeInteger(sequence) || sequence < 1) {
     return undefined;
   }
@@ -123,7 +125,7 @@ export function historyMessages(entries: SequencedEntry[]): Message[] {
         toolCalls: entry.calls.map((call) => ({
           id: call.id,
           type: "function",
-          function: {name: call.name, arguments: "{}"},
+          function: {name: call.name, arguments: toolArguments(call)},
           ...summaryMetadata(call),
         })),
       });
@@ -178,7 +180,11 @@ function toolEvents(messageId: string, entry: ToolsEntry): Event[] {
         parentMessageId: messageId,
         ...summaryMetadata(call),
       },
-      {type: EventType.TOOL_CALL_ARGS, toolCallId: call.id, delta: "{}"},
+      {
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId: call.id,
+        delta: toolArguments(call),
+      },
       {type: EventType.TOOL_CALL_END, toolCallId: call.id},
     ]);
   }
@@ -203,8 +209,28 @@ function toolResultId(messageId: string, call: ToolActivity): string {
   return `${messageId}-${call.id}`;
 }
 
+/**
+ * A call's arguments as JSON: its recorded input, or the empty object when
+ * the input was too long to record.
+ */
+function toolArguments(call: ToolActivity): string {
+  if (call.input === undefined) {
+    return "{}";
+  }
+  return JSON.stringify(call.input);
+}
+
+/**
+ * What stands in for a result the history does not record: the call's
+ * status, and its summary when it has one. It is JSON, because clients such
+ * as CopilotKit parse a tool result as JSON.
+ */
 function toolResultContent(call: ToolActivity): string {
-  return call.status ?? "finished";
+  const status = call.status ?? "finished";
+  if (!call.summary) {
+    return JSON.stringify({status});
+  }
+  return JSON.stringify({status, summary: call.summary});
 }
 
 function summaryMetadata(call: ToolActivity) {

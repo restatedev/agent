@@ -300,6 +300,12 @@ const ToolEventSchema = z.object({
       name: z.string(),
       summary: z.string().trim().min(1).optional(),
       status: ToolExecutionStatusSchema.optional(),
+      input: z
+        .unknown()
+        .optional()
+        .describe(
+          "The call's input, recorded when it starts. Left out when its JSON is longer than 4,000 characters.",
+        ),
     }),
   ),
 });

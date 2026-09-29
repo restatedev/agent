@@ -801,16 +801,21 @@ proposal.
 ## Transcript and observability
 
 The canonical history records structured tool lifecycle summaries—tool names,
-counts, and final statuses—so clients can show useful progress. It deliberately
-does not persist raw arguments or results. A built-in's activity label is a
-fixed `summary` string on its definition (`"Read a file"`, `"Searched tools"`),
-not a function of its input, so paths, queries, commands and names cannot
-leak into the transcript through a label.
+inputs, counts, and final statuses—so clients can show what the agent asked
+for and how it went. A call's input is recorded when it starts, unless its
+JSON is longer than 4,000 characters (a long program or file write). Results
+are not persisted. A built-in's activity label is a fixed `summary` string on
+its definition (`"Read a file"`, `"Searched tools"`), not a function of its
+input.
+
+Recorded inputs are visible to anyone who can read the conversation, like the
+messages themselves. Treat the history as holding what the model sent to its
+tools.
 
 Use the Restate invocation tree and journal for:
 
 - exact model input/output;
-- raw tool arguments and results;
+- tool results, and inputs too long for the history;
 - retries;
 - child invocation IDs;
 - signal and cancellation propagation.

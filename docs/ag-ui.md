@@ -33,7 +33,9 @@ The endpoint tells requests apart by what they carry:
 - **Resume**: `resume` answers every interrupt of the previous run. The
   payload is `{"decision": "approved" | "rejected", "reason"?: string}`, and
   a cancelled entry rejects. An interrupt that is no longer pending, because
-  someone answered it elsewhere or its turn ended, fails the run.
+  someone answered it elsewhere or its turn ended, fails the run. The resume
+  first sends what the turn wrote after the interrupted run ended, such as
+  results of tools that ran in the same step.
 - **New message**: the last message is from the user and has an ID the
   adapter did not mint. It is sent with `ask`. With
   `forwardedProps: {"mode": "steer"}` it steers the running turn instead,
@@ -57,8 +59,8 @@ agent.connect = (input) => agent.run(input);
 | History entry | AG-UI events |
 | --- | --- |
 | user or assistant message | `TEXT_MESSAGE_START`, `_CONTENT`, `_END` |
-| tools started | `TOOL_CALL_START`, `_ARGS` (`{}`), `_END` per call |
-| tools finished | `TOOL_CALL_RESULT` per settled call; the content is its status |
+| tools started | `TOOL_CALL_START`, `_ARGS`, `_END` per call; the arguments are the recorded input, or `{}` when it was too long to record |
+| tools finished | `TOOL_CALL_RESULT` per settled call; the content is JSON: `{"status": ..., "summary"?: ...}` |
 | activity | `ACTIVITY_SNAPSHOT` (`activity`) |
 | progress | `ACTIVITY_SNAPSHOT` (`progress`), one per turn, replaced |
 | anything else | `CUSTOM` named `restate.<type>`, with the entry as its value |
@@ -82,9 +84,12 @@ where to start reading.
 
 - **No token streaming.** Model calls are journaled whole, so an answer
   arrives as one `TEXT_MESSAGE_CONTENT`.
-- **No tool arguments or output.** History records a tool call's name,
-  summary and status, not its input or result.
+- **No tool output.** History records a tool call's name, input and status,
+  not its result. An input longer than 4,000 characters of JSON is not
+  recorded either, and its arguments show as `{}`.
 - **Server-owned history.** The adapter reads only the new user message
-  from `messages`. Client `tools`, `context` and `state` are ignored.
+  from `messages`. Client `tools`, `context` and `state` are ignored. The
+  `restate-agent` skill describes how to add frontend tools
+  (`plugins/restate-agent/skills/restate-agent/references/client-tools.md`).
 - **No sub-agent events.** A sub-agent's work is in its own history. The
   parent's `createSubAgent` call shows as an ordinary tool call.
