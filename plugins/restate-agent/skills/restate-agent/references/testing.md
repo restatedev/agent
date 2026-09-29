@@ -67,11 +67,12 @@ pnpm bundle      # the deployable ESM bundle; catches import problems
 git diff --check
 ```
 
-Then try it end to end: start the stack as in the README quickstart (a
-Restate server with `RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true`, `pnpm
-dev`, and `restate deployments register http://localhost:9080`), open the UI
-at http://localhost:3000 or call ingress, and look at the turn's journal in the Restate UI at
-http://localhost:9070. It shows each model call, tool call and wait.
+Then try it end to end: follow the README quickstart with a Restate server
+(`RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true`), `pnpm dev:service`, and
+`restate deployments register http://localhost:9080`. Call ingress, or start
+the optional UI with `pnpm dev:ui` and open http://127.0.0.1:3000/?agent=demo. Inspect
+the turn's journal in the Restate UI at http://localhost:9070; it shows each
+model call, tool call, and wait.
 
 `pnpm --filter @restate-agents/core test:restart` kills a real endpoint
 mid-turn against a disposable Restate server and checks the resumed result.
