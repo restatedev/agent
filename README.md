@@ -4,6 +4,11 @@ A complete agent, built on [Restate](https://restate.dev). Every feature a
 modern agent needs is here as a small module you can read in one sitting,
 and Restate keeps each turn running through crashes and days-long waits.
 
+https://github.com/user-attachments/assets/5929008d-736e-4cda-9466-d5bb2b5a8245
+
+*A real recording: the service is killed mid-turn, started again, and the
+turn finishes without repeating a model call or a tool.*
+
 [Features](#features) · [One turn, start to finish](#one-turn-start-to-finish) ·
 [How a turn works](#how-a-turn-works) · [Quickstart](#quickstart) ·
 [Documentation](docs/README.md)
