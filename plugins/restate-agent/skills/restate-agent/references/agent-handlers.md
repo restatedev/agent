@@ -51,9 +51,9 @@ Before adding a handler, check the existing entry points:
 
    | Caller | Guard |
    | --- | --- |
-   | A client (UI, ingress) | `requireDirectAccess()` |
+   | A direct top-level mutation (UI, ingress) | `requireDirectAccess()`; child interruption and approval resolution have their own checks |
    | A tool in the active turn | take `turnId`; `requireTurnTool(turnId, "toolName", denied)` or `activeTurn.accepting(turnId)` |
-   | Anything, read-only | none; make it shared |
+   | A read-only caller | use a shared handler for concurrency; authorize at the public edge when accounts are added |
 
 3. **Options.** Register it in `agent/service.ts`: spread the module's
    `handlers`, and give it retention plus `shared(...)` for a reader or
@@ -71,6 +71,12 @@ Before adding a handler, check the existing entry points:
 
 6. **Docs and tests.** Add the handler to `docs/protocol.md`, and add a
    protocol test (`test/protocol.test.mjs`).
+
+Shared is a concurrency mode, not authorization. This local reference trusts
+ingress; a multi-user backend must check ownership before every Agent read or
+write. Internal callbacks also need a live-turn or parent-identity check.
+Read `references/agent-controller.md` for the controller's routing, lifecycle,
+and permission boundaries.
 
 Deadlock rule: an exclusive handler must never wait on a call that comes
 back to an exclusive handler of the same key. That is why `Agent` starts
