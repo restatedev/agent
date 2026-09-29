@@ -34,7 +34,7 @@ Each agent execution is a durable async process that is:
 challenging and usually requires a lot of infra and coordination logic. In this 
 reference architecture, the agent processes rely on Restate to handle this complexity**:
 
-![Agent architecture: Chat, Restate durable runtime, and the agent loop](./docs/images/agent-architecture.svg)
+![Agent architecture: Chat, Restate durable runtime, and the agent loop](docs/images/agent-architecture.svg)
 
 
 [Features](#features) · [One turn, start to finish](#one-turn-start-to-finish) ·
@@ -43,36 +43,22 @@ reference architecture, the agent processes rely on Restate to handle this compl
 
 ## Features
 
-<table>
-<tr>
-<td width="50%"><strong><a href="docs/turn-runtime.md#agent-loop-iterations">Parallel tool calls</a></strong><br>Every call in a model response runs at once; a failure goes back to the model.</td>
-<td width="50%"><strong><a href="docs/tools.md#pending-tools">Background operations</a></strong><br>Timers and approvals run on while the model works. It can wait or cancel.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/turn-runtime.md#steering">Steering and interrupts</a></strong><br>Redirect or stop a turn while it runs, without losing finished work.</td>
-<td><strong><a href="docs/tools.md#sub-agents">Sub-agents</a></strong><br>Delegate tasks to agents with their own history, sandbox and memory.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/turn-runtime.md#guardrails">Guardrails</a></strong><br>Plain-language rules. A policy model allows, blocks or asks a person.</td>
-<td><strong><a href="docs/protocol.md#context-and-approvals">Human approval</a></strong><br>A turn can wait days for a decision, holding no process.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/tools.md#programmatic-tool-calling-ptc">Programmatic tool calls</a></strong><br>The model writes a small program; only its result enters the context.</td>
-<td><strong><a href="docs/architecture.md#control-and-history">Compaction</a></strong><br>Long conversations and long turns are summarized, recent steps kept verbatim.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/schedules.md">Schedules</a></strong><br>Messages to the agent later, once or on a recurrence. No cron.</td>
-<td><strong><a href="docs/architecture.md#context-and-delegation">Memory</a></strong><br>A searchable index, so context does not grow with the memories.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/tools.md#turn-local-tool-search">Tool search</a></strong><br>MCP and discovered tools load on demand, keeping large catalogs out of context.</td>
-<td><strong><a href="docs/sandboxes.md">Sandboxes</a></strong><br>A local directory or <a href="https://modal.com">Modal</a> sandbox for files and commands.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/tools.md#dynamically-discovered-restate-tools">Extensible tools</a></strong><br>One module per tool, plus MCP servers and Restate handlers.</td>
-<td><strong><a href="docs/turn-runtime.md#model-output-budgets-and-recovery">Output recovery</a></strong><br>A truncated response gets one retry with a bigger output budget.</td>
-</tr>
-</table>
+| Feature | Description |
+| --- | --- |
+| **[Parallel tool calls](docs/turn-runtime.md#agent-loop-iterations)** | Every call in a model response runs at once; a failure goes back to the model. |
+| **[Background operations](docs/tools.md#pending-tools)** | Timers and approvals run on while the model works. It can wait or cancel. |
+| **[Steering and interrupts](docs/turn-runtime.md#steering)** | Redirect or stop a turn while it runs, without losing finished work. |
+| **[Sub-agents](docs/tools.md#sub-agents)** | Delegate tasks to agents with their own history, sandbox and memory. |
+| **[Guardrails](docs/turn-runtime.md#guardrails)** | Plain-language rules. A policy model allows, blocks or asks a person. |
+| **[Human approval](docs/protocol.md#context-and-approvals)** | A turn can wait days for a decision, holding no process. |
+| **[Programmatic tool calls](docs/tools.md#programmatic-tool-calling-ptc)** | The model writes a small program; only its result enters the context. |
+| **[Compaction](docs/architecture.md#control-and-history)** | Long conversations and long turns are summarized, recent steps kept verbatim. |
+| **[Schedules](docs/schedules.md)** | Messages to the agent later, once or on a recurrence. No cron. |
+| **[Memory](docs/architecture.md#context-and-delegation)** | A searchable index, so context does not grow with the memories. |
+| **[Tool search](docs/tools.md#turn-local-tool-search)** | MCP and discovered tools load on demand, keeping large catalogs out of context. |
+| **[Sandboxes](docs/sandboxes.md)** | A local directory or [Modal](https://modal.com) sandbox for files and commands. |
+| **[Extensible tools](docs/tools.md#dynamically-discovered-restate-tools)** | One module per tool, plus MCP servers and Restate handlers. |
+| **[Output recovery](docs/turn-runtime.md#model-output-budgets-and-recovery)** | A truncated response gets one retry with a bigger output budget. |
 
 ## One turn, start to finish
 
