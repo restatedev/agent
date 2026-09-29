@@ -5,12 +5,8 @@ steerable, concurrent agents and agentic systems**.
 
 The architecture fully runs on Restate and your favorite container platform or
 serverless provider. Restate is a durable runtime for agents that gives you
-all the building blocks you need to build advanced agentic systems without
+all the building blocks you need to build advanced, large-scale agentic systems without
 managing a large infra stack.
-
-This reference architecture combines learnings and best practices from how
-customers are building and operating large-scale agentic platforms on top of
-Restate.
 
 ## Core idea
 
@@ -28,7 +24,12 @@ Each agent execution is a durable async process that can is:
   as durable concurrent tasks within the process and can share resources like
   sandbox connections. Subagents run as separate durable invocations with their
   own state and resources.
-
+- **Scalable**: Agents can scale up to thousands of concurrent executions, with
+  protection against concurrency issues and race conditions. 
+- **Pausable**: When an execution needs to wait, Restate persists the timers, 
+  approval promises, or subagent invocations, and lets the execution continue 
+  when the waiting is over.
+ 
 ![Agent architecture: Chat, Restate durable runtime, and the agent loop](./docs/images/agent-architecture.png)
 
 
