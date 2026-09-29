@@ -68,7 +68,8 @@ knows no tool by name except its own (`searchTools`, `executeProgram`) and
 | Change `ask`, `steer`, `interrupt`, `deliver`, turn completion, or Agent lifecycle | Preserve routing, reconciliation, and one-way turn start | `references/agent-controller.md` |
 | Change approval or child-agent behavior | Preserve the controller/session split and turn-owned work | `references/agent-controller.md`, `references/runtime-customization.md` |
 | Change memories, compaction or what enters model context | Choose the appropriate state, history, or working-context owner | `references/runtime-customization.md` |
-| Add UI updates, schedules, or a sandbox provider | Extend the existing notification, timer, or provider boundary | `references/agent-controller.md`, `references/runtime-customization.md` |
+| Add UI updates or schedules | Extend the existing notification or timer boundary | `references/agent-controller.md`, `references/runtime-customization.md` |
+| Integrate a sandbox provider or add a workspace operation | Keep turn-owned lifecycle and implement the provider/client boundary | `references/sandboxes.md` |
 | Change models, providers, prompts or the context window | `agent-config.ts` (`provider:model` IDs); `PROVIDERS` in `model/provider.ts` | this file |
 | Users, logins, per-user credentials, many agents per account | Add an app layer on top of the agent | `references/app-layer.md` |
 | Test and validate a change | Record/replay tests, then the validation commands | `references/testing.md` |

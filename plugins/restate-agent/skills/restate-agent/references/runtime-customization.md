@@ -54,16 +54,9 @@ There is no scheduler object or fresh sub-agent per firing. A user-wide
 calendar, cron history, or per-run agent is a new app-layer design; read
 `docs/schedules.md` before choosing its owner.
 
-For persistent files or another compute platform, implement the
-`SandboxProvider` interface in `sandbox/provider.ts` and keep lifecycle in
-`sandbox/turn.ts`. `AgentSession` stores one provider-tagged `SandboxRef`; the
-first sandbox tool of a turn acquires it, and turn exit suspends it. There is
-no sandbox virtual object, borrow/release lease, or idle TTL in this reference.
-For Docker Sandboxes or another provider, decide which storage survives
-suspend, how to recover a provision after an uncertain response, and how a
-stored ref selects its original provider. Provider operations need retry-safe,
-idempotent behavior inside `restate.run`. Read `docs/sandboxes.md` and keep tools on
-`context.sandbox.client()`.
+For a different compute platform, persistent workspace, or sandbox-backed
+tool, read `references/sandboxes.md`. The turn owns acquisition and release;
+the provider owns the external operations.
 
 ## New platform features
 
