@@ -13,6 +13,8 @@
 #
 # Runtime environment:
 #   OPENAI_API_KEY        required for model calls (checked at call time)
+#   AGENT_MODEL, GUARDRAIL_MODEL, COMPACTOR_MODEL
+#                         optional "provider:model" overrides of the models
 #   SANDBOX_PROVIDER      "local" (default) or "modal"
 #   MODAL_TOKEN_ID/SECRET credentials for the modal sandbox provider
 #   RESTATE_ADMIN_URL     admin API for dynamic tool discovery (default

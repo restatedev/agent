@@ -18,6 +18,7 @@ The agent service reads these environment variables:
 | `MCP_SERVERS_JSON` | MCP servers the agents may use; see below |
 | `SANDBOX_PROVIDER` | `local` (default) or `modal`, which also needs `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` |
 | `MODAL_APP_NAME`, `MODAL_SANDBOX_NAMESPACE`, `MODAL_SANDBOX_IMAGE`, `MODAL_SANDBOX_TIMEOUT_MS` | Optional Modal settings; see [sandboxes](sandboxes.md) |
+| `AGENT_MODEL`, `GUARDRAIL_MODEL`, `COMPACTOR_MODEL` | Override the agent, guardrail and compactor models, as `provider:model`; see [models](#models) |
 | `AGENT_MODEL_MAX_OUTPUT_TOKENS` | Output budget per model call, 1024–64000 (default 32000) |
 | `RESTATE_ADMIN_URL`, `RESTATE_ADMIN_TOKEN` | Admin API used to discover dynamic tools |
 
@@ -42,6 +43,16 @@ models: {
   guardrail: "openai:gpt-5.6-terra",
   compactor: "google:gemini-3.8-flash",
 },
+```
+
+Each can also be set from the environment without editing the code:
+`AGENT_MODEL`, `GUARDRAIL_MODEL` and `COMPACTOR_MODEL` override the agent,
+guardrail and compactor models, and an unset or empty variable keeps the
+default from `agent-config.ts`. The service reads them at startup.
+
+```sh
+export AGENT_MODEL=anthropic:claude-sonnet-5
+export COMPACTOR_MODEL=google:gemini-3.8-flash
 ```
 
 Only the providers in use need an API key. Every call asks for low reasoning,
