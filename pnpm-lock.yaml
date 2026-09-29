@@ -17,6 +17,9 @@ importers:
 
   packages/apps/web:
     dependencies:
+      '@ag-ui/core':
+        specifier: ^1.0.0
+        version: 1.0.0(zod@4.4.3)
       '@fontsource-variable/source-sans-3':
         specifier: ^5.3.0
         version: 5.3.0
@@ -41,7 +44,13 @@ importers:
       react-dom:
         specifier: ^19.2.8
         version: 19.2.8(react@19.2.8)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
+      '@ag-ui/client':
+        specifier: ^1.0.0
+        version: 1.0.0
       '@types/node':
         specifier: ^22
         version: 22.20.1
@@ -150,6 +159,23 @@ importers:
 
 packages:
 
+  '@ag-ui/client@1.0.0':
+    resolution: {integrity: sha512-Q24E4yuK35tz7ROOC0yWYltdOZK1K+5GmM2Syh/PReFE9e8lDcE8LoMoY5HZyxpQZ+0IizwpQm9LyVqAHP8mpw==}
+
+  '@ag-ui/core@1.0.0':
+    resolution: {integrity: sha512-yCRhsQvb4+lmGMrDsi4TOJxqKpm/kb3H64wwL+Z90jNVrkhy17RErfzsNgybfbjNKLM0nenEDYDVJsZHJJSigQ==}
+    peerDependencies:
+      zod: ^3.25.18 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@ag-ui/encoder@1.0.0':
+    resolution: {integrity: sha512-8w+SHIjsatOcHHe5UBqdlqOiZaQWa3rMv1cUdNFXtHmfcIOLbMd1PG3SRWHD9AMUzApDl4964BV9xs3QPZogrw==}
+
+  '@ag-ui/proto@1.0.0':
+    resolution: {integrity: sha512-RXEdjD3RfZ/8fUEX+ZqN5SrZAxrOZ9oQt0FlEhN4Ie/YEOKDVv0u1g83fOhGxWJTTVAmYSM/xf+ijwixsmz2RA==}
+
   '@ai-sdk/anthropic@4.0.65':
     resolution: {integrity: sha512-3fmxxn5xWGOPU1wGrUCI30YFW5r6h2WrY+sz3rokkVlBHrDr889hPYP1yNoSmOVvtAwCFWlm79P2lRngIPOObg==}
     engines: {node: '>=22'}
@@ -201,6 +227,9 @@ packages:
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
+
+  '@bufbuild/protobuf@2.15.0':
+    resolution: {integrity: sha512-DAheWUkVr/SJTWCc+lg9dhY0eN4SaWlf4+bG1KzHeXbnqt0AfB/NX0Z+VunGlM1ki1B4zVvye27MpKh/svySUA==}
 
   '@cbor-extract/cbor-extract-darwin-arm64@2.2.2':
     resolution: {integrity: sha512-ZKZ/F8US7JR92J4DMct6cLW/Y66o2K576+zjlEN/MevH70bFIsB10wkZEQPLzl2oNh2SMGy55xpJ9JoBRl5DOA==}
@@ -1028,6 +1057,10 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@protobuf-ts/protoc@2.11.1':
+    resolution: {integrity: sha512-mUZJaV0daGO6HUX90o/atzQ6A7bbN2RSuHtdwo8SSF2Qoe3zHwa4IHyCN1evftTeHfLmdz+45qo47sL+5P8nyg==}
+    hasBin: true
+
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
 
@@ -1096,6 +1129,9 @@ packages:
 
   '@types/react@19.2.18':
     resolution: {integrity: sha512-AnzbBERsrLKtk2XSfTbYRLjQPdy116Sty4q+T+Bp3IC4l6jNBvreVPAHmpq9qhXQM7CXZPjLVmGMw9sy+hxQ3w==}
+
+  '@types/uuid@10.0.0':
+    resolution: {integrity: sha512-7gqG38EyHgyP1S+7+xomFtL+ZNHcKv6DwNaCZmJmo1vgMugyF3TCnXVg4t1uk89mLNwnLtnY3TpOpCOyp1/xHQ==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -1270,6 +1306,9 @@ packages:
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
 
+  compare-versions@6.1.1:
+    resolution: {integrity: sha512-4hm4VPpIecmlg59CHXnRDnqGplJFrbLG4aFEl5vl6cK1u76ws3LLvX7ikFnTDl5vo39sjWD6AaDPYodJp/NNHg==}
+
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
@@ -1305,6 +1344,9 @@ packages:
   eventsource@3.0.7:
     resolution: {integrity: sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA==}
     engines: {node: '>=18.0.0'}
+
+  fast-json-patch@3.1.1:
+    resolution: {integrity: sha512-vf6IHUX2SBcA+5/+4883dsIjpBTqmfBjmYiWK1savxQmFk4JfBMLa7ynTYOs1Rolp/T1betJxHiGD3g1Mn8lUQ==}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -1442,6 +1484,9 @@ packages:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
     engines: {node: '>=0.10.0'}
 
+  rxjs@7.8.1:
+    resolution: {integrity: sha512-AA3TVj+0A2iuIoQkWEK/tqFjBq2j+6PO6Y0zJcvzLAFhEFIO3HL0vls9hWLncZbAAbK0mar7oZ4V079I/qPMxg==}
+
   scheduler@0.27.0:
     resolution: {integrity: sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==}
 
@@ -1518,6 +1563,9 @@ packages:
     resolution: {integrity: sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==}
     engines: {node: '>=20.18.1'}
 
+  untruncate-json@0.0.1:
+    resolution: {integrity: sha512-4W9enDK4X1y1s2S/Rz7ysw6kDuMS3VmRjMFg7GZrNO+98OSe+x5Lh7PKYoVjy3lW/1wmhs6HW0lusnQRHgMarA==}
+
   uuid@11.1.1:
     resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
@@ -1543,10 +1591,48 @@ packages:
     resolution: {integrity: sha512-GZtjxm/J/4TSxuL3FNYjCmLktBTnIw/rVmKSIyKeYAZpmJB2ig9VauCC5xsa82GNKVKDAqpOn3KVzNt0zmrU0g==}
     engines: {node: '>=12'}
 
+  zod@3.25.76:
+    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
 snapshots:
+
+  '@ag-ui/client@1.0.0':
+    dependencies:
+      '@ag-ui/core': 1.0.0(zod@3.25.76)
+      '@ag-ui/encoder': 1.0.0(zod@3.25.76)
+      '@ag-ui/proto': 1.0.0
+      '@types/uuid': 10.0.0
+      compare-versions: 6.1.1
+      fast-json-patch: 3.1.1
+      rxjs: 7.8.1
+      untruncate-json: 0.0.1
+      uuid: 11.1.1
+      zod: 3.25.76
+
+  '@ag-ui/core@1.0.0(zod@3.25.76)':
+    optionalDependencies:
+      zod: 3.25.76
+
+  '@ag-ui/core@1.0.0(zod@4.4.3)':
+    optionalDependencies:
+      zod: 4.4.3
+
+  '@ag-ui/encoder@1.0.0(zod@3.25.76)':
+    dependencies:
+      '@ag-ui/core': 1.0.0(zod@3.25.76)
+      '@ag-ui/proto': 1.0.0
+    transitivePeerDependencies:
+      - zod
+
+  '@ag-ui/proto@1.0.0':
+    dependencies:
+      '@ag-ui/core': 1.0.0(zod@3.25.76)
+      '@bufbuild/protobuf': 2.15.0
+      '@protobuf-ts/protoc': 2.11.1
+      zod: 3.25.76
 
   '@ai-sdk/anthropic@4.0.65(zod@4.4.3)':
     dependencies:
@@ -1603,6 +1689,8 @@ snapshots:
       '@ai-sdk/provider': 4.0.18
       '@ai-sdk/provider-utils': 5.0.49(zod@4.4.3)
       zod: 4.4.3
+
+  '@bufbuild/protobuf@2.15.0': {}
 
   '@cbor-extract/cbor-extract-darwin-arm64@2.2.2':
     optional: true
@@ -2056,6 +2144,8 @@ snapshots:
   '@oxlint/binding-win32-x64-msvc@1.85.0':
     optional: true
 
+  '@protobuf-ts/protoc@2.11.1': {}
+
   '@protobufjs/aspromise@1.1.2': {}
 
   '@protobufjs/base64@1.1.2': {}
@@ -2114,6 +2204,8 @@ snapshots:
   '@types/react@19.2.18':
     dependencies:
       csstype: 3.2.3
+
+  '@types/uuid@10.0.0': {}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -2228,6 +2320,8 @@ snapshots:
 
   color-name@1.1.4: {}
 
+  compare-versions@6.1.1: {}
+
   cross-spawn@7.0.6:
     dependencies:
       path-key: 3.1.1
@@ -2306,6 +2400,8 @@ snapshots:
   eventsource@3.0.7:
     dependencies:
       eventsource-parser: 3.1.0
+
+  fast-json-patch@3.1.1: {}
 
   fsevents@2.3.3:
     optional: true
@@ -2465,6 +2561,10 @@ snapshots:
 
   require-directory@2.1.1: {}
 
+  rxjs@7.8.1:
+    dependencies:
+      tslib: 2.8.1
+
   scheduler@0.27.0: {}
 
   semver@7.8.5:
@@ -2566,6 +2666,8 @@ snapshots:
 
   undici@7.30.0: {}
 
+  untruncate-json@0.0.1: {}
+
   uuid@11.1.1: {}
 
   which@2.0.2:
@@ -2591,5 +2693,7 @@ snapshots:
       string-width: 4.2.3
       y18n: 5.0.8
       yargs-parser: 21.1.1
+
+  zod@3.25.76: {}
 
   zod@4.4.3: {}

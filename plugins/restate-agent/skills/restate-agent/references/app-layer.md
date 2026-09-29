@@ -126,7 +126,8 @@ Do not silently change the existing same-agent `Agent.fire` semantics.
    `packages/libs/types/src/services.ts` and clients in
    `packages/libs/client/src/`.
 2. Add login and `UserSession` at the backend. Make the backend the only public
-   caller of private ingress.
+   caller of private ingress. Scope every UI route by ownership, including
+   `/api/ag-ui`, whose `threadId` names the agent.
 3. Add encrypted user MCP connections and the turn-start snapshot. Extend
    `session/mcp-tools.ts` without putting plaintext into durable values.
 4. Add `UserNotifications` and a workspace sync endpoint if the UI needs to
