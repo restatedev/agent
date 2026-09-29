@@ -8,7 +8,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Kill it mid-turn</title>
+<title>Agent demo</title>
 <style>
   :root {
     --bg: #09090f;
@@ -179,7 +179,7 @@
   <header>
     <div class="logo">R</div>
     <h1>Restate reference agent</h1>
-    <span class="sub">— kill it mid-turn</span>
+    <span class="sub">— a real session</span>
     <span class="speed" id="speed">⏩ 4×</span>
     <span class="real">REAL RECORDING</span>
   </header>
@@ -300,6 +300,10 @@
         if (el.innerHTML !== html) el.innerHTML = html;
       }
       $("journal-count").textContent = `${rows.length} steps`;
+    },
+    journalReset() {
+      $("journal-body").replaceChildren();
+      this.journalFoot("");
     },
     journalFoot(text) {
       $("journal-foot").textContent = text;

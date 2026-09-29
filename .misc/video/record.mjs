@@ -1,8 +1,13 @@
-// Records the README video: a real turn on the real stack, with the agent
-// service killed while the turn waits on a durable timer. See README.md here.
+// Records the README video: a real session with the reference agent on the
+// real stack, in two acts. See README.md here.
+//
+//   1. A casual request: the model writes a program whose web searches run at
+//      once, saves a plan in its sandbox, and is steered while it works.
+//   2. A follow-up that waits on a durable timer. The service is killed with
+//      kill -9 during the wait, started again, and Restate replays the turn.
 //
 // It starts and kills the core service itself, drives the web UI in headless
-// Chrome, polls the turn's journal from the Restate Admin API, and composes
+// Chrome, polls each turn's journal from the Restate Admin API, and composes
 // everything on director.html. The director's screencast frames are written to
 // <out>/frames with the output time of each frame, for encode.sh.
 import {spawn} from "node:child_process";
@@ -21,11 +26,18 @@ const AGENT_ID = process.env.AGENT_ID ?? `demo-${Date.now().toString(36)}`;
 const UI_URL = process.env.UI_URL ?? "http://127.0.0.1:3000";
 const ADMIN_URL = process.env.RESTATE_ADMIN_URL ?? "http://localhost:9070";
 const SLEEP_SECONDS = 30;
-const PROMPT =
-  `Get the weather in Berlin, Tokyo and New York in parallel. ` +
-  `Then sleep for ${SLEEP_SECONDS} seconds. Then compare the three cities in two sentences.`;
+
+const ASK =
+  "Plan a weekend in Lisbon for me. Write a small program that searches the web for " +
+  "the weekend forecast, the top museums and the best food markets all at once, " +
+  "then save a short plan to lisbon.md.";
+const STEER = "Make it vegetarian-friendly, and add a rainy-day option.";
+const FOLLOW_UP =
+  `Give me ${SLEEP_SECONDS} seconds to run it by my partner: sleep for ${SLEEP_SECONDS} seconds, ` +
+  "then read lisbon.md back and sum it up in three lines.";
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+const js = JSON.stringify;
 
 // ---------------------------------------------------------------------------
 // Output timeline. Frames carry the wall-clock time they were painted; the
@@ -45,16 +57,12 @@ function videoTime(seconds) {
   return time;
 }
 
-async function setSpeed(stage, factor) {
-  speedSegments.push({at: Date.now() / 1000, factor});
-  await stage.evaluate(`stage.speed(${factor})`);
-}
-
 // ---------------------------------------------------------------------------
 // The agent service: started, killed and restarted by this script, its log
 // lines shown in the terminal panel.
 
 let service;
+let browser;
 let onServiceLine = () => {};
 
 function startService() {
@@ -69,6 +77,8 @@ function startService() {
   return service.pid;
 }
 
+const SHOWN_HANDLERS = ["ask", "steer", "doTurn"];
+
 // "[restate][2026-...Z][AgentSession/demo/doTurn][inv_...] INFO: Replaying invocation."
 function formatServiceLine(line) {
   const match = line.match(/^\[restate\]\[[^\]]*T([\d:]+)\.\d+Z\](?:\[([^\]]+)\]\[[^\]]+\])? \w+: (.*)$/);
@@ -76,7 +86,7 @@ function formatServiceLine(line) {
   const [, time, target, message] = match;
   if (!target) return message.startsWith("Restate SDK started") ? {text: `${time}  listening on :9080`} : null;
   const handler = target.split("/").pop();
-  if (!["doTurn", "ask"].includes(handler)) return null;
+  if (!SHOWN_HANDLERS.includes(handler)) return null;
   const service = target.startsWith("AgentSession") ? "AgentSession" : "Agent";
   const text = `${time}  ${service}.${handler}  ${message}`;
   return {text, kind: message.startsWith("Replaying") ? "hot" : ""};
@@ -94,7 +104,7 @@ async function query(sql) {
   return (await response.json()).rows ?? [];
 }
 
-async function currentTurnId() {
+async function latestTurnId() {
   const rows = await query(
     `SELECT id FROM sys_invocation WHERE target_service_name = 'AgentSession' ` +
       `AND target_handler_name = 'doTurn' AND target_service_key = '${AGENT_ID}' ` +
@@ -107,14 +117,17 @@ async function journalEntries(turnId) {
   return query(
     `SELECT index, entry_type, name FROM sys_journal WHERE id = '${turnId}' ` +
       `AND entry_type IN ('Command: Input', 'Command: Run', 'Command: Sleep', 'Command: Output', ` +
-      `'Notification: Run', 'Notification: Sleep') ORDER BY index`,
+      `'Notification: Run', 'Notification: Sleep', 'Notification: Signal') ORDER BY index`,
   );
 }
 
-const LABELS = {
+// Runs the turn journals for itself rather than for a tool.
+const STEPS = {
   "agent-model": "model call",
-  getWeather: "getWeather",
   "discover-agent-tools": "tool catalog",
+  provisionSandbox: "sandbox start",
+  resumeSandbox: "sandbox resume",
+  suspendSandbox: "sandbox suspend",
 };
 
 // Turns journal entries into panel rows. A run counts as recorded once as many
@@ -126,19 +139,19 @@ function journalRows(entries, replay) {
   const sleepDone = entries.some((entry) => entry.entry_type === "Notification: Sleep");
   let runs = 0;
   for (const entry of entries) {
-    const row = {index: entry.index, label: "", name: "", state: "wait", status: "running…"};
+    const row = {index: entry.index, label: "", name: "", state: "done", status: "✓ recorded"};
     if (entry.entry_type === "Command: Input") {
-      Object.assign(row, {label: "input", name: "the message", state: "done", status: "✓ recorded"});
+      Object.assign(row, {label: "input", name: "the message"});
     } else if (entry.entry_type === "Command: Output") {
-      Object.assign(row, {label: "output", name: "turn finished", state: "done", status: "✓ recorded"});
+      Object.assign(row, {label: "output", name: "turn finished"});
+    } else if (entry.entry_type === "Notification: Signal") {
+      Object.assign(row, {label: "signal", name: "steer", status: "✓ received"});
     } else if (entry.entry_type === "Command: Run") {
       runs++;
       const recorded = runs <= runResults;
-      const name = LABELS[entry.name] ?? entry.name;
-      const isTool = !LABELS[entry.name] || entry.name === "getWeather";
       Object.assign(row, {
-        label: isTool ? "tool" : "",
-        name,
+        label: STEPS[entry.name] ? "" : "tool",
+        name: STEPS[entry.name] ?? entry.name,
         state: recorded ? "done" : "wait",
         status: recorded ? "✓ recorded" : "running…",
       });
@@ -161,14 +174,19 @@ function journalRows(entries, replay) {
   return rows;
 }
 
+const count = (entries, type, name) =>
+  entries.filter((entry) => entry.entry_type === type && (name === undefined || entry.name === name)).length;
+
 // ---------------------------------------------------------------------------
 
 async function main() {
   rmSync(OUT, {recursive: true, force: true});
   mkdirSync(join(OUT, "frames"), {recursive: true});
 
-  const browser = await launchChrome();
+  browser = await launchChrome();
   const stage = await browser.newTab({url: `file://${HERE}/director.html`, width: 1920, height: 1080});
+  const say = (expression) => stage.evaluate(expression);
+
   // Both UIs render zoomed in, so they stay legible in a README-sized player.
   // The web UI's agent picker is cropped off the top: the conversation is the
   // part the video is about.
@@ -189,7 +207,7 @@ async function main() {
       deviceScaleFactor: uiScale,
       mobile: false,
     });
-    await stage.evaluate(`stage.uiCrop(${Math.round(cropCss * uiScale)})`);
+    await say(`stage.uiCrop(${Math.round(cropCss * uiScale)})`);
   }
   const restateScale = 1.25;
   const restateUi = await browser.newTab({
@@ -211,7 +229,7 @@ async function main() {
       while (latest) {
         const frame = latest;
         latest = undefined;
-        await stage.evaluate(`stage.${method}(${JSON.stringify(frame)})`);
+        await say(`stage.${method}(${js(frame)})`);
       }
       busy = false;
     });
@@ -229,8 +247,10 @@ async function main() {
   await mirror(ui, "uiFrame");
   await mirror(restateUi, "restateFrame");
 
-  const say = (expression) => stage.evaluate(expression);
-  const js = JSON.stringify;
+  async function setSpeed(factor) {
+    speedSegments.push({at: Date.now() / 1000, factor});
+    await say(`stage.speed(${factor})`);
+  }
 
   onServiceLine = (line) => {
     const formatted = formatServiceLine(line);
@@ -246,13 +266,33 @@ async function main() {
     await pause(350);
   }
 
-  const replay = {replayed: new Set(), crashedAt: undefined};
+  // Sends a message from the UI composer in one of its modes (Ask, Steer).
+  async function send(mode, text) {
+    await ui.evaluate(
+      `[...document.querySelectorAll("button")].find((b) => b.textContent.trim() === ${js(mode)}).click()`,
+    );
+    const composer = `document.querySelector('textarea[aria-label="${mode} message"]')`;
+    await ui.waitFor(`Boolean(${composer})`);
+    await ui.evaluate(`${composer}.focus()`);
+    await ui.type(text, {delayMs: 18});
+    await pause(300);
+    await ui.press("Enter");
+    await ui.waitFor(`${composer}.value === ""`, {timeoutMs: 30_000});
+  }
+
+  // The journal panel follows the newest turn of the agent.
+  let replay = {replayed: new Set(), crashedAt: undefined};
   let turnId;
   let entries = [];
   let polling = true;
   const poller = (async () => {
     while (polling) {
-      turnId ??= await currentTurnId();
+      const latest = await latestTurnId();
+      if (latest && latest !== turnId) {
+        turnId = latest;
+        replay = {replayed: new Set(), crashedAt: undefined};
+        await say("stage.journalReset()");
+      }
       if (turnId) {
         entries = await journalEntries(turnId);
         await say(`stage.journal(${js(journalRows(entries, replay))})`);
@@ -261,46 +301,75 @@ async function main() {
     }
   })();
 
+  // The transcript stops following new events once they push it past the
+  // fold; press its "Latest" button, as a viewer would.
+  const follower = (async () => {
+    while (polling) {
+      await ui.evaluate(
+        `[...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Latest")?.click()`,
+      );
+      await pause(400);
+    }
+  })();
+
+  async function waitForTurn(previous) {
+    while (!turnId || turnId === previous) await pause(100);
+    return turnId;
+  }
+  async function waitFor(condition) {
+    while (!condition()) await pause(150);
+  }
+  const finished = () => count(entries, "Command: Output") > 0;
+
   // --- Title ---------------------------------------------------------------
-  await say(`stage.card("Restate reference agent", "Kill it mid-turn.", "A real turn, a real crash, no lost work.")`);
+  await say(`stage.card("Restate reference agent", "A durable agent, for real.", "Tools, programs, steering — and a crash in the middle.")`);
   await stage.send("Page.startScreencast", {format: "jpeg", quality: 90});
   await pause(3200);
   await say("stage.hideCard()");
 
-  // --- 1. Start the service and ask ---------------------------------------
-  await say(`stage.caption(1, "Start the agent and ask for something slow", "Three tools in parallel, then a ${SLEEP_SECONDS}-second durable timer.")`);
+  // --- Act 1: an ordinary turn ------------------------------------------------
+  await say(`stage.caption(1, "Ask it for something", "A real model, real web search, a real sandbox.")`);
   await typeCommand("node dist/app.js");
   let pid = startService();
   await say(`stage.service("running", "RUNNING · PID ${pid}")`);
   await pause(800);
   await openUi();
   await pause(700);
-
-  // The UI shows "Live" once its notification stream to the agent is up.
   await ui.waitFor(`document.body.innerText.includes("Live")`);
-  const composer = `document.querySelector('textarea[aria-label="Ask message"]')`;
-  await ui.evaluate(`${composer}.focus()`);
-  await ui.type(PROMPT, {delayMs: 22});
-  await pause(400);
-  await ui.press("Enter");
-  await ui.waitFor(`${composer}.value === ""`, {timeoutMs: 30_000});
+  await send("Ask", ASK);
+  const firstTurn = await waitForTurn(undefined);
 
-  // --- 2. Journal fills -----------------------------------------------------
-  while (!turnId) await pause(100);
-  await say(`stage.caption(2, "Every step lands in the turn's journal", "Model calls and tool results are stored in Restate as they finish.")`);
-  const quiet = () => {
-    const sleeping = entries.some((entry) => entry.entry_type === "Command: Sleep");
-    const runs = entries.filter((entry) => entry.entry_type === "Command: Run").length;
-    const results = entries.filter((entry) => entry.entry_type === "Notification: Run").length;
-    return sleeping && runs === results;
-  };
-  while (!quiet()) await pause(200);
+  await waitFor(() => count(entries, "Command: Run", "webSearch") >= 2);
+  await say(`stage.caption(2, "It writes a program to do the work", "Its three web searches run at once. Only the program's result enters the context.")`);
+  await pause(600);
+
+  await say(`stage.caption(3, "Steer it while it works", "A new instruction for the running turn. Nothing is cancelled.")`);
+  await send("Steer", STEER);
+  await waitFor(() => count(entries, "Notification: Signal") > 0 || finished());
+  if (!count(entries, "Notification: Signal")) throw new Error("The steer reached no running turn; record again.");
+  await say(`stage.caption(3, "The steer reaches the model's next step", "Running tools finish; the plan in lisbon.md follows the new instruction.")`);
+  await setSpeed(2);
+  await waitFor(finished);
+  await setSpeed(1);
+  await pause(3500);
+
+  // --- Act 2: kill it mid-turn ------------------------------------------------
+  await say(`stage.card("Now the fun part", "Kill it mid-turn.", "A follow-up that waits ${SLEEP_SECONDS} seconds — and kill -9 in the middle.")`);
+  await pause(2800);
+  await say("stage.hideCard()");
+  await say(`stage.caption(4, "Ask for something that takes a while", "A ${SLEEP_SECONDS}-second durable timer, then it reads the file back.")`);
+  await send("Ask", FOLLOW_UP);
+  await waitForTurn(firstTurn);
+
+  // Kill only when the timer runs and no other step is open, so every step
+  // before the crash has its result recorded.
+  const quiet = () =>
+    count(entries, "Command: Sleep") > 0 && count(entries, "Command: Run") === count(entries, "Notification: Run");
+  await waitFor(quiet);
   await pause(2500);
-  // The model may take one more step while it waits; kill only when no run is open.
-  while (!quiet()) await pause(200);
+  await waitFor(quiet);
 
-  // --- 3. Kill ----------------------------------------------------------------
-  await say(`stage.caption(3, "Kill the service mid-turn", "kill -9: no shutdown, no warning. The timer is still running.")`);
+  await say(`stage.caption(5, "Kill the service mid-turn", "kill -9: no shutdown, no warning. The timer is still running.")`);
   await typeCommand(`kill -9 ${pid}`);
   replay.crashedAt = entries.at(-1).index;
   service.kill("SIGKILL");
@@ -308,13 +377,12 @@ async function main() {
   await say(`stage.service("down", "KILLED")`);
   await say(`stage.line("[1]+  Killed: 9    node dist/app.js", "bad")`);
   await pause(2200);
-  await say(`stage.caption(3, "No process is running this turn", "Restate holds its journal and its timer. Nothing is lost.")`);
-  await setSpeed(stage, 4);
+  await say(`stage.caption(5, "No process is running this turn", "Restate holds its journal and its timer. Nothing is lost.")`);
+  await setSpeed(4);
   await pause(8000);
-  await setSpeed(stage, 1);
+  await setSpeed(1);
 
-  // --- 4. Restart and replay ------------------------------------------------
-  await say(`stage.caption(4, "Start it again", "Restate replays the journal. Recorded results are reused, not re-run.")`);
+  await say(`stage.caption(6, "Start it again", "Restate replays the journal. Recorded results are reused, not re-run.")`);
   await typeCommand("node dist/app.js");
   await say(`stage.service("starting", "STARTING")`);
   const replaying = new Promise((done) => {
@@ -339,23 +407,19 @@ async function main() {
     await pause(140);
   }
   const models = recorded.filter((row) => row.name === "model call").length;
-  const tools = recorded.filter((row) => row.label === "tool").length;
-  await say(
-    `stage.journalFoot(${js(`Replayed ${models} model calls and ${tools} tool calls. None ran again.`)})`,
-  );
+  await say(`stage.journalFoot(${js(`Replayed ${recorded.length} recorded steps, ${models} of them model calls. None ran again.`)})`);
 
-  // --- 5. The turn finishes ---------------------------------------------------
   await pause(2500);
-  await say(`stage.caption(5, "The turn finishes where it stopped", "The timer fires on schedule and the model writes its answer.")`);
-  await setSpeed(stage, 4);
-  while (!entries.some((entry) => entry.entry_type === "Command: Output")) await pause(200);
-  await setSpeed(stage, 1);
+  await say(`stage.caption(7, "The turn finishes where it stopped", "The timer fires on schedule; the agent reads the file and answers.")`);
+  await setSpeed(4);
+  await waitFor(finished);
+  await setSpeed(1);
   await pause(4000);
 
-  // --- 6. The Restate UI ----------------------------------------------------
+  // --- The Restate UI -----------------------------------------------------------
   await restateUi.goto(`${ADMIN_URL}/ui/invocations/${turnId}`);
   await pause(2500);
-  await say(`stage.caption(6, "Inspect it in the Restate UI", "One invocation, every step of the turn, across the crash.")`);
+  await say(`stage.caption(8, "Inspect it in the Restate UI", "One invocation, every step of the turn, across the crash.")`);
   await say("stage.showRestate(true)");
   await pause(2500);
   // Scroll to the timer: its bar spans the time the service was down.
@@ -365,7 +429,7 @@ async function main() {
     scrollTo({top, behavior: "smooth"});
   })()`);
   await pause(2000);
-  await say(`stage.caption(6, "The timer kept running while the service was down", "It fired on schedule, and the turn went on from the next step.")`);
+  await say(`stage.caption(8, "The timer kept running while the service was down", "It fired on schedule, and the turn went on from the next step.")`);
   await pause(4000);
 
   // --- End card ---------------------------------------------------------------
@@ -373,17 +437,18 @@ async function main() {
   await pause(3500);
 
   polling = false;
-  await poller;
+  await Promise.all([poller, follower]);
   await stage.send("Page.stopScreencast");
   frames.push({file: frames.at(-1).file, time: videoTime(Date.now() / 1000)});
   writeFileSync(join(OUT, "frames.json"), JSON.stringify(frames));
   service.kill();
   await browser.close();
-  console.log(`${frames.length} frames, ${frames.at(-1).time.toFixed(1)}s, agent ${AGENT_ID}, turn ${turnId}`);
+  console.log(`${frames.length} frames, ${frames.at(-1).time.toFixed(1)}s, agent ${AGENT_ID}`);
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   console.error(error);
   service?.kill("SIGKILL");
+  await browser?.close();
   process.exit(1);
 });

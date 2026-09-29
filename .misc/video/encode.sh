@@ -18,6 +18,6 @@ node -e '
 
 ffmpeg -y -loglevel error -f concat -safe 0 -i "$out/frames.ffconcat" \
   -vf "fps=30,format=yuv420p" -c:v libx264 -preset slow -crf 20 \
-  -movflags +faststart "$out/kill-it-mid-turn.mp4"
+  -movflags +faststart "$out/agent-demo.mp4"
 
-ls -lh "$out/kill-it-mid-turn.mp4"
+ls -lh "$out/agent-demo.mp4"
