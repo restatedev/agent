@@ -8,12 +8,10 @@ import {TerminalError} from "@restatedev/restate-sdk";
 import {
   APICallError,
   type AssistantModelMessage,
-  createProviderRegistry,
   generateText,
   jsonSchema,
   LoadAPIKeyError,
   type ModelMessage,
-  NoSuchModelError,
   Output,
   type ToolSet,
 } from "ai";
@@ -27,6 +25,10 @@ import {
   GUARDRAIL_SYSTEM,
   TURN_COMPACTOR_SYSTEM,
 } from "./prompts.js";
+
+// The message shapes of a model call, named here so that the rest of the
+// runtime depends on this module and not on the inference library.
+export type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 
 /** Provider-neutral model description of one executable agent tool. */
 export type ToolManifest = {
@@ -162,22 +164,31 @@ const GuardrailReviewSchema = z.object({
  * (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY), so only
  * the providers the configured models use need a key.
  */
-const providers = createProviderRegistry({openai, anthropic, google});
+const PROVIDERS = {openai, anthropic, google};
 
-export type ModelId = Parameters<typeof providers.languageModel>[0];
+/** Resolves a "provider:model" ID from agent-config.ts to its model. */
+function languageModel(id: string) {
+  const separator = id.indexOf(":");
+  const provider = id.slice(0, separator);
+  const model = id.slice(separator + 1);
+  if (separator < 1 || !model || !Object.hasOwn(PROVIDERS, provider)) {
+    const known = Object.keys(PROVIDERS).join(", ");
+    throw new TerminalError(
+      `model "${id}" must be "provider:model", where the provider is one of: ${known}`,
+    );
+  }
+  return PROVIDERS[provider as keyof typeof PROVIDERS](model);
+}
 
 /** Runs one provider call and classifies the failures a retry cannot fix. */
 async function withModel<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (error) {
-    // Restate owns retries. A missing API key, an unknown model ID, invalid
-    // requests and authentication failures are terminal; throttling and
-    // transient provider failures remain retryable.
-    if (
-      LoadAPIKeyError.isInstance(error) ||
-      NoSuchModelError.isInstance(error)
-    ) {
+    // Restate owns retries. A missing API key, invalid requests and
+    // authentication failures are terminal; throttling and transient provider
+    // failures remain retryable.
+    if (LoadAPIKeyError.isInstance(error)) {
       throw new TerminalError(error.message);
     }
     if (APICallError.isInstance(error) && !error.isRetryable) {
@@ -195,9 +206,9 @@ async function withModel<T>(call: () => Promise<T>): Promise<T> {
  * level is provider-neutral: each provider maps it to its own setting
  * (OpenAI's reasoning effort, Anthropic's and Google's thinking).
  */
-function callOptions(model: ModelId, signal: AbortSignal, timeout: number) {
+function callOptions(model: string, signal: AbortSignal, timeout: number) {
   return {
-    model: providers.languageModel(model),
+    model: languageModel(model),
     maxRetries: 0,
     abortSignal: signal,
     timeout,

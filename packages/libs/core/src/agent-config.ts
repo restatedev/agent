@@ -10,7 +10,6 @@
 // `description` and `instructions`, not in `baseInstructions`: a tool's
 // instructions reach the model only in turns where the tool is offered.
 
-import type {ModelId} from "./model/provider.js";
 import {humanApprovalTool} from "./tools/approval.js";
 import {
   manageMemoryTool,
@@ -55,7 +54,7 @@ export const agentConfig = {
     guardrail: "openai:gpt-5.6-terra",
     /** Summarizes older conversation for later turns. */
     compactor: "openai:gpt-5.6-terra",
-  } satisfies Record<string, ModelId>,
+  },
 
   /**
    * The agent model's context window, in input tokens, and the share of it at

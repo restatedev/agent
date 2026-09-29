@@ -3,6 +3,7 @@ import {test} from "node:test";
 
 import {TerminalError} from "@restatedev/restate-sdk";
 
+import {agentConfig} from "../src/agent-config.ts";
 import {completeAgent} from "../src/model/provider.ts";
 
 // The configured agent model is an OpenAI model, so these calls go through
@@ -63,4 +64,22 @@ test("a rejected request is terminal and throttling stays retryable", async (t) 
     assert.ok(!(error instanceof TerminalError));
     return true;
   });
+});
+
+test("a model ID without a known provider fails terminally before any request", async (t) => {
+  const fetch = respondWith(t, 500);
+  const configured = agentConfig.models.agent;
+  t.after(() => {
+    agentConfig.models.agent = configured;
+  });
+
+  for (const id of ["gpt-5.6-luna", "mistral:large", "openai:", ":gpt"]) {
+    agentConfig.models.agent = id;
+    await assert.rejects(completeAgent(request, signal()), (error) => {
+      assert.ok(error instanceof TerminalError);
+      assert.match(error.message, /must be "provider:model"/);
+      return true;
+    });
+  }
+  assert.equal(fetch.mock.callCount(), 0);
 });

@@ -44,8 +44,7 @@ version they started on, so a change applies to new turns. Switching between
 turns is safe: the transcript is provider-neutral, and each turn rebuilds its
 model messages from it.
 
-To add another provider, install its AI SDK package and add it to the
-registry in `src/model/provider.ts`.
+To add another provider, add it to `PROVIDERS` in `src/model/provider.ts`.
 
 ## MCP servers
 
