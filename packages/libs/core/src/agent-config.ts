@@ -1,8 +1,9 @@
 // What this agent is: the models it runs on, its base instructions and its
-// built-in tools. This is the file to edit to change the agent; the runtime in
-// `session/` and `agent/` reads it and knows no tool by name except the ones
-// it provides itself (searchTools and executeProgram) and humanApproval, whose
-// requests it withdraws like a guardrail's.
+// built-in tools. This is the file to edit to change the agent. The turn
+// runtime in `session/` knows no tool by name except the ones it provides
+// itself (searchTools and executeProgram) and humanApproval, whose requests it
+// withdraws like a guardrail's. The controller in `agent/` checks the grants
+// of the tools that call it (schedules and sub-agents) by name.
 //
 // A tool is written with `defineAgentTool` from `tools-api.ts` and lives in
 // `tools/`. Adding one is a new file there and a line in `tools` below. What

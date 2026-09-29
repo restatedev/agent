@@ -1,16 +1,15 @@
 # Tools
 
-Full guide: `docs/tools.md`. The contract is in
-`packages/libs/core/src/tools-api.ts`; its header comment explains how a
-tool runs.
+Full guide: `docs/tools.md`. The contract is in `tools-api.ts`; its header
+comment explains how a tool runs.
 
 ## Choose the kind of tool
 
 | The capability | Kind | Where it lives |
 | --- | --- | --- |
-| Belongs to this agent and finishes in seconds | Built-in foreground tool | `src/tools/*.ts` + `agent-config.ts` |
-| Takes long, and the model can do useful work meanwhile | Built-in pending tool | `src/tools/*.ts` + `agent-config.ts` |
-| Needs the turn's sandbox, pending tasks or the agent's own state | Built-in tool | `src/tools/*.ts` |
+| Belongs to this agent and finishes in seconds | Built-in foreground tool | `tools/*.ts` + `agent-config.ts` |
+| Takes long, and the model can do useful work meanwhile | Built-in pending tool | `tools/*.ts` + `agent-config.ts` |
+| Needs the turn's sandbox, pending tasks or the agent's own state | Built-in tool | `tools/*.ts` |
 | Already is, or should be, an independently deployed Restate handler | Discovered Restate tool | Any service in the cluster |
 | Is offered by a remote MCP server | MCP tool | `MCP_SERVERS_JSON` on the core service |
 
@@ -21,7 +20,7 @@ it. Put the side effect in `toolRun`, a journaled `restate.run` that turns
 unexpected errors into `failed` and rethrows cancellation:
 
 ```ts
-// src/tools/stock-price.ts
+// tools/stock-price.ts
 import {z} from "zod";
 
 import {defineAgentTool, failed, toolRun} from "../tools-api.js";
@@ -48,10 +47,10 @@ export const stockPriceTool = defineAgentTool({
 });
 ```
 
-Then add it to `tools` in `src/agent-config.ts`. The order there is the
-order the model and the tool picker list it. The UI's tool toggles and the
-agent's grants (`permissions.builtin`) pick it up from the catalog; nothing
-else needs registering.
+Then add it to `tools` in `agent-config.ts`. The order there is the order
+the model and the tool picker list it. The UI's tool toggles and the agent's
+grants (`permissions.builtin`) pick it up from the catalog; nothing else
+needs registering.
 
 - `description` is the contract of one call. `instructions` is guidance on
   when and how to use the tool; it joins the system prompt only in turns
@@ -59,18 +58,23 @@ else needs registering.
 - `summary` is a fixed activity label for the public transcript. It is not
   a function of the input: tool arguments never enter the transcript.
 - `unavailable(context)` returns a reason when the tool's own switch is off
-  (see `web-search.ts`). The runtime then hides it and refuses its calls.
+  (see `tools/web-search.ts`). The runtime then hides it and refuses its
+  calls.
 - Make every schema property required and use `.nullable()` for optional
   values, because strict model function schemas require every property.
 - Return `failed(...)` for what the model can react to. Throw only for what
   it cannot fix. `TerminalError` stops retrying; any other error inside
   `restate.run` is retried by its policy.
+- The runtime cuts every tool result to 128,000 characters before the model
+  sees it (`MAX_MODEL_RESULT_CHARS` in `session/tools.ts`). Return a compact
+  result rather than relying on that cut.
 
 ## A pending tool
 
 For work that takes longer than a step should wait. `run` starts it and
-returns at once; `complete` waits for it as a background task of the turn,
+returns at once. `complete` waits for it as a background task of the turn,
 and its result reaches the model as a runtime event before a later step.
+This is the `sleep` tool from `tools/operations.ts`:
 
 ```ts
 export const sleepTool = defineAgentTool({
@@ -94,30 +98,40 @@ export const sleepTool = defineAgentTool({
   from it. Derive every name (timer, signal, awakeable, idempotency key)
   from the `toolCallId`.
 - The turn does not finish while pending work runs. An interrupt, or the
-  model's `cancelOperation` with the operation ID, interrupts `complete`, and
-  the call ends as `cancelled`.
+  model's `cancelOperation` with the operation ID, interrupts `complete`,
+  and the call ends as `cancelled`.
 - Only make a tool pending when the model can do useful work before it
   completes. Inside an `executeProgram` program, a pending call is
   completed inline.
 
-To wait for the outside world, have `run` hand an ID to the other system
-(inside `restate.run`), and `complete` wait on a signal named after the call.
-`humanApproval` does this: its approval ID is the `toolCallId`.
+To wait for the outside world:
+
+1. `run` hands an ID to the other system, inside `restate.run` or with a
+   durable Restate call.
+2. `complete` waits on a signal named after the call.
+3. The other system resolves that signal on the turn's invocation.
+
+`humanApproval` (`tools/approval.ts`) does this. Its approval ID is the
+`toolCallId`. `run` registers it with `Agent.requestApproval`, `complete`
+waits on the signal in `session/approvals.ts`, and `Agent.resolveApproval`
+signals the turn.
 
 ## The tool context
 
 A tool body receives `ToolCallContext`: `agentId`, `turnId`, `toolCallId`,
 `permissions`, `webSearchEnabled`, `sandbox` and, lazily, `toolSearch`.
-These are trusted; model input is not. Use `context.sandbox` for the
-agent's persistent files and commands (see `tools/sandbox.ts`); the turn
-provisions it on first use and suspends it at the end.
+These are trusted; model input is not.
+
+Use `context.sandbox` for the agent's persistent files and commands (see
+`tools/sandbox.ts`). The turn provisions the sandbox on first use and
+suspends it at the end.
 
 ## A tool that changes the agent's state
 
 A tool cannot write `Agent` state: the turn runs in `AgentSession`. It calls
 an `Agent` handler with its `turnId`, and the handler checks that this is
 still the active turn and that it holds the grant (`requireTurnTool`). Wrap
-the call in `agentCall` so the handler's expected rejections become
+the call in `agentCall`, so the handler's expected rejections become
 feedback for the model:
 
 ```ts
@@ -137,8 +151,8 @@ See `tools/schedules.ts` and `tools/memory.ts`, and
 
 ## Discovered Restate tools
 
-Any JSON handler deployed to the same Restate cluster becomes a tool when
-its handler metadata names it:
+Any JSON handler deployed to the same Restate cluster can become a tool
+when its handler metadata names it:
 
 ```ts
 const Grafana = restate.service({
@@ -159,8 +173,15 @@ const Grafana = restate.service({
 });
 ```
 
-- The core service discovers these through the Admin API
-  (`RESTATE_ADMIN_URL`) and journals one catalog snapshot per turn.
+- **An agent must grant it.** New agents grant no discovered tools
+  (`dynamic: {mode: "selected", names: []}`). Add the name to the agent's
+  `tools.dynamic` with `updateProfile`, or switch it on in the UI's tool
+  panel.
+- The core service discovers handlers through the Admin API
+  (`RESTATE_ADMIN_URL`, and `RESTATE_ADMIN_TOKEN` if the Admin API needs
+  one).
+- Discovery is cached for five minutes per process. Each turn journals one
+  catalog snapshot, so a new handler appears only in a later turn.
 - The handler description becomes the model-facing description. The input
   schema is nested under `input`, plus `key` for an object or workflow.
 - Discovered tools are foreground calls; they cannot be pending.
@@ -174,7 +195,7 @@ agent's own state.
 
 ## MCP tools
 
-The operator configures MCP servers on the core service; agents and clients
+The operator configures MCP servers on the core service. Agents and clients
 only switch configured servers on or off:
 
 ```sh
@@ -189,36 +210,43 @@ export MCP_SERVERS_JSON='[{"id":"docs","type":"http","url":"https://mcp.example.
 See `docs/mcp-configuration.md`. For per-user OAuth connections instead of
 operator tokens, see `references/app-layer.md`.
 
-## Reduce tool context and compose calls
+## Keep tool context small
 
-For a request like “connect many MCP servers without sending every schema to
-the model,” preserve the two different savings:
+Two mechanisms save different things:
 
 | Need | Mechanism | Owner |
 | --- | --- | --- |
-| Fewer tool schemas in the model request | `searchTools` loads matching dynamic/MCP schemas into this turn's model catalog | `session/tool-search.ts`, `session/tools.ts` |
-| Fewer intermediate tool results in model context | `executeProgram` returns only a program's compact JSON result | `session/program-tool.ts`, `ptc/runtime.ts`, `ptc/guest.ts` |
+| Fewer tool schemas in the model request | `searchTools` loads matching discovered and MCP schemas into this turn's catalog | `session/tool-search.ts`, `session/tools.ts` |
+| Fewer intermediate results in model context | `executeProgram` returns only a program's compact JSON result | `session/program-tool.ts`, `ptc/runtime.ts`, `ptc/guest.ts` |
 
-Built-ins remain visible upfront. Search is lexical and turn-local; it selects
-only permitted tools and does not call them. A search inside a running program
-loads schemas for the **next model round**, not the current program. Catalog
-discovery and authorization still happen even when schemas are deferred. Read
-`docs/tools.md#turn-local-tool-search` before changing catalog visibility.
+### Tool search
 
-The model writes ordinary `async` JavaScript for `executeProgram`, using tool
-stubs and `Promise.all`/`allSettled` to coordinate calls. This guest code is
-**not** a Restate generator handler: it has no `yield*`, `restate.run`, direct
-I/O, modules, `Date`, or `Math.random`. The host journals tool results and
-their completion order, then re-executes the guest on replay. Every emitted
-call still passes grants and guardrails. A program can await pending tools;
-steering can hand a running program to the turn's pending registry. Keep the
-output small, join branches whose effects must finish, and test replay and
-cancellation when changing the bridge. Read
+- Built-ins are always visible. Discovered and MCP schemas stay deferred
+  until a search selects them.
+- Search is lexical and local to the turn. It selects only permitted tools
+  and does not call them.
+- A search inside a running program loads schemas for the **next model
+  round**, not for the current program.
+- Discovery and authorization still happen for deferred tools.
+
+Read `docs/tools.md#turn-local-tool-search` before changing what the
+catalog shows.
+
+### Programmatic tool calls
+
+The model writes ordinary `async` JavaScript for `executeProgram`. It calls
+tool stubs and coordinates them with `Promise.all` or `Promise.allSettled`.
+
+- This guest code is **not** a Restate generator handler. It has no
+  `yield*`, `restate.run`, direct I/O, modules, `Date` or `Math.random`.
+- The host journals the tool results and their completion order, then
+  re-runs the guest on replay.
+- Every call the program makes still passes grants and guardrails.
+- A program can await pending tools. Steering can hand a running program to
+  the turn's pending work.
+
+When changing the bridge, keep the output small, join branches whose
+effects must finish, and test replay and cancellation. Read
 `docs/tools.md#programmatic-tool-calling-ptc` and
-`docs/turn-runtime.md#programmatic-tool-calling-ptc` for the limits and exact
-ordering contract.
-
-Dynamic Restate handler discovery is part of the current reference. Its Admin API
-metadata annotation is a trusted capability boundary, not a general user
-connection flow. For user-scoped MCP/OAuth connections, follow
-`references/app-layer.md` instead of passing tokens through a tool schema.
+`docs/turn-runtime.md#programmatic-tool-calling-ptc` for the limits and
+the exact ordering contract.

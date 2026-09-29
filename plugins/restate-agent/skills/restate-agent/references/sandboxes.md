@@ -1,96 +1,122 @@
 # Integrate sandbox compute
 
-Use this reference when a request asks to run agent code on another compute
-platform, change workspace persistence, or add a sandbox-backed tool. Paths
-for `sandbox/...`, `tools/...`, and `agent-config.ts` are relative to
-`packages/libs/core/src/`; `test/...` is relative to `packages/libs/core/`.
-Read `docs/sandboxes.md` and `docs/agent-guide.md` for the current contract.
+Use this when a request asks to run agent code on another compute
+platform, change how the workspace persists, or add a sandbox-backed tool.
+Read `docs/sandboxes.md` and `docs/agent-guide.md` for the current
+contract.
 
 ## Choose the seam
 
 | Goal | Change |
 | --- | --- |
-| Use the existing demo workspace | Keep the default `local` provider; it runs as the service user and is not an isolation boundary. |
-| Use the existing remote adapter | Configure `SANDBOX_PROVIDER=modal` and its credentials as described in `docs/sandboxes.md`. |
-| Use Docker Sandboxes or another platform | Implement `SandboxProvider` in a new adapter and register it in `sandbox/provider.ts`. |
-| Give the model another operation in its workspace | Extend `SandboxClient` and a built-in tool in `tools/sandbox.ts`; register the tool in `agent-config.ts`. |
+| Use the demo workspace | Keep the default `local` provider. It runs as the service user and is not an isolation boundary |
+| Use the existing remote adapter | Set `SANDBOX_PROVIDER=modal` and its credentials, as in `docs/sandboxes.md` |
+| Use Docker Sandboxes or another platform | Implement `SandboxProvider` in a new adapter and route to it in `sandbox/provider.ts` |
+| Give the model another operation in its workspace | Extend `SandboxClient` and add a tool in `tools/sandbox.ts`; list it in `agent-config.ts` |
 
-`AgentSession` owns the sandbox, not `Agent` or a separate virtual object. It
-stores a provider-tagged `SandboxRef` under the `sandbox` state key. The first
-sandbox tool in a turn provisions or resumes compute; parallel first users
-share that acquisition, and the turn suspends it on exit. A later turn
-resumes the stored workspace. `AgentSession.retire` destroys it after the
-active turn. Providers keep workspace files across turns; do not rely on
-processes or ephemeral compute surviving suspension. If a product needs a
-different lifetime, change `sandbox/turn.ts` explicitly; an adapter alone
-cannot change when the turn acquires or releases compute.
+## Who owns the sandbox
+
+`AgentSession` owns the sandbox, not `Agent` and not a separate virtual
+object. It stores a provider-tagged `SandboxRef` under the `sandbox` state
+key.
+
+- The first sandbox tool in a turn provisions or resumes the compute.
+  Parallel first calls share that one acquisition.
+- The turn suspends the sandbox when it ends. A later turn resumes the
+  stored workspace.
+- `AgentSession.retire` destroys it, after the active turn.
+- Providers keep the workspace files across turns. Processes and ephemeral
+  compute do not survive a suspension.
+
+`sandbox/turn.ts` decides when compute is acquired and released. For a
+different lifetime, change it there; an adapter alone cannot change it.
 
 ## Add a provider
 
-1. Add a discriminated, serializable variant to `SandboxRef` in
+1. Add a serializable variant, tagged by `provider`, to `SandboxRef` in
    `sandbox/provider.ts`. Store only the identifiers needed to reconnect to
-   compute and persistent storage; keep credentials, SDK clients, and open
-   handles process-local.
-2. Implement `provision`, `resume`, `suspend`, `destroy`, and `connect` in an
-   adapter beside `sandbox/local-provider.ts` and
-   `sandbox/modal-provider.ts`. `connect` must only construct a client; it
-   must not perform external I/O. Return a new ref when an operation changes
-   the external identity.
-3. Route new provisions from `SANDBOX_PROVIDER` and stored refs by their
-   `provider` tag in `sandbox/provider.ts`. Changing the environment setting
-   does not migrate existing workspaces; design a migration separately if
-   existing agents must move.
-4. Implement the `SandboxClient` file and command methods with workspace path
-   containment and the supplied `AbortSignal`. Bound command runtime and
-   clip model-visible results before journaling. Keep service credentials
-   out of model-issued command environments. The local adapter is a
-   development example, not a security boundary.
-5. Leave acquisition, suspension, and retirement in `sandbox/turn.ts`.
-   Tools obtain a client through `context.sandbox.client()`; do not put
-   provider selection or lifecycle recovery into each tool.
+   the compute and the storage. Keep credentials, SDK clients and open
+   handles in the process.
+2. Implement `provision`, `resume`, `suspend`, `destroy` and `connect` in an
+   adapter next to `sandbox/local-provider.ts` and
+   `sandbox/modal-provider.ts`.
+   - `connect` only builds a client; it does no external I/O.
+   - Return a new ref when an operation changes the external identity.
+3. Route to the adapter in `sandbox/provider.ts`: new sandboxes by
+   `SANDBOX_PROVIDER`, stored refs by their `provider` tag. **Update
+   `providerFor`**: today it sends every tag other than `modal` to the local
+   adapter, so a missing case fails silently.
+4. Changing `SANDBOX_PROVIDER` does not move existing workspaces. If
+   existing agents must move, design a migration.
+5. Implement the `SandboxClient` file and command methods:
+   - keep every path inside the workspace;
+   - honor the `AbortSignal` passed in;
+   - bound how long a command runs;
+   - keep service credentials out of the environment of commands the model
+     issues.
+6. Leave acquisition, suspension and retirement in `sandbox/turn.ts`. Tools
+   get a client through `context.sandbox.client()`; they never pick a
+   provider or recover a lifecycle themselves.
 
-For a Docker-backed adapter, decide which external identity names the
-persistent workspace, what `suspend` preserves, and how `resume` reconnects
-or replaces stopped compute. Use stable names or provider idempotency support
-so a retry after an uncertain provision finds the same resource. Keep the
-provider-specific answer in its adapter and ref rather than adding a
-Docker-specific path to the turn loop.
+For a Docker-backed adapter, decide:
+
+- which external identity names the persistent workspace;
+- what `suspend` preserves;
+- how `resume` reconnects to, or replaces, stopped compute.
+
+Use stable names or the provider's idempotency support, so a retry after an
+uncertain provision finds the same resource. Keep the provider-specific
+parts in its adapter and ref, not in the turn loop.
 
 ## Add a sandbox-backed capability
 
-The current `listFiles`, `readFile`, `writeFile`, and `executeCommand` tools
-are in `tools/sandbox.ts`. When a new capability is useful across providers,
-add it to `SandboxClient`, implement it in each adapter, then expose a
-`defineAgentTool` that gets `context.sandbox.client()` and calls the client
-method through `toolRun`. Add that tool to `agent-config.ts`. If a capability
-exists only on one provider, decide how other providers report it before
-advertising the tool to every agent. Keep model-visible output bounded before
-it is journaled.
+The current tools are `listFiles`, `readFile`, `writeFile` and
+`executeCommand`, in `tools/sandbox.ts`. For a capability that is useful on
+every provider:
 
-## Preserve replay and cancellation
+1. Add it to `SandboxClient` and implement it in each adapter.
+2. Add a `defineAgentTool` that gets `context.sandbox.client()` and calls
+   the method inside `toolRun`.
+3. Clip the model-visible output inside the run, before it is journaled,
+   as `clipped()` in `tools/sandbox.ts` does.
+4. Add the tool to `agent-config.ts`.
 
-`sandbox/turn.ts` wraps lifecycle operations in `restate.run`, and
-`tools/sandbox.ts` wraps client calls in `toolRun`. Give each operation an
-appropriate retry policy and pass its `AbortSignal` to the adapter. A remote
-effect may finish before Restate records its result; replay can then repeat
-it. Provision, suspend, resume, and destroy must recover or converge on the
-same resource. Whole-file writes can be retried; arbitrary shell commands
-cannot be assumed idempotent. The existing command tool makes one attempt
-on a reported failure, but a crash before journaling can still repeat it.
-For jobs that must not run twice, require provider-side idempotency with a
-stable operation ID and a way to query its result on recovery.
+If a capability exists on only one provider, decide how the others report
+it before offering the tool to every agent.
 
-Do not claim that aborting a tool necessarily kills a remote process. If
-the provider cannot cancel an individual command, bound its runtime and
-document what may continue until sandbox suspension or destruction.
+## Keep replay and cancellation safe
+
+`sandbox/turn.ts` wraps the lifecycle operations in `restate.run`, and
+`tools/sandbox.ts` wraps the client calls in `toolRun`.
+
+- The lifecycle runs use the default retry policy. The tool runs use
+  bounded ones: `IDEMPOTENT_RETRY` (three attempts) for file operations,
+  and a single attempt for commands.
+- A remote effect can finish before Restate records its result, and replay
+  then repeats it. Provision, suspend, resume and destroy must therefore
+  converge on the same resource.
+- Whole-file writes are safe to retry. Shell commands are not assumed to
+  be: `executeCommand` runs once and never retries a failed attempt, but a
+  crash before its result is journaled can still run it again. (A non-zero
+  exit code is a normal result, not a failure.)
+- For a job that must never run twice, require provider-side idempotency:
+  a stable operation ID, and a way to query its result on recovery.
+
+Aborting a tool does not necessarily kill a remote process. If the
+provider cannot cancel a single command, bound its runtime, and document
+what may keep running until the sandbox is suspended or destroyed.
 
 ## Verify the integration
 
-Test adapter path containment, command environment, and resume after stale
-compute in `test/sandbox.test.mjs` or a provider-specific test. Extend
-`test/agent-deletion.test.mjs` for lazy first use, parallel acquisition,
-interrupted first acquisition, later-turn resume, turn-end suspension, and
-retirement. Exercise a restart around an uncertain external effect when
-the provider has a recovery path. Update `docs/sandboxes.md` with the
-provider's configuration, persistent storage semantics, and cancellation
-limits.
+- **Adapter:** path containment, the command environment, and resuming
+  after the compute went away. `test/sandbox.test.mjs` covers the local
+  adapter's environment and path containment; add a test file for the new
+  provider.
+- **Lifecycle:** extend `test/agent-deletion.test.mjs` for lazy first use,
+  parallel acquisition, an interrupted first acquisition, resuming in a
+  later turn, suspension at turn end, and retirement.
+- **Recovery:** when the provider has a recovery path, exercise a restart
+  around an uncertain external effect.
+
+Update `docs/sandboxes.md` with the provider's configuration, how its
+storage persists, and its cancellation limits.

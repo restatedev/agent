@@ -44,8 +44,10 @@ function* chargeCard(orderId: string, cents: number) {
 
 ## Retries
 
-`restate.run` retries a thrown error until it succeeds, unless you set a
-policy:
+Without a `retry` option, a thrown error falls back to the invocation's
+retry policy. The server default retries with backoff and, after 70
+attempts, pauses the invocation until someone resumes it. Set a policy on
+the run to bound it:
 
 ```ts
 const retry = {
@@ -78,5 +80,14 @@ Catch terminal errors from a child call with `try`/`catch` around its
 ## Cancellation
 
 Cancelling an invocation (from the UI, the CLI, or `ref.cancel()`) raises a
-`TerminalError` at the handler's next `yield*`. Catch it to run compensation,
-then rethrow. Cancellation also propagates to calls the handler is awaiting.
+`CancelledError`, a `TerminalError` subclass, at the handler's next `yield*`.
+Catch it to run compensation, then rethrow. Cancellation also propagates to
+calls the handler is awaiting.
+
+`task.interrupt()` on a spawned task raises `restate.InterruptedError` inside
+that task. It is a plain `Error`, not a terminal one; treat it like
+cancellation and let it propagate.
+
+To retry after a delay the server names, for example an HTTP `Retry-After`,
+throw `RetryableError.from(cause, {retryAfter: {seconds: 30}})` from the
+`run` closure.

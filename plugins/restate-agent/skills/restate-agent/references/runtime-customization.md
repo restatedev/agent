@@ -1,73 +1,77 @@
 # Customize control, context and lifecycle
 
-Use this when a request is phrased as behavior (“let me steer a running agent,”
-“remember only useful facts,” “stream updates,” “run on a different sandbox”).
-First read `docs/agent-guide.md` and the relevant source. The owners below
-refer to `packages/libs/core/src/` unless a path starts at the repo root.
+Use this when a request is phrased as behavior: "let me approve risky
+actions", "remember only useful facts", "run this every morning". First
+read `docs/agent-guide.md` and the source of the owner below.
 
-## Steer, interrupt, and ask for approval
+Routing (`ask`, `steer`, `interrupt`, `deliver`), turn end, sub-agents and
+live UI updates are in `references/agent-controller.md`.
 
-| Request | Owner and path | Preserve |
+## Approvals and cancellation
+
+| Request | Owner | Keep |
 | --- | --- | --- |
-| Queue, steer, interrupt or deliver external input | `agent/turns.ts`, `agent/active-turn.ts`, `session/steering.ts` | Agent stays responsive; ordered signals reconcile with the active turn and its consumed-steering count. |
-| Require approval for a proposed action | `session/step.ts`, `session/approvals.ts`, `agent/approvals.ts` | Guardrail approval gates the exact proposal. A turn-scoped signal resumes it; rejection and steering are handled by the active turn. |
-| Let the model ask a human explicitly | `tools/approval.ts`, `session/approvals.ts` | `humanApproval` is a pending tool, distinct from guardrail approval. |
-| Cancel an in-flight operation | `tools/operations.ts`, `session/pending.ts` | Stop and join only the operation ID owned by this turn; completed external effects cannot be undone. |
-| Delegate to another agent | `agent/sub-agents.ts`, `tools/sub-agents.ts` | Children have separate state and a creation-time profile copy; parent waits for an exact child turn. |
+| Require approval for an action the model proposes | `session/guardrails.ts` (`guardAction`), `session/step.ts`, `agent/approvals.ts` | The guardrail approval gates that exact proposal. A signal scoped to the turn resumes it. The active turn handles rejection and steering |
+| Let the model ask a person explicitly | `tools/approval.ts`, `session/approvals.ts` | `humanApproval` is a pending tool, separate from guardrail approval |
+| Cancel an operation in flight | `tools/operations.ts`, `session/pending.ts` | Stop and join only the operation ID this turn owns. A finished external effect cannot be undone |
 
-Read `docs/turn-runtime.md` for signal ordering, pending-work races and
-interruption. Do not have an exclusive Agent handler wait for a call back into
-the same key. A new approval or cancellation path needs an Agent contract,
-client/UI operation where exposed, and tests for stale decisions, steering,
-and replay.
+Read `docs/turn-runtime.md` for the signal order, the races with pending
+work, and interruption. A new approval or cancellation path needs:
+
+- an Agent contract, and a client and UI operation if it is exposed;
+- tests for stale decisions, steering and replay.
 
 ## Decide which context to change
 
-| Desired behavior | Current mechanism and owner |
+| Desired behavior | Mechanism and owner |
 | --- | --- |
-| Change durable conversation record | Append events through `session/history.ts`; update event schema and projection in `references/agent-handlers.md`. |
-| Summarize older finished turns | Background `session/history.ts` + `model/compactor.ts` checkpoint. The public event log remains append-only. |
-| Reduce a long active turn's model input | `session/turn-compaction.ts` makes a journaled handoff note before model calls. Configure window/threshold in `agent-config.ts`. |
-| Remember facts across turns | `agent/memories.ts` owns a per-agent index and content keys. The turn receives a count; tools search descriptions, then read selected content. |
+| Change the durable conversation record | Append events through `session/history.ts`. A new event type follows `references/agent-handlers.md#add-a-transcript-event` |
+| Summarize older finished turns | A background checkpoint: `session/history.ts` and `model/compactor.ts`. The public event log stays append-only |
+| Shrink a long turn's model input | `session/turn-compaction.ts` writes a journaled handoff note before a model call. The window and threshold are in `agent-config.ts` |
+| Remember facts across turns | `agent/memories.ts` keeps a per-agent index and one key per memory. The turn gets only the count; tools search the descriptions, then read the chosen content |
 
-The two compactions have different lifetimes; neither replaces searchable
-memories. Before adding “automatic memory,” decide who writes it, when it is
-read, and whether it belongs to one agent or a user account. User-wide memory
-requires the app layer in `references/app-layer.md`. See
-`docs/architecture.md#context-and-delegation` and
+The two compactions have different lifetimes, and neither replaces the
+searchable memories. Before adding "automatic memory", decide:
+
+- who writes a memory, and when;
+- when it is read;
+- whether it belongs to one agent or to a user account. User-wide memory
+  needs the app layer in `references/app-layer.md`.
+
+See `docs/architecture.md#context-and-delegation` and
 `docs/turn-runtime.md#working-context-compaction`.
 
-## Update the UI or run work later
+## Run work later
 
-For live UI updates, publish an invalidation topic in
-`agent/notifications.ts`. Add the topic to the notification schema and
-client snapshot if new; serve authoritative data from its owner. The browser
-captures a revision before reading state, drains sequenced
-`AgentSession.history`, then long-polls `Agent.watch({afterRevision})` and
-re-reads changed topics. The watch response carries revisions, not content.
-Start with `references/agent-handlers.md` and `docs/protocol.md#history-and-notifications`.
+For a timer or a recurring message, extend `agent/schedules.ts`, the
+`createSchedule` and `cancelSchedule` handlers, and their tools.
 
-For a timer or recurring message, extend `agent/schedules.ts` and the
-`createSchedule`/`cancelSchedule` handlers and tools. Current firings deliver
-to the **same** agent with an explicit queue/steer/interrupt busy policy.
-There is no scheduler object or fresh sub-agent per firing. A user-wide
-calendar, cron history, or per-run agent is a new app-layer design; read
-`docs/schedules.md` before choosing its owner.
+- A firing delivers to the **same** agent, with an explicit
+  `queue`/`steer`/`interrupt` busy policy, and coalesces with itself.
+- There is no scheduler object, and no fresh sub-agent per firing.
+- A user-wide calendar, a run history or an agent per run is a new
+  app-layer design. Read `docs/schedules.md` before choosing its owner.
 
-For a different compute platform, persistent workspace, or sandbox-backed
-tool, read `references/sandboxes.md`. The turn owns acquisition and release;
-the provider owns the external operations.
+## Other compute
 
-## New platform features
+For a different compute platform, a persistent workspace or a
+sandbox-backed tool, read `references/sandboxes.md`. The turn owns when
+the sandbox is acquired and released; the provider owns the external
+operations.
 
-Turn- or user-level token-usage budgets and an eval service are possible
-extensions. The reference already has a per-call output ceiling and one
-truncation-recovery attempt (`AGENT_MODEL_MAX_OUTPUT_TOKENS`; see
-`docs/turn-runtime.md#model-output-budgets-and-recovery`). An aggregate budget
-would need a scope (turn, user, or sub-agent tree), an owner to reserve and
-reconcile usage, and a rule for what parallel children may spend before a
-parent sees their cost. For evals, define the scenario inputs, recorded
-outcome, and whether scoring belongs in test code or an
-independently deployed service. Add a new virtual object only if it needs its
-own durable identity and lifecycle. Do not describe these ideas as existing
-capabilities.
+## Features that do not exist yet
+
+Turn- or user-level token budgets and an eval service are possible
+extensions. Do not describe them as existing.
+
+- **Budgets.** Today there is a per-call output limit with one recovery
+  attempt after truncation (`AGENT_MODEL_MAX_OUTPUT_TOKENS`; see
+  `docs/turn-runtime.md#model-output-budgets-and-recovery`). An aggregate
+  budget needs a scope (a turn, a user or a sub-agent tree), an owner that
+  reserves and reconciles usage, and a rule for what parallel children may
+  spend before the parent sees their cost.
+- **Evals.** Define the scenario inputs, the recorded outcome, and whether
+  scoring belongs in test code or in an independently deployed service.
+
+Add a new virtual object only if it needs its own durable identity and
+lifecycle.

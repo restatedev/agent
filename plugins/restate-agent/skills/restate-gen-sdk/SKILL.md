@@ -68,7 +68,7 @@ handler.
 | 9   | Wait for the outside world                       | `restate.sleep`, `restate.awakeable`, `restate.signal`, `invocation(id).signal(name)` | `references/waiting-and-signals.md`     |
 | 10  | A multi-step process with its own ID             | `restate.workflow`, `restate.workflowPromise`                                         | `references/waiting-and-signals.md`     |
 | 11  | Contracts shared between teams or tools          | `restate.iface.*`, `restate.implement`                                                | `references/composition.md`             |
-| 12  | Serve, register, call, and test                  | `serve`, `restate deployments register`, `clients.connect`, `RestateTestEnvironment`  | `references/running-and-testing.md`     |
+| 12  | Serve, register, call, and test                  | `serve`, `restate deployments register`, `connect`, `RestateTestEnvironment`          | `references/running-and-testing.md`     |
 
 To compose a bigger application, read `references/patterns.md`. It shows how
 the blocks above combine into orchestrators, sagas, entities, pub/sub feeds,
@@ -96,8 +96,10 @@ and human-in-the-loop flows.
 - [ ] Spawned tasks are joined, or interrupted and joined, before the handler
       returns; otherwise they are abandoned.
 - [ ] Non-retryable failures throw `TerminalError` (from `@restatedev/restate-sdk`).
-- [ ] Only exclusive object handlers write state. Shared handlers use
-      `restate.sharedState()` and only read.
+- [ ] Only exclusive object handlers and a workflow's `run` write state.
+      Shared handlers use `restate.sharedState()` and only read. A shared
+      handler needs `shared: true` in its options, even when its interface
+      uses `iface.shared.*`.
 - [ ] No cycles of exclusive calls between objects (A→B→A on the same key deadlocks).
 - [ ] The service is registered, called once with curl, and covered by a test
       that replays it (see `references/running-and-testing.md`).

@@ -719,8 +719,11 @@ or separate authorization broker for cluster capabilities.
 5. For a keyed service, ensure the model can know the appropriate key.
 6. Wait for cache refresh, restart this endpoint, or temporarily lower the
    refresh interval while developing.
-7. Start a new turn. Existing turns retain their journaled catalog.
-8. Inspect logs for discovery warnings and the Restate invocation tree for the
+7. Grant the tool to the agent: add its name to the profile's
+   `tools.dynamic`, or switch it on in the UI's tool panel. New agents grant
+   no discovered tools.
+8. Start a new turn. Existing turns retain their journaled catalog.
+9. Inspect logs for discovery warnings and the Restate invocation tree for the
    generic child call.
 
 Choose a built-in when execution needs access to turn-owned pending tasks,

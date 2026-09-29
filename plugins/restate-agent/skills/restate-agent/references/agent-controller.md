@@ -1,129 +1,185 @@
 # Customize the Agent controller
 
-Use this when a request changes how a conversation starts, accepts input while
-busy, ends, exposes state, or coordinates children. `Agent` is a virtual object
-keyed by `agentId`. Its exclusive handlers serialize control decisions;
-`AgentSession.doTurn` executes the model loop and owns history. Paths below are
-relative to `packages/libs/core/src/` unless they begin at the repository root.
-Read `docs/agent-guide.md`, `docs/architecture.md`, and the affected modules
-before editing. `docs/protocol.md` is the source for public wire behavior.
+Use this when a request changes how a conversation starts, takes input while
+busy, ends, exposes state, or coordinates children.
+
+`Agent` is a virtual object keyed by `agentId`. Its exclusive handlers
+serialize control decisions. `AgentSession.doTurn` runs the model loop and
+owns the history. Read `docs/agent-guide.md`, `docs/architecture.md` and the
+modules you change before editing. `docs/protocol.md` is the source for the
+public wire behavior.
 
 ## Route input and reconcile a turn
 
-`agent/turns.ts` owns entry and completion; `agent/active-turn.ts` owns the
-active invocation ID, pending FIFO, and its signals. `agent/start-turn.ts`
-reads the current profile and MCP references, then starts
-`AgentSession.doTurn` with a **one-way send**. Never hold Agent's exclusive
-lock while waiting for the turn it started.
-
-| Request | Idle Agent | Busy Agent |
-| --- | --- | --- |
-| `ask` | Start a turn | Queue the user message FIFO; it does not steer |
-| `steer` | Return `false` | Move queued entries plus the new instruction into an ordered signal, without cancelling current tool work |
-| `interrupt` | Return `false` | Signal graceful interruption; optional replacement input queues for a successor turn |
-| `deliver` | Start a turn | Apply the producer's explicit `queue`, `steer`, or `interrupt` policy |
-
-A coalescing delivery with a `sourceId` is skipped while the same
-`source`/`sourceId` pair is already queued or active. Once interruption has begun, later deliveries queue
-instead of steering or interrupting again. The pending queue and per-turn
-steering batches each have a bound of 32; preserve the 429 behavior when
-changing their representation.
-
-`onTurnEnd` is the reconciliation point, not merely a callback. It accepts
-only the current turn ID; stale or repeated outcomes return `null`. It uses
-`consumedSteering` to put unconsumed steering ahead of the remaining pending
-queue, applies a late accepted interrupt to an otherwise completed or stopped
-outcome, stops that turn's child tasks, and clears its approvals. Only then
-may it start a successor. If a terminal error (for example, invalid MCP
-configuration) prevents a successor from starting, accepted input is requeued. AgentSession appends the
-reconciled outcome to history; Agent never writes that log. Read
-`docs/turn-runtime.md#steering` before changing signal ordering or cleanup.
-
-For routing changes, test busy and idle paths, queue order, coalescing, the
-32-item bounds, duplicate `onTurnEnd`, unconsumed steering, late interrupt,
-and successor-start failure. Start with `packages/libs/core/test/local-agent.test.mjs`.
-
-## Choose handler mode and access boundary
-
-`agent/service.ts` assembles owner modules and assigns each handler its
-concurrency mode, ingress visibility, and completed-invocation retention.
-
-| Caller or behavior | Mode and check |
+| Module | Owns |
 | --- | --- |
-| Mutate Agent state | Exclusive handler; validate its precondition explicitly with `agent/guards.ts` |
-| Read state while a turn is active, or long-poll | Shared handler using `restate.sharedState()`; it must not write Agent state |
-| Direct UI/ingress mutation of a top-level agent | `requireDirectAccess()` checks live and top-level; the backend must additionally check user ownership if an app layer is added |
-| Internal turn callback | `ingressPrivate` plus the current, non-interrupting `turnId`; use `requireTurnTool` when the handler must independently enforce a named built-in grant, or `activeTurn.accepting` when dispatch has already enforced the grant |
-| Parent/child coordination | `ingressPrivate`, with exact parent identity and child turn checks |
+| `agent/turns.ts` | Entry points and turn end |
+| `agent/active-turn.ts` | The active turn ID, the pending queue, the signals to the turn, and the one-way send that starts `doTurn` |
+| `agent/start-turn.ts` | The snapshot a turn starts with |
 
-`shared` is a concurrency choice, not permission to expose data to any
-caller. Read-only handlers in this local reference rely on trusted ingress;
-a multi-user backend must authorize reads as well as writes. Keep
-`ingressPrivate` on coordination handlers that would bypass turn or grant
-checks if invoked directly.
+The controller never waits for the turn it started. It starts `doTurn` with
+a one-way send, so the turn can call back into `Agent` while it runs.
 
-Use the existing policies in `retention.ts` when registering a handler:
-`askRetention`, `interactionRetention`, `coordinationRetention`, or
-`noRetention`. They govern **completed invocation** journals and idempotency
-records, not Agent state or an active turn. Pick retention for the caller's
-retry/duplicate semantics; do not add a new handler without an explicit
-choice in `agent/service.ts`. See `references/agent-handlers.md` for the
-contract, client, UI, and test steps.
+| Request | Idle agent | Busy agent |
+| --- | --- | --- |
+| `ask` | Start a turn | Queue the message; it does not steer |
+| `steer` | Return `false` | Send the queued entries and the new instruction to the turn as one batch, without cancelling tools. Return `false` if the turn is already interrupting |
+| `interrupt` | Return `false`; a `message` is dropped | Signal a graceful stop and stop the turn's child tasks. A `message` queues for the next turn |
+| `deliver` | Start a turn | Apply the producer's `whenBusy`: `queue`, `steer` or `interrupt` |
 
-## Create, snapshot, and retire an Agent
+Details that are easy to break:
 
-A top-level agent may be created implicitly by its first `ask`, or configured
-first with `initialize({name, profile?})`. `initialize` is retry-safe and
-keeps parent metadata immutable. `agent/start-turn.ts` snapshots
-instructions, guardrails, tool grants, web-search preference, memory count,
-and allowed MCP references before recording the active turn. Profile edits
-apply on the next turn; memory tools read and write live Agent state during
-the current one. `agent/profile.ts`, `agent/memories.ts`, and
-`agent/guards.ts` own these boundaries.
+- A second `interrupt` returns `false`, unless it carries a `message`,
+  which is queued.
+- Once an interrupt has begun, later deliveries queue instead of steering
+  or interrupting again.
+- A coalescing delivery is skipped while one with the same
+  `source`/`sourceId` pair is queued or part of the active turn.
+- The pending queue holds at most 32 user messages. Deliveries do not count
+  towards that limit, and requeued input bypasses it.
+- A turn takes at most 32 steering batches.
+- Both limits reject with 429. Keep that when changing how they are stored.
 
-`retire` in `agent/lifecycle.ts` marks the ID deleted so it cannot be started
-again. It drops queued input; stops child tasks; interrupts the active turn;
-clears approvals, schedules, profile, and memories; retires children; and
-one-way sends `AgentSession.retire`. Keep metadata for idempotent retirement
-and the active turn until it reports its terminal outcome. The session
-retirement queues behind that turn, which still needs to call Agent. Retained
-conversation history is not a data-purge API. Test repeat retirement, late
-callbacks, and cleanup that races a running turn.
+### Turn end
+
+`onTurnEnd` is where the controller reconciles a finished turn. In order:
+
+1. It accepts only the current turn ID. A stale or repeated outcome returns
+   `null`.
+2. It uses `consumedSteering` to put the steering the turn never saw ahead
+   of the rest of the queue.
+3. A late interrupt turns a `completed` or `stopped` outcome into an
+   interrupted one.
+4. It stops the turn's child tasks and clears its approvals.
+5. Only then does it start the next turn. If that start fails with a
+   terminal error (for example, invalid MCP configuration), the accepted
+   input is requeued.
+
+`AgentSession` appends the reconciled outcome to the history; `Agent` never
+writes the history. Read `docs/turn-runtime.md#steering` before changing
+the signal order or the cleanup.
+
+For routing changes, test in `test/local-agent.test.mjs`:
+
+- the busy and idle paths, and the queue order;
+- coalescing and both 32-item limits;
+- a duplicate `onTurnEnd`, unconsumed steering and a late interrupt;
+- a failed start of the next turn.
+
+## Choose handler mode and access
+
+`agent/service.ts` puts the owner modules together. It gives each handler
+its concurrency mode, its ingress visibility and its retention.
+
+| Caller | Mode and check |
+| --- | --- |
+| A mutation of Agent state | Exclusive. Check the precondition with a guard from `agent/guards.ts` |
+| A read while a turn is active, or a long poll | Shared, with `restate.sharedState()`. It never writes Agent state |
+| A direct UI or ingress mutation of a top-level agent | `requireDirectAccess()`: the agent is live and top-level. Child interruption and approval resolution have their own checks |
+| A tool in the active turn | `ingressPrivate`, and the tool's current, non-interrupting `turnId`. Use `requireTurnTool(turnId, "toolName", ...)` when the handler must enforce a tool grant itself, or `activeTurn.accepting(turnId)` when the tool dispatch already did |
+| A parent or a child agent | `ingressPrivate`, with checks on the exact parent and child turn |
+
+`shared` is a concurrency mode, not permission to expose data. The local
+reference trusts ingress. A multi-user backend must authorize reads as well
+as writes, and check ownership before every Agent call. Keep
+`ingressPrivate` on coordination handlers that would bypass the turn or
+grant checks if called directly.
+
+Pick a retention policy from `retention.ts` for every new handler:
+`askRetention`, `interactionRetention`, `coordinationRetention` or
+`noRetention`. (`executionRetention` is for `AgentSession`'s long
+invocations.) Retention governs the journals and idempotency records of
+**completed** invocations, not Agent state or an active turn. Choose it for
+the caller's retry and duplicate semantics.
+
+`references/agent-handlers.md` has the steps for the contract, the client,
+the UI and the tests.
+
+## Create, snapshot and retire an agent
+
+A top-level agent is created by `initialize({name, profile?})`, or
+implicitly by its first `ask` or `deliver` (a schedule firing is a
+delivery).
+
+- `initialize` is safe to retry, and the parent is immutable.
+- After an implicit creation, `initialize` does nothing: its name and
+  profile are ignored.
+
+`agent/start-turn.ts` snapshots the turn's inputs before it records the
+active turn:
+
+- the instructions and guardrails;
+- the tool grants and the web-search preference;
+- the memory count;
+- the references of the allowed MCP servers.
+
+Profile edits apply from the next turn. Memory tools read and write live
+Agent state during the current turn. `agent/profile.ts`,
+`agent/memories.ts` and `agent/guards.ts` own these boundaries.
+
+`retire` (`agent/lifecycle.ts`) marks the ID deleted, so it cannot start
+again. Then it:
+
+1. drops the queued input;
+2. stops child tasks and interrupts the active turn;
+3. clears approvals, schedules, the profile and memories;
+4. retires the children;
+5. sends `AgentSession.retire` one way.
+
+It keeps the metadata, so a repeated retire is a no-op, and it keeps the
+active turn until that turn reports its outcome. `AgentSession.retire`
+queues behind that turn, which still needs to call `Agent`. The retained
+history is not a data-purge API.
+
+Test a repeated retire, late callbacks, and cleanup that races a running
+turn (`test/agent-deletion.test.mjs`).
 
 ## Delegate without widening access
 
-`agent/sub-agents.ts` stores direct children and the exact child turns started
-by parent tool calls. Child IDs derive from parent ID, turn ID, and tool-call
-ID, so retries name the same child. A child receives a creation-time copy of
-instructions, guardrails, and effective grants, possibly narrowed by the
-parent request; its memory starts empty. It cannot create children or
-schedules, and new MCP connections are not automatically granted.
+`agent/sub-agents.ts` stores the direct children and the exact child turns
+that parent tool calls started.
 
-Parent handlers validate the live turn and requested tool, then record the
-child invocation ID. The parent **session** waits for that invocation; the
-controller stays responsive. Interruption, turn end, deletion, or an
-abandoned program branch must stop only the recorded child turn, never a
-newer follow-up. Child-side handlers verify the owning parent; cleanup checks
-the exact child turn. Direct users may inspect, approve, or interrupt a child
-but do not submit its
-tasks. Read `docs/tools.md#sub-agents` and test with
-`packages/libs/core/test/sub-agent-delegation.test.mjs` and
-`packages/libs/core/test/sub-agent.test.mjs`.
+- A child ID derives from the parent ID, the turn ID and the tool call ID,
+  so a retry names the same child.
+- A child gets a copy of the parent's instructions, guardrails and grants
+  at creation, possibly narrowed by the parent. Its memory starts empty.
+- A child cannot create children or schedules. New MCP servers are not
+  granted to it automatically.
+- Parent handlers check the live turn and the tool, then record the child's
+  invocation ID. The parent **session** waits for that invocation, so the
+  controller stays responsive.
+- An interrupt, the turn's end, deletion or an abandoned program branch
+  stops only the recorded child turn, never a newer one.
+- Users may inspect a child, resolve its approvals and interrupt it, but
+  not give it tasks.
 
-## Notify clients without duplicating state
+Read `docs/tools.md#sub-agents`. Test with
+`test/sub-agent-delegation.test.mjs` and `test/sub-agent.test.mjs`.
 
-`agent/notifications.ts` stores a global revision and watermarks for
-`history`, `profile`, `approvals`, and `schedules`. A writer publishes its
-topic; AgentSession sends `publish("history")` after appending history.
-Notifications contain invalidation only. Read authoritative history from
-AgentSession and other current state from Agent.
+## Notify clients without copying state
 
-`watch` is shared so its wait does not block Agent's exclusive lock. Its
-exclusive `subscribe` rechecks the revision before parking the watcher,
-closing the read/subscribe race. Timeout removes the subscription;
-cancellation sends an unsubscribe. A client captures a revision **before** reading state, drains
-sequenced history pages, then watches from that revision and re-reads changed
-topics. A new topic needs a schema key, stored watermark, publisher, and
-client invalidation path. Read `docs/protocol.md#history-and-notifications`
-and test missed-update and timeout paths in
-`packages/libs/core/test/local-agent.test.mjs`.
+`agent/notifications.ts` stores a global revision and a watermark for each
+topic: `history`, `profile`, `approvals` and `schedules`.
+
+- A module that writes a topic publishes it. `AgentSession` publishes
+  `history` after it appends to the history.
+- A notification carries revisions, never data. Read the history from
+  `AgentSession` and everything else from `Agent`.
+- `watch` is shared, so its wait does not hold the Agent's lock. Its
+  exclusive `subscribe` checks the revision again before parking, which
+  closes the race between reading and subscribing. A timeout removes the
+  subscription, and cancellation sends an unsubscribe.
+
+A client syncs like this. In the reference UI, the Next.js server does it
+for the browser (`packages/apps/web/src/server/agent-snapshot.ts`):
+
+1. Capture a revision **before** reading any state.
+2. Read the state, and page through the sequenced
+   `AgentSession.history`.
+3. Call `watch({afterRevision})`, then re-read only the topics that
+   changed.
+
+A new topic needs a key in `AgentNotificationTopicSchema`, a stored
+watermark, a publisher and a client path that re-reads it. Read
+`docs/protocol.md#history-and-notifications`, and test missed updates and
+timeouts in `test/local-agent.test.mjs`.
