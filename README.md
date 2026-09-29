@@ -1,8 +1,7 @@
 # A reference architecture for durable agents
 
-An agent can be halfway through tool calls when the user changes direction—or
-waiting a day for approval when its service restarts. Those events should not
-erase finished work or leave the user unable to control the turn.
+Build agents that stay responsive while tools run, wait durably for people,
+and recover after process restarts.
 
 This runnable TypeScript reference shows how to build that with
 [Restate](https://restate.dev). Run its stateless service on your container
