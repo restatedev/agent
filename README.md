@@ -1,14 +1,49 @@
-# A reference agent architecture
+# A reference architecture for durable agents
 
-A complete agent, built on [Restate](https://restate.dev). Every feature a
-modern agent needs is here as a small module you can read in one sitting,
-and Restate keeps each turn running through crashes and days-long waits.
+Build stateful, steerable agents with [Restate](https://restate.dev) and run the
+service on your container platform or serverless provider. This runnable
+TypeScript reference shows how a responsive controller, durable turns,
+parallel tools, and sub-agents fit together. Restate holds the journal, agent
+state, messages, and timers, so the agent needs no separate database, queue,
+or scheduler.
 
-[Features](#features) · [One turn, start to finish](#one-turn-start-to-finish) ·
-[How a turn works](#how-a-turn-works) · [Quickstart](#quickstart) ·
+[Architecture](#how-it-fits-together) · [Key ideas](#most-important-bits) ·
+[Features](#full-list-of-features) · [Quickstart](#quickstart) ·
 [Documentation](docs/README.md)
 
-## Features
+## How it fits together
+
+```mermaid
+flowchart TB
+  Client["Client / UI"] -->|ask, steer, interrupt, approve| Controller["Agent controller"]
+  Controller -->|start or signal a turn| Turn["AgentSession.doTurn"]
+  Turn -->|model step| Model["Model"]
+  Turn -->|parallel calls| Tools["Tools"]
+  Turn -->|delegate| Children["Child agents"]
+  Restate[("Restate: state, journal, messages, timers")] --- Controller
+  Restate --- Turn
+```
+
+`Agent` handles incoming messages without waiting for the turn. `AgentSession`
+runs one turn at a time for the same agent ID; child agents have their own IDs,
+conversations, and sandboxes.
+
+## Most important bits
+
+- **A durable turn and a stable handle.** Each `AgentSession.doTurn` invocation
+  has a `turnId` that survives process restarts. Restate reuses recorded model
+  and tool results on replay, then continues unfinished work.
+- **Responsive control.** The `Agent` controller routes steering, interruption,
+  and approvals to the active turn. Interrupting a parent also stops its active
+  delegated child work. A turn can wait for a person without holding a process.
+- **State owned by each agent.** `Agent` stores the profile and memories;
+  `AgentSession` stores an append-only transcript and summary checkpoint. A
+  turn builds model context from a profile snapshot and conversation history.
+- **Concurrent tools and sub-agents.** Tool calls in one model response run in
+  parallel within the turn. Sub-agents run as separate conversations with
+  their own state and sandboxes.
+
+## Full list of features
 
 <table>
 <tr>
@@ -25,7 +60,7 @@ and Restate keeps each turn running through crashes and days-long waits.
 </tr>
 <tr>
 <td><strong><a href="docs/tools.md#programmatic-tool-calling-ptc">Programmatic tool calls</a></strong><br>The model writes a small program; only its result enters the context.</td>
-<td><strong><a href="docs/architecture.md#control-and-history">Compaction</a></strong><br>Long conversations and long turns are summarized, recent steps kept verbatim.</td>
+<td><strong><a href="docs/architecture.md#control-and-history">Compaction</a></strong><br>Conversation history compacts in the background; a long turn can compact its working context.</td>
 </tr>
 <tr>
 <td><strong><a href="docs/schedules.md">Schedules</a></strong><br>Messages to the agent later, once or on a recurrence. No cron.</td>
@@ -39,12 +74,68 @@ and Restate keeps each turn running through crashes and days-long waits.
 <td><strong><a href="docs/tools.md#dynamically-discovered-restate-tools">Extensible tools</a></strong><br>One module per tool, plus MCP servers and Restate handlers.</td>
 <td><strong><a href="docs/turn-runtime.md#model-output-budgets-and-recovery">Output recovery</a></strong><br>A truncated response gets one retry with a bigger output budget.</td>
 </tr>
+<tr>
+<td><strong><a href="docs/protocol.md#history-and-notifications">UI updates</a></strong><br>The UI long-polls for changes, then reads history from a sequence cursor.</td>
+<td><strong><a href="docs/architecture.md#external-effects-and-credentials">Crash recovery</a></strong><br>Replay reuses recorded results and continues unfinished work.</td>
+</tr>
 </table>
 
-## One turn, start to finish
+## Quickstart
 
-Here is one turn, from the first message to the answer, and what Restate
-does for it along the way.
+You need Node.js 22+, pnpm, the Restate server and CLI, and an OpenAI API key.
+
+```sh
+pnpm install
+```
+
+Start Restate in one terminal:
+
+```sh
+RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true restate-server
+```
+
+Start the agent service in a second terminal:
+
+```sh
+export OPENAI_API_KEY=your-api-key
+pnpm dev:service
+```
+
+Once the service is listening on port 9080, register it from a third terminal:
+
+```sh
+restate deployments register http://localhost:9080
+```
+
+Talk to an agent through Restate ingress on port 8080. Any agent ID works;
+the first message creates the agent.
+
+```sh
+# Start a turn (or queue the message if one is running)
+curl localhost:8080/Agent/demo/ask --json '{"message":"What is the weather in Berlin?"}'
+
+# Redirect the running turn without cancelling its tools
+curl localhost:8080/Agent/demo/steer --json '{"message":"Use Fahrenheit"}'
+
+# Stop it, optionally queueing a replacement request
+curl localhost:8080/Agent/demo/interrupt --json '{"reason":"Changed my mind"}'
+
+# Read the conversation log
+curl localhost:8080/AgentSession/demo/history --json '{"fromSequence":1,"limit":100}'
+```
+
+Or chat in the reference UI: run `pnpm dev:ui` and open
+[http://127.0.0.1:3000/?agent=demo](http://127.0.0.1:3000/?agent=demo).
+
+**Try this:** ask it to sleep for four minutes, then kill `pnpm dev:service`
+and start it again. The turn picks up where it was, and the Restate UI
+(`http://localhost:9070`) shows every model call and tool result in the
+turn's journal.
+
+## Four execution scenarios
+
+These examples show separate paths through the same architecture: parallel
+work, live control, approval waits, and crash recovery.
 
 ### 1. It calls tools in parallel
 
@@ -79,36 +170,23 @@ and finishes](docs/images/durable-wait.svg)
 
 ### 4. It survives a crash
 
-Every model call and tool result is in the turn's journal. If the process
-dies, Restate replays the journal: nothing is asked or run twice, and the
-turn finishes.
+Recorded model responses and tool results stay in the turn's journal. If the
+process dies, Restate replays those results and continues unfinished work.
 
 ![Animation: a turn journals a model call and three tool results, the process
 crashes, and after restart Restate replays the journal, reuses every recorded
 result and the turn finishes](docs/images/durable-turn.svg)
 
-## Why Restate
+## Durability and deployment
 
-Every feature above gets the same guarantees, because they come from Restate
-rather than from each feature:
+Replay reuses results only after they have been recorded. If an external call
+completes but its result has not reached the journal when the service fails,
+that call may run again. Use idempotency keys for external writes.
 
-- **A crash resumes the turn.** Restate replays the turn's journal. Recorded
-  model responses and tool results are reused, so the model is never asked
-  to repeat a decision and completed tool calls are not re-run.
-- **New versions don't break running turns.** Restate keeps each turn on
-  the service version it started on; new turns use the new version.
-- **Waiting is free.** A turn can wait hours or days for an approval, a timer
-  or a sub-agent. While it waits it holds no process, only stored state.
-- **Always responsive.** `ask`, `steer` and `interrupt` return right away,
-  even while a turn runs for minutes.
-- **Nothing else to operate.** State, messages, timers and notifications all
-  live in Restate: no database, queue or scheduler of the agent's own. Each
-  agent's state has a single owner, so there are no locks. The service is
-  stateless: it scales out, or builds into a single bundle for serverless.
-
-**What replay does not do:** make external side effects exactly-once. A crash
-between an MCP call completing and its result being recorded can repeat that
-call.
+Restate keeps a running turn on the service version where it started; new
+turns use the new version. Keep the old endpoint available until its turns
+finish. A turn waiting on approval, a timer, or a sub-agent holds stored state
+instead of a process.
 
 ## How a turn works
 
@@ -204,44 +282,3 @@ install it when you open this repository. You can also install it by hand:
 # Other coding agents
 npx skills add restatedev/agent
 ```
-
-## Quickstart
-
-You need Node.js 22+, pnpm, the Restate server and CLI, and an OpenAI API key.
-
-```sh
-pnpm install
-
-# Terminal 1: Restate, with the SDK features this example uses
-RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true restate-server
-
-# Terminal 2: the agent service on port 9080, registered with Restate
-export OPENAI_API_KEY=your-api-key
-pnpm dev:service
-restate deployments register http://localhost:9080
-```
-
-Talk to an agent through Restate ingress on port 8080. Any agent ID works;
-the first message creates the agent.
-
-```sh
-# Start a turn (or queue the message if one is running)
-curl localhost:8080/Agent/demo/ask --json '{"message":"What is the weather in Berlin?"}'
-
-# Redirect the running turn without cancelling its tools
-curl localhost:8080/Agent/demo/steer --json '{"message":"Use Fahrenheit"}'
-
-# Stop it, optionally queueing a replacement request
-curl localhost:8080/Agent/demo/interrupt --json '{"reason":"Changed my mind"}'
-
-# Read the conversation log
-curl localhost:8080/AgentSession/demo/history --json '{"fromSequence":1,"limit":100}'
-```
-
-Or chat in the reference UI: run `pnpm dev:ui` and open
-[http://127.0.0.1:3000/?agent=demo](http://127.0.0.1:3000/?agent=demo).
-
-**Try this:** ask it to sleep for four minutes, then kill `pnpm dev:service`
-and start it again. The turn picks up where it was, and the Restate UI
-(`http://localhost:9070`) shows every model call and tool result in the
-turn's journal.
