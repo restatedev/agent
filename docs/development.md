@@ -9,7 +9,8 @@ semantics.
 - Node.js 22 or newer
 - pnpm
 - Restate Server and CLI
-- an API key for the model provider: OpenAI by default, or Anthropic or Google
+- an API key for the model provider (OpenAI by default), or a local
+  OpenAI-compatible server such as Ollama for open models
   (see [configuration](configuration.md#models))
 - optionally, Modal credentials for remote sandboxes
 

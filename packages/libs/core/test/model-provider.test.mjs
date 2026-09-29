@@ -83,3 +83,50 @@ test("a model ID without a known provider fails terminally before any request", 
   }
   assert.equal(fetch.mock.callCount(), 0);
 });
+
+test("each provider sends the call to its own endpoint", async (t) => {
+  const configured = agentConfig.models.agent;
+  t.after(() => {
+    agentConfig.models.agent = configured;
+  });
+  setEnv(t, "ANTHROPIC_API_KEY", "fixture-not-a-real-api-key");
+  setEnv(t, "GOOGLE_GENERATIVE_AI_API_KEY", "fixture-not-a-real-api-key");
+  setEnv(t, "XAI_API_KEY", "fixture-not-a-real-api-key");
+  setEnv(t, "DEEPSEEK_API_KEY", "fixture-not-a-real-api-key");
+  setEnv(t, "OPENAI_COMPATIBLE_BASE_URL", "http://localhost:11434/v1");
+
+  const endpoints = {
+    "anthropic:claude-sonnet-5": "https://api.anthropic.com/v1/messages",
+    "google:gemini-3.8-flash":
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+    "xai:grok-4": "https://api.x.ai/v1/responses",
+    // Strict tool schemas need DeepSeek's beta endpoint.
+    "deepseek:deepseek-chat": "https://api.deepseek.com/beta/chat/completions",
+    // Everything after the provider is the model name, colons included.
+    "openai-compatible:qwen3:32b": "http://localhost:11434/v1/chat/completions",
+  };
+  for (const [id, endpoint] of Object.entries(endpoints)) {
+    const fetch = respondWith(t, 400);
+    agentConfig.models.agent = id;
+    await assert.rejects(completeAgent(request, signal()), TerminalError);
+    assert.equal(String(fetch.mock.calls[0].arguments[0]), endpoint);
+    fetch.mock.restore();
+  }
+});
+
+test("an OpenAI-compatible model without a base URL fails terminally", async (t) => {
+  const configured = agentConfig.models.agent;
+  t.after(() => {
+    agentConfig.models.agent = configured;
+  });
+  setEnv(t, "OPENAI_COMPATIBLE_BASE_URL", undefined);
+  const fetch = respondWith(t, 500);
+
+  agentConfig.models.agent = "openai-compatible:qwen3:32b";
+  await assert.rejects(completeAgent(request, signal()), (error) => {
+    assert.ok(error instanceof TerminalError);
+    assert.match(error.message, /OPENAI_COMPATIBLE_BASE_URL/);
+    return true;
+  });
+  assert.equal(fetch.mock.callCount(), 0);
+});

@@ -39,9 +39,10 @@ import {webSearchTool} from "./tools/web-search.js";
 
 export const agentConfig = {
   /**
-   * The models, as "provider:model", where the provider is openai, anthropic
-   * or google (see model/provider.ts). Each provider needs its API key in the
-   * service's environment. The three may use different providers.
+   * The models, as "provider:model", where the provider is openai,
+   * anthropic, google, xai, deepseek or openai-compatible (see
+   * model/provider.ts and docs/configuration.md). Each provider needs its API
+   * key in the service's environment. The three may use different providers.
    *
    * A turn keeps one model: its working messages carry that provider's
    * reasoning and tool-call data. Running turns finish on the version they
