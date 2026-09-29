@@ -69,14 +69,10 @@ const text = {
 };
 const signal = () => new AbortController().signal;
 beforeEach((t) => {
-  const oldKey = process.env.OPENAI_API_KEY,
-    oldBudget = process.env.AGENT_MODEL_MAX_OUTPUT_TOKENS;
-  process.env.OPENAI_API_KEY = "fixture-not-a-real-api-key";
+  const oldBudget = process.env.AGENT_MODEL_MAX_OUTPUT_TOKENS;
   delete process.env.AGENT_MODEL_MAX_OUTPUT_TOKENS;
   globalThis.__budgetFixture = {calls: [], results: []};
   t.after(() => {
-    if (oldKey === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = oldKey;
     if (oldBudget === undefined)
       delete process.env.AGENT_MODEL_MAX_OUTPUT_TOKENS;
     else process.env.AGENT_MODEL_MAX_OUTPUT_TOKENS = oldBudget;

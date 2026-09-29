@@ -208,6 +208,8 @@ npx skills add restatedev/agent
 ## Quickstart
 
 You need Node.js 22+, pnpm, the Restate server and CLI, and an OpenAI API key.
+The agent can run on Anthropic or Google models instead; see
+[models](docs/configuration.md#models).
 
 ```sh
 pnpm install

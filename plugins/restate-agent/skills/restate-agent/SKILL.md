@@ -60,7 +60,7 @@ knows no tool by name except its own (`searchTools`, `executeProgram`) and
 | A tool that changes the agent's own durable state | The tool calls an internal `Agent` handler, which checks the live turn's grant | `references/agent-handlers.md` |
 | A new client or UI operation | Contract in `types/src/services.ts`, handler in `agent/`, client method, UI table entry | `references/agent-handlers.md` |
 | A new kind of transcript entry | `ConversationEventSchema` + an explicit relevance decision | `references/agent-handlers.md` |
-| Change models, prompts or the context window | `agent-config.ts`; model plumbing in `model/provider.ts` | this file |
+| Change models, providers, prompts or the context window | `agent-config.ts` (`provider:model` IDs); `PROVIDERS` in `model/provider.ts` | this file |
 | Users, logins, per-user credentials, many agents per account | Add an app layer on top of the agent | `references/app-layer.md` |
 | Test and validate a change | Record/replay tests, then the validation commands | `references/testing.md` |
 

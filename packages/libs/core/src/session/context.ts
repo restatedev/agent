@@ -2,13 +2,12 @@
 // context used by one Turn invocation.
 
 import type {ConversationEntry} from "@restate-agents/types";
-import type {ModelMessage} from "ai";
 
 import {
   type AgentSessionSteering,
   isDerivedConversationEvent,
 } from "../internal-types.js";
-import type {GuardrailApproval} from "../model/index.js";
+import type {GuardrailApproval, ModelMessage} from "../model/index.js";
 import type {McpServerAvailability} from "./mcp-tools.js";
 
 /** A runtime note to the model: a bracketed title and its lines. */
