@@ -148,7 +148,12 @@ test("a message starts a turn and the run ends with its answer", async () => {
       agent.append(
         {role: "user", text: message, delivery: "turn"},
         toolsEvent("t1", "started", [
-          {id: "call-1", name: "getWeather", summary: "Weather in Berlin"},
+          {
+            id: "call-1",
+            name: "getWeather",
+            summary: "Weather in Berlin",
+            input: {city: "Berlin"},
+          },
         ]),
         toolsEvent("t1", "finished", [
           {id: "call-1", name: "getWeather", status: "succeeded"},
@@ -169,7 +174,11 @@ test("a message starts a turn and the run ends with its answer", async () => {
   assert.deepEqual(roles, ["user", "assistant", "tool", "assistant"]);
   const toolCall = client.messages[1].toolCalls[0];
   assert.equal(toolCall.function.name, "getWeather");
-  assert.equal(client.messages[2].content, "succeeded");
+  assert.equal(toolCall.function.arguments, JSON.stringify({city: "Berlin"}));
+  // The history keeps no tool output; the result is the status, as JSON.
+  assert.deepEqual(JSON.parse(client.messages[2].content), {
+    status: "succeeded",
+  });
   assert.equal(newMessages.at(-1).content, "It is sunny in Berlin.");
 });
 
@@ -384,4 +393,52 @@ test("a request that is not a RunAgentInput is rejected", () => {
     () => parseRunInput({threadId: "demo"}),
     (error) => error.status === 400,
   );
+});
+
+test("a resume catches up on the tools that ran next to the approval", async () => {
+  const agent = fakeAgent();
+  agent.turn.ask = () => {
+    later(() => {
+      // One step runs a tool and asks for approval. The approval request is
+      // recorded before the step's results.
+      agent.append(
+        toolsEvent("t1", "started", [
+          {id: "call-w", name: "getWeather", input: {city: "Rome"}},
+          {id: "call-a", name: "humanApproval", input: {question: "Book it?"}},
+        ]),
+      );
+      agent.requestApproval("call-a", "t1", "Book it?");
+      agent.append(
+        toolsEvent("t1", "finished", [
+          {id: "call-w", name: "getWeather", status: "succeeded"},
+          {id: "call-a", name: "humanApproval", status: "pending"},
+        ]),
+      );
+    });
+    return {decision: "start", turnId: "t1", stats: {pendingMessages: 0}};
+  };
+  agent.turn.resolved = (approval) => {
+    later(() => {
+      agent.append(answer(approval.turnId, "Booked. It is sunny in Rome."));
+    });
+  };
+  const client = agUiClient(agent);
+  client.addMessage(userMessage("Check Rome and book it"));
+  await client.runAgent();
+
+  await client.runAgent({
+    resume: [
+      {
+        interruptId: "call-a",
+        status: "resolved",
+        payload: {decision: "approved"},
+      },
+    ],
+  });
+
+  const weatherResult = client.messages.find(
+    (message) => message.role === "tool" && message.toolCallId === "call-w",
+  );
+  assert.deepEqual(JSON.parse(weatherResult.content), {status: "succeeded"});
+  assert.equal(client.messages.at(-1).content, "Booked. It is sunny in Rome.");
 });

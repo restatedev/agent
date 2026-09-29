@@ -273,7 +273,7 @@ async function deliver(
  * answered again.
  */
 async function resume(client: AgUiClient, input: RunAgentInput): Promise<Plan> {
-  const cursor = await tail(client, input.messages);
+  const cursor = await caughtUp(client, input.messages);
   const pending = new Map(
     (await client.approvals()).map((approval) => [
       approval.approvalId,
@@ -468,14 +468,41 @@ function approvalDecision(
  * rather than at the beginning of a long conversation.
  */
 async function tail(client: AgUiClient, messages: Message[]): Promise<number> {
+  const newest = await newestKnown(client, messages);
+  return (await readFrom(client, newest ?? 1)).nextSequence;
+}
+
+/**
+ * Where a resume continues: right after the newest entry the client has.
+ * The interrupted run ended the moment the turn asked for approval, and the
+ * turn can have written more since, such as the results of tools that ran
+ * in the same step. The resume sends those first. Without a known entry it
+ * falls back to the end of history.
+ */
+async function caughtUp(
+  client: AgUiClient,
+  messages: Message[],
+): Promise<number> {
+  const newest = await newestKnown(client, messages);
+  if (newest === undefined) {
+    return tail(client, messages);
+  }
+  return newest + 1;
+}
+
+/** The newest history sequence the client's messages name, if it exists. */
+async function newestKnown(
+  client: AgUiClient,
+  messages: Message[],
+): Promise<number | undefined> {
   const known = messages
     .map((message) => historySequence(message.id))
     .filter((sequence) => sequence !== undefined);
   const newest = Math.max(0, ...known);
-  if (newest > 0 && (await exists(client, newest))) {
-    return (await readFrom(client, newest)).nextSequence;
+  if (newest === 0 || !(await exists(client, newest))) {
+    return undefined;
   }
-  return (await readFrom(client, 1)).nextSequence;
+  return newest;
 }
 
 async function exists(client: AgUiClient, sequence: number): Promise<boolean> {

@@ -98,6 +98,7 @@ The providers are `openai`, `anthropic`, `google`, `xai`, `deepseek` and
 | Run the sandbox on another platform, or add a workspace operation | `references/sandboxes.md` |
 | Change models, providers, prompts or the context window | `agent-config.ts`; see "Models" above |
 | Users, logins, per-user credentials, many agents per account | `references/app-layer.md` |
+| Let a UI run tools itself (AG-UI frontend tools, CopilotKit) | `references/client-tools.md` |
 | Test and validate a change | `references/testing.md` |
 
 ## Turn a request into a change

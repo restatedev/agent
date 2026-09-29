@@ -146,20 +146,20 @@ questions.
 - What did the user and assistant observe?
 - In what order did AgentSession append activated input, steering,
   interruption, approvals, and terminal outcomes?
-- Which tool names started and how did the batch settle?
+- Which tools started, with what input, and how did the batch settle?
 - Did an approval, external-delivery, or lifecycle event occur?
 
 ### The Restate execution trace answers
 
 - What exact model request and response ran?
-- What raw tool input and result were used?
+- What tool results came back, and any input too long for the history?
 - Which child invocation or signal was created?
 - Was an operation replayed, retried, interrupted, or cancelled?
 - Which `restate.run` or handler is currently parked?
 
-The public event log intentionally omits raw reasoning, tool arguments, and
-tool results. Those details belong to the agent trajectory/working context and
-runtime trace.
+The public event log records tool inputs (up to 4,000 characters of JSON)
+but omits raw reasoning and tool results. Those belong to the agent
+trajectory/working context and runtime trace.
 
 ### Useful correlations
 
