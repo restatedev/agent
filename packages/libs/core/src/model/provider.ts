@@ -1,8 +1,11 @@
 // Model inference through the AI SDK, and the contracts the turn consumes.
 
 import {anthropic} from "@ai-sdk/anthropic";
+import {createDeepSeek} from "@ai-sdk/deepseek";
 import {google} from "@ai-sdk/google";
 import {openai} from "@ai-sdk/openai";
+import {createOpenAICompatible} from "@ai-sdk/openai-compatible";
+import {xai} from "@ai-sdk/xai";
 import type {Guardrail} from "@restate-agents/types";
 import {TerminalError} from "@restatedev/restate-sdk";
 import {
@@ -10,10 +13,12 @@ import {
   type AssistantModelMessage,
   generateText,
   jsonSchema,
+  type LanguageModel,
   LoadAPIKeyError,
   type ModelMessage,
   Output,
   type ToolSet,
+  UnsupportedFunctionalityError,
 } from "ai";
 import {z} from "zod";
 
@@ -161,10 +166,45 @@ const GuardrailReviewSchema = z.object({
 /**
  * The providers a model ID in agent-config.ts may name, as "provider:model".
  * Each provider reads its API key from the environment when a call is made
- * (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY), so only
- * the providers the configured models use need a key.
+ * (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY,
+ * XAI_API_KEY, DEEPSEEK_API_KEY), so only the providers the configured
+ * models use need a key.
  */
-const PROVIDERS = {openai, anthropic, google};
+const PROVIDERS: Record<string, (model: string) => LanguageModel> = {
+  openai,
+  anthropic,
+  google,
+  xai,
+  // Built-in tools use strict schemas, which DeepSeek accepts only on its
+  // beta endpoint.
+  deepseek: createDeepSeek({baseURL: "https://api.deepseek.com/beta"}),
+  "openai-compatible": openAICompatible,
+};
+
+/**
+ * Any server that speaks the OpenAI chat completions API: Ollama, vLLM and
+ * LM Studio for open models on your own hardware, or a hosted router such as
+ * OpenRouter or Together. OPENAI_COMPATIBLE_BASE_URL names the server;
+ * OPENAI_COMPATIBLE_API_KEY is optional, since local servers need none.
+ *
+ * The guardrails ask for structured output with a JSON schema, which these
+ * servers support; without it the model would see no schema to follow.
+ */
+function openAICompatible(model: string): LanguageModel {
+  const baseURL = process.env.OPENAI_COMPATIBLE_BASE_URL;
+  if (!baseURL) {
+    throw new TerminalError(
+      `model "openai-compatible:${model}" needs OPENAI_COMPATIBLE_BASE_URL`,
+    );
+  }
+  const provider = createOpenAICompatible({
+    name: "openai-compatible",
+    baseURL,
+    apiKey: process.env.OPENAI_COMPATIBLE_API_KEY,
+    supportsStructuredOutputs: true,
+  });
+  return provider(model);
+}
 
 /** Resolves a "provider:model" ID from agent-config.ts to its model. */
 function languageModel(id: string) {
@@ -177,7 +217,7 @@ function languageModel(id: string) {
       `model "${id}" must be "provider:model", where the provider is one of: ${known}`,
     );
   }
-  return PROVIDERS[provider as keyof typeof PROVIDERS](model);
+  return PROVIDERS[provider](model);
 }
 
 /** Runs one provider call and classifies the failures a retry cannot fix. */
@@ -185,10 +225,13 @@ async function withModel<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (error) {
-    // Restate owns retries. A missing API key, invalid requests and
-    // authentication failures are terminal; throttling and transient provider
-    // failures remain retryable.
-    if (LoadAPIKeyError.isInstance(error)) {
+    // Restate owns retries. A missing API key, a feature the provider does not
+    // support, invalid requests and authentication failures are terminal;
+    // throttling and transient provider failures remain retryable.
+    if (
+      LoadAPIKeyError.isInstance(error) ||
+      UnsupportedFunctionalityError.isInstance(error)
+    ) {
       throw new TerminalError(error.message);
     }
     if (APICallError.isInstance(error) && !error.isRetryable) {
