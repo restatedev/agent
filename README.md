@@ -195,16 +195,35 @@ stream to Restate. That append is the only persistence a step needs.
 - `restate-gen-sdk`: how to write the generator-SDK code the agent is built
   from.
 
-The plugin also connects the Restate docs MCP server. Claude Code offers to
-install it when you open this repository. You can also install it by hand:
+The plugin bundles both skills and the Restate docs MCP server. Codex and
+Claude Code share the same skill files and MCP configuration.
+
+For Codex, install the plugin from a terminal:
 
 ```sh
-# Claude Code
+codex plugin marketplace add restatedev/agent
+codex plugin add restate-agent@restate-agent
+```
+
+Start a new Codex chat after installation. Opening the repository alone does
+not enable the plugin. To install from a local checkout, run
+`codex plugin marketplace add .` from the repository root instead of the
+first command above. Codex supports the existing
+[marketplace catalog](.claude-plugin/marketplace.json) and uses the
+[Codex manifest](plugins/restate-agent/.codex-plugin/plugin.json) to load the
+skills and MCP server.
+
+Claude Code offers to install the plugin when you open this repository.
+You can also install it by hand:
+
+```sh
 /plugin marketplace add restatedev/agent
 /plugin install restate-agent@restate-agent
-# Other coding agents
-npx skills add restatedev/agent
 ```
+
+For other coding agents, install just the skills with
+`npx skills add restatedev/agent`. That command does not configure the
+Restate docs MCP server.
 
 ## Quickstart
 
