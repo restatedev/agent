@@ -8,14 +8,13 @@ import type {
   ConversationEntry,
 } from "@restate-agents/types";
 import {type Operation, run} from "@restatedev/restate-sdk-gen";
-import type {ModelMessage} from "ai";
 
 import {errorMessage, isCancellation} from "../errors.js";
 import {
   type ConversationCompactionInput,
   isDerivedConversationEvent,
 } from "../internal-types.js";
-import {modelProvider} from "./provider.js";
+import {type ModelMessage, modelProvider} from "./provider.js";
 
 /** Summarizes a reserved, immutable transcript prefix for later model context. */
 export function* compactConversation(

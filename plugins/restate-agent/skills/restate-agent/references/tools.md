@@ -188,3 +188,37 @@ export MCP_SERVERS_JSON='[{"id":"docs","type":"http","url":"https://mcp.example.
 
 See `docs/mcp-configuration.md`. For per-user OAuth connections instead of
 operator tokens, see `references/app-layer.md`.
+
+## Reduce tool context and compose calls
+
+For a request like “connect many MCP servers without sending every schema to
+the model,” preserve the two different savings:
+
+| Need | Mechanism | Owner |
+| --- | --- | --- |
+| Fewer tool schemas in the model request | `searchTools` loads matching dynamic/MCP schemas into this turn's model catalog | `session/tool-search.ts`, `session/tools.ts` |
+| Fewer intermediate tool results in model context | `executeProgram` returns only a program's compact JSON result | `session/program-tool.ts`, `ptc/runtime.ts`, `ptc/guest.ts` |
+
+Built-ins remain visible upfront. Search is lexical and turn-local; it selects
+only permitted tools and does not call them. A search inside a running program
+loads schemas for the **next model round**, not the current program. Catalog
+discovery and authorization still happen even when schemas are deferred. Read
+`docs/tools.md#turn-local-tool-search` before changing catalog visibility.
+
+The model writes ordinary `async` JavaScript for `executeProgram`, using tool
+stubs and `Promise.all`/`allSettled` to coordinate calls. This guest code is
+**not** a Restate generator handler: it has no `yield*`, `restate.run`, direct
+I/O, modules, `Date`, or `Math.random`. The host journals tool results and
+their completion order, then re-executes the guest on replay. Every emitted
+call still passes grants and guardrails. A program can await pending tools;
+steering can hand a running program to the turn's pending registry. Keep the
+output small, join branches whose effects must finish, and test replay and
+cancellation when changing the bridge. Read
+`docs/tools.md#programmatic-tool-calling-ptc` and
+`docs/turn-runtime.md#programmatic-tool-calling-ptc` for the limits and exact
+ordering contract.
+
+Dynamic Restate handler discovery is part of the current reference. Its Admin API
+metadata annotation is a trusted capability boundary, not a general user
+connection flow. For user-scoped MCP/OAuth connections, follow
+`references/app-layer.md` instead of passing tokens through a tool schema.

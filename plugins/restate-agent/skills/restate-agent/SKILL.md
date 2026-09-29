@@ -9,7 +9,9 @@ description: >
   server as a tool, adding Agent handlers, transcript events or UI
   operations, changing models or instructions, or growing the reference into
   a full application with users, sessions, credentials and a backend for the
-  web UI.
+  web UI. Also use for natural-language customization requests about tool-context
+  size, programmatic tool calls, steering, approvals, memory, compaction,
+  schedules, sandbox providers, and UI updates.
 ---
 
 # Extending the Restate reference agent
@@ -25,10 +27,12 @@ both keyed by `agentId`, run it:
   and runs one turn at a time in `doTurn`: model call, guardrails, tool
   batch, repeat. The turn's Restate invocation ID is its `turnId`.
 
-Everything in a turn is journaled, so a crash resumes the turn where it
-stopped, and tools, approvals and sub-agents can wait for minutes or days
-without holding a process. Load the `restate-gen-sdk` skill as well: every
-handler and tool here is generator code, and its rules apply.
+Durable operations and completed results are journaled. After a crash, the
+turn replays deterministic code and reuses recorded results; an external effect
+that finished before its result was recorded may run again. Tools, approvals
+and sub-agents can wait for minutes or days without holding a process. Load
+the `restate-gen-sdk` skill as well: every handler and tool here is generator
+code, and its rules apply.
 
 ## Detect context
 
@@ -57,12 +61,34 @@ knows no tool by name except its own (`searchTools`, `executeProgram`) and
 | Wait on a timer, a person or a long job without blocking the turn | A pending tool: `run` returns `pending`, `complete` waits | `references/tools.md` |
 | Expose an existing or separately deployed Restate handler | Annotate it with `restate.dev/agent: <name>`; no code here | `references/tools.md` |
 | Use a remote MCP server | Add it to `MCP_SERVERS_JSON` on the core service | `references/tools.md` |
-| A tool that changes the agent's own durable state | The tool calls an internal `Agent` handler, which checks the live turn's grant | `references/agent-handlers.md` |
+| Keep a large tool catalog out of model context, or compose calls in JavaScript | Use `searchTools` for deferred schemas; use `executeProgram` for compact intermediate results | `references/tools.md` |
+| A tool that changes the agent's own durable state | Call an internal `Agent` handler; check the live turn and enforce the named grant where needed | `references/agent-controller.md`, `references/agent-handlers.md` |
 | A new client or UI operation | Contract in `types/src/services.ts`, handler in `agent/`, client method, UI table entry | `references/agent-handlers.md` |
 | A new kind of transcript entry | `ConversationEventSchema` + an explicit relevance decision | `references/agent-handlers.md` |
-| Change models, prompts or the context window | `agent-config.ts`; model plumbing in `model/provider.ts` | this file |
+| Change `ask`, `steer`, `interrupt`, `deliver`, turn completion, or Agent lifecycle | Preserve routing, reconciliation, and one-way turn start | `references/agent-controller.md` |
+| Change approval or child-agent behavior | Preserve the controller/session split and turn-owned work | `references/agent-controller.md`, `references/runtime-customization.md` |
+| Change memories, compaction or what enters model context | Choose the appropriate state, history, or working-context owner | `references/runtime-customization.md` |
+| Add UI updates or schedules | Extend the existing notification or timer boundary | `references/agent-controller.md`, `references/runtime-customization.md` |
+| Integrate a sandbox provider or add a workspace operation | Keep turn-owned lifecycle and implement the provider/client boundary | `references/sandboxes.md` |
+| Change models, providers, prompts or the context window | `agent-config.ts` (`provider:model` IDs); `PROVIDERS` in `model/provider.ts` | this file |
 | Users, logins, per-user credentials, many agents per account | Add an app layer on top of the agent | `references/app-layer.md` |
 | Test and validate a change | Record/replay tests, then the validation commands | `references/testing.md` |
+
+## Turn a request into a change
+
+When someone describes a product behavior rather than a file or API, first
+locate its owner with the table above and read the linked reference and current
+source. Say which behavior already exists, which part is a customization, and
+which part needs a new app layer. The current reference has operator-configured
+MCP servers with optional environment tokens, per-agent memories and schedules,
+and an optional local UI. It has a per-call model output limit, but no
+turn- or user-level token-usage budget, user OAuth flow, account service, or
+eval service. Do not present an extension pattern as existing code.
+
+Make the requested behavior concrete through its typed contract, owner module,
+turn snapshot (if needed), client/UI path, and replay or protocol test. Prefer
+changing the existing owner; add an object or service only when it has an
+independent key, lifecycle, or deployment need.
 
 ## Working rules
 
@@ -78,7 +104,8 @@ knows no tool by name except its own (`searchTools`, `executeProgram`) and
 - **Trusted values come from the context.** A tool reads `agentId`,
   `turnId` and grants from its `ToolCallContext`, never from model input.
   Handlers that act for a turn take its `turnId` and check it against the
-  controller's live turn (`requireTurnTool`).
+  controller's live turn (`requireTurnTool` or `activeTurn.accepting`, depending
+  on where the named grant is enforced).
 - **The transcript is append-only and public.** Tool arguments, results and
   reasoning never enter it; a tool may add summary `transcript` entries.
 - **Turns replay from their journal.** Code between journaled steps must
@@ -93,9 +120,10 @@ knows no tool by name except its own (`searchTools`, `executeProgram`) and
 
 - [ ] The tool is in `agent-config.ts` `tools`, with a precise `description`
       and, if it needs usage guidance, `instructions`, not `baseInstructions`.
-- [ ] Every side effect is inside `restate.run` / `toolRun`, with a retry
-      policy, and external writes carry an idempotency key (the `toolCallId`
-      is stable across retries).
+- [ ] External I/O uses `restate.run` / `toolRun` with an explicit bounded
+      retry policy, or a durable Restate RPC. External writes use a stable
+      idempotency key where the provider supports one; replay alone does not
+      make them exactly-once.
 - [ ] A pending tool's `complete` derives everything from its input and
       `toolCallId`.
 - [ ] New handlers state shared vs exclusive and `ingressPrivate` for
@@ -103,6 +131,7 @@ knows no tool by name except its own (`searchTools`, `executeProgram`) and
 - [ ] No exclusive call cycle between objects (Agent → X → the same Agent).
 - [ ] Wire schemas in `packages/libs/types` match every caller, and the client
       and UI tables are updated for external handlers.
-- [ ] Tests cover the change, including a replay of the recorded journal.
+- [ ] Tests cover changed behavior; replay tests cover durable effects or
+      turn-control changes.
 - [ ] `pnpm lint && pnpm build && pnpm test && pnpm bundle` and
       `git diff --check` pass, and the docs are updated.

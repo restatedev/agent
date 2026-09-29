@@ -16,15 +16,15 @@ import {
   spawn,
   type Task,
 } from "@restatedev/restate-sdk-gen";
-import type {ModelMessage} from "ai";
 
-import type {
-  GuardrailApproval,
-  ModelResult,
-  ProposedAction,
-  ToolCall,
+import {
+  callModel,
+  type GuardrailApproval,
+  type ModelMessage,
+  type ModelResult,
+  type ProposedAction,
+  type ToolCall,
 } from "../model/index.js";
-import {callModel} from "../model/index.js";
 import {PROGRAM_TOOL_NAME} from "../ptc/definition.js";
 import {interruptAndJoin, raceBranches} from "../tasks.js";
 import type {DiscoveredAgentTool} from "./dynamic-tools.js";

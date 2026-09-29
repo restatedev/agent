@@ -6,12 +6,17 @@
 
 import type {AgentTools, ConversationEntry} from "@restate-agents/types";
 import type * as restate from "@restatedev/restate-sdk-gen";
-import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 
 import {agentConfig} from "../agent-config.js";
 import {errorMessage, isCancellation} from "../errors.js";
-import type {ToolCall, ToolManifest} from "../model/index.js";
+import type {
+  JSONValue,
+  ModelMessage,
+  ToolCall,
+  ToolManifest,
+  ToolModelMessage,
+} from "../model/index.js";
 import {PROGRAM_TOOL_NAME, programToolManifest} from "../ptc/definition.js";
 import {openTurnSandbox} from "../sandbox/index.js";
 import {

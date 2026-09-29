@@ -38,13 +38,23 @@ import {getWeatherTool} from "./tools/weather.js";
 import {webSearchTool} from "./tools/web-search.js";
 
 export const agentConfig = {
+  /**
+   * The models, as "provider:model", where the provider is openai,
+   * anthropic, google, xai, deepseek or openai-compatible (see
+   * model/provider.ts and docs/configuration.md). Each provider needs its API
+   * key in the service's environment. The three may use different providers.
+   *
+   * A turn keeps one model: its working messages carry that provider's
+   * reasoning and tool-call data. Running turns finish on the version they
+   * started on, so a change here applies to new turns.
+   */
   models: {
     /** Runs the agent's turns. */
-    agent: "gpt-5.6-luna",
+    agent: "openai:gpt-5.6-luna",
     /** Evaluates and reviews proposed actions against the guardrails. */
-    guardrail: "gpt-5.6-terra",
+    guardrail: "openai:gpt-5.6-terra",
     /** Summarizes older conversation for later turns. */
-    compactor: "gpt-5.6-terra",
+    compactor: "openai:gpt-5.6-terra",
   },
 
   /**

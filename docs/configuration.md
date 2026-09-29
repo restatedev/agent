@@ -13,12 +13,61 @@ The agent service reads these environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY` | Required for model calls |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY` | The API key of each provider the configured models use; see [models](#models) |
+| `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY` | The server for `openai-compatible` models, and its key if it needs one |
 | `MCP_SERVERS_JSON` | MCP servers the agents may use; see below |
 | `SANDBOX_PROVIDER` | `local` (default) or `modal`, which also needs `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` |
 | `MODAL_APP_NAME`, `MODAL_SANDBOX_NAMESPACE`, `MODAL_SANDBOX_IMAGE`, `MODAL_SANDBOX_TIMEOUT_MS` | Optional Modal settings; see [sandboxes](sandboxes.md) |
 | `AGENT_MODEL_MAX_OUTPUT_TOKENS` | Output budget per model call, 1024–64000 (default 32000) |
 | `RESTATE_ADMIN_URL`, `RESTATE_ADMIN_TOKEN` | Admin API used to discover dynamic tools |
+
+## Models
+
+`agentConfig.models` names three models, as `provider:model`: the agent
+model, the guardrail model and the compactor. The three may use different
+providers:
+
+| Provider | Models from | Needs |
+| --- | --- | --- |
+| `openai` | OpenAI | `OPENAI_API_KEY` |
+| `anthropic` | Anthropic | `ANTHROPIC_API_KEY` |
+| `google` | Google Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| `xai` | xAI Grok | `XAI_API_KEY` |
+| `deepseek` | DeepSeek | `DEEPSEEK_API_KEY` |
+| `openai-compatible` | Any server with the OpenAI chat completions API | `OPENAI_COMPATIBLE_BASE_URL`, and `OPENAI_COMPATIBLE_API_KEY` if the server needs one |
+
+```ts
+models: {
+  agent: "anthropic:claude-sonnet-5",
+  guardrail: "openai:gpt-5.6-terra",
+  compactor: "google:gemini-3.8-flash",
+},
+```
+
+Only the providers in use need an API key. Every call asks for low reasoning,
+and each provider maps that to its own setting. When the agent model changes,
+set `context.windowTokens` to its context window.
+
+`openai-compatible` runs open models: on your own hardware with Ollama, vLLM
+or LM Studio, or hosted by a router such as OpenRouter or Together.
+Everything after the first colon is the server's model name, so Ollama's
+`qwen3:32b` is `openai-compatible:qwen3:32b`:
+
+```sh
+export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1   # Ollama
+```
+
+The server must support tool calls and JSON-schema structured output, which
+the guardrails use. Small open models follow the tool protocol less reliably
+than frontier ones, so try the agent with the model before relying on it.
+
+A turn keeps the model it started with, because its working messages carry
+that provider's reasoning and tool-call data. Running turns finish on the
+version they started on, so a change applies to new turns. Switching between
+turns is safe: the transcript is provider-neutral, and each turn rebuilds its
+model messages from it.
+
+To add another provider, add it to `PROVIDERS` in `src/model/provider.ts`.
 
 ## MCP servers
 
