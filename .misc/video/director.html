@@ -1,0 +1,315 @@
+<!doctype html>
+<!--
+  The stage the README video is recorded from. record.mjs streams the web UI
+  and the Restate UI into it as screencast frames, and drives the terminal,
+  the journal panel and the captions through window.stage. Everything shown
+  comes from the running system, except the titles and captions.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent demo</title>
+<style>
+  :root {
+    --bg: #09090f;
+    --panel: #11111a;
+    --panel-2: #161622;
+    --line: #262636;
+    --text: #ececf4;
+    --muted: #8b8ba3;
+    --accent: #8b6cff;
+    --accent-2: #b59cff;
+    --green: #3ddc97;
+    --red: #ff4d5e;
+    --amber: #ffb547;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+    --sans: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    background: radial-gradient(1200px 700px at 15% -10%, #1d1440 0%, transparent 60%),
+                radial-gradient(900px 600px at 110% 110%, #14203a 0%, transparent 60%),
+                var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+  }
+
+  /* Header */
+  header {
+    position: absolute; left: 40px; right: 40px; top: 26px; height: 56px;
+    display: flex; align-items: center; gap: 18px;
+  }
+  .logo {
+    width: 44px; height: 44px; border-radius: 12px;
+    background: linear-gradient(135deg, #8b6cff, #5a3df0);
+    display: grid; place-items: center; font-weight: 800; font-size: 22px;
+    box-shadow: 0 6px 24px #6a4cff55;
+  }
+  header h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  header .sub { color: var(--muted); font-size: 18px; margin-left: 4px; }
+  .speed {
+    margin-left: auto; font: 700 20px var(--mono); color: var(--amber);
+    padding: 8px 16px; border: 1px solid #ffb54755; border-radius: 999px;
+    background: #ffb5471a; opacity: 0; transition: opacity 0.3s;
+  }
+  .speed.on { opacity: 1; }
+  .real {
+    font: 600 15px var(--mono); color: var(--muted); letter-spacing: 0.08em;
+    padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px;
+  }
+
+  /* Panels */
+  .panel {
+    position: absolute; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 18px; overflow: hidden;
+    box-shadow: 0 24px 60px #0008;
+  }
+  .panel-head {
+    height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel-2);
+    font: 600 15px var(--mono); color: var(--muted);
+  }
+  .dots { display: flex; gap: 7px; margin-right: 6px; }
+  .dots i { width: 12px; height: 12px; border-radius: 50%; background: #2c2c3c; display: block; }
+  .panel-head .right { margin-left: auto; }
+
+  #ui { left: 40px; top: 104px; width: 1100px; height: 812px; }
+  #ui .view { width: 1100px; height: 768px; overflow: hidden; }
+  #ui img { display: block; width: 1100px; visibility: hidden; }
+
+  #term { left: 1164px; top: 104px; width: 716px; height: 380px; transition: box-shadow 0.3s, border-color 0.3s; }
+  #term.dead { border-color: #ff4d5e88; box-shadow: 0 0 0 1px #ff4d5e55, 0 24px 60px #ff4d5e22; }
+  #term-body {
+    padding: 16px 20px; font: 15px/1.55 var(--mono); color: #cfcfe0;
+    height: 336px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  .ln { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  .ln.cmd { color: var(--text); }
+  .ln.cmd .ps { color: var(--green); }
+  .ln.cmd .caret { display: inline-block; width: 9px; height: 18px; background: var(--text); vertical-align: -3px; animation: blink 1s steps(1) infinite; }
+  .ln.dim { color: var(--muted); }
+  .ln.hot { color: var(--accent-2); font-weight: 700; }
+  .ln.bad { color: var(--red); font-weight: 700; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .pill {
+    font: 700 13px var(--mono); padding: 5px 12px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 8px; letter-spacing: 0.04em;
+  }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .pill.running { color: var(--green); background: #3ddc971a; }
+  .pill.down { color: var(--red); background: #ff4d5e1f; }
+  .pill.down::before { animation: pulse 0.9s ease-in-out infinite; }
+  .pill.starting { color: var(--amber); background: #ffb5471a; }
+  @keyframes pulse { 50% { opacity: 0.2; } }
+
+  #journal { left: 1164px; top: 508px; width: 716px; height: 408px; }
+  #journal-body { padding: 10px 14px; }
+  .jrow {
+    display: grid; grid-template-columns: 34px 1fr 150px; align-items: center;
+    height: 34px; padding: 0 10px; border-radius: 9px; font: 15px var(--mono);
+    animation: pop 0.35s cubic-bezier(.2,1.4,.4,1);
+    transition: background 0.25s;
+  }
+  .jrow .ix { color: #55556e; }
+  .jrow .nm b { color: var(--accent-2); font-weight: 600; }
+  .jrow .st { text-align: right; font-size: 13px; color: var(--muted); }
+  .jrow.done .st { color: var(--green); }
+  .jrow.wait .st { color: var(--amber); }
+  .jrow.replayed { background: #8b6cff26; }
+  .jrow.replayed .st { color: var(--accent-2); font-weight: 700; }
+  .jrow.fresh .st { color: var(--green); font-weight: 700; }
+  @keyframes pop { from { transform: translateY(8px) scale(0.97); opacity: 0; } }
+  #journal-foot {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 52px; padding: 0 20px;
+    display: flex; align-items: center; border-top: 1px solid var(--line);
+    font: 600 15px var(--mono); color: var(--accent-2); background: var(--panel-2);
+    opacity: 0; transition: opacity 0.4s;
+  }
+  #journal-foot.on { opacity: 1; }
+
+  /* Caption */
+  #caption {
+    position: absolute; left: 40px; right: 40px; bottom: 30px; height: 112px;
+    display: flex; align-items: center; gap: 22px; padding: 0 28px;
+  }
+  #caption .n {
+    width: 52px; height: 52px; border-radius: 50%; flex: none;
+    display: grid; place-items: center; font: 800 24px var(--sans);
+    background: var(--accent); color: white; box-shadow: 0 0 0 6px #8b6cff33;
+  }
+  #caption .t { font-size: 34px; font-weight: 700; letter-spacing: -0.01em; }
+  #caption .d { font-size: 22px; color: var(--muted); margin-top: 4px; }
+  #caption.swap { animation: swap 0.5s ease; }
+  @keyframes swap { from { opacity: 0; transform: translateY(10px); } }
+
+  /* Full-width Restate UI */
+  #restate { left: 40px; top: 104px; width: 1840px; height: 812px; opacity: 0; transition: opacity 0.6s; }
+  #restate.on { opacity: 1; }
+  #restate img { display: block; width: 1840px; height: 768px; }
+
+  /* Title cards */
+  #card {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    background: radial-gradient(900px 600px at 50% 40%, #241a52 0%, var(--bg) 70%);
+    opacity: 0; transition: opacity 0.6s; pointer-events: none;
+  }
+  #card.on { opacity: 1; }
+  #card .k { font: 700 20px var(--mono); color: var(--accent-2); letter-spacing: 0.2em; text-transform: uppercase; }
+  #card h2 { font-size: 92px; margin: 18px 0 14px; letter-spacing: -0.03em; line-height: 1.02; }
+  #card p { font-size: 30px; color: var(--muted); margin: 0; }
+  #card code { font: 600 28px var(--mono); color: var(--text); background: #ffffff10; padding: 8px 16px; border-radius: 10px; }
+
+  /* Crash flash */
+  #flash { position: absolute; inset: 0; background: var(--red); opacity: 0; pointer-events: none; }
+  #flash.go { animation: flash 0.9s ease-out; }
+  @keyframes flash { 0% { opacity: 0.45; } 100% { opacity: 0; } }
+  body.shake #ui, body.shake #term, body.shake #journal { animation: shake 0.45s; }
+  @keyframes shake {
+    20% { transform: translateX(-10px); } 40% { transform: translateX(9px); }
+    60% { transform: translateX(-6px); } 80% { transform: translateX(4px); }
+  }
+  /* Keeps the page repainting, so the screencast delivers a steady frame rate. */
+  #tick { position: absolute; width: 1px; height: 1px; right: 0; bottom: 0; animation: tick 1s linear infinite; }
+  @keyframes tick { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <header>
+    <div class="logo">R</div>
+    <h1>Restate reference agent</h1>
+    <span class="sub">— a real session</span>
+    <span class="speed" id="speed">⏩ 4×</span>
+    <span class="real">REAL RECORDING</span>
+  </header>
+
+  <section class="panel" id="ui">
+    <div class="panel-head"><span class="dots"><i></i><i></i><i></i></span>127.0.0.1:3000 · reference UI</div>
+    <div class="view"><img id="ui-img" alt=""></div>
+  </section>
+
+  <section class="panel" id="term">
+    <div class="panel-head"><span class="dots"><i></i><i></i><i></i></span>agent service · packages/libs/core<span class="right"><span class="pill running" id="svc">RUNNING</span></span></div>
+    <div id="term-body"></div>
+  </section>
+
+  <section class="panel" id="journal">
+    <div class="panel-head"><span class="dots"><i></i><i></i><i></i></span>turn journal · stored in Restate<span class="right" id="journal-count"></span></div>
+    <div id="journal-body"></div>
+    <div id="journal-foot"></div>
+  </section>
+
+  <section class="panel" id="restate">
+    <div class="panel-head"><span class="dots"><i></i><i></i><i></i></span>localhost:9070 · Restate UI</div>
+    <img id="restate-img" alt="">
+  </section>
+
+  <div id="caption"><div class="n">1</div><div><div class="t"></div><div class="d"></div></div></div>
+
+  <div id="card"><div><div class="k" id="card-k"></div><h2 id="card-t"></h2><p id="card-p"></p></div></div>
+  <div id="flash"></div>
+  <div id="tick"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const MAX_LINES = 13;
+
+  window.stage = {
+    card(kicker, title, text) {
+      $("card-k").textContent = kicker;
+      $("card-t").innerHTML = title;
+      $("card-p").innerHTML = text;
+      $("card").classList.add("on");
+    },
+    hideCard() { $("card").classList.remove("on"); },
+
+    caption(n, title, detail) {
+      const el = $("caption");
+      el.querySelector(".n").textContent = n;
+      el.querySelector(".t").textContent = title;
+      el.querySelector(".d").textContent = detail;
+      el.classList.remove("swap"); void el.offsetWidth; el.classList.add("swap");
+    },
+
+    speed(factor) {
+      $("speed").textContent = `⏩ ${factor}×`;
+      $("speed").classList.toggle("on", factor > 1);
+    },
+
+    uiCrop(px) {
+      $("ui-img").style.marginTop = `-${px}px`;
+      $("ui-img").style.visibility = "visible";
+    },
+    uiFrame(data) { $("ui-img").src = `data:image/jpeg;base64,${data}`; },
+    restateFrame(data) { $("restate-img").src = `data:image/jpeg;base64,${data}`; },
+    showRestate(on) {
+      $("restate").classList.toggle("on", on);
+      for (const id of ["ui", "term", "journal"]) $(id).style.opacity = on ? 0 : 1;
+    },
+
+    line(text, kind = "") {
+      const body = $("term-body");
+      body.querySelector(".caret")?.remove();
+      const el = document.createElement("div");
+      el.className = `ln ${kind}`;
+      el.textContent = text;
+      body.appendChild(el);
+      while (body.children.length > MAX_LINES) body.firstChild.remove();
+      return el;
+    },
+    prompt() {
+      const el = this.line("", "cmd");
+      el.innerHTML = '<span class="ps">$ </span><span class="typed"></span><span class="caret"></span>';
+      return el;
+    },
+    typeChar(char) {
+      const typed = $("term-body").querySelector(".ln.cmd:last-child .typed");
+      if (typed) typed.textContent += char;
+    },
+
+    service(state, label) {
+      const pill = $("svc");
+      pill.className = `pill ${state}`;
+      pill.textContent = label;
+      $("term").classList.toggle("dead", state === "down");
+    },
+
+    crash() {
+      $("flash").classList.remove("go"); void $("flash").offsetWidth; $("flash").classList.add("go");
+      document.body.classList.remove("shake"); void document.body.offsetWidth; document.body.classList.add("shake");
+    },
+
+    // rows: [{index, label, name, state, status}]; state is done | wait | replayed | fresh.
+    // Rows are updated in place: re-inserting one would replay its pop-in.
+    journal(rows) {
+      const body = $("journal-body");
+      const shown = rows.slice(-10);
+      const keep = new Set(shown.map((row) => String(row.index)));
+      for (const el of [...body.children]) if (!keep.has(el.dataset.index)) el.remove();
+      for (const row of shown) {
+        let el = body.querySelector(`[data-index="${row.index}"]`);
+        if (!el) {
+          el = document.createElement("div");
+          el.dataset.index = row.index;
+          body.appendChild(el);
+        }
+        const className = `jrow ${row.state}`;
+        const html = `<span class="ix">${row.index}</span><span class="nm">${row.label} <b>${row.name}</b></span><span class="st">${row.status}</span>`;
+        if (el.className !== className) el.className = className;
+        if (el.innerHTML !== html) el.innerHTML = html;
+      }
+      $("journal-count").textContent = `${rows.length} steps`;
+    },
+    journalReset() {
+      $("journal-body").replaceChildren();
+      this.journalFoot("");
+    },
+    journalFoot(text) {
+      $("journal-foot").textContent = text;
+      $("journal-foot").classList.toggle("on", Boolean(text));
+    },
+  };
+</script>
+</body>
+</html>
