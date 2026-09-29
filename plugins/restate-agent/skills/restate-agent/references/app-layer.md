@@ -140,7 +140,8 @@ Each seam is small and sits in the module that already owns the concern:
    `src/app.ts`.
 2. Add `UserSession` and a login route to the backend: OIDC with state,
    nonce and PKCE, and a sealed session cookie. Scope every
-   `/api/agent/[agentId]/...` route by ownership.
+   `/api/agent/[agentId]/...` route by ownership, and `/api/ag-ui` by the
+   agent its `threadId` names.
 3. Add `UserNotifications` and a user-level sync route, so the UI can watch
    all of a user's agents at once.
 4. Move whatever should be per-user, not per-agent, into `User`:

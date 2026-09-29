@@ -182,6 +182,7 @@ stream to Restate. That append is the only persistence a step needs.
    repository layout; [PROJECT.md](PROJECT.md) gives a file-by-file reading
    order
 8. [Agent guide](docs/agent-guide.md): read before changing runtime semantics
+9. [AG-UI](docs/ag-ui.md): connect AG-UI frontends such as CopilotKit
 
 [The documentation index](docs/README.md) has the full list.
 

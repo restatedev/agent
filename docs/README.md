@@ -14,6 +14,7 @@ request path begins with an agent ID, without an account or login prerequisite.
 7. [Schedules](schedules.md) and [sandboxes](sandboxes.md): durable timer and resource lifecycles.
 8. [Configuration](configuration.md): agent definition, environment variables, MCP and UI.
 9. [Development](development.md): verification, debugging and repository layout.
+10. [AG-UI](ag-ui.md): the endpoint for AG-UI frontends such as CopilotKit.
 
 [PROJECT.md](../PROJECT.md) maps the source tree. Coding agents should read
 [agent-guide.md](agent-guide.md) before changing runtime semantics.
