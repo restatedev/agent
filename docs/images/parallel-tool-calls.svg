@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="Animation: one model step proposes three tool calls; the guardrails allow the batch in one check; the calls run concurrently, one fails and is reported as an error while the others finish; the next model step sees both results and the error, and replies.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="Animation: three tool calls run concurrently after a guardrail check. readFile encounters two transient failures and Restate retries it, succeeding on the third attempt. getWeather and webSearch finish once and keep their results. The next model step receives all three successful results and replies.">
 <style>
 :root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
   --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
@@ -72,7 +72,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .break { fill: none; stroke: var(--muted); stroke-width: 1.5; }
 .link path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.8; }
 .link polygon { fill: var(--accent); opacity: 0.8; }
-.cap18, .cap19 { opacity: 0; }
+.cap23, .cap24 { opacity: 0; }
 @keyframes e1 { 0%, 0.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 2.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 3.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes e2 { 0%, 12.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 14.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 15.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes e3 { 0%, 12.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 14.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 15.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
@@ -86,35 +86,45 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 @keyframes g11 { 0%, 25.99% { opacity: 0; transform: scaleX(0.001) } 26.00% { opacity: 1; transform: scaleX(0.001) } 34.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
 @keyframes e12 { 0%, 26.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 28.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 29.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes e13 { 0%, 33.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 35.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 36.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
-@keyframes e14 { 0%, 36.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 38.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 39.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
-@keyframes e15 { 0%, 53.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 55.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 56.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
-@keyframes e16 { 0%, 53.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 55.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 56.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
-@keyframes e17 { 0%, 72.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 74.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 75.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes g14 { 0%, 37.99% { opacity: 0; transform: scaleX(0.001) } 38.00% { opacity: 1; transform: scaleX(0.001) } 46.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e15 { 0%, 38.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 40.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 41.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e16 { 0%, 45.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 47.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 48.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes g17 { 0%, 51.99% { opacity: 0; transform: scaleX(0.001) } 52.00% { opacity: 1; transform: scaleX(0.001) } 64.00%, 93% { opacity: 1; transform: scaleX(1) } 98%, 100% { opacity: 0; transform: scaleX(1) } }
+@keyframes e18 { 0%, 52.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 54.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 55.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e19 { 0%, 63.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 65.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 66.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e20 { 0%, 66.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 68.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 69.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e21 { 0%, 66.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 68.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 69.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
+@keyframes e22 { 0%, 79.99% { opacity: 0; transform: translateY(5px) scale(0.94) } 81.20% { opacity: 1; transform: translateY(-1px) scale(1.02) } 82.20%, 93% { opacity: 1; transform: none } 98%, 100% { opacity: 0; transform: none } }
 @keyframes playhead { 0% { opacity: 1; transform: translateX(0px) } 86% { opacity: 1; transform: translateX(805.0px) } 89%, 100% { opacity: 0; transform: translateX(805.0px) } }
-@keyframes cap18 { 0% { opacity: 1 } 24.20% { opacity: 1 } 25.00%, 100% { opacity: 0 } }
-@keyframes cap19 { 0%, 24.99% { opacity: 0 } 25.80% { opacity: 1 } 52.20% { opacity: 1 } 53.00%, 100% { opacity: 0 } }
-@keyframes cap20 { 0%, 52.99% { opacity: 0 } 53.80% { opacity: 1 } 100% { opacity: 1 } }
-.e1 { animation: e1 16s linear infinite; }
-.e2 { animation: e2 16s linear infinite; }
-.e3 { animation: e3 16s linear infinite; }
-.e4 { animation: e4 16s linear infinite; }
-.g5 { animation: g5 16s linear infinite; }
-.e6 { animation: e6 16s linear infinite; }
-.e7 { animation: e7 16s linear infinite; }
-.g8 { animation: g8 16s linear infinite; }
-.e9 { animation: e9 16s linear infinite; }
-.e10 { animation: e10 16s linear infinite; }
-.g11 { animation: g11 16s linear infinite; }
-.e12 { animation: e12 16s linear infinite; }
-.e13 { animation: e13 16s linear infinite; }
-.e14 { animation: e14 16s linear infinite; }
-.e15 { animation: e15 16s linear infinite; }
-.e16 { animation: e16 16s linear infinite; }
-.e17 { animation: e17 16s linear infinite; }
-.playhead { animation: playhead 16s linear infinite; }
-.cap18 { animation: cap18 16s linear infinite; }
-.cap19 { animation: cap19 16s linear infinite; }
-.cap20 { animation: cap20 16s linear infinite; }
+@keyframes cap23 { 0% { opacity: 1 } 24.20% { opacity: 1 } 25.00%, 100% { opacity: 0 } }
+@keyframes cap24 { 0%, 24.99% { opacity: 0 } 25.80% { opacity: 1 } 65.20% { opacity: 1 } 66.00%, 100% { opacity: 0 } }
+@keyframes cap25 { 0%, 65.99% { opacity: 0 } 66.80% { opacity: 1 } 100% { opacity: 1 } }
+.e1 { animation: e1 18s linear infinite; }
+.e2 { animation: e2 18s linear infinite; }
+.e3 { animation: e3 18s linear infinite; }
+.e4 { animation: e4 18s linear infinite; }
+.g5 { animation: g5 18s linear infinite; }
+.e6 { animation: e6 18s linear infinite; }
+.e7 { animation: e7 18s linear infinite; }
+.g8 { animation: g8 18s linear infinite; }
+.e9 { animation: e9 18s linear infinite; }
+.e10 { animation: e10 18s linear infinite; }
+.g11 { animation: g11 18s linear infinite; }
+.e12 { animation: e12 18s linear infinite; }
+.e13 { animation: e13 18s linear infinite; }
+.g14 { animation: g14 18s linear infinite; }
+.e15 { animation: e15 18s linear infinite; }
+.e16 { animation: e16 18s linear infinite; }
+.g17 { animation: g17 18s linear infinite; }
+.e18 { animation: e18 18s linear infinite; }
+.e19 { animation: e19 18s linear infinite; }
+.e20 { animation: e20 18s linear infinite; }
+.e21 { animation: e21 18s linear infinite; }
+.e22 { animation: e22 18s linear infinite; }
+.playhead { animation: playhead 18s linear infinite; }
+.cap23 { animation: cap23 18s linear infinite; }
+.cap24 { animation: cap24 18s linear infinite; }
+.cap25 { animation: cap25 18s linear infinite; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 </style>
 <defs><linearGradient id="toolGradient" x1="0" y1="0" x2="1" y2="0"><stop offset="0" style="stop-color: var(--tool-bar)"/><stop offset="1" style="stop-color: var(--tool-bar-2)"/></linearGradient></defs>
@@ -146,23 +156,28 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text class="bar-t e9" x="413.4" y="220">webSearch</text>
 <g class="mark ok e10"><circle cx="665.7" cy="233.5" r="7.5"/><text x="665.7" y="237.3">✓</text></g>
 <g class="bar g11"><rect class="bar tool" x="413.4" y="262" width="74.9" height="14" rx="7"/></g>
-<text class="bar-t e12" x="413.4" y="256">runCommand</text>
+<text class="bar-t e12" x="413.4" y="256">readFile</text>
 <g class="mark bad e13"><circle cx="497.3" cy="269.5" r="7.5"/><text x="497.3" y="273.3">✕</text></g>
-<text class="axis e14" x="516.3" y="274">failed: reported to the model, the others keep running</text>
-<g class="chip model e15">
-<rect x="675.5" y="34" width="164" height="44" rx="8"/>
-<rect class="stripe" x="680.5" y="41" width="3" height="30" rx="1.5"/>
-<text class="chip-t" x="689.5" y="53">model step</text>
-<text class="chip-s" x="689.5" y="70">2 results + 1 error</text>
+<g class="bar g14"><rect class="bar tool" x="525.7" y="262" width="74.9" height="14" rx="7"/></g>
+<text class="bar-t e15" x="525.7" y="256">retry 1</text>
+<g class="mark bad e16"><circle cx="609.6" cy="269.5" r="7.5"/><text x="609.6" y="273.3">✕</text></g>
+<g class="bar g17"><rect class="bar tool" x="656.7" y="262" width="112.3" height="14" rx="7"/></g>
+<text class="bar-t e18" x="656.7" y="256">retry 2</text>
+<g class="mark ok e19"><circle cx="778.1" cy="269.5" r="7.5"/><text x="778.1" y="273.3">✓</text></g>
+<g class="chip model e20">
+<rect x="797.2" y="34" width="120" height="44" rx="8"/>
+<rect class="stripe" x="802.2" y="41" width="3" height="30" rx="1.5"/>
+<text class="chip-t" x="811.2" y="53">model step</text>
+<text class="chip-s" x="811.2" y="70">3 results</text>
 </g>
-<g class="link e16"><path d="M 691.5 176 V 85"/><polygon points="687.5,85 695.5,85 691.5,80"/></g>
-<g class="chip reply e17">
-<rect x="853.3" y="41" width="80" height="30" rx="8"/>
-<rect class="stripe" x="858.3" y="48" width="3" height="16" rx="1.5"/>
-<text class="chip-t" x="867.3" y="61">reply</text>
+<g class="link e21"><path d="M 797.2 276 V 85"/><polygon points="793.2,85 801.2,85 797.2,80"/></g>
+<g class="chip reply e22">
+<rect x="918.8" y="41" width="64" height="30" rx="8"/>
+<rect class="stripe" x="923.8" y="48" width="3" height="16" rx="1.5"/>
+<text class="chip-t" x="932.8" y="61">reply</text>
 </g>
 <g class="playhead"><line x1="170" y1="20" x2="170" y2="286"/><circle cx="170" cy="20" r="4"/></g>
-<g class="caption cap18"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">1</text><text x="50" y="330">One model response proposes three tool calls, and the guardrails check them as one batch.</text></g>
-<g class="caption cap19"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">2</text><text x="50" y="330">They run concurrently. runCommand fails, and its error does not discard the other results.</text></g>
-<g class="caption cap20"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">3</text><text x="50" y="330">The next model step sees both results and the error, and decides what to do.</text></g>
+<g class="caption cap23"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">1</text><text x="50" y="330">One model response proposes three tool calls; the guardrails check the batch.</text></g>
+<g class="caption cap24"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">2</text><text x="50" y="330">Restate retries readFile after transient failures. The other calls keep their results.</text></g>
+<g class="caption cap25"><circle class="step" cx="33" cy="325.0" r="9"/><text class="step-n" x="33" y="329.0">3</text><text x="50" y="330">The retry succeeds. All three results reach the next model step; completed calls are not rerun.</text></g>
 </svg>

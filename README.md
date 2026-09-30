@@ -79,18 +79,18 @@ Each agent has two Restate Virtual Objects (stateful entities addressed by key) 
 
 This architecture makes the following advanced features possible:
 
-### Steering and interruption via durable signals
+### Steer and interrupt ongoing agent executions
 
 When an `Agent` starts a turn, it gets the `turnId` back, with which it can:
 - **Steer the turn**: adds an instruction to the context for the next LLM call.
   Tools already running can finish.
 - **Interrupt the turn**: stops unfinished work, including subagent tasks, and asks
-  the model to summarize what it completed. 
-
-![Client, Agent, and AgentSession in three columns, with events read from top to bottom: starting a turn, steering while tools continue, interrupting unfinished work, and returning a summary](docs/images/agent-responsive.svg)
+  the model to summarize what it completed.
 
 The implementation relies on Restate's durable signals, instead of plumbing together
 event queues and state machines.
+
+![Client, Agent, and AgentSession in three columns, with events read from top to bottom: starting a turn, steering while tools continue, interrupting unfinished work, and returning a summary](docs/images/agent-responsive.svg)
 
 See [steering](docs/turn-runtime.md#steering) and
 [interruption](docs/turn-runtime.md#interruption-and-stopping).
@@ -114,10 +114,9 @@ connections. Each tool's durable steps are recorded independently, so recovery
 can reuse completed work across the batch. The runtime handles deterministic
 replay during recovery.
 
-![Animation: one model step proposes three tool calls; the guardrails allow
-the batch in one check; the calls run concurrently, one fails and is reported
-as an error while the others finish; the next model step sees both results
-and the error](docs/images/parallel-tool-calls.svg)
+![Three tools run concurrently. Restate retries a readFile operation after two
+transient failures until its third attempt succeeds. The other calls keep their
+completed results, and all three results return to the model.](docs/images/parallel-tool-calls.svg)
 
 See [parallel tools](docs/turn-runtime.md#agent-loop-iterations)
 and [background operations](docs/tools.md#pending-tools).
