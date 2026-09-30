@@ -163,142 +163,102 @@ transcript sequence numbers let it catch up after disconnects.
 
 See [session updates](docs/protocol.md#history-and-notifications).
 
-### Other features
-
-The reference architecture has many other features worth checking out. 
-Consult the table above for a complete list.
-
-## Quickstart
-
-
-To run the reference locally, you need Node.js 22+, pnpm, the Restate server
-and CLI, and an OpenAI API key.
-
-Install the dependencies:
-
-```sh
-pnpm install
-```
-
-Start Restate in one terminal, with the experimental protocol features used
-by this implementation enabled:
-
-```sh
-RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true restate-server
-```
-
-Start the agent service in another terminal:
-
-```sh
-export OPENAI_API_KEY=your-api-key
-pnpm dev:service
-```
-
-Once the service is listening on port 9080, register it with Restate from a
-third terminal:
-
-```sh
-restate deployments register http://localhost:9080
-```
-
-You can now send requests through Restate's ingress on port 8080. Choose an
-agent ID, such as `demo`; the first request creates the agent.
-
-```sh
-# Start a turn, or queue the message if one is already running
-curl localhost:8080/Agent/demo/ask --json '{"message":"What is the weather in Berlin?"}'
-
-# Send a new instruction without stopping the running tools
-curl localhost:8080/Agent/demo/steer --json '{"message":"Use Fahrenheit"}'
-
-# Interrupt the current turn
-curl localhost:8080/Agent/demo/interrupt --json '{"reason":"Changed my mind"}'
-
-# Read the conversation history
-curl localhost:8080/AgentSession/demo/history --json '{"fromSequence":1,"limit":100}'
-```
-
-The weather tool returns synthetic data. To use the conversation UI, run
-`pnpm dev:ui` and open
-[localhost:3000/?agent=demo](http://127.0.0.1:3000/?agent=demo).
-
-To try failure recovery, ask the agent to sleep for four minutes, stop the
-agent service, and start it again. Restate recovers the execution and resumes
-the wait. Open the [Restate UI](http://localhost:9070) to inspect the invocation
-and its journal.
-
-The reference has no user authentication or account isolation layer. Run it
-on a trusted network, or add authentication and authorization in your application
-before exposing the agent API. The default local sandbox runs commands on the
-host; use an isolated sandbox provider for untrusted workloads.
-
-## Adapting the architecture
-
-Start with the parts that define your agent's behavior:
-
-- **Models and instructions:** edit
-  [`agent-config.ts`](packages/libs/core/src/agent-config.ts) to choose models,
-  set context limits, and select built-in tools.
-- **Tools:** add a module with
-  [`defineAgentTool`](packages/libs/core/src/tools-api.ts) and register it in the
-  configuration. Tools can make durable calls, wait for signals, and share the
-  turn's sandbox. For external tools, see [MCP configuration](docs/mcp-configuration.md)
-  and [Restate tool discovery](docs/tools.md#dynamically-discovered-restate-tools).
-- **Sandboxes:** implement the
-  [provider interface](packages/libs/core/src/sandbox/provider.ts) for your
-  platform. The turn acquires a sandbox on first use and shares it across tools.
-  The Modal provider releases compute at turn end and keeps workspace files in
-  a Volume; running processes don't survive between turns.
-- **UI and integration:** use the
-  [client](packages/libs/client/src/index.ts) from your backend, or adapt the
-  [reference UI](packages/apps/web). The UI is an example consumer of the same
-  agent API.
-
-For a larger platform, add the application-specific state and policies around
-these components. User profiles could own agent directories and credential
-references. Shared token budgets need coordination across concurrent agents.
-An idle-time policy could keep sandboxes warm between turns. These are extension
-points, rather than features included in this reference.
-
-[PROJECT.md](PROJECT.md) gives a reading order through the code.
-[Development](docs/development.md) covers builds and tests, and the
-[agent guide](docs/agent-guide.md) explains the execution rules to preserve
-when making changes.
-
 ## Further reading
 
-The [documentation index](docs/README.md) links to the full implementation docs:
+1. [Architecture](docs/architecture.md): state owners, one request, notifications
+2. [Protocol](docs/protocol.md): every handler, ordering rules, clients
+3. [Turn runtime](docs/turn-runtime.md): steps, guardrails, pending work, recovery
+4. [Tools](docs/tools.md): built-ins, programmatic tool calls, dynamic tools, MCP
+5. [Schedules](docs/schedules.md) and [sandboxes](docs/sandboxes.md)
+6. [Configuration](docs/configuration.md): models, tools, environment
+   variables, MCP servers and the reference UI
+7. [Development](docs/development.md): tests, debugging, packaging and the
+   repository layout; [PROJECT.md](PROJECT.md) gives a file-by-file reading
+   order
+8. [Agent guide](docs/agent-guide.md): read before changing runtime semantics
+9. [AG-UI](docs/ag-ui.md): connect AG-UI frontends such as CopilotKit
 
-- [Architecture](docs/architecture.md) and [protocol](docs/protocol.md): state
-  ownership, API handlers, message ordering, and client updates.
-- [Turn runtime](docs/turn-runtime.md) and [tools](docs/tools.md): the loop,
-  concurrency, steering, guardrails, and tool execution.
-- [Schedules](docs/schedules.md) and [sandboxes](docs/sandboxes.md): timer and
-  resource lifecycles.
-- [Configuration](docs/configuration.md) and [MCP configuration](docs/mcp-configuration.md):
-  models, environment variables, and external connections.
-
-For more background on the design:
-
-- [A Durable Coding Agent — with Modal and Restate](https://restate.dev/blog/durable-coding-agent-with-restate-and-modal)
-- [Agent checkpointing is far from production-grade resiliency](https://restate.dev/blog/why-checkpointing-is-not-production-grade-durable-execution)
-- [Updating AI Agents safely in production](https://restate.dev/blog/dealing-with-versioning-in-long-running-agents)
+[The documentation index](docs/README.md) has the full list.
 
 ### Skills for coding agents
 
-The [`restate-agent` plugin](plugins/restate-agent) includes a skill for extending
-this implementation and one for the generator-based Restate SDK. It also connects
-the Restate docs MCP server.
+[`plugins/restate-agent`](plugins/restate-agent) has two skills:
+- `restate-agent`: how to extend this agent. It covers tools, handlers,
+  configuration and testing, and how to grow the agent into a full
+  application with users, sessions and credentials.
+- `restate-gen-sdk`: how to write the generator-SDK code the agent is built
+  from.
 
-Install the plugin in Claude Code:
+The plugin bundles both skills and the Restate docs MCP server. Codex and
+Claude Code share the same skill files and MCP configuration.
+
+For Codex, install the plugin from a terminal:
+
+```sh
+codex plugin marketplace add restatedev/agent
+codex plugin add restate-agent@restate-agent
+```
+
+Start a new Codex chat after installation. Opening the repository alone does
+not enable the plugin. To install from a local checkout, run
+`codex plugin marketplace add .` from the repository root instead of the
+first command above. Codex supports the existing
+[marketplace catalog](.claude-plugin/marketplace.json) and uses the
+[Codex manifest](plugins/restate-agent/.codex-plugin/plugin.json) to load the
+skills and MCP server.
+
+Claude Code offers to install the plugin when you open this repository.
+You can also install it by hand:
 
 ```sh
 /plugin marketplace add restatedev/agent
 /plugin install restate-agent@restate-agent
 ```
 
-For other coding agents, install the skills with:
+For other coding agents, install just the skills with
+`npx skills add restatedev/agent`. That command does not configure the
+Restate docs MCP server.
+
+## Quickstart
+
+You need Node.js 22+, pnpm, the Restate server and CLI, and an OpenAI API key.
+The agent can also run on Anthropic, Google, xAI or DeepSeek models, or on
+open models through Ollama, vLLM or any OpenAI-compatible server; see
+[models](docs/configuration.md#models).
 
 ```sh
-npx skills add restatedev/agent
+pnpm install
+
+# Terminal 1: Restate, with the SDK features this example uses
+RESTATE_EXPERIMENTAL_ENABLE_PROTOCOL_V7=true restate-server
+
+# Terminal 2: the agent service on port 9080, registered with Restate
+export OPENAI_API_KEY=your-api-key
+pnpm dev:service
+restate deployments register http://localhost:9080
 ```
+
+Talk to an agent through Restate ingress on port 8080. Any agent ID works;
+the first message creates the agent.
+
+```sh
+# Start a turn (or queue the message if one is running)
+curl localhost:8080/Agent/demo/ask --json '{"message":"What is the weather in Berlin?"}'
+
+# Redirect the running turn without cancelling its tools
+curl localhost:8080/Agent/demo/steer --json '{"message":"Use Fahrenheit"}'
+
+# Stop it, optionally queueing a replacement request
+curl localhost:8080/Agent/demo/interrupt --json '{"reason":"Changed my mind"}'
+
+# Read the conversation log
+curl localhost:8080/AgentSession/demo/history --json '{"fromSequence":1,"limit":100}'
+```
+
+Or chat in the reference UI: run `pnpm dev:ui` and open
+[http://127.0.0.1:3000/?agent=demo](http://127.0.0.1:3000/?agent=demo).
+
+**Try this:** ask it to sleep for four minutes, then kill `pnpm dev:service`
+and start it again. The turn picks up where it was, and the Restate UI
+(`http://localhost:9070`) shows every model call and tool result in the
+turn's journal.
