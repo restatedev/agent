@@ -154,9 +154,9 @@ When a guardrail needs a person, the turn suspends: no process, only stored stat
 
 See [approvals](docs/protocol.md#context-and-approvals).
 
-### Following live session updates and catching up after reconnecting
+### Subscribing to session updates and reconnecting later
 
-The reference UI usees a [typed client](packages/libs/client/src/index.ts) to read session data and follow
+The reference UI uses a [typed client](packages/libs/client/src/index.ts) to read session data and follow
 changes to history, approvals, configuration, and schedules. The UI
 uses HTTP long-polling and revision tags to fetch only what changed, while
 transcript sequence numbers let it catch up after disconnects. 
