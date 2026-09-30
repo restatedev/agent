@@ -130,7 +130,7 @@ work after process failures, without the need for locks or coordination.
 
 See [state ownership](docs/architecture.md#state-ownership).
 
-### Durable history, memory, and compaction
+### Managing history and memory per session
 
 This architecture uses Restate's embedded KV store for both conversation state 
 and context. Restate gives each agent session its own isolated store, and 
@@ -158,7 +158,7 @@ alive. Steering and interruption still work while it waits.
 
 See [approvals](docs/protocol.md#context-and-approvals).
 
-### Subscribing to session events
+### Following live session updates and catching up after reconnecting
 
 The architecture includes a typed client for reading session data and following
 changes to history, approvals, configuration, and schedules. The reference UI
