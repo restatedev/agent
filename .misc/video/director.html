@@ -37,7 +37,7 @@
 
   /* Header */
   header {
-    position: absolute; left: 40px; right: 40px; top: 26px; height: 56px;
+    position: absolute; left: 40px; right: 40px; top: 18px; height: 52px;
     display: flex; align-items: center; gap: 18px;
   }
   .logo {
@@ -74,15 +74,15 @@
   .dots i { width: 12px; height: 12px; border-radius: 50%; background: #2c2c3c; display: block; }
   .panel-head .right { margin-left: auto; }
 
-  #ui { left: 40px; top: 104px; width: 1100px; height: 812px; }
-  #ui .view { width: 1100px; height: 768px; overflow: hidden; }
-  #ui img { display: block; width: 1100px; visibility: hidden; }
+  #ui { left: 40px; top: 84px; width: 1240px; height: 872px; }
+  #ui .view { width: 1240px; height: 828px; overflow: hidden; }
+  #ui img { display: block; width: 1240px; visibility: hidden; transition: transform 0.7s cubic-bezier(.4,0,.2,1); }
 
-  #term { left: 1164px; top: 104px; width: 716px; height: 380px; transition: box-shadow 0.3s, border-color 0.3s; }
+  #term { left: 1304px; top: 84px; width: 576px; height: 400px; transition: box-shadow 0.3s, border-color 0.3s; }
   #term.dead { border-color: #ff4d5e88; box-shadow: 0 0 0 1px #ff4d5e55, 0 24px 60px #ff4d5e22; }
   #term-body {
-    padding: 16px 20px; font: 15px/1.55 var(--mono); color: #cfcfe0;
-    height: 336px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
+    padding: 14px 18px; font: 14px/1.55 var(--mono); color: #cfcfe0;
+    height: 356px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
   }
   .ln { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
   .ln.cmd { color: var(--text); }
@@ -94,6 +94,7 @@
   @keyframes blink { 50% { opacity: 0; } }
 
   .pill {
+    white-space: nowrap;
     font: 700 13px var(--mono); padding: 5px 12px; border-radius: 999px;
     display: inline-flex; align-items: center; gap: 8px; letter-spacing: 0.04em;
   }
@@ -104,10 +105,10 @@
   .pill.starting { color: var(--amber); background: #ffb5471a; }
   @keyframes pulse { 50% { opacity: 0.2; } }
 
-  #journal { left: 1164px; top: 508px; width: 716px; height: 408px; }
+  #journal { left: 1304px; top: 508px; width: 576px; height: 448px; }
   #journal-body { padding: 10px 14px; }
   .jrow {
-    display: grid; grid-template-columns: 34px 1fr 150px; align-items: center;
+    display: grid; grid-template-columns: 40px 1fr 130px; align-items: center;
     height: 34px; padding: 0 10px; border-radius: 9px; font: 15px var(--mono);
     animation: pop 0.35s cubic-bezier(.2,1.4,.4,1);
     transition: background 0.25s;
@@ -131,7 +132,7 @@
 
   /* Caption */
   #caption {
-    position: absolute; left: 40px; right: 40px; bottom: 30px; height: 112px;
+    position: absolute; left: 40px; right: 40px; bottom: 12px; height: 100px;
     display: flex; align-items: center; gap: 22px; padding: 0 28px;
   }
   #caption .n {
@@ -145,9 +146,23 @@
   @keyframes swap { from { opacity: 0; transform: translateY(10px); } }
 
   /* Full-width Restate UI */
-  #restate { left: 40px; top: 104px; width: 1840px; height: 812px; opacity: 0; transition: opacity 0.6s; }
+  #restate { left: 40px; top: 84px; width: 1840px; height: 872px; opacity: 0; transition: opacity 0.6s; }
   #restate.on { opacity: 1; }
-  #restate img { display: block; width: 1840px; height: 768px; }
+  #restate img { display: block; width: 1840px; height: 828px; }
+
+  /* The sub-agent fleet: one live page per child */
+  #fleet {
+    position: absolute; left: 40px; top: 84px; width: 1840px; height: 872px;
+    display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 16px;
+    opacity: 0; transition: opacity 0.6s; pointer-events: none;
+  }
+  #fleet.on { opacity: 1; }
+  #fleet .panel { position: relative; }
+  #fleet .panel-head { color: var(--text); }
+  #fleet .panel-head .who { font: 700 16px var(--sans); }
+  #fleet .view { width: 912px; height: 384px; overflow: hidden; }
+  #fleet img { display: block; width: 912px; }
+  #fleet .tile.done { border-color: #3ddc9766; }
 
   /* Title cards */
   #card {
@@ -190,7 +205,7 @@
   </section>
 
   <section class="panel" id="term">
-    <div class="panel-head"><span class="dots"><i></i><i></i><i></i></span>agent service · packages/libs/core<span class="right"><span class="pill running" id="svc">RUNNING</span></span></div>
+    <div class="panel-head"><span class="dots"><i></i><i></i><i></i></span>agent service<span class="right"><span class="pill running" id="svc">RUNNING</span></span></div>
     <div id="term-body"></div>
   </section>
 
@@ -203,6 +218,13 @@
   <section class="panel" id="restate">
     <div class="panel-head"><span class="dots"><i></i><i></i><i></i></span>localhost:9070 · Restate UI</div>
     <img id="restate-img" alt="">
+  </section>
+
+  <section id="fleet">
+    <div class="panel tile"><div class="panel-head"><span class="dots"><i></i><i></i><i></i></span><span class="who"></span><span class="right"><span class="pill starting">WORKING</span></span></div><div class="view"><img alt=""></div></div>
+    <div class="panel tile"><div class="panel-head"><span class="dots"><i></i><i></i><i></i></span><span class="who"></span><span class="right"><span class="pill starting">WORKING</span></span></div><div class="view"><img alt=""></div></div>
+    <div class="panel tile"><div class="panel-head"><span class="dots"><i></i><i></i><i></i></span><span class="who"></span><span class="right"><span class="pill starting">WORKING</span></span></div><div class="view"><img alt=""></div></div>
+    <div class="panel tile"><div class="panel-head"><span class="dots"><i></i><i></i><i></i></span><span class="who"></span><span class="right"><span class="pill starting">WORKING</span></span></div><div class="view"><img alt=""></div></div>
   </section>
 
   <div id="caption"><div class="n">1</div><div><div class="t"></div><div class="d"></div></div></div>
@@ -237,12 +259,33 @@
       $("speed").classList.toggle("on", factor > 1);
     },
 
-    uiCrop(px) {
-      $("ui-img").style.marginTop = `-${px}px`;
+    // Shows the web UI from this many pixels below its top; a change slides.
+    uiView(px) {
+      $("ui-img").style.transform = `translateY(-${px}px)`;
       $("ui-img").style.visibility = "visible";
     },
     uiFrame(data) { $("ui-img").src = `data:image/jpeg;base64,${data}`; },
     restateFrame(data) { $("restate-img").src = `data:image/jpeg;base64,${data}`; },
+    // The fleet grid: a tile per sub-agent, showing its page from `top` down.
+    fleetTile(index, name, top) {
+      const tile = document.querySelectorAll("#fleet .tile")[index];
+      tile.querySelector(".who").textContent = `sub-agent · ${name}`;
+      tile.querySelector("img").style.marginTop = `-${top}px`;
+    },
+    fleetFrame(index, data) {
+      document.querySelectorAll("#fleet img")[index].src = `data:image/jpeg;base64,${data}`;
+    },
+    fleetStatus(index, done) {
+      const tile = document.querySelectorAll("#fleet .tile")[index];
+      const pill = tile.querySelector(".pill");
+      pill.className = `pill ${done ? "running" : "starting"}`;
+      pill.textContent = done ? "✓ DONE" : "WORKING";
+      tile.classList.toggle("done", done);
+    },
+    showFleet(on) {
+      $("fleet").classList.toggle("on", on);
+      for (const id of ["ui", "term", "journal"]) $(id).style.opacity = on ? 0 : 1;
+    },
     showRestate(on) {
       $("restate").classList.toggle("on", on);
       for (const id of ["ui", "term", "journal"]) $(id).style.opacity = on ? 0 : 1;

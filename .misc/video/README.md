@@ -1,11 +1,17 @@
 # README video: a real session
 
-A real recording of the reference agent, in two acts:
+A real recording of the reference agent, in three acts:
 
 1. **An ordinary turn.** A casual request for a weekend plan. The model
-   writes a program whose three web searches run at once, saves `lisbon.md`
-   in its sandbox, and is steered while it works.
-2. **Kill it mid-turn.** A follow-up waits on a 30-second durable timer. The
+   writes a program whose three web searches run at once and is steered
+   while it works. The agent has a guardrail that makes file writes wait for
+   a person, so saving `lisbon.md` asks for approval in the UI's Approvals
+   panel, and the script approves it.
+2. **A fleet of sub-agents.** The agent hands four cities to four
+   sub-agents, which research at the same time. Each child is a whole agent,
+   so the script opens each child's own page, read-only, in a 2×2 grid, then
+   returns to the parent's combined answer.
+3. **Kill it mid-turn.** A follow-up waits on a 30-second durable timer. The
    service is killed with `kill -9`, started again, and Restate replays the
    turn's journal, so the turn reads the file back and answers.
 
@@ -19,11 +25,16 @@ when the UI or the runtime changes.
 | `cdp.mjs` | A tiny Chrome DevTools Protocol client (Node 22+, no npm packages) |
 | `encode.sh` | Turns the captured frames into `out/agent-demo.mp4` |
 
-Everything on screen comes from the running system except the titles and
-captions: the UI is streamed from its own tab, the terminal shows the
+Everything on screen comes from the running system except the titles,
+captions and the highlight on the Approve button before it is clicked: the UI is streamed from its own tab, the terminal shows the
 service's real log lines, and the journal panel is `sys_journal`. The quiet
 stretches (model calls after the steer, the service down, the timer
 running) play faster, shown by the badge in the header.
+
+The web UI renders 800 CSS pixels wide, its one-column layout, zoomed in so
+the text stays legible. To fit the frame, the script crops off the agent
+picker, injects one rule that shortens the conversation pane, and slides
+the view down to the Approvals panel while a decision is pending.
 
 ## Record
 
@@ -60,12 +71,14 @@ ffmpeg -i .misc/video/out/agent-demo.mp4 -vf fps=1/3 /tmp/frames/%02d.png
 
 Check that each ask went through at once (the prompt must not sit in the
 composer), that the steer landed while the turn ran (the script stops if it
-did not), that the kill happened while only the timer was open, that the
+did not), that each approval showed its card before the click, that all four
+sub-agent tiles filled and finished, that the
+kill happened while only the timer was open, that the
 journal marks only finished steps as replayed, and that the Restate UI scene
 shows the 30-second `sleep` row. The model's wording differs between takes,
 so read its answers too.
 
-A take runs about 75 seconds. If it runs much longer, look for leftover
+A take runs about two minutes. If it runs much longer, look for leftover
 headless Chrome processes (`pgrep -f readme-video-chrome`): they slow the UI
 down enough to delay the ask.
 
