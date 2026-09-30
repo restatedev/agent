@@ -148,10 +148,7 @@ See [history and context](docs/architecture.md#control-and-history).
 
 ### Waiting months for approval
 
-Approvals wait on durable signals that survive restarts. Other work can continue;
-when nothing can progress, Restate suspends the execution and releases the
-process. A decision months later resumes it, without keeping a polling worker
-alive. Steering and interruption still work while it waits. 
+When a guardrail needs a person, the turn suspends: no process, only stored state. It can wait weeks, through new versions of the service, and resumes where it stopped.
 
 ![An execution suspends while waiting for approval and resumes when the decision arrives](docs/images/durable-wait.svg)
 
