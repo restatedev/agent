@@ -130,13 +130,22 @@ work after process failures, without the need for locks or coordination.
 
 See [state ownership](docs/architecture.md#state-ownership).
 
-### Managing and storing messages and context
+### Durable history, memory, and compaction
 
-History, memories, and summaries live in Restate's embedded KV store. Chunked
-history and lazy state keep reads small; compaction trims model context while
-preserving the full transcript. The summary calls and state updates are durable
-too, so persistence and compaction don't need a separate database or recovery
-service. See [history and context](docs/architecture.md#control-and-history).
+This architecture uses Restate's embedded KV store for both conversation state 
+and context. Restate gives each agent session its own isolated store, and 
+ensures that only a single process can write to it at a time.
+
+This architecture also implements:
+- **Selective loading:** history is stored in chunks, and memories are retrieved
+  on demand. Clients read only the history they need to update the UI, 
+  and the model sees only relevant memories.
+- **Compaction background jobs:** Older messages are compacted in the background,
+  to avoid exceeding the LLM's context limit. The model sees the latest messages
+  verbatim, incl. the last summary. The full chat transcript is retained so the 
+  UI client can retrieve it, when needed.
+
+See [history and context](docs/architecture.md#control-and-history).
 
 ### Waiting months for approval
 
@@ -151,10 +160,12 @@ See [approvals](docs/protocol.md#context-and-approvals).
 
 ### Subscribing to session events
 
-The agent runs independently of the browser. The client watches revision counters
-and fetches changed data; sequence numbers let it catch up after disconnects
-without losing messages. Multiple tabs can follow the same session, and closing
-one doesn't stop the work. 
+The architecture includes a typed client for reading session data and following
+changes to history, approvals, configuration, and schedules. The reference UI
+uses HTTP long-polling and revision tags to fetch only what changed, while
+transcript sequence numbers let it catch up after disconnects. This support
+for live updates and reconnection is already implemented and works across
+multiple tabs, independently of the agent's execution.
 
 See [session updates](docs/protocol.md#history-and-notifications) and the [typed client](packages/libs/client/src/index.ts).
 
