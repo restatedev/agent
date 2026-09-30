@@ -16,8 +16,15 @@ node -e '
   require("fs").writeFileSync(process.argv[1] + "/frames.ffconcat", lines.join("\n") + "\n");
 ' "$out"
 
+# The frames are full-range JPEGs; convert to limited-range yuv420p at level
+# 4.1, which every player handles (QuickTime shows a still for yuvj420p).
+# Encode to a temporary file and rename it, so a player that has the old
+# video open never reads a half-written one.
 ffmpeg -y -loglevel error -f concat -safe 0 -i "$out/frames.ffconcat" \
-  -vf "fps=30,format=yuv420p" -c:v libx264 -preset slow -crf 20 \
-  -movflags +faststart "$out/agent-demo.mp4"
+  -vf "fps=30,scale=out_range=tv:out_color_matrix=bt709,format=yuv420p" \
+  -c:v libx264 -preset slow -crf 20 -profile:v high -level:v 4.1 \
+  -color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709 \
+  -movflags +faststart "$out/agent-demo.tmp.mp4"
+mv "$out/agent-demo.tmp.mp4" "$out/agent-demo.mp4"
 
 ls -lh "$out/agent-demo.mp4"
