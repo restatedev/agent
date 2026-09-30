@@ -1,8 +1,8 @@
 # A reference for building agentic systems
 
-Productionizing agents is notoriously difficult, because of their long-running, stateful nature.
-This reference architecture shows you the simplest way to build **durable, stateful,
-steerable, concurrent agents and agentic systems**.
+> Productionizing agents is notoriously difficult, because of their long-running, stateful nature.
+> This reference architecture shows you the simplest way to build **durable, stateful,
+> steerable, concurrent agents and agentic systems**.
 
 The architecture fully runs on Restate and your favorite container platform or
 serverless provider. Restate is a durable runtime for agents that gives you
@@ -13,21 +13,21 @@ managing a large infra stack.
 
 Each agent execution is a durable async process that is:
 
-- **Steerable**: Each execution has a handle that is stable across process
+- **STEERABLE**: Each execution has a handle that is stable across process
   restarts and can be used to steer it, interrupt it, or approve an action.
   Interrupts automatically propagate through subagents.
-- **Stateful**: Execution is isolated per agent session and stateful. Transcripts
+- **STATEFUL**: Execution is isolated per agent session and stateful. Transcripts
   and model context (preferences, instructions) are stored in Restate's
   embedded KV store.
 - **Recoverable**: Restate automatically keeps a journal per agent execution,
   to recover it automatically after a failure.
-- **Concurrent**: Agents can spawn parallel subagents and tools. Tools execute
+- **CONCURRENT**: Agents can spawn parallel subagents and tools. Tools execute
   as durable concurrent tasks within the process and can share resources like
   sandbox connections. Subagents run as separate durable invocations with their
   own state and resources.
-- **Scalable**: Agents can scale up to thousands of concurrent executions, with
+- **SCALABLE**: Agents can scale up to thousands of concurrent executions, with
   protection against concurrency issues and race conditions.
-- **Pausable**: When an execution needs to wait, it scales to zero. Restate
+- **PAUSABLE**: When an execution needs to wait, it scales to zero. Restate
   persists the timers, approval promises, or subagent invocations, and lets
   the execution resume when the waiting is over.
 
