@@ -77,7 +77,7 @@ Each agent has two Restate Virtual Objects (stateful entities addressed by key) 
 
 ![Two Virtual Objects share the same agentId: Agent accepts input and starts or signals AgentSession, which runs the turn and reports its outcome](docs/images/agent-objects.svg)
 
-This architecture makes the following advanced feature possible:
+This architecture makes the following advanced features possible:
 
 ### Steering and interruption via durable signals
 
