@@ -68,35 +68,44 @@ OAuth flows, and evals are not included.
 ## Architecture
 
 Each agent has two Restate Virtual Objects with the same `agentId`:
-[`Agent`](packages/libs/core/src/agent/service.ts) accepts input and tracks queued
-work; [`AgentSession`](packages/libs/core/src/session/service.ts) stores the
-conversation and runs each turn in `doTurn`. Both have persistent state and
-serialized writes. The controller stays responsive while the session works,
-without you managing locks or a separate message queue.
+
+- **[`Agent`](packages/libs/core/src/agent/service.ts)** handles incoming messages
+  and tracks the active turn, queued input, profile, memories, approvals, and schedules.
+- **[`AgentSession`](packages/libs/core/src/session/service.ts)** stores the
+  conversation and runs the model/tool loop. Each `doTurn` invocation handles
+  one request within a conversation.
 
 ![Two Virtual Objects share the same agentId: Agent accepts input and starts or signals AgentSession, which runs the turn and reports its outcome](docs/images/agent-objects.svg)
 
+This architecture makes the following advanced feature possible:
+
 ### Steering and interruption via durable signals
 
-`Agent` starts a turn, stores its `turnId`, and uses it to send durable signals.
-Steering adds input to the next LLM call; interruption stops unfinished work,
-including subagent tasks. These controls survive process restarts. The controller
-also handles messages that arrive as a turn finishes, so late input isn't lost.
-See [steering](docs/turn-runtime.md#steering) and
-[interruption](docs/turn-runtime.md#interruption-and-stopping).
+When an `Agent` starts a turn, it gets the `turnId` back, with which it can:
+- **Steer the turn**: adds an instruction to the context for the next LLM call.
+  Tools already running can finish.
+- **Interrupt the turn**: stops unfinished work, including subagent tasks, and asks
+  the model to summarize what it completed. 
 
 ![Client, Agent, and AgentSession in three columns, with events read from top to bottom: starting a turn, steering while tools continue, interrupting unfinished work, and returning a summary](docs/images/agent-responsive.svg)
 
+The implementation relies on Restate's durable signals, instead of plumbing together
+event queues and state machines.
+
+See [steering](docs/turn-runtime.md#steering) and
+[interruption](docs/turn-runtime.md#interruption-and-stopping).
+
 ### Fine-grained recovery within the agent loop
 
-Restate records LLM calls, guardrail checks, and durable operations inside tools
-separately, with [millisecond-scale overhead](https://restate.dev/vs/temporal).
-After a crash, it reuses recorded results and resumes unfinished work—even
-partway through a tool. You don't need to build checkpoints or a recovery
-worker. External writes still need idempotency when a call can succeed before
-its result is recorded. See [recovery](docs/turn-runtime.md#execution-shape).
+Each step in an agent loop is recorded in Restate's journal: LLM calls, guardrail
+checks, tool calls, state updates, approvals,... 
+After a failure or a long wait, the agent process can recover to the exact step
+where it left off, by replaying the journal.
 
-![A doTurn invocation records LLM, guardrail, and tool-step results in Restate; after a crash, it reuses those results and retries the unfinished tool operation](docs/images/agent-step-recovery.svg)
+![A doTurn invocation records LLM, guardrail, and tool-step results in Restate; after a crash, it reuses those results and retries the unfinished tool operation](docs/images/durable-turn.svg)
+
+Restate only adds a few milliseconds of overhead to persist a journal entry,
+making fine-grained recovery feasible.
 
 ### Parallelizing work within an execution
 
