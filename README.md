@@ -130,7 +130,7 @@ work after process failures, without the need for locks or coordination.
 
 See [state ownership](docs/architecture.md#state-ownership).
 
-### Consistent per-session history and memory with background compaction
+### Consistent per-session memory and background compaction
 
 This architecture uses Restate's embedded KV store for both conversation state 
 and context. Restate gives each agent session its own isolated store, and 
