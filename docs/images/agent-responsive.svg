@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="706" viewBox="0 0 1000 706" role="img" aria-labelledby="title desc">
+<title id="title">Client, Agent, and AgentSession interaction</title>
+<desc id="desc">Three columns show Client, Agent controller, and AgentSession. Agent and AgentSession each display a key icon labeled agentId, indicating that both use the same key. Read events from top to bottom: Agent starts the doTurn invocation and receives its invocation ID as turnId immediately; the doTurn handler contains the session execution steps; model and parallel tools run; steering reaches the next model step without stopping tools; an interrupt stops unfinished work; the session summarizes completed work and reports the outcome to the controller.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 10 5 0 10Z" style="fill:var(--blue)"/></marker></defs>
+<rect x="16" y="12" width="218" height="678" rx="12" class="panel"/>
+<text x="34" y="46" class="name" text-anchor="start">Client</text>
+<rect x="286" y="12" width="224" height="678" rx="12" class="panel"/>
+<text x="304" y="46" class="name" text-anchor="start">Agent</text>
+<g transform="translate(410 29)" fill="none" stroke="#d49b16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="14" cy="6" r="4"/><path d="M11 9 3 17M5 15 8 18M8 12 11 15"/></g>
+<text x="436" y="44" class="small">agent-123</text>
+<rect x="562" y="12" width="422" height="678" rx="12" class="panel"/>
+<text x="580" y="46" class="name" text-anchor="start">AgentSession</text>
+<g transform="translate(884 29)" fill="none" stroke="#d49b16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="14" cy="6" r="4"/><path d="M11 9 3 17M5 15 8 18M8 12 11 15"/></g>
+<text x="910" y="44" class="small">agent-123</text>
+<rect x="578" y="70" width="398" height="614" rx="10" class="handler"/>
+<text x="596" y="102" class="body">doTurn</text>
+<path d="M578 126H496" class="return"/>
+<text x="536" y="145" class="tiny" text-anchor="middle">turnId</text>
+<g class="event">
+<rect x="32" y="78" width="186" height="48" rx="8" class="input"/>
+<text x="45" y="99" class="body" text-anchor="start">ask</text>
+<text x="45" y="117" class="small" text-anchor="start">"Plan a Berlin trip"</text>
+</g>
+<g class="event">
+<path d="M218 102H300" class="edge"/>
+<rect x="302" y="78" width="192" height="48" rx="8" class="ok"/>
+<text x="315" y="99" class="body" text-anchor="start">Start turn</text>
+<text x="315" y="117" class="small" text-anchor="start">Store turnId</text>
+</g>
+<g class="event">
+<path d="M494 102H576" class="edge"/>
+<rect x="596" y="132" width="370" height="48" rx="8" class="model"/>
+<text x="609" y="153" class="body" text-anchor="start">LLM call</text>
+<text x="609" y="171" class="small" text-anchor="start">2 tool calls</text>
+</g>
+
+<g class="event">
+<text x="610" y="223" class="small" text-anchor="start">getWeather</text>
+<text x="610" y="275" class="small" text-anchor="start">webSearch: flights</text>
+</g>
+<g class="event">
+<rect x="610" y="240" width="150" height="12" rx="6" class="bar"/>
+</g>
+<g class="event">
+<rect x="610" y="292" width="300" height="12" rx="6" class="bar"/>
+</g>
+<g class="event">
+<circle cx="780" cy="246" r="9" class="ok"/>
+<text x="780" y="250" class="mark" text-anchor="middle">✓</text>
+</g>
+<g class="event">
+<rect x="32" y="339" width="186" height="48" rx="8" class="input"/>
+<text x="45" y="360" class="body" text-anchor="start">steer</text>
+<text x="45" y="378" class="small" text-anchor="start">"Only direct flights"</text>
+</g>
+<g class="event">
+<path d="M218 363H300" class="edge"/>
+<rect x="302" y="339" width="192" height="48" rx="8" class="ok"/>
+<text x="315" y="360" class="body" text-anchor="start">Signal turn</text>
+<text x="315" y="378" class="small" text-anchor="start">Accept new input</text>
+</g>
+<g class="event">
+<path d="M494 363H594" class="edge"/>
+<rect x="596" y="339" width="246" height="48" rx="8" class="warn"/>
+<text x="609" y="360" class="body" text-anchor="start">Steering received</text>
+<text x="609" y="378" class="small" text-anchor="start">Added to context for next LLM call</text>
+</g>
+<g class="event">
+<circle cx="930" cy="298" r="9" class="ok"/>
+<text x="930" y="302" class="mark" text-anchor="middle">✓</text>
+</g>
+<g class="event">
+<rect x="596" y="452" width="370" height="48" rx="8" class="model"/>
+<text x="609" y="473" class="body" text-anchor="start">LLM call</text>
+<text x="609" y="491" class="small" text-anchor="start">Tool results + steering</text>
+</g>
+<g class="event">
+<text x="610" y="523" class="small" text-anchor="start">webSearch: direct flights</text>
+</g>
+<g class="event">
+<rect x="610" y="540" width="300" height="12" rx="6" class="bar"/>
+</g>
+<g class="event">
+<rect x="32" y="547" width="186" height="34" rx="8" class="input"/>
+<text x="45" y="568" class="body" text-anchor="start">interrupt</text>
+</g>
+<g class="event">
+<path d="M218 564H300" class="edge"/>
+<rect x="302" y="547" width="192" height="34" rx="8" class="stop"/>
+<text x="315" y="568" class="body" text-anchor="start">Interrupt turn</text>
+</g>
+<g class="event">
+<path d="M494 564H930V557" class="edge"/>
+<circle cx="930" cy="546" r="9" class="stop"/>
+<text x="930" y="550" class="mark" text-anchor="middle">×</text>
+</g>
+<g class="event">
+<rect x="596" y="619" width="370" height="48" rx="8" class="model"/>
+<text x="609" y="640" class="body" text-anchor="start">LLM call</text>
+<text x="609" y="658" class="small" text-anchor="start">Summarize</text>
+</g>
+<g class="event">
+<path d="M596 637H496" class="edge"/>
+<rect x="302" y="620" width="192" height="34" rx="8" class="ok"/>
+<text x="315" y="641" class="body" text-anchor="start">Turn ended</text>
+</g>
+<style>:root {--bg:#fff;--ink:#294b69;--muted:#647b90;--border:#c6d6e4;--panel:#f8fafc;--blue:#25679e;--bluebg:#edf6fd;--purple:#8250df;--purplebg:#f3efff;--green:#1a7f37;--greenbg:#dafbe1;--red:#cf222e;--redbg:#ffebe9;--amber:#9a6700;--amberbg:#fff8c5;}
+@media(prefers-color-scheme:dark){:root {--bg:#0d1117;--ink:#e6edf3;--muted:#99adbf;--border:#35495b;--panel:#161b22;--blue:#79c0ff;--bluebg:#102b42;--purple:#b69aff;--purplebg:#251d3b;--green:#7ee787;--greenbg:#122e20;--red:#ff938a;--redbg:#381c20;--amber:#e3b341;--amberbg:#332b13;}}
+svg{background:var(--bg)}text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;fill:var(--ink)}.name{font-size:23px;font-weight:650}.body{font-size:16px;font-weight:600}.small{font-size:14px;fill:var(--muted)}.tiny{font-size:12px;fill:var(--muted)}.mark{font-size:13px;font-weight:700}.panel{fill:var(--panel);stroke:var(--border)}.handler{fill:none;stroke:var(--border);stroke-dasharray:5 4}.card{fill:var(--bg);stroke:var(--border)}.input{fill:var(--bluebg);stroke:var(--border)}.model{fill:var(--purplebg);stroke:var(--purple)}.ok{fill:var(--greenbg);stroke:var(--green)}.warn{fill:var(--amberbg);stroke:var(--amber)}.stop{fill:var(--redbg);stroke:var(--red)}.bar{fill:var(--blue)}.edge,.return{fill:none;stroke:var(--blue);stroke-width:1.5;marker-end:url(#arrow)}.return{stroke-dasharray:3 3}.event{opacity:1}
+</style></svg>

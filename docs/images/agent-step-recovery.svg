@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="352" viewBox="0 0 1000 352" role="img" aria-labelledby="title desc">
+<title id="title">Recovery of durable steps inside a turn</title><desc id="desc">Model and guardrail calls and operations inside tools run within doTurn. Restate records each result. After a process failure the invocation replays those results, skips the completed external calls, and retries the unfinished operation before recording its result.</desc>
+<style>:root {--bg:#fff;--ink:#294b69;--muted:#647b90;--border:#c6d6e4;--panel:#f8fafc;--blue:#25679e;--bluebg:#edf6fd;--purple:#8250df;--purplebg:#f3efff;--green:#1a7f37;--greenbg:#dafbe1;--red:#cf222e;--redbg:#ffebe9;--amber:#9a6700;--amberbg:#fff8c5;}
+@media(prefers-color-scheme:dark){:root {--bg:#0d1117;--ink:#e6edf3;--muted:#99adbf;--border:#35495b;--panel:#161b22;--blue:#79c0ff;--bluebg:#102b42;--purple:#b69aff;--purplebg:#251d3b;--green:#7ee787;--greenbg:#122e20;--red:#ff938a;--redbg:#381c20;--amber:#e3b341;--amberbg:#332b13;}}
+svg{background:var(--bg)}text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;fill:var(--ink)}.name{font-size:20px;font-weight:650}.body{font-size:16px;font-weight:600}.small{font-size:14px;fill:var(--muted)}.panel{fill:var(--panel);stroke:var(--border)}.model{fill:var(--purplebg);stroke:var(--purple)}.tool{fill:var(--bluebg);stroke:var(--border)}.ok{fill:var(--greenbg);stroke:var(--green)}.stop{fill:var(--redbg);stroke:var(--red)}.arrow{fill:none;stroke:var(--blue);stroke-width:1.5;marker-end:url(#arrow)}</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 10 5 0 10Z" style="fill:var(--blue)"/></marker></defs>
+<rect x="16" y="12" width="282" height="328" rx="9" class="panel"/>
+<text x="32" y="45" class="name" text-anchor="start">doTurn · first run</text>
+<rect x="366" y="12" width="268" height="328" rx="9" class="panel"/>
+<text x="382" y="45" class="name" text-anchor="start">Restate journal</text>
+<rect x="702" y="12" width="282" height="328" rx="9" class="panel"/>
+<text x="718" y="45" class="name" text-anchor="start">doTurn · after restart</text>
+<text x="332" y="77" class="small" text-anchor="middle">record</text>
+<text x="668" y="77" class="small" text-anchor="middle">reuse</text>
+<rect x="32" y="90" width="250" height="36" rx="9" class="model"/>
+<text x="44" y="113" class="body" text-anchor="start">LLM call</text>
+<rect x="382" y="90" width="236" height="36" rx="9" class="ok"/>
+<text x="394" y="113" class="body" text-anchor="start">Model response</text>
+<rect x="718" y="90" width="250" height="36" rx="9" class="ok"/>
+<text x="730" y="113" class="body" text-anchor="start">Use recorded response</text>
+<path d="M282 108H380" class="arrow"/>
+<path d="M618 108H716" class="arrow"/>
+<rect x="32" y="143" width="250" height="36" rx="9" class="model"/>
+<text x="44" y="166" class="body" text-anchor="start">Guardrail check</text>
+<rect x="382" y="143" width="236" height="36" rx="9" class="ok"/>
+<text x="394" y="166" class="body" text-anchor="start">Policy decision</text>
+<rect x="718" y="143" width="250" height="36" rx="9" class="ok"/>
+<text x="730" y="166" class="body" text-anchor="start">Use recorded decision</text>
+<path d="M282 161H380" class="arrow"/>
+<path d="M618 161H716" class="arrow"/>
+<rect x="32" y="196" width="250" height="36" rx="9" class="tool"/>
+<text x="44" y="219" class="body" text-anchor="start">Tool: fetch data</text>
+<rect x="382" y="196" width="236" height="36" rx="9" class="ok"/>
+<text x="394" y="219" class="body" text-anchor="start">Fetched data</text>
+<rect x="718" y="196" width="250" height="36" rx="9" class="ok"/>
+<text x="730" y="219" class="body" text-anchor="start">Use recorded data</text>
+<path d="M282 214H380" class="arrow"/>
+<path d="M618 214H716" class="arrow"/>
+<rect x="32" y="249" width="250" height="36" rx="9" class="stop"/>
+<text x="44" y="272" class="body" text-anchor="start">Tool: publish · interrupted</text>
+<text x="44" y="314" class="small" text-anchor="start">Crash before result is recorded</text>
+<rect x="718" y="249" width="250" height="36" rx="9" class="tool"/>
+<text x="730" y="272" class="body" text-anchor="start">Retry publish</text>
+<rect x="382" y="249" width="236" height="36" rx="9" class="ok"/>
+<text x="394" y="272" class="body" text-anchor="start">New result</text>
+<path d="M718 267H620" class="arrow"/>
+<text x="668" y="303" class="small" text-anchor="middle">record</text>
+</svg>
