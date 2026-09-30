@@ -19,7 +19,7 @@ Each agent execution is a durable async process that is:
 - **STATEFUL**: Execution is isolated per agent session and stateful. Transcripts
   and model context (preferences, instructions) are stored in Restate's
   embedded KV store.
-- **Recoverable**: Restate automatically keeps a journal per agent execution,
+- **RECOVERABLE**: Restate automatically keeps a journal per agent execution,
   to recover it automatically after a failure.
 - **CONCURRENT**: Agents can spawn parallel subagents and tools. Tools execute
   as durable concurrent tasks within the process and can share resources like
