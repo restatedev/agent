@@ -156,14 +156,12 @@ See [approvals](docs/protocol.md#context-and-approvals).
 
 ### Following live session updates and catching up after reconnecting
 
-The architecture includes a typed client for reading session data and following
+A [typed client](packages/libs/client/src/index.ts) reads session data and follows
 changes to history, approvals, configuration, and schedules. The reference UI
 uses HTTP long-polling and revision tags to fetch only what changed, while
-transcript sequence numbers let it catch up after disconnects. This support
-for live updates and reconnection is already implemented and works across
-multiple tabs, independently of the agent's execution.
+transcript sequence numbers let it catch up after disconnects. 
 
-See [session updates](docs/protocol.md#history-and-notifications) and the [typed client](packages/libs/client/src/index.ts).
+See [session updates](docs/protocol.md#history-and-notifications).
 
 ### Other features
 
