@@ -67,7 +67,7 @@ OAuth flows, and evals are not included.
 
 ## Architecture
 
-Each agent has two Restate Virtual Objects with the same `agentId`:
+Each agent has two Restate Virtual Objects (stateful entities addressed by key) keyed by the same `agentId`:
 
 - **[`Agent`](packages/libs/core/src/agent/service.ts)** handles incoming messages
   and tracks the active turn, queued input, profile, memories, approvals, and schedules.
@@ -130,7 +130,7 @@ work after process failures, without the need for locks or coordination.
 
 See [state ownership](docs/architecture.md#state-ownership).
 
-### Managing history and memory per session
+### Consistent per-session history and memory with background compaction
 
 This architecture uses Restate's embedded KV store for both conversation state 
 and context. Restate gives each agent session its own isolated store, and 
