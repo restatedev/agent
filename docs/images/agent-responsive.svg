@@ -92,7 +92,7 @@
 </g>
 <g class="event">
 <rect x="596" y="364" width="370" height="30" rx="8" class="model"/>
-<text x="609" y="383" class="body" text-anchor="start">LLM call</text>
+<text x="609" y="383" class="body" text-anchor="start">LLM call - summarize</text>
 </g>
 <g class="event">
 <path d="M596 379H496" class="edge"/>

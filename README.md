@@ -102,25 +102,33 @@ checks, tool calls, state updates, approvals,...
 After a failure or a long wait, the agent process can recover to the exact step
 where it left off, by replaying the journal.
 
-![A doTurn invocation records LLM, guardrail, and tool-step results in Restate; after a crash, it reuses those results and retries the unfinished tool operation](docs/images/durable-turn.svg)
-
 Restate only adds a few milliseconds of overhead to persist a journal entry,
 making fine-grained recovery feasible.
 
-### Parallelizing work within an execution
+![A doTurn invocation records LLM, guardrail, and tool-step results in Restate; after a crash, it reuses those results and retries the unfinished tool operation](docs/images/durable-turn.svg)
+
+### Resilient parallel work within an execution
 
 Tools run concurrently in the same process and share resources such as sandbox
 connections. Each tool's durable steps are recorded independently, so recovery
-can reuse completed work across the batch. The runtime handles joining results,
-waiting, and cancellation. See [parallel tools](docs/turn-runtime.md#agent-loop-iterations)
+can reuse completed work across the batch. The runtime handles deterministic
+replay during recovery.
+
+![Animation: one model step proposes three tool calls; the guardrails allow
+the batch in one check; the calls run concurrently, one fails and is reported
+as an error while the others finish; the next model step sees both results
+and the error](docs/images/parallel-tool-calls.svg)
+
+See [parallel tools](docs/turn-runtime.md#agent-loop-iterations)
 and [background operations](docs/tools.md#pending-tools).
 
 ### Scaling thousands of stateful agents
 
 Agent IDs run in parallel across service instances, while each session runs one
 turn at a time. Restate coordinates state access, routes calls, and recovers
-work after process failures. You can add instances without building distributed
-locks or pinning conversations to a server. See [state ownership](docs/architecture.md#state-ownership).
+work after process failures, without the need for locks or coordination. 
+
+See [state ownership](docs/architecture.md#state-ownership).
 
 ### Managing and storing messages and context
 
@@ -135,27 +143,25 @@ service. See [history and context](docs/architecture.md#control-and-history).
 Approvals wait on durable signals that survive restarts. Other work can continue;
 when nothing can progress, Restate suspends the execution and releases the
 process. A decision months later resumes it, without keeping a polling worker
-alive. Steering and interruption still work while it waits. See
-[approvals](docs/protocol.md#context-and-approvals).
+alive. Steering and interruption still work while it waits. 
 
 ![An execution suspends while waiting for approval and resumes when the decision arrives](docs/images/durable-wait.svg)
+
+See [approvals](docs/protocol.md#context-and-approvals).
 
 ### Subscribing to session events
 
 The agent runs independently of the browser. The client watches revision counters
 and fetches changed data; sequence numbers let it catch up after disconnects
 without losing messages. Multiple tabs can follow the same session, and closing
-one doesn't stop the work. See [session updates](docs/protocol.md#history-and-notifications)
-and the [typed client](packages/libs/client/src/index.ts).
+one doesn't stop the work. 
+
+See [session updates](docs/protocol.md#history-and-notifications) and the [typed client](packages/libs/client/src/index.ts).
 
 ### Other features
 
-[Subagents](docs/tools.md#sub-agents) keep their own conversation and state across
-tasks. [Schedules](docs/schedules.md) use durable timers to deliver future
-messages. [Memory](docs/architecture.md#context-and-delegation),
-[tool search](docs/tools.md#turn-local-tool-search), and
-[programmatic calls](docs/tools.md#programmatic-tool-calling-ptc) keep model
-context focused as the agent takes on more work.
+The reference architecture has many other features worth checking out. 
+Consult the table above for a complete list.
 
 ## Quickstart
 
