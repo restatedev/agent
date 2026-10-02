@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="510" viewBox="0 0 1500 510" role="img" aria-labelledby="title desc">
+<title id="title">Agent architecture with Restate</title>
+<desc id="desc">Chat sends ask, steer, approval and interrupt messages through Restate to a collection of agent processes. Restate provides durable execution, state and sessions, signals and interrupts, approvals and timers, and calls and concurrency. The agent processes loop between LLM calls and guardrails, tools and subagents, connecting to sandboxes, LLMs and MCP.</desc>
+<defs>
+  <g id="key" fill="none" stroke="#e5ac16" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="17" cy="7" r="5.5"/>
+    <path d="M 13 11 L 3 21 M 6 18 L 9 21 M 9 15 L 12 18"/>
+  </g>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#3575ab"/></marker>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; fill: #25679e; font-size: 22px; }
+    .heading { font-size: 28px; font-weight: 600; }
+    .small { font-size: 19px; }
+    .state { fill: #278065; }
+    .line { fill: none; stroke: #3575ab; stroke-width: 1.7; marker-end: url(#arrow); }
+  </style>
+</defs>
+<rect width="1500" height="510" fill="white"/>
+<!-- Chat -->
+<rect x="20" y="20" width="300" height="460" rx="10" fill="#edf6fd" stroke="#3575ab" stroke-width="1.5"/>
+<text x="170" y="60" text-anchor="middle" class="heading">Chat</text>
+<use href="#key" x="120" y="72"/>
+<text x="182" y="91" text-anchor="middle" class="small">agentId</text>
+<rect x="141" y="122" width="152" height="53" rx="8" fill="#c8e3f9"/>
+<path d="M 161 142 H 274 M 161 155 H 248" stroke="#77a5c9" stroke-width="3" stroke-linecap="round"/>
+<rect x="47" y="199" width="149" height="59" rx="8" fill="#d5ecdf"/>
+<path d="M 65 220 H 177 M 65 235 H 133" stroke="#7bab91" stroke-width="3" stroke-linecap="round"/>
+<rect x="107" y="285" width="186" height="76" rx="8" fill="#c8e3f9"/>
+<path d="M 127 306 H 274 M 127 322 H 260 M 127 339 H 223" stroke="#77a5c9" stroke-width="3" stroke-linecap="round"/>
+<rect x="47" y="389" width="125" height="49" rx="8" fill="#d5ecdf"/>
+<path d="M 65 410 H 151 M 65 423 H 117" stroke="#7bab91" stroke-width="3" stroke-linecap="round"/>
+<!-- Same control messages as the reference -->
+<g text-anchor="middle" class="small">
+<text x="384" y="127">ask</text>
+<text x="384" y="195">steer</text>
+<text x="384" y="263" class="state">approval</text>
+<text x="384" y="331">interrupt</text>
+<text x="384" y="399" class="state">respond</text>
+</g>
+<path d="M 332 140 H 438" class="line"/>
+<path d="M 332 208 H 438" class="line"/>
+<path d="M 332 276 H 438" class="line" marker-start="url(#arrow)"/>
+<path d="M 332 344 H 438" class="line"/>
+<path d="M 438 412 H 332" class="line"/>
+<!-- Restate: feature icons and labels -->
+<rect x="450" y="20" width="318" height="460" rx="10" fill="#ffffff" stroke="#3575ab" stroke-width="1.5"/>
+<text x="609" y="62" text-anchor="middle" class="heading" style="font-size:30px">Restate</text>
+<text x="609" y="91" text-anchor="middle" style="font-size:18px;fill:#627e96">durable runtime</text>
+<!-- Compact feature cards -->
+<rect x="469" y="126" width="280" height="51" rx="8" fill="#f5f9fd" stroke="#dce7f1"/>
+<rect x="469" y="187" width="280" height="91" rx="8" fill="#f3faf6" stroke="#d8eadd"/>
+<rect x="469" y="288" width="280" height="51" rx="8" fill="#f8f6fc" stroke="#e5dff0"/>
+<rect x="469" y="349" width="280" height="51" rx="8" fill="#fffbf2" stroke="#eee4cb"/>
+<rect x="469" y="410" width="280" height="51" rx="8" fill="#f5f9fd" stroke="#dce7f1"/>
+<!-- Durable execution: shield and check -->
+<g transform="translate(485 138)" fill="none" stroke="#3575ab" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+<path d="M 12 1 L 22 5 V 13 C 22 20 16 24 12 26 C 8 24 2 20 2 13 V 5 Z"/>
+<path d="M 7 13 L 11 17 L 18 9"/>
+</g>
+<text x="526" y="158" style="font-size:21px;font-weight:600">durable execution</text>
+<!-- State and sessions: database -->
+<g transform="translate(485 194)" fill="#edf7f1" stroke="#278065" stroke-width="1.6">
+<path d="M 1 5 V 22 C 1 29 23 29 23 22 V 5"/>
+<ellipse cx="12" cy="5" rx="11" ry="4.5"/>
+<path d="M 1 13 C 1 20 23 20 23 13" fill="none"/>
+</g>
+<text x="526" y="214" class="state" style="font-size:21px;font-weight:600">state &amp; sessions</text>
+<text x="485" y="255" class="state" style="font-size:16px">agentId → {messages, memory}</text>
+<!-- Signals and interrupts: broadcast -->
+<g transform="translate(485 304)" fill="none" stroke="#7362ab" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+<circle cx="12" cy="13" r="2" fill="#7362ab" stroke="none"/>
+<path d="M 7 8 A 7 7 0 0 0 7 18 M 17 8 A 7 7 0 0 1 17 18 M 3 4 A 13 13 0 0 0 3 22 M 21 4 A 13 13 0 0 1 21 22"/>
+</g>
+<text x="526" y="324" style="font-size:21px;font-weight:600">signals &amp; interrupts</text>
+<!-- Approvals and timers: clock and check -->
+<g transform="translate(485 363)" fill="none" stroke="#b18227" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+<path d="M 23 12 A 11 11 0 1 0 12 23 M 12 5 V 12 L 17 15 M 17 22 L 20 25 L 27 18"/>
+</g>
+<text x="526" y="383" style="font-size:21px;font-weight:600">approvals &amp; timers</text>
+<!-- Calls and concurrency: parallel branches -->
+<g transform="translate(485 424)" fill="none" stroke="#3575ab" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+<path d="M 1 12 H 8 M 8 3 V 21 M 8 3 H 24 M 8 21 H 24 M 20 0 L 24 3 L 20 6 M 20 18 L 24 21 L 20 24"/>
+</g>
+<text x="526" y="444" style="font-size:21px;font-weight:600">calls &amp; concurrency</text>
+<!-- Runtime to agent -->
+<path d="M 780 244 H 876" class="line" marker-start="url(#arrow)"/>
+<g text-anchor="middle" class="small">
+<text x="828" y="279">request,</text>
+<text x="828" y="307">retry,</text>
+<text x="828" y="335">interrupt</text>
+</g>
+<!-- Stacked outlines represent a collection of agent processes -->
+<rect x="900" y="32" width="318" height="460" rx="10" fill="#f1f6fb" stroke="#9bbbd6" stroke-width="1.5"/>
+<rect x="894" y="26" width="318" height="460" rx="10" fill="#f8fbfe" stroke="#6f9dc3" stroke-width="1.5"/>
+<rect x="888" y="20" width="318" height="460" rx="10" fill="#ffffff" stroke="#3575ab" stroke-width="1.5"/>
+<text x="1047" y="60" text-anchor="middle" class="heading">Agent processes</text>
+<use href="#key" x="997" y="72"/>
+<text x="1059" y="91" text-anchor="middle" class="small">agentId</text>
+<g text-anchor="middle">
+<text x="950" y="278">LLM</text>
+<text x="950" y="307">call</text>
+<text x="1111" y="255">guardrails,</text>
+<text x="1111" y="285">tools &amp;</text>
+<text x="1111" y="315">subagents</text>
+<text x="1037" y="172" class="small">call</text>
+<text x="1037" y="414" class="small">output</text>
+</g>
+<path d="M 950 240 C 950 170 1105 164 1111 216" class="line"/>
+<path d="M 1111 336 C 1111 398 950 411 950 330" class="line"/>
+<!-- External integrations -->
+<path d="M 1230 280 L 1310 223" class="line"/>
+<path d="M 1230 297 H 1310" class="line"/>
+<path d="M 1230 315 L 1310 372" class="line"/>
+<!-- Sandbox: cube -->
+<g transform="translate(1328 210)" fill="none" stroke="#3575ab" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+<path d="M 12 0 L 24 6 V 20 L 12 27 L 0 20 V 6 Z M 0 6 L 12 13 L 24 6 M 12 13 V 27 M 6 3 L 18 10"/>
+</g>
+<text x="1365" y="230">sandbox</text>
+<!-- LLM: conversation -->
+<g transform="translate(1328 284)" fill="none" stroke="#7362ab" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+<path d="M 4 3 H 22 Q 25 3 25 6 V 18 Q 25 21 22 21 H 11 L 5 26 V 21 H 4 Q 1 21 1 18 V 6 Q 1 3 4 3 Z"/>
+<path d="M 7 10 H 19 M 7 15 H 15"/>
+</g>
+<text x="1365" y="305">LLM</text>
+<!-- MCP: plug -->
+<g transform="translate(1328 359)" fill="none" stroke="#278065" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+<path d="M 7 0 V 8 M 19 0 V 8 M 3 8 H 23 M 5 8 V 13 C 5 23 21 23 21 13 V 8 M 13 21 V 27"/>
+</g>
+<text x="1365" y="380">MCP</text>
+</svg>

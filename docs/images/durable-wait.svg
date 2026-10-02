@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="Animation: a guardrail requires approval; the turn suspends and holds no process for about a day, while a new service version ships; when a person approves, the turn resumes, runs the deploy and replies.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="Animation: a guardrail requires approval; the turn suspends and holds no process for about a day, while a new service version ships; when a person approves, the turn resumes on its original deployment, runs the deploy and replies.">
 <style>
 :root { --bg:#ffffff; --ink:#1b1f24; --muted:#59636e; --stroke:#d0d7de; --lane:#f6f8fa;
   --ok:#1a7f37; --ok-bg:#dafbe1; --bad:#cf222e; --bad-bg:#ffebe9; --warn:#9a6700; --warn-bg:#fff8c5;
@@ -164,7 +164,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text class="chip-t" x="577.1" y="162">new version v2</text>
 </g>
 <g class="bar g12"><rect class="bar ok" x="759.7" y="124" width="215.3" height="14" rx="7"/></g>
-<text class="bar-t on-bar e13" x="769.7" y="135">resumed</text>
+<text class="bar-t on-bar e13" x="769.7" y="135">v1 resumed</text>
 <g class="link e14"><path d="M 775.7 196 V 145"/><polygon points="771.7,145 779.7,145 775.7,140"/></g>
 <g class="e15"><polyline class="break" points="670.5,24 680.5,34 670.5,44 680.5,54 670.5,64 680.5,74 670.5,84 680.5,94 670.5,104 680.5,114 670.5,124 680.5,134 670.5,144 680.5,154 670.5,164 680.5,174 670.5,184 680.5,194 670.5,204 680.5,214 670.5,224 680.5,234 670.5,244 680.5,254"/><text class="axis" x="675.5" y="16" text-anchor="middle"></text></g>
 <text class="axis e16" x="600.6" y="272">≈ 1 day later</text>
@@ -189,6 +189,6 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 </g>
 <g class="playhead"><line x1="170" y1="20" x2="170" y2="256"/><circle cx="170" cy="20" r="4"/></g>
 <g class="caption cap21"><circle class="step" cx="33" cy="313.0" r="9"/><text class="step-n" x="33" y="317.0">1</text><text x="50" y="318">A guardrail requires a person to approve the deploy before it runs.</text></g>
-<g class="caption cap22"><circle class="step" cx="33" cy="313.0" r="9"/><text class="step-n" x="33" y="317.0">2</text><text x="50" y="318">The turn suspends: no process, only state. New versions can ship while it waits.</text></g>
+<g class="caption cap22"><circle class="step" cx="33" cy="313.0" r="9"/><text class="step-n" x="33" y="317.0">2</text><text x="50" y="318">The turn suspends. New versions can ship; its original deployment must remain available.</text></g>
 <g class="caption cap23"><circle class="step" cx="33" cy="313.0" r="9"/><text class="step-n" x="33" y="317.0">3</text><text x="50" y="318">When the approval arrives a day later, the turn resumes exactly where it waited.</text></g>
 </svg>

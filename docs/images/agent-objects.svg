@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="152" viewBox="0 0 1000 152" role="img" aria-labelledby="title desc">
+<title id="title">Two Virtual Objects per agent</title><desc id="desc">Agent and AgentSession share the same agentId. Agent accepts input and starts or signals a turn in AgentSession; the session reports its outcome.</desc>
+<style>:root {--bg:#fff;--ink:#294b69;--muted:#647b90;--border:#c6d6e4;--panel:#f8fafc;--blue:#25679e;--bluebg:#edf6fd;--purple:#8250df;--purplebg:#f3efff;--green:#1a7f37;--greenbg:#dafbe1;--red:#cf222e;--redbg:#ffebe9;--amber:#9a6700;--amberbg:#fff8c5;}
+@media(prefers-color-scheme:dark){:root {--bg:#0d1117;--ink:#e6edf3;--muted:#99adbf;--border:#35495b;--panel:#161b22;--blue:#79c0ff;--bluebg:#102b42;--purple:#b69aff;--purplebg:#251d3b;--green:#7ee787;--greenbg:#122e20;--red:#ff938a;--redbg:#381c20;--amber:#e3b341;--amberbg:#332b13;}}
+svg{background:var(--bg)}text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;fill:var(--ink)}.name{font-size:20px;font-weight:650}.body{font-size:16px;font-weight:600}.small{font-size:14px;fill:var(--muted)}.panel{fill:var(--panel);stroke:var(--border)}.model{fill:var(--purplebg);stroke:var(--purple)}.tool{fill:var(--bluebg);stroke:var(--border)}.ok{fill:var(--greenbg);stroke:var(--green)}.stop{fill:var(--redbg);stroke:var(--red)}.arrow{fill:none;stroke:var(--blue);stroke-width:1.5;marker-end:url(#arrow)}</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 10 5 0 10Z" style="fill:var(--blue)"/></marker></defs>
+<rect x="16" y="12" width="378" height="128" rx="9" class="panel"/>
+<text x="34" y="47" class="name" text-anchor="start">Agent</text>
+<g transform="translate(292 29)" fill="none" stroke="#d49b16" stroke-width="2" stroke-linecap="round"><circle cx="14" cy="6" r="4"/><path d="M11 9 3 17M5 15 8 18M8 12 11 15"/></g>
+<text x="318" y="44" class="small" text-anchor="start">agentId</text>
+<text x="34" y="104" class="small" text-anchor="start">Input, queue, profile, memories</text>
+<rect x="606" y="12" width="378" height="128" rx="9" class="panel"/>
+<text x="624" y="47" class="name" text-anchor="start">AgentSession</text>
+<g transform="translate(882 29)" fill="none" stroke="#d49b16" stroke-width="2" stroke-linecap="round"><circle cx="14" cy="6" r="4"/><path d="M11 9 3 17M5 15 8 18M8 12 11 15"/></g>
+<text x="908" y="44" class="small" text-anchor="start">agentId</text>
+<text x="624" y="104" class="small" text-anchor="start">Conversation, model/tool loop</text>
+<path d="M394 60H604" class="arrow"/>
+<text x="500" y="49" class="small" text-anchor="middle">start / signal</text>
+<path d="M606 112H396" class="arrow"/>
+<text x="500" y="101" class="small" text-anchor="middle">turn outcome</text>
+</svg>

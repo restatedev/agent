@@ -14,7 +14,7 @@ cells = [
     ("model", "call 3 tools", "in parallel"),
     ("tool", "getWeather", "12°C, light rain"),
     ("tool", "webSearch", "5 results"),
-    ("tool", "runCommand", "exit 0"),
+    ("tool", "executeCommand", "exit 0"),
     ("model", "final answer", ""),
     ("reply", "published", "to the log"),
 ]
@@ -129,7 +129,7 @@ for i in range(RECORDED):
 captions = [
     ("Each model response and tool result is recorded in the turn&#8217;s journal.", 0, CRASH),
     ("The process crashes in the middle of the turn. The journal is safe in Restate.", CRASH, RESTART + 4),
-    ("After restart, Restate replays the journal: recorded results are reused, nothing runs twice.", RESTART + 4, 68),
+    ("After restart, Restate replays the journal and reuses the recorded results.", RESTART + 4, 68),
     ("The turn continues from where it stopped and publishes its answer.", 68, 101),
 ]
 for n, (text, a, b) in enumerate(captions):

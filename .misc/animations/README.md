@@ -19,7 +19,7 @@ fully before touching an animation.
 | `programmatic-tool-calls.svg` | `timeline.py` → `programmatic-tool-calls` | docs/tools.md: Programmatic tool calling | QuickJS program, guardrails per call, compact result (`ptc/runtime.ts`) |
 | `compaction.svg` | `timeline.py` → `compaction` | docs/architecture.md: Control and history | `COMPACT_AFTER_MESSAGES = 32`, `KEEP_RECENT_MESSAGES = 8` (`session/history.ts`) |
 | `schedules.svg` | `timeline.py` → `schedules` | docs/schedules.md: Contract | Timers are delayed `Agent.fire` invocations in Restate (`agent/schedules.ts`, `docs/schedules.md`) |
-| `parallel-tool-calls.svg` | `timeline.py` → `parallel-tool-calls` | README: 1. It calls tools in parallel | Guardrails gate the batch once, calls run concurrently, a failure is a result not a throw (`session/step.ts`, `session/tools.ts`) |
+| `parallel-tool-calls.svg` | `timeline.py` → `parallel-tool-calls` | README: Resilient parallel work within an execution | Calls run concurrently; a retryable readFile operation fails twice and succeeds on its third attempt, while completed results are retained (`session/step.ts`, `tools/sandbox.ts`, `tools-api.ts`) |
 | `background-operations.svg` | `timeline.py` → `background-operations` | docs/tools.md: Pending tools | Pending results, the turn waits while its text answer stands, `cancelOperation`, completion as a runtime message (`session/pending.ts`, `session/service.ts`, `tools/operations.ts`) |
 
 Code paths are relative to `packages/libs/core/src`.

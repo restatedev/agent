@@ -1,180 +1,169 @@
 # A reference agent architecture
 
-A complete agent, built on [Restate](https://restate.dev). Every feature a
-modern agent needs is here as a small module you can read in one sitting,
-and Restate keeps each turn running through crashes and days-long waits.
+> Productionizing agents is notoriously difficult, because of their long-running, stateful nature.
+> This reference architecture shows how to build **durable, stateful,
+> steerable, concurrent agents and agentic systems**.
 
-https://github.com/user-attachments/assets/41ddbac1-09a0-4a70-839a-79b29bd53331
+The architecture fully runs on Restate and your favorite container platform or
+serverless provider. Restate is a durable runtime for agents that gives you
+all the building blocks you need to build advanced, large-scale agentic systems without
+managing a large infra stack.
 
-*A real session: the model writes a program whose web searches run at
-once, you steer it and approve its file writes, it hands work to four
-sub-agents, and then the service is killed mid-turn and the turn still
-finishes.*
+https://github.com/user-attachments/assets/f2244c8f-5f4a-4a1f-87bd-39c0502f078f
 
-[Features](#features) · [One turn, start to finish](#one-turn-start-to-finish) ·
-[How a turn works](#how-a-turn-works) · [Quickstart](#quickstart) ·
-[Documentation](docs/README.md)
+## Core idea
+
+Each agent execution is a durable async process that is:
+
+- **STEERABLE**: Each execution has a handle that is stable across process
+  restarts and can be used to steer it, interrupt it, or approve an action.
+  Interrupts automatically propagate through subagents.
+- **STATEFUL**: Execution is isolated per agent session and stateful. Transcripts
+  and profile data (memories, instructions) are stored in Restate's
+  embedded KV store.
+- **RECOVERABLE**: Restate automatically keeps a journal per agent execution,
+  to recover it automatically after a failure.
+- **CONCURRENT**: Agents can spawn parallel subagents and tools. Tools execute
+  as durable concurrent tasks within the process and can share resources like
+  sandbox connections. Subagents run as separate durable invocations with their
+  own state and resources.
+- **SCALABLE**: Agents can scale up to thousands of concurrent executions, with
+  protection against concurrency issues and race conditions.
+- **PAUSABLE**: Restate can suspend an invocation waiting on a durable timer,
+  approval signal, or child invocation, then resume it when ready. Suspension
+  releases that invocation's execution on serverless platforms.
+
+**Implementing these characteristics in a production-grade manner is
+challenging and usually requires a lot of infra and coordination logic. In this
+reference architecture, the agent processes rely on Restate to handle this complexity**:
+
+[![Chat, Restate's durable building blocks, and agent processes connected to models, sandboxes, and MCP](docs/images/agent-architecture.png)](docs/images/agent-architecture.svg)
+
+## What this reference includes
+
+This is a runnable TypeScript implementation with an agent runtime, a typed
+client, and an optional demo UI. You can use it as a starting point
+for your own application or take individual patterns into an existing agent.
+The reference focuses on agent execution and session management. User accounts,
+OAuth flows, and evals are not included.
 
 ## Features
 
-<table>
-<tr>
-<td width="50%"><strong><a href="docs/turn-runtime.md#agent-loop-iterations">Parallel tool calls</a></strong><br>Every call in a model response runs at once; a failure goes back to the model.</td>
-<td width="50%"><strong><a href="docs/tools.md#pending-tools">Background operations</a></strong><br>Timers and approvals run on while the model works. It can wait or cancel.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/turn-runtime.md#steering">Steering and interrupts</a></strong><br>Redirect or stop a turn while it runs, without losing finished work.</td>
-<td><strong><a href="docs/tools.md#sub-agents">Sub-agents</a></strong><br>Delegate tasks to agents with their own history, sandbox and memory.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/turn-runtime.md#guardrails">Guardrails</a></strong><br>Plain-language rules. A policy model allows, blocks or asks a person.</td>
-<td><strong><a href="docs/protocol.md#context-and-approvals">Human approval</a></strong><br>A turn can wait days for a decision, holding no process.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/tools.md#programmatic-tool-calling-ptc">Programmatic tool calls</a></strong><br>The model writes a small program; only its result enters the context.</td>
-<td><strong><a href="docs/architecture.md#control-and-history">Compaction</a></strong><br>Long conversations and long turns are summarized, recent steps kept verbatim.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/schedules.md">Schedules</a></strong><br>Messages to the agent later, once or on a recurrence. No cron.</td>
-<td><strong><a href="docs/architecture.md#context-and-delegation">Memory</a></strong><br>A searchable index, so context does not grow with the memories.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/tools.md#turn-local-tool-search">Tool search</a></strong><br>MCP and discovered tools load on demand, keeping large catalogs out of context.</td>
-<td><strong><a href="docs/sandboxes.md">Sandboxes</a></strong><br>A local directory or <a href="https://modal.com">Modal</a> sandbox for files and commands.</td>
-</tr>
-<tr>
-<td><strong><a href="docs/tools.md#dynamically-discovered-restate-tools">Extensible tools</a></strong><br>One module per tool, plus MCP servers and Restate handlers.</td>
-<td><strong><a href="docs/turn-runtime.md#model-output-budgets-and-recovery">Output recovery</a></strong><br>A truncated response gets one retry with a bigger output budget.</td>
-</tr>
-</table>
+| Feature | What you can do                                                                                                                    |
+| --- |------------------------------------------------------------------------------------------------------------------------------------|
+| **[Queueing, steering, and interruption](docs/turn-runtime.md#steering)** | Queue a new request, add instructions to an ongoing execution, or interrupt it and optionally start a replacement.                 |
+| **[Parallel tools](docs/turn-runtime.md#agent-loop-iterations)** | Run independent tool calls concurrently and return their results or errors to the model.                                           |
+| **[Background operations](docs/tools.md#pending-tools)** | Continue model steps while tool-requested timers or approvals are pending; wait for or cancel them later. |
+| **[Subagents](docs/tools.md#sub-agents)** | Delegate work to persistent agents with their own history, memory, and sandbox, then send follow-up tasks to the same agents.      |
+| **[Guardrails](docs/turn-runtime.md#guardrails)** | Define guardrails that guard against dangerous or unwanted tool behavior.                                                          |
+| **[Human approval](docs/protocol.md#context-and-approvals)** | Wait durably for a decision. The controller continues accepting steering and interruption; a guardrail wait holds its current proposal. |
+| **[Programmatic tool calling](docs/tools.md#programmatic-tool-calling-ptc)** | Let the model write JavaScript that combines tool calls and returns a result without putting all intermediate data in its context. |
+| **[Tool search](docs/tools.md#turn-local-tool-search)** | Find tools from MCP servers and Restate services, loading their schemas into model context only when needed.                       |
+| **[Memory](docs/architecture.md#context-and-delegation)** | Store information across turns, search memory descriptions, and retrieve the entries relevant to the task.                         |
+| **[Compaction](docs/architecture.md#control-and-history)** | Summarize older conversation history in the background and compact long-running turns, while keeping recent context verbatim.      |
+| **[Schedules](docs/schedules.md)** | Schedule one-off or recurring messages, with a policy to queue, steer, or interrupt when the agent is busy.                        |
+| **[Sandboxes](docs/sandboxes.md)** | Read and write files and run commands in a local workspace or Modal sandbox, keeping files between turns.                          |
+| **[Client updates](docs/protocol.md#history-and-notifications)** | Follow a running agent, reconnect after a connection failure, and read new history from an offset.                                 |
+| **[Extensible tools](docs/tools.md)** | Add built-in tools, connect MCP servers, or expose Restate handlers as tools.                                                      |
+| **[Output recovery](docs/turn-runtime.md#model-output-budgets-and-recovery)** | Retry a truncated model response at most once with a larger output budget, if it is below the runtime's cap. |
 
-## One turn, start to finish
+## Architecture
 
-Here is one turn, from the first message to the answer, and what Restate
-does for it along the way.
+Each agent has two Restate Virtual Objects (stateful entities addressed by key) keyed by the same `agentId`:
 
-### 1. It calls tools in parallel
+- **[`Agent`](packages/libs/core/src/agent/service.ts)** handles incoming messages
+  and tracks the active turn, queued input, profile, memories, approvals, and schedules.
+- **[`AgentSession`](packages/libs/core/src/session/service.ts)** stores the
+  conversation and runs the model/tool loop. Each `doTurn` invocation handles
+  one turn, which may incorporate several queued messages or steering updates.
 
-The model asks for three tools, the guardrails check them once, and they
-run together. Each result is recorded as it lands, and a call that fails
-goes back to the model as an error.
+![Two Virtual Objects share the same agentId: Agent accepts input and starts or signals AgentSession, which runs the turn and reports its outcome](docs/images/agent-objects.svg)
 
-![Animation: one model step proposes three tool calls; the guardrails allow
-the batch in one check; the calls run concurrently, one fails and is reported
-as an error while the others finish; the next model step sees both results
-and the error](docs/images/parallel-tool-calls.svg)
+This architecture makes the following advanced features possible:
 
-### 2. You steer it while it works
+### Steer and interrupt ongoing agent executions
 
-A new message does not have to wait for the turn to end. A steer reaches the
-next model step without cancelling tools in flight, and an interrupt stops
-the turn with a summary of what it did.
+When an `Agent` starts a turn, it gets the `turnId` back, with which it can:
+- **Steer the turn**: adds an instruction to the context for the next LLM call.
+  Tools already running can finish.
+- **Interrupt the turn**: stops unfinished work, including subagent tasks, and asks
+  the model to summarize what it completed.
 
-![Animation: while a turn runs tools in parallel, the client steers it and the
-controller answers at once; an interrupt later cancels the remaining tool and
-the turn ends with a summary](docs/images/steer-interrupt.svg)
+Restate provides durable signal delivery. The reference implements the routing,
+turn state machine, and cleanup rules on top of it.
 
-### 3. It waits a day for your approval
+![Client, Agent, and AgentSession in three columns, with events read from top to bottom: starting a turn, steering while tools continue, interrupting unfinished work, and returning a summary](docs/images/agent-responsive.svg)
 
-When a guardrail needs a person, the turn suspends: no process, only stored
-state. It can wait a day, through new versions of the service, and resumes
-where it stopped.
+See [steering](docs/turn-runtime.md#steering) and
+[interruption](docs/turn-runtime.md#interruption-and-stopping).
 
-![Animation: a guardrail requires approval; the turn suspends for about a day
-while a new service version ships; when a person approves, the turn resumes
-and finishes](docs/images/durable-wait.svg)
+### Fine-grained recovery within the agent loop
 
-### 4. It survives a crash
+Each step in an agent loop is recorded in Restate's journal: LLM calls, guardrail
+checks, tool calls, state updates, approvals,... 
+After a failure or a long wait, the agent process can recover to the exact step
+where it left off, by replaying the journal.
 
-Every model call and tool result is in the turn's journal. If the process
-dies, Restate replays the journal: nothing is asked or run twice, and the
-turn finishes.
+Restate only adds a few milliseconds of overhead to persist a journal entry,
+making fine-grained recovery feasible.
 
-![Animation: a turn journals a model call and three tool results, the process
-crashes, and after restart Restate replays the journal, reuses every recorded
-result and the turn finishes](docs/images/durable-turn.svg)
+![A doTurn invocation records LLM, guardrail, and tool-step results in Restate; after a crash, it reuses those results and retries the unfinished tool operation](docs/images/durable-turn.svg)
 
-## Why Restate
+### Resilient parallel work within an execution
 
-Every feature above gets the same guarantees, because they come from Restate
-rather than from each feature:
+Tools run concurrently in the same process and share resources such as sandbox
+connections. Each tool's durable steps are recorded independently, so recovery
+can reuse completed work across the batch. The runtime handles deterministic
+replay during recovery.
 
-- **A crash resumes the turn.** Restate replays the turn's journal. Recorded
-  model responses and tool results are reused, so the model is never asked
-  to repeat a decision and completed tool calls are not re-run.
-- **New versions don't break running turns.** Restate keeps each turn on
-  the service version it started on; new turns use the new version.
-- **Waiting is free.** A turn can wait hours or days for an approval, a timer
-  or a sub-agent. While it waits it holds no process, only stored state.
-- **Always responsive.** `ask`, `steer` and `interrupt` return right away,
-  even while a turn runs for minutes.
-- **Nothing else to operate.** State, messages, timers and notifications all
-  live in Restate: no database, queue or scheduler of the agent's own. Each
-  agent's state has a single owner, so there are no locks. The service is
-  stateless: it scales out, or builds into a single bundle for serverless.
+![Three tools run concurrently. Restate retries a readFile operation after two
+transient failures until its third attempt succeeds. The other calls keep their
+completed results, and all three results return to the model.](docs/images/parallel-tool-calls.svg)
 
-**What replay does not do:** make external side effects exactly-once. A crash
-between an MCP call completing and its result being recorded can repeat that
-call.
+See [parallel tools](docs/turn-runtime.md#agent-loop-iterations)
+and [background operations](docs/tools.md#pending-tools).
 
-## How a turn works
+### Scaling thousands of stateful agents
 
-Each agent is two Restate Virtual Objects with the same key:
+Agent IDs run in parallel across service instances, while each session runs one
+turn at a time. Restate coordinates state access, routes calls, and recovers
+work after process failures, without the need for locks or coordination. 
 
-- **`Agent`**, the controller. It decides what happens to each incoming
-  message and owns the profile: instructions, guardrails, memories, tool
-  grants, approvals, schedules and child agents. Its handlers are short, so
-  it always answers.
-- **`AgentSession`**, the turn. One `doTurn` invocation is one turn. It owns
-  the append-only conversation log and runs the model/tool loop.
+See [state ownership](docs/architecture.md#state-ownership).
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant C as Client
-  participant A as Agent (controller)
-  participant S as AgentSession (turn)
-  participant M as Model, guardrails, tools
+### Consistent per-session memory and background compaction
 
-  C->>A: ask("Weather in Berlin?")
-  A-)S: doTurn(profile snapshot), one way
-  A-->>C: started, turnId
-  S->>S: append to log, build context
+This architecture uses Restate's embedded KV store for both conversation state 
+and context. Restate gives each agent session its own isolated store, and 
+ensures that only a single process can write to it at a time.
 
-  S->>M: model step
-  M-->>S: proposal: call 3 tools
-  S->>M: guardrail check
-  par tool calls run concurrently
-    S->>M: getWeather
-  and
-    S->>M: webSearch
-  and
-    S->>M: runCommand
-  end
+This architecture also implements:
+- **Selective loading:** history is stored in chunks, and memories are retrieved
+  on demand. Clients read only the history they need to update the UI, 
+  and the model sees only relevant memories.
+- **Compaction background jobs:** Older messages are compacted in the background,
+  to avoid exceeding the LLM's context limit. The model sees the latest messages
+  verbatim, incl. the last summary. The full chat transcript is retained so the 
+  UI client can retrieve it, when needed.
 
-  C->>A: steer("Use Fahrenheit")
-  A-)S: steering signal, addressed to turnId
-  Note over S: A crash anywhere here is harmless. Restate replays the journal and reuses every recorded result.
+See [history and context](docs/architecture.md#control-and-history).
 
-  S->>M: model step, with tool results and steering
-  M-->>S: final answer
-  S-)A: onTurnEnd(outcome)
-  Note over A: Retire the turn. Start the next one if messages were queued.
+### Waiting durably for approval
 
-  C->>A: watch(afterRevision), long poll
-  A-->>C: history changed
-  C->>S: history(fromSequence)
-  S-->>C: new entries
-```
+When a guardrail needs a person, the turn suspends: no process, only stored state. It can wait weeks, through new versions of the service, and resumes where it stopped.
 
-The controller keeps track of the currently executing turn. `steer`,
-`interrupt` and approval decisions reach the turn as durable signals
-addressed to its invocation ID, the `turnId`, so they never land in the
-wrong turn.
+![An execution suspends while waiting for approval and resumes when the decision arrives](docs/images/durable-wait.svg)
 
-`doTurn` runs the model calls and tools itself, as in-process function calls.
-Each result is appended to the turn's journal over one open, low-latency
-stream to Restate. That append is the only persistence a step needs.
+See [approvals](docs/protocol.md#context-and-approvals).
+
+### Subscribing to session updates and reconnecting later
+
+The reference UI uses a [typed client](packages/libs/client/src/index.ts) to read session data and follow
+changes to history, approvals, configuration, and schedules. The UI
+uses HTTP long-polling and revision tags to fetch only what changed, while
+transcript sequence numbers let it catch up after disconnects. 
+
+See [session updates](docs/protocol.md#history-and-notifications).
 
 ## Further reading
 

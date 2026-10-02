@@ -333,7 +333,7 @@ def durable_wait():
     a.bar(0, 30, 124, "ok", "running", label_on_bar=True)
     a.bar(31, 62, 124, "idle", "suspended: no process, only state")
     a.chip(42, 142, 124, "tool", "new version v2")
-    a.bar(63, 86, 124, "ok", "resumed", label_on_bar=True)
+    a.bar(63, 86, 124, "ok", "v1 resumed", label_on_bar=True)
     a.link(63, 196, 140)
 
     a.time_break(54, 24, 256, "")
@@ -347,12 +347,12 @@ def durable_wait():
     a.playhead(20, 256)
     a.captions(318, [
         ("A guardrail requires a person to approve the deploy before it runs.", 0, 30),
-        ("The turn suspends: no process, only state. New versions can ship while it waits.", 30, 62),
+        ("The turn suspends. New versions can ship; its original deployment must remain available.", 30, 62),
         ("When the approval arrives a day later, the turn resumes exactly where it waited.", 62, 101),
     ])
     a.write("durable-wait.svg",
             "Animation: a guardrail requires approval; the turn suspends and holds no process for about a day, "
-            "while a new service version ships; when a person approves, the turn resumes, runs the deploy and replies.")
+            "while a new service version ships; when a person approves, the turn resumes on its original deployment, runs the deploy and replies.")
 
 
 def sub_agents():
@@ -540,7 +540,7 @@ def schedules():
 
 
 def parallel_tool_calls():
-    a = Animation(1000, 360, 16, 86)
+    a = Animation(1000, 360, 18, 86)
     a.lane(20, 64, "Turn", "model steps")
     a.lane(94, 54, "Guardrails")
     a.lane(158, 128, "Tools")
@@ -554,24 +554,30 @@ def parallel_tool_calls():
     a.mark(40, 202, "ok", "✓")
     a.bar(26, 52, 226, "tool", "webSearch")
     a.mark(52, 238, "ok", "✓")
-    a.bar(26, 34, 262, "tool", "runCommand")
+    # readFile retries transport failures up to three attempts; shell commands
+    # deliberately do not. Show success on the third attempt, not infinite retry.
+    a.bar(26, 34, 262, "tool", "readFile")
     a.mark(34, 274, "bad", "✕")
-    a.axis_label(37, 274, "failed: reported to the model, the others keep running")
+    a.bar(38, 46, 262, "tool", "retry 1")
+    a.mark(46, 274, "bad", "✕")
+    a.bar(52, 64, 262, "tool", "retry 2")
+    a.mark(64, 274, "ok", "✓")
 
-    a.chip(54, 34, 164, "model", "model step", "2 results + 1 error")
-    a.link(54, 176, 80)
-    a.chip(73, 41, 80, "reply", "reply")
+    a.chip(67, 34, 120, "model", "model step", "3 results")
+    a.link(67, 276, 80, dx=0)
+    a.chip(80, 41, 64, "reply", "reply")
 
     a.playhead(20, 286)
     a.captions(330, [
-        ("One model response proposes three tool calls, and the guardrails check them as one batch.", 0, 25),
-        ("They run concurrently. runCommand fails, and its error does not discard the other results.", 25, 53),
-        ("The next model step sees both results and the error, and decides what to do.", 53, 101),
+        ("One model response proposes three tool calls; the guardrails check the batch.", 0, 25),
+        ("Restate retries readFile after transient failures. The other calls keep their results.", 25, 66),
+        ("The retry succeeds. All three results reach the next model step; completed calls are not rerun.", 66, 101),
     ])
     a.write("parallel-tool-calls.svg",
-            "Animation: one model step proposes three tool calls; the guardrails allow the batch in one check; "
-            "the calls run concurrently, one fails and is reported as an error while the others finish; the "
-            "next model step sees both results and the error, and replies.")
+            "Animation: three tool calls run concurrently after a guardrail check. readFile encounters "
+            "two transient failures and Restate retries it, succeeding on the third attempt. "
+            "getWeather and webSearch finish once and keep their results. The next model step "
+            "receives all three successful results and replies.")
 
 
 def background_operations():

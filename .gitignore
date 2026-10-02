@@ -26,3 +26,6 @@ next-env.d.ts
 # Restate
 .restate
 restate-data
+
+
+.idea

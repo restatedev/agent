@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="420" viewBox="0 0 1000 420" role="img" aria-labelledby="title desc">
+<title id="title">Client, Agent, and AgentSession interaction</title>
+<desc id="desc">Three columns show Client, Agent controller, and AgentSession. Agent and AgentSession each display a key icon labeled agentId, indicating that both use the same key. Read events from top to bottom: Agent starts the doTurn invocation and receives its invocation ID as turnId immediately; the doTurn handler contains the session execution steps; model and parallel tools run; steering reaches the next model step without stopping tools; an interrupt stops unfinished work; the session summarizes completed work and reports the outcome to the controller.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 10 5 0 10Z" style="fill:var(--blue)"/></marker></defs>
+<rect x="16" y="12" width="218" height="396" rx="12" class="panel"/>
+<text x="34" y="35" class="name" text-anchor="start">Client</text>
+<rect x="286" y="12" width="224" height="396" rx="12" class="panel"/>
+<text x="304" y="35" class="name" text-anchor="start">Agent</text>
+<g transform="translate(410 19)" fill="none" stroke="#d49b16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="14" cy="6" r="4"/><path d="M11 9 3 17M5 15 8 18M8 12 11 15"/></g>
+<text x="436" y="34" class="small">agent-123</text>
+<rect x="562" y="12" width="422" height="396" rx="12" class="panel"/>
+<text x="580" y="35" class="name" text-anchor="start">AgentSession</text>
+<g transform="translate(884 19)" fill="none" stroke="#d49b16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="14" cy="6" r="4"/><path d="M11 9 3 17M5 15 8 18M8 12 11 15"/></g>
+<text x="910" y="34" class="small">agent-123</text>
+<rect x="578" y="49" width="398" height="353" rx="10" class="handler"/>
+<text x="596" y="72" class="body">doTurn</text>
+<path d="M578 94H496" class="return"/>
+<text x="536" y="110" class="tiny" text-anchor="middle">turnId</text>
+<g class="event">
+<rect x="32" y="52" width="186" height="42" rx="8" class="input"/>
+<text x="45" y="69" class="body" text-anchor="start">ask</text>
+<text x="45" y="87" class="small" text-anchor="start">"Plan a Berlin trip"</text>
+</g>
+<g class="event">
+<path d="M218 73H300" class="edge"/>
+<rect x="302" y="52" width="192" height="42" rx="8" class="ok"/>
+<text x="315" y="69" class="body" text-anchor="start">Start turn</text>
+<text x="315" y="87" class="small" text-anchor="start">Store turnId</text>
+</g>
+<g class="event">
+<path d="M494 73H576" class="edge"/>
+<rect x="596" y="86" width="370" height="30" rx="8" class="model"/>
+<text x="609" y="105" class="body" text-anchor="start">LLM call</text>
+</g>
+
+<g class="event">
+<text x="610" y="134" class="small" text-anchor="start">getWeather</text>
+<text x="610" y="174" class="small" text-anchor="start">webSearch: flights</text>
+</g>
+<g class="event">
+<rect x="610" y="143" width="150" height="10" rx="5" class="bar"/>
+</g>
+<g class="event">
+<rect x="610" y="183" width="300" height="10" rx="5" class="bar"/>
+</g>
+<g class="event">
+<circle cx="780" cy="148" r="9" class="ok"/>
+<text x="780" y="152" class="mark" text-anchor="middle">✓</text>
+</g>
+<g class="event">
+<rect x="32" y="209" width="186" height="42" rx="8" class="input"/>
+<text x="45" y="226" class="body" text-anchor="start">steer</text>
+<text x="45" y="244" class="small" text-anchor="start">"Only direct flights"</text>
+</g>
+<g class="event">
+<path d="M218 230H300" class="edge"/>
+<rect x="302" y="215" width="192" height="30" rx="8" class="ok"/>
+<text x="315" y="234" class="body" text-anchor="start">Signal turn</text>
+</g>
+<g class="event">
+<path d="M494 230H594" class="edge"/>
+<rect x="596" y="215" width="246" height="30" rx="8" class="warn"/>
+<text x="609" y="234" class="body" text-anchor="start">Steering added to context</text>
+</g>
+<g class="event">
+<circle cx="930" cy="188" r="9" class="ok"/>
+<text x="930" y="192" class="mark" text-anchor="middle">✓</text>
+</g>
+<g class="event">
+<rect x="596" y="257" width="370" height="30" rx="8" class="model"/>
+<text x="609" y="276" class="body" text-anchor="start">LLM call</text>
+</g>
+<g class="event">
+<text x="610" y="305" class="small" text-anchor="start">webSearch: direct flights</text>
+</g>
+<g class="event">
+<rect x="610" y="314" width="300" height="10" rx="5" class="bar"/>
+</g>
+<g class="event">
+<rect x="32" y="324" width="186" height="30" rx="8" class="input"/>
+<text x="45" y="343" class="body" text-anchor="start">interrupt</text>
+</g>
+<g class="event">
+<path d="M218 339H300" class="edge"/>
+<rect x="302" y="324" width="192" height="30" rx="8" class="stop"/>
+<text x="315" y="343" class="body" text-anchor="start">Interrupt turn</text>
+</g>
+<g class="event">
+<path d="M494 339H930V330" class="edge"/>
+<circle cx="930" cy="319" r="9" class="stop"/>
+<text x="930" y="323" class="mark" text-anchor="middle">×</text>
+</g>
+<g class="event">
+<rect x="596" y="364" width="370" height="30" rx="8" class="model"/>
+<text x="609" y="383" class="body" text-anchor="start">LLM call - summarize</text>
+</g>
+<g class="event">
+<path d="M596 379H496" class="edge"/>
+<rect x="302" y="364" width="192" height="30" rx="8" class="ok"/>
+<text x="315" y="383" class="body" text-anchor="start">Mark turn ended</text>
+</g>
+<style>:root {--bg:#fff;--ink:#294b69;--muted:#647b90;--border:#c6d6e4;--panel:#f8fafc;--blue:#25679e;--bluebg:#edf6fd;--purple:#8250df;--purplebg:#f3efff;--green:#1a7f37;--greenbg:#dafbe1;--red:#cf222e;--redbg:#ffebe9;--amber:#9a6700;--amberbg:#fff8c5;}
+@media(prefers-color-scheme:dark){:root {--bg:#0d1117;--ink:#e6edf3;--muted:#99adbf;--border:#35495b;--panel:#161b22;--blue:#79c0ff;--bluebg:#102b42;--purple:#b69aff;--purplebg:#251d3b;--green:#7ee787;--greenbg:#122e20;--red:#ff938a;--redbg:#381c20;--amber:#e3b341;--amberbg:#332b13;}}
+svg{background:var(--bg)}text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;fill:var(--ink)}.name{font-size:18px;font-weight:650}.body{font-size:16px;font-weight:600}.small{font-size:14px;fill:var(--muted)}.tiny{font-size:12px;fill:var(--muted)}.mark{font-size:13px;font-weight:700}.panel{fill:var(--panel);stroke:var(--border)}.handler{fill:none;stroke:var(--border);stroke-dasharray:5 4}.card{fill:var(--bg);stroke:var(--border)}.input{fill:var(--bluebg);stroke:var(--border)}.model{fill:var(--purplebg);stroke:var(--purple)}.ok{fill:var(--greenbg);stroke:var(--green)}.warn{fill:var(--amberbg);stroke:var(--amber)}.stop{fill:var(--redbg);stroke:var(--red)}.bar{fill:var(--blue)}.edge,.return{fill:none;stroke:var(--blue);stroke-width:1.5;marker-end:url(#arrow)}.return{stroke-dasharray:3 3}.event{opacity:1}
+</style></svg>

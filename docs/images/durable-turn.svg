@@ -118,7 +118,7 @@ g { transform-box: fill-box; transform-origin: 50% 50%; }
 <g class="c4">
 <rect class="cell tool" x="572" y="150" width="128" height="110" rx="10"/>
 <text class="idx" x="584" y="174">5 · tool</text>
-<text class="line" x="584" y="200">runCommand</text>
+<text class="line" x="584" y="200">executeCommand</text>
 <text class="line muted" x="584" y="220">exit 0</text>
 </g>
 <rect class="slot" x="708" y="150" width="128" height="110" rx="10"/>
@@ -142,6 +142,6 @@ g { transform-box: fill-box; transform-origin: 50% 50%; }
 <g class="b4"><rect class="badge" x="584" y="230" width="66" height="20" rx="10"/><text class="badge-t" x="617" y="244">✓ reused</text></g>
 <g class="caption cap0"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">1</text><text x="54" y="304">Each model response and tool result is recorded in the turn&#8217;s journal.</text></g>
 <g class="caption cap1"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">2</text><text x="54" y="304">The process crashes in the middle of the turn. The journal is safe in Restate.</text></g>
-<g class="caption cap2"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">3</text><text x="54" y="304">After restart, Restate replays the journal: recorded results are reused, nothing runs twice.</text></g>
+<g class="caption cap2"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">3</text><text x="54" y="304">After restart, Restate replays the journal and reuses the recorded results.</text></g>
 <g class="caption cap3"><circle class="step" cx="37" cy="299" r="9"/><text class="step-n" x="37" y="303">4</text><text x="54" y="304">The turn continues from where it stopped and publishes its answer.</text></g>
 </svg>
