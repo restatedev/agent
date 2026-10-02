@@ -34,19 +34,81 @@ its own session waits for that child's outcome without holding the parent lock.
 
 ```mermaid
 sequenceDiagram
+  autonumber
   participant C as Client
-  participant A as Agent
-  participant S as AgentSession
-  participant M as Model and tools
-  C->>A: ask(message)
-  A->>S: send doTurn(snapshot)
-  A-->>C: started + turnId
-  S->>M: model / policy / tool steps
-  C->>A: steer or interrupt
-  A-->>S: durable control signal
+  participant A as Agent (controller)
+  participant S as AgentSession (turn)
+  participant M as Model and guardrails
+  participant T as Tools
+
+  C->>A: ask("Compare weather in Berlin, Paris and Rome")
+  A-)S: doTurn(profile snapshot and input), one way
+  A-->>C: started, turnId
+  S->>S: append input to history, build context
+
+  S->>M: model call
+  M-->>S: proposal: three tool calls
+  opt guardrails configured
+    S->>M: evaluate proposed tool batch
+    M-->>S: allow
+  end
+  Note over S,T: Allowed foreground calls run concurrently inside the turn
+  par Berlin
+    S->>T: getWeather(Berlin)
+    T-->>S: result
+  and Paris
+    S->>T: getWeather(Paris)
+    T-->>S: result
+  and Rome
+    S->>T: getWeather(Rome)
+    T-->>S: result
+  and new input while tools run
+    C->>A: steer("Use Fahrenheit")
+    A-)S: durable steering signal addressed to turnId
+    A-->>C: accepted
+  end
+  Note over S,T: Restate journals durable operations; recovery reuses recorded results
+
+  S->>S: retain tool results, consume steering
+  S->>M: next model call with results and steering
+  M-->>S: proposed final answer
+  opt guardrails configured
+    S->>M: evaluate proposed answer
+    M-->>S: allow
+  end
   S->>A: onTurnEnd(outcome)
+  Note over A: Reconcile late input, retire matching turn, dispatch queued work
   A-->>S: reconciled outcome
+  S->>S: append final outcome to history
+  S-)A: publish(history)
+
+  C->>A: watch(afterRevision), long poll
+  A-->>C: changed topic revisions
+  C->>S: history(fromSequence)
+  S-->>C: new entries and next sequence
 ```
+
+The diagram shows a successful tool batch and final answer. Model/tool steps
+can repeat, and a guardrail can instead block a proposal or wait for approval.
+`getWeather` is a synthetic demo tool. The client can watch throughout the
+turn; history appends publish changes as work progresses, not just at the end.
+
+These arrows describe logical calls through Restate. `doTurn` is dispatched
+one way so the controller can return immediately. Steering, interruption and
+approval decisions use durable signals addressed to that invocation's
+`turnId`. Normal completion uses a request/response call to `onTurnEnd` so the
+session can record the controller's reconciled outcome. A queued successor
+cannot execute until the current exclusive `doTurn` finishes.
+
+The model and tool lanes represent work owned by the turn, not additional
+Virtual Objects. Built-in tools run as in-process functions; model requests,
+MCP calls and sandbox operations use journaled effects. Discovered Restate
+tools use durable RPCs. Recovery reuses recorded results, but an external
+effect that completed before its result was recorded may run again; remote
+side effects still need provider-level idempotency.
+
+For exact message shapes, see the [protocol](protocol.md). For the loop's
+approval, pending-work and cancellation paths, see the [turn runtime](turn-runtime.md).
 
 ## Control and history
 
