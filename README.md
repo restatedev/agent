@@ -4,6 +4,10 @@
 > This reference architecture shows you the simplest way to build **durable, stateful,
 > steerable, concurrent agents and agentic systems**.
 
+<video src="docs/images/agent-reference.mp4" controls width="100%">
+  <a href="docs/images/agent-reference.mp4">Watch the agent reference video</a>
+</video>
+
 The architecture fully runs on Restate and your favorite container platform or
 serverless provider. Restate is a durable runtime for agents that gives you
 all the building blocks you need to build advanced, large-scale agentic systems without
