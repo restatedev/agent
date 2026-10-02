@@ -333,7 +333,7 @@ def durable_wait():
     a.bar(0, 30, 124, "ok", "running", label_on_bar=True)
     a.bar(31, 62, 124, "idle", "suspended: no process, only state")
     a.chip(42, 142, 124, "tool", "new version v2")
-    a.bar(63, 86, 124, "ok", "resumed", label_on_bar=True)
+    a.bar(63, 86, 124, "ok", "v1 resumed", label_on_bar=True)
     a.link(63, 196, 140)
 
     a.time_break(54, 24, 256, "")
@@ -347,12 +347,12 @@ def durable_wait():
     a.playhead(20, 256)
     a.captions(318, [
         ("A guardrail requires a person to approve the deploy before it runs.", 0, 30),
-        ("The turn suspends: no process, only state. New versions can ship while it waits.", 30, 62),
+        ("The turn suspends. New versions can ship; its original deployment must remain available.", 30, 62),
         ("When the approval arrives a day later, the turn resumes exactly where it waited.", 62, 101),
     ])
     a.write("durable-wait.svg",
             "Animation: a guardrail requires approval; the turn suspends and holds no process for about a day, "
-            "while a new service version ships; when a person approves, the turn resumes, runs the deploy and replies.")
+            "while a new service version ships; when a person approves, the turn resumes on its original deployment, runs the deploy and replies.")
 
 
 def sub_agents():

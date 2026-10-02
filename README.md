@@ -1,7 +1,7 @@
 # A reference agent architecture
 
 > Productionizing agents is notoriously difficult, because of their long-running, stateful nature.
-> This reference architecture shows you the simplest way to build **durable, stateful,
+> This reference architecture shows how to build **durable, stateful,
 > steerable, concurrent agents and agentic systems**.
 
 The architecture fully runs on Restate and your favorite container platform or
@@ -19,7 +19,7 @@ Each agent execution is a durable async process that is:
   restarts and can be used to steer it, interrupt it, or approve an action.
   Interrupts automatically propagate through subagents.
 - **STATEFUL**: Execution is isolated per agent session and stateful. Transcripts
-  and model context (preferences, instructions) are stored in Restate's
+  and profile data (memories, instructions) are stored in Restate's
   embedded KV store.
 - **RECOVERABLE**: Restate automatically keeps a journal per agent execution,
   to recover it automatically after a failure.
@@ -29,9 +29,9 @@ Each agent execution is a durable async process that is:
   own state and resources.
 - **SCALABLE**: Agents can scale up to thousands of concurrent executions, with
   protection against concurrency issues and race conditions.
-- **PAUSABLE**: When an execution needs to wait, it scales to zero. Restate
-  persists the timers, approval promises, or subagent invocations, and lets
-  the execution resume when the waiting is over.
+- **PAUSABLE**: Restate can suspend an invocation waiting on a durable timer,
+  approval signal, or child invocation, then resume it when ready. Suspension
+  releases that invocation's execution on serverless platforms.
 
 **Implementing these characteristics in a production-grade manner is
 challenging and usually requires a lot of infra and coordination logic. In this
@@ -42,7 +42,7 @@ reference architecture, the agent processes rely on Restate to handle this compl
 ## What this reference includes
 
 This is a runnable TypeScript implementation with an agent runtime, a typed
-client, and an optional conversation UI. You can use it as a starting point
+client, and an optional demo UI. You can use it as a starting point
 for your own application or take individual patterns into an existing agent.
 The reference focuses on agent execution and session management. User accounts,
 OAuth flows, and evals are not included.
@@ -53,10 +53,10 @@ OAuth flows, and evals are not included.
 | --- |------------------------------------------------------------------------------------------------------------------------------------|
 | **[Queueing, steering, and interruption](docs/turn-runtime.md#steering)** | Queue a new request, add instructions to an ongoing execution, or interrupt it and optionally start a replacement.                 |
 | **[Parallel tools](docs/turn-runtime.md#agent-loop-iterations)** | Run independent tool calls concurrently and return their results or errors to the model.                                           |
-| **[Background operations](docs/tools.md#pending-tools)** | Keep working while timers, approvals, or delegated tasks are pending; wait for or cancel them later.                               |
+| **[Background operations](docs/tools.md#pending-tools)** | Continue model steps while tool-requested timers or approvals are pending; wait for or cancel them later. |
 | **[Subagents](docs/tools.md#sub-agents)** | Delegate work to persistent agents with their own history, memory, and sandbox, then send follow-up tasks to the same agents.      |
 | **[Guardrails](docs/turn-runtime.md#guardrails)** | Define guardrails that guard against dangerous or unwanted tool behavior.                                                          |
-| **[Human approval](docs/protocol.md#context-and-approvals)** | Ask for a decision and wait durably, while the agent remains steerable and interruptible.                                          |
+| **[Human approval](docs/protocol.md#context-and-approvals)** | Wait durably for a decision. The controller continues accepting steering and interruption; a guardrail wait holds its current proposal. |
 | **[Programmatic tool calling](docs/tools.md#programmatic-tool-calling-ptc)** | Let the model write JavaScript that combines tool calls and returns a result without putting all intermediate data in its context. |
 | **[Tool search](docs/tools.md#turn-local-tool-search)** | Find tools from MCP servers and Restate services, loading their schemas into model context only when needed.                       |
 | **[Memory](docs/architecture.md#context-and-delegation)** | Store information across turns, search memory descriptions, and retrieve the entries relevant to the task.                         |
@@ -65,7 +65,7 @@ OAuth flows, and evals are not included.
 | **[Sandboxes](docs/sandboxes.md)** | Read and write files and run commands in a local workspace or Modal sandbox, keeping files between turns.                          |
 | **[Client updates](docs/protocol.md#history-and-notifications)** | Follow a running agent, reconnect after a connection failure, and read new history from an offset.                                 |
 | **[Extensible tools](docs/tools.md)** | Add built-in tools, connect MCP servers, or expose Restate handlers as tools.                                                      |
-| **[Output recovery](docs/turn-runtime.md#model-output-budgets-and-recovery)** | Retry a truncated model response once with a larger output budget, capped by the runtime.                                          |
+| **[Output recovery](docs/turn-runtime.md#model-output-budgets-and-recovery)** | Retry a truncated model response at most once with a larger output budget, if it is below the runtime's cap. |
 
 ## Architecture
 
@@ -75,7 +75,7 @@ Each agent has two Restate Virtual Objects (stateful entities addressed by key) 
   and tracks the active turn, queued input, profile, memories, approvals, and schedules.
 - **[`AgentSession`](packages/libs/core/src/session/service.ts)** stores the
   conversation and runs the model/tool loop. Each `doTurn` invocation handles
-  one request within a conversation.
+  one turn, which may incorporate several queued messages or steering updates.
 
 ![Two Virtual Objects share the same agentId: Agent accepts input and starts or signals AgentSession, which runs the turn and reports its outcome](docs/images/agent-objects.svg)
 
@@ -89,8 +89,8 @@ When an `Agent` starts a turn, it gets the `turnId` back, with which it can:
 - **Interrupt the turn**: stops unfinished work, including subagent tasks, and asks
   the model to summarize what it completed.
 
-The implementation relies on Restate's durable signals, instead of plumbing together
-event queues and state machines.
+Restate provides durable signal delivery. The reference implements the routing,
+turn state machine, and cleanup rules on top of it.
 
 ![Client, Agent, and AgentSession in three columns, with events read from top to bottom: starting a turn, steering while tools continue, interrupting unfinished work, and returning a summary](docs/images/agent-responsive.svg)
 
@@ -148,7 +148,7 @@ This architecture also implements:
 
 See [history and context](docs/architecture.md#control-and-history).
 
-### Waiting months for approval
+### Waiting durably for approval
 
 When a guardrail needs a person, the turn suspends: no process, only stored state. It can wait weeks, through new versions of the service, and resumes where it stopped.
 
