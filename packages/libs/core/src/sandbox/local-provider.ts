@@ -117,7 +117,7 @@ export const localSandboxProvider: SandboxProvider = {
 /**
  * The environment of a model-issued command. `exec` would otherwise inherit
  * the whole service environment, and a model running `env` would read
- * OPENAI_API_KEY, MCP tokens, RESTATE_ADMIN_TOKEN and Modal credentials into
+ * model API keys, MCP tokens, RESTATE_ADMIN_TOKEN and Modal credentials into
  * its context (and the journal). Only what ordinary shell tools need is
  * passed; HOME points into the workspace so dotfiles land there too. This
  * narrows accidental disclosure only: the command still runs as the service

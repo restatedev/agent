@@ -46,7 +46,8 @@ export const triage = restate.service({
 ```
 
 `restate.schemas` needs both `input` and `output`. For a handler without
-input, use `z.object({})` or skip schemas and write `*name()`.
+input, use `input: z.void()`, so callers pass no argument, or skip schemas
+and write `*name()`.
 
 ## Virtual objects: state per key
 
@@ -107,10 +108,17 @@ export const onboarding = restate.workflow({
 
 ## Handler options
 
-`options` sets service-level options, and `options.handlers` sets per-handler
-options: `shared`, `retryPolicy`, timeouts, `enableLazyState`, and others.
+`options` sets service-level options, such as `retryPolicy` and
+`inactivityTimeout`. `options.handlers` sets per-handler options:
+
+- for services and objects: `retryPolicy`, timeouts, `description`,
+  `metadata`, `ingressPrivate`, and for objects `shared` and
+  `enableLazyState`;
+- for workflows: only `enableLazyState`. Set a workflow's retry policy and
+  timeouts at the service level.
+
 Use `retryPolicy` with `onMaxAttempts: "kill"` or `"pause"` to decide what
-happens to an invocation after retries are exhausted.
+happens to an invocation after its retries are exhausted.
 
 ## Serving
 
@@ -120,5 +128,7 @@ import {serve} from "@restatedev/restate-sdk";
 await serve({services: [pricing, triage, counter, onboarding], port: 9080});
 ```
 
-Register the endpoint once, and again after changing handler signatures:
-`npx @restatedev/restate deployments register http://localhost:9080`.
+Register the endpoint with
+`npx @restatedev/restate deployments register http://localhost:9080`. In
+local development, re-register the same URL with `--force` after changing
+handlers; without it, the registration is left unchanged.

@@ -64,15 +64,16 @@ workspace cache or global account directory.
 `MUTATIONS` tables in `src/server/operations.ts`; the browser client in
 `src/agent-client.ts` derives its types from them. `src/server/agent-snapshot.ts`
 captures notification watermarks before reading data and fetches only changed
-topics on subsequent polls.
+topics on subsequent polls. `app/api/ag-ui/route.ts` serves AG-UI runs through
+`src/server/ag-ui.ts`, which translates history with `src/server/ag-ui-events.ts`.
 
 ## Validation and reference
 
 - `packages/libs/core/test`: deterministic runtime, control, history,
   approvals, PTC, MCP, sandbox, memory, scheduling and delegation coverage.
 - `packages/libs/client/test`: the ingress client's follow loop.
-- `packages/apps/web/test`: snapshot loading, pagination, merging and the
-  request guard.
+- `packages/apps/web/test`: snapshot loading, pagination, merging, the
+  request guard and the AG-UI adapter under the real AG-UI client.
 - `docs/agent-guide.md`: invariants for maintainers and coding agents.
 - `plugins/restate-agent/skills`: coding-agent skills for extending the
   agent (`restate-agent`) and for the generator SDK (`restate-gen-sdk`).

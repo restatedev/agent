@@ -91,3 +91,30 @@ test("failed and cancelled completions use the same shape", () => {
     reason: "user stopped it",
   });
 });
+
+test("a starting call records its input, and a finished one does not", () => {
+  const weather = {
+    toolCallId: "call-2",
+    toolName: "getWeather",
+    input: {city: "Rome"},
+  };
+
+  const started = tools.toolActivity(weather);
+  const finished = tools.toolActivity(weather, "succeeded");
+
+  assert.deepEqual(started.input, {city: "Rome"});
+  assert.equal(Object.hasOwn(finished, "input"), false);
+});
+
+test("an input too long for the history is left out", () => {
+  const write = {
+    toolCallId: "call-3",
+    toolName: "writeFile",
+    input: {path: "notes.txt", content: "x".repeat(5_000)},
+  };
+
+  const started = tools.toolActivity(write);
+
+  assert.equal(Object.hasOwn(started, "input"), false);
+  assert.equal(started.name, "writeFile");
+});

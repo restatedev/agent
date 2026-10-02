@@ -8,11 +8,11 @@
 import type {Guardrail} from "@restate-agents/types";
 import {AgentDefinition} from "@restate-agents/types/services";
 import {client, type Operation} from "@restatedev/restate-sdk-gen";
-import type {ModelMessage} from "ai";
 
 import {
   callGuardrailModel,
   type GuardrailApproval,
+  type ModelMessage,
   type ProposedAction,
 } from "../model/index.js";
 import type {AgentToolContext} from "../tools-api.js";

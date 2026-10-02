@@ -1,8 +1,9 @@
 // What this agent is: the models it runs on, its base instructions and its
-// built-in tools. This is the file to edit to change the agent; the runtime in
-// `session/` and `agent/` reads it and knows no tool by name except the ones
-// it provides itself (searchTools and executeProgram) and humanApproval, whose
-// requests it withdraws like a guardrail's.
+// built-in tools. This is the file to edit to change the agent. The turn
+// runtime in `session/` knows no tool by name except the ones it provides
+// itself (searchTools and executeProgram) and humanApproval, whose requests it
+// withdraws like a guardrail's. The controller in `agent/` checks the grants
+// of the tools that call it (schedules and sub-agents) by name.
 //
 // A tool is written with `defineAgentTool` from `tools-api.ts` and lives in
 // `tools/`. Adding one is a new file there and a line in `tools` below. What
@@ -37,14 +38,33 @@ import {
 import {getWeatherTool} from "./tools/weather.js";
 import {webSearchTool} from "./tools/web-search.js";
 
+/** An environment variable's value, or the default when it is unset or blank. */
+function fromEnv(name: string, fallback: string): string {
+  return process.env[name]?.trim() || fallback;
+}
+
 export const agentConfig = {
+  /**
+   * The models, as "provider:model", where the provider is openai,
+   * anthropic, google, xai, deepseek or openai-compatible (see
+   * model/provider.ts and docs/configuration.md). Each provider needs its API
+   * key in the service's environment. The three may use different providers.
+   *
+   * AGENT_MODEL, GUARDRAIL_MODEL and COMPACTOR_MODEL override them from the
+   * environment; they are read once, at module load, so a change needs a
+   * restart.
+   *
+   * A turn keeps one model: its working messages carry that provider's
+   * reasoning and tool-call data. Running turns finish on the version they
+   * started on, so a change here applies to new turns.
+   */
   models: {
     /** Runs the agent's turns. */
-    agent: "gpt-5.6-luna",
+    agent: fromEnv("AGENT_MODEL", "openai:gpt-5.6-luna"),
     /** Evaluates and reviews proposed actions against the guardrails. */
-    guardrail: "gpt-5.6-terra",
+    guardrail: fromEnv("GUARDRAIL_MODEL", "openai:gpt-5.6-terra"),
     /** Summarizes older conversation for later turns. */
-    compactor: "gpt-5.6-terra",
+    compactor: fromEnv("COMPACTOR_MODEL", "openai:gpt-5.6-terra"),
   },
 
   /**

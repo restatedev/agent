@@ -17,7 +17,6 @@ import {
 } from "@restate-agents/types/services";
 import {CancelledError, TerminalError} from "@restatedev/restate-sdk";
 import * as restate from "@restatedev/restate-sdk-gen";
-import type {ModelMessage} from "ai";
 
 import {errorMessage, isCancellation} from "../errors.js";
 import {
@@ -29,6 +28,7 @@ import {
   callGuardrailModel,
   callModel,
   compactConversation,
+  type ModelMessage,
 } from "../model/index.js";
 import {executionRetention, noRetention} from "../retention.js";
 import {destroySandbox} from "../sandbox/index.js";

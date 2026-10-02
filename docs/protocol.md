@@ -141,7 +141,8 @@ adapter whose operation names match the Agent handlers. `GET` serves
 `profile` and `toolCatalog`. `POST` serves `ask`, `steer`, `interrupt`,
 `updateProfile`, `deleteMemory`, `cancelSchedule` and `resolveApproval`, each
 with a JSON body validated against the shared schema. Both tables live in
-`packages/apps/web/src/server/operations.ts`.
+`packages/apps/web/src/server/operations.ts`. `POST /api/ag-ui` serves the
+same conversation to AG-UI clients; see [AG-UI](ag-ui.md).
 
 Every request, reads included, must carry a loopback Host, or, when
 `APP_PUBLIC_URL` is set, that URL's host (or one listed in `APP_ALLOWED_HOSTS`

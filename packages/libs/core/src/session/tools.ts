@@ -6,12 +6,17 @@
 
 import type {AgentTools, ConversationEntry} from "@restate-agents/types";
 import type * as restate from "@restatedev/restate-sdk-gen";
-import type {JSONValue, ModelMessage, ToolModelMessage} from "ai";
 import {z} from "zod";
 
 import {agentConfig} from "../agent-config.js";
 import {errorMessage, isCancellation} from "../errors.js";
-import type {ToolCall, ToolManifest} from "../model/index.js";
+import type {
+  JSONValue,
+  ModelMessage,
+  ToolCall,
+  ToolManifest,
+  ToolModelMessage,
+} from "../model/index.js";
 import {PROGRAM_TOOL_NAME, programToolManifest} from "../ptc/definition.js";
 import {openTurnSandbox} from "../sandbox/index.js";
 import {
@@ -286,7 +291,17 @@ export function unavailable(
 
 type ToolsEvent = Extract<ConversationEntry, {role: "event"; type: "tools"}>;
 
-/** A call as the transcript's tools events list it. */
+/**
+ * Longest input, as JSON, that a tools event records. A program's source or
+ * a file write can be far longer; the journal keeps the full input either
+ * way.
+ */
+const MAX_RECORDED_INPUT_CHARS = 4_000;
+
+/**
+ * A call as the transcript's tools events list it. A starting call also
+ * records its input, so a client can show what the agent asked for.
+ */
 export function toolActivity(
   call: ToolCall,
   status?: ToolsEvent["calls"][number]["status"],
@@ -297,7 +312,16 @@ export function toolActivity(
     name: call.toolName,
     ...(summary ? {summary} : {}),
     ...(status ? {status} : {}),
+    ...(status ? {} : recordedInput(call)),
   };
+}
+
+function recordedInput(call: ToolCall) {
+  const json = JSON.stringify(call.input);
+  if (json === undefined || json.length > MAX_RECORDED_INPUT_CHARS) {
+    return {};
+  }
+  return {input: call.input};
 }
 
 /** A transcript event for a batch of calls starting or finishing. */
@@ -310,7 +334,10 @@ export function toolsEvent(
   return {role: "event", type: "tools", turnId, step, phase, calls};
 }
 
-/** The concise user-facing activity label for a tool call; never its input. */
+/**
+ * The concise user-facing activity label for a tool call. It is fixed per
+ * tool, never derived from the input; the input is recorded on its own.
+ */
 function activityLabel(call: ToolCall): string | undefined {
   if (call.toolName === PROGRAM_TOOL_NAME) {
     return "Coordinated tools with JavaScript";

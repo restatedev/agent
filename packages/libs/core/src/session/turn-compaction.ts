@@ -28,11 +28,14 @@
 // so a replay rebuilds exactly the same context.
 
 import type * as restate from "@restatedev/restate-sdk-gen";
-import type {ModelMessage} from "ai";
 
 import {agentConfig} from "../agent-config.js";
 import {errorMessage, isCancellation} from "../errors.js";
-import {type GuardrailApproval, summarizeTurnContext} from "../model/index.js";
+import {
+  type GuardrailApproval,
+  type ModelMessage,
+  summarizeTurnContext,
+} from "../model/index.js";
 import {approvalGrantedMessage, note} from "./context.js";
 import type {RunningOperation} from "./pending.js";
 import {untrustedOutput} from "./tools.js";

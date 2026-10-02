@@ -17,12 +17,17 @@ Only exclusive handlers write state. A turn in `AgentSession` changes
 
 Before adding a handler, check the existing entry points:
 
-- `ask`, `steer`, `interrupt` for a person in the conversation.
-- `deliver({source, sourceId?, message, whenBusy, coalesce?})` for an
-  external producer (a webhook, a queue consumer, another service). It
-  routes with an explicit busy policy (`queue`, `steer`, `interrupt`), and
-  `coalesce` drops a duplicate while the same source is queued or active.
-- `createSchedule` for durable timers that deliver a message later.
+- `ask`, `steer` and `interrupt`, for a person in the conversation.
+- `deliver`, for an external producer such as a webhook, a queue consumer
+  or another service. Its input is
+  `{source, sourceId?, message, whenBusy, interruptReason?, coalesce?}`.
+  - `whenBusy` is the busy policy: `queue`, `steer` or `interrupt`.
+  - `coalesce` skips the delivery while one with the same `source` and
+    `sourceId` is queued or part of the active turn. Without a `sourceId`,
+    nothing is skipped.
+- `createSchedule`, for durable timers that deliver a message later.
+
+`references/agent-controller.md` has the full routing table.
 
 ## Add an Agent handler
 
@@ -35,8 +40,8 @@ Before adding a handler, check the existing entry points:
    ```
 
 2. **Implementation.** Put it in the module that owns the concern
-   (`agent/*.ts`), typed with `AgentHandlers`, and state its precondition
-   with a guard from `agent/guards.ts`:
+   (`agent/*.ts`), typed with `AgentHandlers`. State its precondition with a
+   guard from `agent/guards.ts`:
 
    ```ts
    export const handlers: AgentHandlers<"archive"> = {
@@ -49,53 +54,52 @@ Before adding a handler, check the existing entry points:
    };
    ```
 
-   | Caller | Guard |
-   | --- | --- |
-   | A client (UI, ingress) | `requireDirectAccess()` |
-   | A tool in the active turn | take `turnId`; `requireTurnTool(turnId, "toolName", denied)` or `activeTurn.accepting(turnId)` |
-   | Anything, read-only | none; make it shared |
+   `references/agent-controller.md#choose-handler-mode-and-access` says
+   which guard fits which caller.
 
-3. **Options.** Register it in `agent/service.ts`: spread the module's
-   `handlers`, and give it retention plus `shared(...)` for a reader or
-   `internal(...)` (`ingressPrivate`) for a callback only the turn, other
-   agents or the Agent itself may call.
+3. **Options.** Register it in `agent/service.ts`. Spread the module's
+   `handlers`, and give the handler:
+   - a retention policy from `retention.ts`;
+   - `shared(...)` for a reader, or `internal(...)` (`ingressPrivate`) for
+     a callback that only the turn, other agents or the Agent itself may
+     call.
 
-4. **Client.** For an external handler, add a method to `AgentClient` in
-   `packages/libs/client/src/index.ts`, wrapped in `invoke(...)` so HTTP
-   errors become `AgentClientError`.
+4. **Client.** For an external handler, add a method to the `AgentClient`
+   interface in `packages/libs/client/src/index.ts`, and implement it in
+   `createAgentClient`, wrapped in `invoke(...)` so HTTP errors become
+   `AgentClientError`.
 
-5. **UI.** The browser reaches Restate only through the Next.js proxy. Add
-   the operation to `MUTATIONS` (POST, body validated by its schema) or
-   `READS` (GET) in `packages/apps/web/src/server/operations.ts`; the
-   browser client derives its types from those tables.
+5. **UI.** The browser reaches Restate only through the Next.js proxy route
+   `packages/apps/web/app/api/agent/[agentId]/[operation]/route.ts`, which
+   `packages/apps/web/src/server/request-guard.ts` protects. Add the operation to `MUTATIONS`
+   (POST, body validated by its schema) or `READS` (GET) in
+   `packages/apps/web/src/server/operations.ts`. The browser client derives
+   its types from those tables.
 
-6. **Docs and tests.** Add the handler to `docs/protocol.md`, and add a
-   protocol test (`test/protocol.test.mjs`).
-
-Deadlock rule: an exclusive handler must never wait on a call that comes
-back to an exclusive handler of the same key. That is why `Agent` starts
-`doTurn` with a one-way send (`agent/active-turn.ts`) and the turn can then
-call `Agent` freely, and why long waits run in shared handlers (`watch`).
+6. **Docs and tests.** Add the handler to `docs/protocol.md`. Test it in
+   `test/local-agent.test.mjs`, which runs `Agent` handlers against
+   in-memory state (`test/state-fixture.mjs`).
 
 ## Add a transcript event
 
 1. Add the variant to `ConversationEventSchema` in
    `packages/libs/types/src/index.ts`.
 2. Decide explicitly whether the model sees it: add the type to the switch
-   in `isDerivedConversationEvent` (`src/internal-types.ts`). Derived
-   events are client status only; the others are projected into model
-   context.
-3. For a model-visible event, project it in `session/context.ts` and
-   handle it in `model/compactor.ts`.
-4. Render it in the web transcript (`packages/apps/web/src/transcript-entries.ts`).
+   in `isDerivedConversationEvent` (`internal-types.ts`). Derived events are
+   client status only; the others are projected into model context.
+3. For a model-visible event, add a case to the projection in
+   `session/context.ts`. The compactor (`model/compactor.ts`) passes
+   model-visible events through as they are.
+4. Render it in the web transcript: a case in
+   `packages/apps/web/src/transcript.tsx`, and an entry in `DETAIL_TYPES`
+   (`transcript-entries.ts`) if it belongs inside a turn card.
 
 Never rewrite an existing entry to explain later routing; append a new
 event.
 
 ## Notifications
 
-Clients do not poll data. They watch `Agent.watch({afterRevision})` and
-re-read whatever topic changed (`history`, `profile`, `approvals`,
-`schedules`). A module that writes a topic publishes it with
-`notifications.publish(topic)`. Notifications carry no data. A new topic is
-a new key in `AgentNotificationTopicSchema` and in the snapshot versions.
+A module that writes a topic publishes it with
+`notifications.publish(topic)`. Clients then re-read that topic.
+`references/agent-controller.md#notify-clients-without-copying-state`
+explains the protocol and what a new topic needs.
