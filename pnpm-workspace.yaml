@@ -5,7 +5,14 @@ packages:
 # pnpm blocks dependency build scripts by default. esbuild and sharp ship
 # native binaries and need theirs; the rest are optional and stay off.
 allowBuilds:
+  "@google/genai": false
   cbor-extract: false
   esbuild: true
   protobufjs: false
   sharp: true
+
+minimumReleaseAgeExclude:
+  - "@earendil-works/chord@1.0.1"
+  - "@earendil-works/pi-ai@1.0.1"
+  - "@earendil-works/pi-durable@1.0.1"
+  - "@earendil-works/pi-telemetry@1.0.1"

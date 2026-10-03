@@ -1,0 +1,31 @@
+{
+  "name": "@restate-agents/pi",
+  "version": "0.0.1",
+  "description": "Pi Durable embedded in Restate: the journal is Pi's commit log.",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "test": "tsc -p test/tsconfig.json && node --import tsx --test test/*.test.ts",
+    "build": "tsc --noEmitOnError"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.1",
+    "@earendil-works/pi-ai": "1.0.1",
+    "@earendil-works/pi-durable": "1.0.1",
+    "@restatedev/restate-sdk": "1.17.0",
+    "@restatedev/restate-sdk-gen": "1.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsx": "^4.19.2",
+    "typescript": "^7.0.2"
+  }
+}
