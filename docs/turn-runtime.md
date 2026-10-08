@@ -289,7 +289,10 @@ the guest using recorded results and completion ordering, including native
 
 Within PTC, `sleep` and `humanApproval` are awaited to completion inside the
 program instead of returning a pending acknowledgement to the next model round,
-so programs can compose them (for example, a retry loop with backoff). If
+so programs can compose them (for example, a retry loop with backoff).
+`createCallback` is the exception the model is told to avoid in programs: its
+promise would resolve only when the callback arrives, so the program never sees
+its URL. If
 steering arrives while the program runs, the step hands the program off to the
 turn's pending operations and the model reads the steering right away. A race alone does not
 cancel losing branches, but program return, failure, or turn interruption stops

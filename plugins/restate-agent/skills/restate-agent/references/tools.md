@@ -117,10 +117,20 @@ To wait for the outside world:
 waits on the signal in `session/approvals.ts`, and `Agent.resolveApproval`
 signals the turn.
 
+When the other system should report back by itself, over HTTP, use an
+awakeable instead. `createCallback` (`tools/callback.ts`) creates one in
+`run` and returns Restate's own `/restate/awakeables/{id}/resolve` and
+`/reject` URLs, so no handler of ours sits on the callback path. An
+awakeable cannot be looked up by ID, so `run` leaves its future in
+`context.callbacks` for `complete`, which races it against a durable
+timeout. This is replay-safe because both phases run in the same turn
+invocation and `run` always replays first.
+
 ## The tool context
 
 A tool body receives `ToolCallContext`: `agentId`, `turnId`, `toolCallId`,
-`permissions`, `webSearchEnabled`, `sandbox` and, lazily, `toolSearch`.
+`permissions`, `webSearchEnabled`, `sandbox`, `callbacks` and, lazily,
+`toolSearch`.
 These are trusted; model input is not.
 
 Use `context.sandbox` for the agent's persistent files and commands (see
