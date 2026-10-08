@@ -54,7 +54,8 @@
 // the two. So anything `complete` needs must be derivable from the input and
 // the call ID. `humanApproval` uses the call ID as its approval ID, and
 // `complete` waits on the signal named after it. `sleep` names its timer
-// after it.
+// after it. The one exception is `createCallback`: an awakeable cannot be
+// looked up by ID, so `run` leaves its future in `context.callbacks`.
 //
 // Pending work is bounded by its turn: the turn does not finish while any is
 // still running. If the turn is interrupted, or the model calls
@@ -124,6 +125,11 @@ export type AgentToolContext = {
   permissions: AgentTools;
   toolSearch?: TurnToolSearch;
   sandbox: TurnSandbox;
+  /**
+   * Awakeables created by createCallback's `run`, by call ID, for its
+   * `complete` to wait on. Turn-local: replaying the turn recreates them.
+   */
+  callbacks: Map<string, restate.Future<Uint8Array>>;
 };
 
 export type ToolCallContext = AgentToolContext & {toolCallId: string};

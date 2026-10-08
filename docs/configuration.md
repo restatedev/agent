@@ -21,6 +21,7 @@ The agent service reads these environment variables:
 | `AGENT_MODEL`, `GUARDRAIL_MODEL`, `COMPACTOR_MODEL` | Override the agent, guardrail and compactor models, as `provider:model`; see [models](#models) |
 | `AGENT_MODEL_MAX_OUTPUT_TOKENS` | Output budget per model call, 1024–64000 (default 32000) |
 | `RESTATE_ADMIN_URL`, `RESTATE_ADMIN_TOKEN` | Admin API used to discover dynamic tools |
+| `CALLBACK_BASE_URL` | Restate ingress as callers of `createCallback` URLs reach it (default `http://localhost:8080`) |
 
 ## Models
 

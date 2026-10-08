@@ -12,6 +12,7 @@
 // instructions reach the model only in turns where the tool is offered.
 
 import {humanApprovalTool} from "./tools/approval.js";
+import {createCallbackTool} from "./tools/callback.js";
 import {
   manageMemoryTool,
   readMemoriesTool,
@@ -99,6 +100,7 @@ export const agentConfig = {
     webSearchTool,
     sleepTool,
     humanApprovalTool,
+    createCallbackTool,
     cancelOperationTool,
     searchMemoriesTool,
     readMemoriesTool,

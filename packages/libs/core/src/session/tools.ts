@@ -96,6 +96,7 @@ export function createAgentToolContext(
     webSearchEnabled,
     permissions,
     sandbox: openTurnSandbox(agentId),
+    callbacks: new Map(),
   };
 }
 

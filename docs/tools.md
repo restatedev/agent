@@ -163,6 +163,7 @@ of the model contract, not cosmetic documentation.
 | `webSearch` | Tavily keyless web search with bounded source evidence | Foreground journaled HTTP request |
 | `sleep` | Durable timer | Pending |
 | `humanApproval` | Signal-backed human decision | Pending |
+| `createCallback` | Awakeable URL another system POSTs its result to, with a timeout | Pending |
 | `cancelOperation` | Cancel one pending operation by ID | Foreground control |
 | `searchMemories` | Search memory descriptions by keyword; returns IDs and descriptions | Foreground Agent RPC |
 | `readMemories` | Read memory content by ID | Foreground Agent RPC |
@@ -356,6 +357,8 @@ Inside a program, `sleep` and `humanApproval` promises resolve when their pendin
 completion arrives. Human approval returns its normal text decision; the program
 must inspect it before taking dependent actions. `cancelOperation` can target an
 existing turn-owned operation using an ID obtained from an earlier direct call.
+`createCallback` is for direct calls only: inside a program its promise resolves
+only when the callback arrives, so the program would never see the URL.
 
 If steering arrives while a program is running, the step stops waiting for it.
 The program continues in the background as a turn-owned pending operation: the
