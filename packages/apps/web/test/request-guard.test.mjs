@@ -35,7 +35,11 @@ function assertForbidden(check, pattern) {
 /** Sets the guard's environment for one test and restores it afterwards. */
 function useEnv(t, env) {
   const saved = {};
-  for (const key of ["APP_PUBLIC_URL", "APP_ALLOWED_HOSTS"]) {
+  for (const key of [
+    "APP_PUBLIC_URL",
+    "APP_ALLOWED_HOSTS",
+    "APP_ALLOW_UNTRUSTED_HOSTS",
+  ]) {
     saved[key] = process.env[key];
     if (env[key] === undefined) {
       delete process.env[key];
@@ -117,6 +121,36 @@ test("behind a proxy, reads through a rebound Host are rejected", (t) => {
     assertForbidden(() => trustedOrigin(read(host)), /Untrusted UI host/);
   }
 });
+
+for (const publicUrl of [undefined, PUBLIC_URL]) {
+  test(`APP_ALLOW_UNTRUSTED_HOSTS bypasses Host checks with APP_PUBLIC_URL=${publicUrl}`, (t) => {
+    useEnv(t, {
+      APP_PUBLIC_URL: publicUrl,
+      APP_ALLOW_UNTRUSTED_HOSTS: "true",
+    });
+    const host = "web.internal:3000";
+    const origin = publicUrl ?? `http://${host}`;
+
+    assert.equal(trustedOrigin(read(host)), origin);
+    requireSameOrigin(write(host, origin));
+    assertForbidden(() => requireSameOrigin(write(host)), /Cross-origin/);
+    assertForbidden(
+      () => requireSameOrigin(write(host, "http://evil.example")),
+      /Cross-origin/,
+    );
+  });
+
+  test(`Host bypass requires exactly true with APP_PUBLIC_URL=${publicUrl}`, (t) => {
+    useEnv(t, {APP_PUBLIC_URL: publicUrl});
+    for (const value of ["", "false", "1", "TRUE"]) {
+      process.env.APP_ALLOW_UNTRUSTED_HOSTS = value;
+      assertForbidden(
+        () => trustedOrigin(read("attacker.example")),
+        /Untrusted/,
+      );
+    }
+  });
+}
 
 test("APP_ALLOWED_HOSTS admits the Host a rewriting proxy sends", (t) => {
   useEnv(t, {

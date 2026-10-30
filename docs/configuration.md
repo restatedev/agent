@@ -113,3 +113,4 @@ export EXAMPLE_MCP_TOKEN=your-server-token
 | `RESTATE_AUTH_TOKEN` | Bearer token for an authenticated ingress |
 | `APP_PUBLIC_URL` | Browser origin when the UI sits behind a proxy; its host becomes the only accepted Host |
 | `APP_ALLOWED_HOSTS` | Comma-separated extra Host values to accept, for proxies that rewrite Host |
+| `APP_ALLOW_UNTRUSTED_HOSTS` | Set exactly `true` to bypass Host restrictions (default off). Disables DNS-rebinding protection; same-origin write checks still apply. Prefer `APP_PUBLIC_URL` / `APP_ALLOWED_HOSTS`. |
