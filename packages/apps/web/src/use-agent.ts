@@ -4,6 +4,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {createUiClient} from "./agent-client";
 import {type AgentSnapshot, mergeAgentSnapshot} from "./agent-snapshot";
 import {errorMessage, type Notify, runAction} from "./format";
+import {randomUUID} from "./random-uuid";
 
 type Connection = {
   snapshot?: AgentSnapshot;
@@ -44,14 +45,14 @@ export function useAgent(agentId: string, notify: Notify) {
     }
 
     async function follow() {
-      let windowKey = crypto.randomUUID();
+      let windowKey = randomUUID();
       while (!abort.signal.aborted) {
         try {
           const snapshot = await next(windowKey);
           if (abort.signal.aborted) {
             return;
           }
-          windowKey = crypto.randomUUID();
+          windowKey = randomUUID();
           latest.current = snapshot;
           setConnection({snapshot, status: "connected"});
         } catch (failure) {
