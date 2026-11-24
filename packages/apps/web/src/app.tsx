@@ -1,12 +1,10 @@
 "use client";
 
-import {Activity} from "lucide-react";
 import {useEffect, useMemo, useState} from "react";
 
 import {AgentNavigation} from "./agent-navigation";
 import {ChildControls, Composer} from "./composer";
 import {Inspector} from "./inspector";
-import {MemoriesAndSchedules} from "./memories-schedules";
 import {ConnectionHeader, StatusStrip} from "./status";
 import {Toasts, useToasts} from "./toasts";
 import {Transcript} from "./transcript";
@@ -43,33 +41,25 @@ export function App({initialAgentId}: {initialAgentId: string}) {
         connected={agent.connected}
         name={agentName}
         error={agent.connectionError}
-      />
-      <AgentNavigation
-        agentId={initialAgentId}
-        metadata={agent.metadata}
-        childAgents={agent.children}
-      />
+        eventCount={agent.entries.length}
+      >
+        <AgentNavigation
+          agentId={initialAgentId}
+          metadata={agent.metadata}
+          childAgents={agent.children}
+        />
+      </ConnectionHeader>
       <main className="workspace" data-readonly={readOnly}>
-        <section className="conversation-pane">
-          <div className="conversation-heading">
-            <div>
-              <p className="eyebrow">Conversation</p>
-              <h1>{agentName}</h1>
-            </div>
-            <div className="conversation-stat">
-              <Activity />
-              <span>{agent.entries.length} durable events</span>
-            </div>
-          </div>
+        <section className="conversation-pane" aria-label="Conversation">
           <div className="transcript-frame">
             <Transcript entries={agent.entries} busy={busy} />
           </div>
-          <StatusStrip turn={turn} />
           {readOnly ? (
             <ChildControls
               client={agent.client}
               notify={notify}
               busy={busy}
+              status={<StatusStrip turn={turn} />}
               awaitingApproval={agent.approvals.length > 0}
             />
           ) : (
@@ -77,6 +67,7 @@ export function App({initialAgentId}: {initialAgentId: string}) {
               client={agent.client}
               notify={notify}
               busy={busy}
+              status={<StatusStrip turn={turn} />}
               onTurnStarted={setProvisionalTurn}
             />
           )}
@@ -87,16 +78,10 @@ export function App({initialAgentId}: {initialAgentId: string}) {
           client={agent.client}
           notify={notify}
           profile={agent.profile}
+          schedules={agent.schedules}
           saveProfile={agent.saveProfile}
         />
       </main>
-      <MemoriesAndSchedules
-        client={agent.client}
-        notify={notify}
-        readOnly={readOnly}
-        memories={agent.profile?.memories ?? []}
-        schedules={agent.schedules}
-      />
       <Toasts toasts={toasts} />
     </div>
   );

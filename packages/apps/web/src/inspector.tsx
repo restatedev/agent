@@ -1,14 +1,19 @@
-import type {AgentProfile, ApprovalRequest} from "@restate-agents/types";
-import {type LucideIcon, Settings2, ShieldCheck} from "lucide-react";
+import type {
+  AgentProfile,
+  ApprovalRequest,
+  ScheduledMessage,
+} from "@restate-agents/types";
+import {Brain, type LucideIcon, Settings2, ShieldCheck} from "lucide-react";
 import {useState} from "react";
 
 import type {UiAgentClient} from "./agent-client";
 import {ApprovalsPanel} from "./approvals-panel";
 import type {Notify} from "./format";
+import {MemoriesAndSchedules} from "./memories-schedules";
 import {ProfilePanel} from "./profile-panel";
 import type {SaveProfile} from "./use-agent";
 
-type Tab = "approvals" | "profile";
+type Tab = "approvals" | "profile" | "memory";
 type TabSpec = {id: Tab; label: string; icon: LucideIcon};
 
 const APPROVALS_TAB: TabSpec = {
@@ -17,12 +22,17 @@ const APPROVALS_TAB: TabSpec = {
   icon: ShieldCheck,
 };
 const PROFILE_TAB: TabSpec = {id: "profile", label: "Context", icon: Settings2};
+const MEMORY_TAB: TabSpec = {id: "memory", label: "Memory", icon: Brain};
 
-/** The side panel: pending approvals and, for top-level agents, the profile. */
+/**
+ * The side panel: pending approvals, the profile (top-level agents only), and
+ * saved memories and schedules.
+ */
 export function Inspector({
   readOnly,
   approvals,
   profile,
+  schedules,
   client,
   notify,
   saveProfile,
@@ -30,13 +40,16 @@ export function Inspector({
   readOnly: boolean;
   approvals: ApprovalRequest[];
   profile?: AgentProfile;
+  schedules: ScheduledMessage[];
   client: UiAgentClient;
   notify: Notify;
   saveProfile: SaveProfile;
 }) {
   const [selected, setSelected] = useState<Tab>("approvals");
   // A read-only child has no editable profile.
-  const tabs = readOnly ? [APPROVALS_TAB] : [APPROVALS_TAB, PROFILE_TAB];
+  const tabs = readOnly
+    ? [APPROVALS_TAB, MEMORY_TAB]
+    : [APPROVALS_TAB, PROFILE_TAB, MEMORY_TAB];
   // Metadata can reveal a parent (read-only child) after the user picked the
   // Context tab; fall back to one that still exists instead of an empty panel.
   const shown = tabs.some(({id}) => id === selected) ? selected : "approvals";
@@ -74,6 +87,15 @@ export function Inspector({
             notify={notify}
             profile={profile}
             saveProfile={saveProfile}
+          />
+        )}
+        {shown === "memory" && (
+          <MemoriesAndSchedules
+            client={client}
+            notify={notify}
+            readOnly={readOnly}
+            memories={profile?.memories ?? []}
+            schedules={schedules}
           />
         )}
       </div>

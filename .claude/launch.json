@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-ui",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@restate-agents/web", "exec", "next", "dev", "--hostname", "127.0.0.1", "--port", "3100"],
+      "port": 3100
+    }
+  ]
+}
