@@ -1,4 +1,5 @@
-import {GitBranch, Sparkles} from "lucide-react";
+import {Activity, GitBranch, Sparkles} from "lucide-react";
+import type {ReactNode} from "react";
 
 import {shortTurn} from "./format";
 import {type ActiveTurn, isRunning} from "./turn-state";
@@ -10,15 +11,22 @@ function connectionLabel(connected: boolean, error?: string) {
   return error ? "Offline" : "Connecting";
 }
 
-/** The top bar: agent name and whether the long poll is connected. */
+/**
+ * The one-line top bar: agent name, agent navigation (as children), the
+ * durable event count and whether the long poll is connected.
+ */
 export function ConnectionHeader({
   name,
   connected,
   error,
+  eventCount,
+  children,
 }: {
   name: string;
   connected: boolean;
   error?: string;
+  eventCount: number;
+  children?: ReactNode;
 }) {
   const label = connectionLabel(connected, error);
   return (
@@ -27,12 +35,21 @@ export function ConnectionHeader({
         <div className="brand-mark" aria-hidden="true">
           <GitBranch aria-hidden="true" />
         </div>
-        <div>
-          <strong>{name}</strong>
+        <div className="brand-copy">
+          <h1 title={name}>{name}</h1>
           <span>Restate Agent</span>
         </div>
       </div>
+      {children}
       <div className="topbar-actions">
+        <span
+          className="conversation-stat"
+          title={`${eventCount} durable events`}
+        >
+          <Activity aria-hidden="true" />
+          {eventCount}
+          <span className="stat-label">durable events</span>
+        </span>
         <span
           className="connection-status"
           data-connected={connected}
@@ -46,7 +63,7 @@ export function ConnectionHeader({
   );
 }
 
-/** One line under the transcript: idle, or the running turn's phase. */
+/** One line above the composer: idle, or the running turn's phase. */
 export function StatusStrip({turn}: {turn?: ActiveTurn}) {
   if (!turn || !isRunning(turn)) {
     return (

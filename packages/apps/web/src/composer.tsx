@@ -6,7 +6,13 @@ import {
   RefreshCw,
   Send,
 } from "lucide-react";
-import {type KeyboardEvent, useRef, useState} from "react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import type {UiAgentClient} from "./agent-client";
 import {errorMessage, type Notify, runAction, shortTurn} from "./format";
@@ -38,6 +44,9 @@ const MODE_COPY: Record<
     icon: Ban,
   },
 };
+
+// While a turn runs, an ask waits in the queue; the placeholder says so.
+const QUEUED_ASK_PLACEHOLDER = "Queue a request behind the active turn…";
 
 // The protocol requires a reason; the UI supplies one when the user gives none.
 const DEFAULT_INTERRUPT_REASON = "Interrupted by the user.";
@@ -116,6 +125,7 @@ function outgoingMessage(mode: Mode, draft: string) {
   return undefined;
 }
 
+/** Ask, steer or interrupt; each button's tooltip explains its mode. */
 function ModeSwitcher({
   mode,
   setMode,
@@ -124,25 +134,24 @@ function ModeSwitcher({
   setMode: (mode: Mode) => void;
 }) {
   return (
-    <div className="mode-row">
-      <fieldset className="mode-switcher" aria-label="Message delivery mode">
-        {MODES.map((candidate) => {
-          const {icon: Icon, label} = MODE_COPY[candidate];
-          return (
-            <button
-              data-active={mode === candidate}
-              key={candidate}
-              onClick={() => setMode(candidate)}
-              type="button"
-            >
-              <Icon />
-              {label}
-            </button>
-          );
-        })}
-      </fieldset>
-      <span className="mode-description">{MODE_COPY[mode].description}</span>
-    </div>
+    <fieldset className="mode-switcher" aria-label="Message delivery mode">
+      {MODES.map((candidate) => {
+        const {icon: Icon, label, description} = MODE_COPY[candidate];
+        return (
+          <button
+            aria-pressed={mode === candidate}
+            data-active={mode === candidate}
+            key={candidate}
+            onClick={() => setMode(candidate)}
+            title={description}
+            type="button"
+          >
+            <Icon />
+            {label}
+          </button>
+        );
+      })}
+    </fieldset>
   );
 }
 
@@ -153,23 +162,43 @@ function SendIcon({mode, sending}: {mode: Mode; sending: boolean}) {
   return mode === "interrupt" ? <Ban /> : <Send />;
 }
 
+/**
+ * Grows the textarea with its content, from one line up to the CSS
+ * max-height, after which it scrolls.
+ */
+function useAutoHeight(value: string) {
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const element = textarea.current;
+    if (!element) {
+      return;
+    }
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight}px`;
+  }, [value]);
+  return textarea;
+}
+
 /** Message input for a top-level agent: ask, steer or interrupt. */
 export function Composer({
   client,
   notify,
   busy,
+  status,
   onTurnStarted,
 }: {
   client: UiAgentClient;
   notify: Notify;
   busy: boolean;
+  /** The turn status, shown beside the mode switcher. */
+  status: ReactNode;
   onTurnStarted: (turnId: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("ask");
   const [message, setMessage] = useState("");
   const [replacement, setReplacement] = useState("");
   const [sending, setSending] = useState(false);
-  const textarea = useRef<HTMLTextAreaElement>(null);
+  const textarea = useAutoHeight(message);
   const send = useSend(client, notify, onTurnStarted);
 
   // Interrupt can go without a message, but only while there is a turn.
@@ -203,17 +232,22 @@ export function Composer({
   }
 
   const copy = MODE_COPY[mode];
+  const placeholder =
+    busy && mode === "ask" ? QUEUED_ASK_PLACEHOLDER : copy.placeholder;
   return (
     <div className="composer-shell">
-      <ModeSwitcher mode={mode} setMode={setMode} />
+      <div className="composer-toolbar">
+        <ModeSwitcher mode={mode} setMode={setMode} />
+        {status}
+      </div>
       <div className="composer-box" data-mode={mode}>
         <textarea
           aria-label={`${copy.label} message`}
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={copy.placeholder}
+          placeholder={placeholder}
           ref={textarea}
-          rows={2}
+          rows={1}
           value={message}
         />
         <button
@@ -234,11 +268,6 @@ export function Composer({
           value={replacement}
         />
       )}
-      {busy && mode === "ask" && (
-        <p className="composer-note">
-          This request will be queued behind the active turn.
-        </p>
-      )}
     </div>
   );
 }
@@ -251,11 +280,14 @@ export function ChildControls({
   client,
   notify,
   busy,
+  status,
   awaitingApproval,
 }: {
   client: UiAgentClient;
   notify: Notify;
   busy: boolean;
+  /** The turn status, shown beside the interrupt button. */
+  status: ReactNode;
   awaitingApproval: boolean;
 }) {
   function interrupt() {
@@ -270,23 +302,22 @@ export function ChildControls({
 
   return (
     <div className="composer-shell">
+      <div className="composer-toolbar">
+        {status}
+        <button
+          type="button"
+          className="button secondary small"
+          disabled={!busy}
+          onClick={() => void interrupt()}
+        >
+          <Ban /> Interrupt
+        </button>
+      </div>
       <p className="empty-copy">
         Sub-agent conversation — only its parent can send tasks and follow-ups.
+        {awaitingApproval &&
+          " It is waiting for approval: respond in the Approvals panel, or interrupt its task."}
       </p>
-      <button
-        type="button"
-        className="button secondary"
-        disabled={!busy}
-        onClick={() => void interrupt()}
-      >
-        <Ban /> Interrupt
-      </button>
-      {awaitingApproval && (
-        <p className="empty-copy">
-          This child is waiting for approval. Use the Approvals panel to
-          respond, or interrupt its task.
-        </p>
-      )}
     </div>
   );
 }
